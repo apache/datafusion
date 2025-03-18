@@ -18,8 +18,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_array::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use rand::{thread_rng, Rng};
 use tokio::task::JoinSet;

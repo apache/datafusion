@@ -17,17 +17,17 @@
 
 use std::sync::Arc;
 
+use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{
-    BinaryType, BinaryViewType, BooleanType, ByteArrayType, ByteViewType, Date32Type,
-    Date64Type, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-    IntervalYearMonthType, LargeBinaryType, LargeUtf8Type, StringViewType,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type, Utf8Type,
+    BinaryType, BinaryViewType, BooleanType, ByteArrayType, ByteViewType, DataType,
+    Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field, Float32Type,
+    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, LargeBinaryType,
+    LargeUtf8Type, Schema, StringViewType, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type, Utf8Type,
 };
-use arrow_array::{ArrayRef, RecordBatch};
-use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -100,7 +100,28 @@ impl DatasetGeneratorConfig {
 
 /// Dataset generator
 ///
-/// It will generate one random [`Dataset`] when `generate` function is called.
+/// It will generate random [`Dataset`]s when the `generate` function is called. For each
+/// sort key in `sort_keys_set`, an additional sorted dataset will be generated, and the
+/// dataset will be chunked into staggered batches.
+///
+/// # Example
+/// For `DatasetGenerator` with `sort_keys_set = [["a"], ["b"]]`, it will generate 2
+/// datasets. The first one will be sorted by column `a` and get randomly chunked
+/// into staggered batches. It might look like the following:
+/// ```text
+/// a b
+/// ----
+/// 1 2 <-- batch 1
+/// 1 1
+///
+/// 2 1 <-- batch 2
+///
+/// 3 3 <-- batch 3
+/// 4 3
+/// 4 1
+/// ```
+///
+/// # Implementation details:
 ///
 /// The generation logic in `generate`:
 ///
@@ -728,7 +749,7 @@ impl RecordBatchGenerator {
 
 #[cfg(test)]
 mod test {
-    use arrow_array::UInt32Array;
+    use arrow::array::UInt32Array;
 
     use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
 

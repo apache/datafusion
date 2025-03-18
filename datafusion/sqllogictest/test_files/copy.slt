@@ -172,7 +172,7 @@ logical_plan
 02)--TableScan: source_table projection=[col1, col2]
 physical_plan
 01)DataSinkExec: sink=ParquetSink(file_groups=[])
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Error case
 query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension! Use STORED AS to define file format.
@@ -186,7 +186,7 @@ logical_plan
 02)--TableScan: source_table projection=[col1, col2]
 physical_plan
 01)DataSinkExec: sink=ParquetSink(file_groups=[])
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Copy to directory as partitioned files with keep_partition_by_columns enabled
 query I
@@ -558,7 +558,6 @@ select * from validate_arrow_file_dict;
 c foo
 d bar
 
-
 # Copy from table to folder of json
 query I
 COPY source_table to 'test_files/scratch/copy/table_arrow' STORED AS ARROW;
@@ -632,3 +631,20 @@ COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);
 # Copy using execution.keep_partition_by_columns with an invalid value
 query error DataFusion error: Invalid or Unsupported Configuration: provided value for 'execution.keep_partition_by_columns' was not recognized: "invalid_value"
 COPY source_table  to '/tmp/table.parquet' OPTIONS (execution.keep_partition_by_columns invalid_value);
+
+statement count 0
+create table t;
+
+query TT
+explain COPY (select * from t limit 10) to 'output.csv';
+----
+logical_plan
+01)CopyTo: format=csv output_url=output.csv options: ()
+02)--Limit: skip=0, fetch=10
+03)----TableScan: t projection=[], fetch=10
+physical_plan
+01)DataSinkExec: sink=CsvSink(file_groups=[])
+02)--DataSourceExec: partitions=1, partition_sizes=[0], fetch=10
+
+statement count 0
+drop table t;

@@ -54,6 +54,7 @@ use datafusion_physical_expr::{
     ExprBoundaries, PhysicalExpr,
 };
 
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -328,6 +329,9 @@ impl DisplayAs for FilterExec {
                     "".to_string()
                 };
                 write!(f, "FilterExec: {}{}", self.predicate, display_projections)
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "predicate={}", fmt_sql(self.predicate.as_ref()))
             }
         }
     }
@@ -624,9 +628,7 @@ mod tests {
     use crate::expressions::*;
     use crate::test;
     use crate::test::exec::StatisticsExec;
-
-    use arrow::datatypes::{Field, Schema};
-    use arrow_schema::{UnionFields, UnionMode};
+    use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
     use datafusion_common::ScalarValue;
 
     #[tokio::test]

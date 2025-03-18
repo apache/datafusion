@@ -22,9 +22,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::JoinSide;
 use datafusion_common::{stats::Precision, ColumnStatistics, JoinType, ScalarValue};
@@ -925,6 +924,10 @@ impl DisplayAs for UnboundedExec {
                     self.batch_produce.is_none(),
                 )
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -1019,6 +1022,11 @@ impl DisplayAs for StatisticsExec {
                     self.schema.fields().len(),
                     self.stats.num_rows,
                 )
+            }
+
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

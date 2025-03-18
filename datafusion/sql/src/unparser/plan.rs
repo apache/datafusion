@@ -984,11 +984,18 @@ impl Unparser<'_> {
                 Ok(Some(builder.build()?))
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
-                Self::unparse_table_scan_pushdown(
+                let ret = Self::unparse_table_scan_pushdown(
                     &subquery_alias.input,
                     Some(subquery_alias.alias.clone()),
                     already_projected,
-                )
+                )?;
+                if let Some(alias) = alias {
+                    if let Some(plan) = ret {
+                        let plan = LogicalPlanBuilder::new(plan).alias(alias)?.build()?;
+                        return Ok(Some(plan));
+                    }
+                }
+                Ok(ret)
             }
             // SubqueryAlias could be rewritten to a plan with a projection as the top node by [rewrite::subquery_alias_inner_query_and_columns].
             // The inner table scan could be a scan with pushdown operations.
@@ -1089,7 +1096,7 @@ impl Unparser<'_> {
         &self,
         join_conditions: &[(Expr, Expr)],
     ) -> Option<ast::JoinConstraint> {
-        let mut idents = Vec::with_capacity(join_conditions.len());
+        let mut object_names = Vec::with_capacity(join_conditions.len());
         for (left, right) in join_conditions {
             match (left, right) {
                 (
@@ -1104,14 +1111,18 @@ impl Unparser<'_> {
                         spans: _,
                     }),
                 ) if left_name == right_name => {
-                    idents.push(self.new_ident_quoted_if_needs(left_name.to_string()));
+                    // For example, if the join condition `t1.id = t2.id`
+                    // this is represented as two columns like `[t1.id, t2.id]`
+                    // This code forms `id` (without relation name)
+                    let ident = self.new_ident_quoted_if_needs(left_name.to_string());
+                    object_names.push(ast::ObjectName(vec![ident]));
                 }
                 // USING is only valid with matching column names; arbitrary expressions
                 // are not allowed
                 _ => return None,
             }
         }
-        Some(ast::JoinConstraint::Using(idents))
+        Some(ast::JoinConstraint::Using(object_names))
     }
 
     /// Convert a join constraint and associated conditions and filter to a SQL AST node

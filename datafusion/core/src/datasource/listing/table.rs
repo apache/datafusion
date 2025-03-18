@@ -29,18 +29,19 @@ use crate::datasource::{
         file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
     },
     get_statistics_with_limit,
-    physical_plan::{FileScanConfig, FileSinkConfig},
+    physical_plan::FileSinkConfig,
 };
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
-use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
+use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
-use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
-use arrow_schema::Schema;
+use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_common::{
     config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
     SchemaExt, ToDFSchema,
@@ -137,7 +138,7 @@ impl ListingTableConfig {
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
-    pub async fn infer_options(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_options(self, state: &dyn Session) -> Result<Self> {
         let store = if let Some(url) = self.table_paths.first() {
             state.runtime_env().object_store(url)?
         } else {
@@ -164,7 +165,7 @@ impl ListingTableConfig {
             format_options
                 .insert("format.compression".to_string(), compression_type.clone());
         }
-
+        let state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let file_format = state
             .get_file_format_factory(&file_extension)
             .ok_or(config_datafusion_err!(
@@ -191,7 +192,7 @@ impl ListingTableConfig {
     }
 
     /// Infer the [`SchemaRef`] based on `table_path` suffix.  Requires `self.options` to be set prior to using.
-    pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_schema(self, state: &dyn Session) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let schema = if let Some(url) = self.table_paths.first() {
@@ -211,12 +212,12 @@ impl ListingTableConfig {
     }
 
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
-    pub async fn infer(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer(self, state: &dyn Session) -> Result<Self> {
         self.infer_options(state).await?.infer_schema(state).await
     }
 
     /// Infer the partition columns from the path. Requires `self.options` to be set prior to using.
-    pub async fn infer_partitions_from_path(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_partitions_from_path(self, state: &dyn Session) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let Some(url) = self.table_paths.first() else {
@@ -484,7 +485,7 @@ impl ListingOptions {
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema<'a>(
         &'a self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &'a ListingTableUrl,
     ) -> Result<SchemaRef> {
         let store = state.runtime_env().object_store(table_path)?;
@@ -509,7 +510,7 @@ impl ListingOptions {
     /// Allows specifying partial partitions.
     pub async fn validate_partitions(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &ListingTableUrl,
     ) -> Result<()> {
         if self.table_partition_cols.is_empty() {
@@ -563,7 +564,7 @@ impl ListingOptions {
     /// and therefore may fail to detect invalid partitioning.
     pub(crate) async fn infer_partitions(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &ListingTableUrl,
     ) -> Result<Vec<String>> {
         let store = state.runtime_env().object_store(table_path)?;
@@ -615,6 +616,7 @@ impl ListingOptions {
 /// using an  [`ObjectStore`] instance, for example from local files or objects
 /// from AWS S3.
 ///
+/// # Reading Directories
 /// For example, given the `table1` directory (or object store prefix)
 ///
 /// ```text
@@ -650,13 +652,19 @@ impl ListingOptions {
 /// If the query has a predicate like `WHERE date = '2024-06-01'`
 /// only the corresponding directory will be read.
 ///
-/// `ListingTable` also supports filter and projection pushdown for formats that
+/// `ListingTable` also supports limit, filter and projection pushdown for formats that
 /// support it as such as Parquet.
+///
+/// # Implementation
+///
+/// `ListingTable` Uses [`DataSourceExec`] to execute the data. See that struct
+/// for more details.
+///
+/// [`DataSourceExec`]: crate::datasource::source::DataSourceExec
 ///
 /// # Example
 ///
-/// Here is an example of reading a directory of parquet files using a
-/// [`ListingTable`]:
+/// To read a directory of parquet files using a [`ListingTable`]:
 ///
 /// ```no_run
 /// # use datafusion::prelude::SessionContext;
@@ -933,14 +941,18 @@ impl TableProvider for ListingTable {
             .format
             .create_physical_plan(
                 session_state,
-                FileScanConfig::new(object_store_url, Arc::clone(&self.file_schema))
-                    .with_file_groups(partitioned_file_lists)
-                    .with_constraints(self.constraints.clone())
-                    .with_statistics(statistics)
-                    .with_projection(projection.cloned())
-                    .with_limit(limit)
-                    .with_output_ordering(output_ordering)
-                    .with_table_partition_cols(table_partition_cols),
+                FileScanConfig::new(
+                    object_store_url,
+                    Arc::clone(&self.file_schema),
+                    self.options.format.file_source(),
+                )
+                .with_file_groups(partitioned_file_lists)
+                .with_constraints(self.constraints.clone())
+                .with_statistics(statistics)
+                .with_projection(projection.cloned())
+                .with_limit(limit)
+                .with_output_ordering(output_ordering)
+                .with_table_partition_cols(table_partition_cols),
                 filters.as_ref(),
             )
             .await
@@ -993,27 +1005,8 @@ impl TableProvider for ListingTable {
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check that the schema of the plan matches the schema of this table.
-        if !self
-            .schema()
-            .logically_equivalent_names_and_types(&input.schema())
-        {
-            // Return an error if schema of the input query does not match with the table schema.
-            return plan_err!(
-                "Inserting query must have the same schema with the table. \
-                Expected: {:?}, got: {:?}",
-                self.schema()
-                    .fields()
-                    .iter()
-                    .map(|field| field.data_type())
-                    .collect::<Vec<_>>(),
-                input
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|field| field.data_type())
-                    .collect::<Vec<_>>()
-            );
-        }
+        self.schema()
+            .logically_equivalent_names_and_types(&input.schema())?;
 
         let table_path = &self.table_paths()[0];
         if !table_path.is_collection() {
@@ -1044,6 +1037,7 @@ impl TableProvider for ListingTable {
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
+            original_url: String::default(),
             object_store_url: self.table_paths()[0].object_store(),
             table_paths: self.table_paths().clone(),
             file_groups,
@@ -1091,7 +1085,7 @@ impl ListingTable {
     /// be distributed to different threads / executors.
     async fn list_files_for_scan<'a>(
         &'a self,
-        ctx: &'a SessionState,
+        ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
@@ -1112,7 +1106,9 @@ impl ListingTable {
             )
         }))
         .await?;
-        let file_list = stream::iter(file_list).flatten();
+        let meta_fetch_concurrency =
+            ctx.config_options().execution.meta_fetch_concurrency;
+        let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
         // collect the statistics if required by the config
         let files = file_list
             .map(|part_file| async {
@@ -1129,7 +1125,7 @@ impl ListingTable {
                 }
             })
             .boxed()
-            .buffered(ctx.config_options().execution.meta_fetch_concurrency);
+            .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
         let (files, statistics) = get_statistics_with_limit(
             files,
@@ -1152,7 +1148,7 @@ impl ListingTable {
     /// If they are not, it infers the statistics from the file and stores them in the cache.
     async fn do_collect_statistics(
         &self,
-        ctx: &SessionState,
+        ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> Result<Arc<Statistics>> {
@@ -1187,29 +1183,30 @@ impl ListingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::avro::AvroFormat;
     use crate::datasource::file_format::csv::CsvFormat;
     use crate::datasource::file_format::json::JsonFormat;
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
-    use crate::datasource::{provider_as_source, MemTable};
+    use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
     use crate::{
         assert_batches_eq,
         test::{columns, object_store::register_test_store},
     };
-    use datafusion_physical_plan::collect;
 
+    use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::SortOptions;
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_plan::collect;
     use datafusion_physical_plan::ExecutionPlanProperties;
 
+    use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
     use tempfile::TempDir;
+    use url::Url;
 
     #[tokio::test]
     async fn read_single_file() -> Result<()> {
@@ -1253,6 +1250,7 @@ mod tests {
 
         let exec = table.scan(&state, None, &[], None).await?;
         assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
 
         Ok(())
@@ -1309,7 +1307,7 @@ mod tests {
                 vec![vec![
                     col("int_col").add(lit(1)).sort(true, true),
                 ]],
-                Err("Expected single column references in output_ordering, got int_col + Int32(1)"),
+                Err("Expected single column reference in sort_order[0][0], got int_col + Int32(1)"),
             ),
             // ok with one column
             (
@@ -1378,11 +1376,14 @@ mod tests {
     #[tokio::test]
     async fn read_empty_table() -> Result<()> {
         let ctx = SessionContext::new();
-        let path = String::from("table/p1=v1/file.avro");
+        let path = String::from("table/p1=v1/file.json");
         register_test_store(&ctx, &[(&path, 100)]);
 
-        let opt = ListingOptions::new(Arc::new(AvroFormat {}))
-            .with_file_extension(AvroFormat.get_ext())
+        let format = JsonFormat::default();
+        let ext = format.get_ext();
+
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension(ext)
             .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)])
             .with_target_partitions(4);
 
@@ -1492,9 +1493,9 @@ mod tests {
         // files that don't match the prefix or the default file extention
         assert_list_files_for_scan_grouping(
             &[
-                "bucket/key-prefix/file0.avro",
+                "bucket/key-prefix/file0.json",
                 "bucket/key-prefix/file1.parquet",
-                "bucket/other-prefix/roguefile.avro",
+                "bucket/other-prefix/roguefile.json",
             ],
             "test:///bucket/key-prefix/",
             10,
@@ -1582,14 +1583,89 @@ mod tests {
         // files that don't match the prefix or the default file ext
         assert_list_files_for_multi_paths(
             &[
-                "bucket/key1/file0.avro",
+                "bucket/key1/file0.json",
                 "bucket/key1/file1.csv",
-                "bucket/key1/file2.avro",
+                "bucket/key1/file2.json",
                 "bucket/key2/file3.csv",
-                "bucket/key2/file4.avro",
+                "bucket/key2/file4.json",
                 "bucket/key3/file5.csv",
             ],
             &["test:///bucket/key1/", "test:///bucket/key3/"],
+            2,
+            2,
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_assert_list_files_for_exact_paths() -> Result<()> {
+        // more expected partitions than files
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+            ],
+            12,
+            5,
+            Some(""),
+        )
+        .await?;
+
+        // more files than meta_fetch_concurrency (32)
+        let files: Vec<String> =
+            (0..64).map(|i| format!("bucket/key1/file{}", i)).collect();
+        // Collect references to each string
+        let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
+        assert_list_files_for_exact_paths(file_refs.as_slice(), 5, 5, Some("")).await?;
+
+        // as many expected partitions as files
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+            ],
+            5,
+            5,
+            Some(""),
+        )
+        .await?;
+
+        // more files as expected partitions
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+            ],
+            2,
+            2,
+            Some(""),
+        )
+        .await?;
+
+        // no files => no groups
+        assert_list_files_for_exact_paths(&[], 2, 0, Some("")).await?;
+
+        // files that don't match the default file ext
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0.json",
+                "bucket/key1/file1.csv",
+                "bucket/key1/file2.json",
+                "bucket/key2/file3.csv",
+                "bucket/key2/file4.json",
+                "bucket/key3/file5.csv",
+            ],
             2,
             2,
             None,
@@ -1625,9 +1701,7 @@ mod tests {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
-        let format = AvroFormat {};
-
-        let opt = ListingOptions::new(Arc::new(format))
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
             .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
 
@@ -1659,9 +1733,7 @@ mod tests {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
-        let format = AvroFormat {};
-
-        let opt = ListingOptions::new(Arc::new(format))
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
             .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
 
@@ -1670,6 +1742,56 @@ mod tests {
         let table_paths = table_prefix
             .iter()
             .map(|t| ListingTableUrl::parse(t).unwrap())
+            .collect();
+        let config = ListingTableConfig::new_with_multi_paths(table_paths)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema));
+
+        let table = ListingTable::try_new(config)?;
+
+        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+
+        assert_eq!(file_list.len(), output_partitioning);
+
+        Ok(())
+    }
+
+    /// Check that the files listed by the table match the specified `output_partitioning`
+    /// when the object store contains `files`, and validate that file metadata is fetched
+    /// concurrently
+    async fn assert_list_files_for_exact_paths(
+        files: &[&str],
+        target_partitions: usize,
+        output_partitioning: usize,
+        file_ext: Option<&str>,
+    ) -> Result<()> {
+        let ctx = SessionContext::new();
+        let (store, _) = make_test_store_and_state(
+            &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>(),
+        );
+
+        let meta_fetch_concurrency = ctx
+            .state()
+            .config_options()
+            .execution
+            .meta_fetch_concurrency;
+        let expected_concurrency = files.len().min(meta_fetch_concurrency);
+        let head_blocking_store = ensure_head_concurrency(store, expected_concurrency);
+
+        let url = Url::parse("test://").unwrap();
+        ctx.register_object_store(&url, head_blocking_store.clone());
+
+        let format = JsonFormat::default();
+
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension_opt(file_ext)
+            .with_target_partitions(target_partitions);
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+
+        let table_paths = files
+            .iter()
+            .map(|t| ListingTableUrl::parse(format!("test:///{}", t)).unwrap())
             .collect();
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
             .with_listing_options(opt)
@@ -1720,6 +1842,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn test_insert_into_append_2_new_parquet_files_defaults() -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
@@ -1738,6 +1861,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn test_insert_into_append_1_new_parquet_files_defaults() -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
@@ -1994,7 +2118,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(arrow_array::Int32Array::from(vec![
+            vec![Arc::new(arrow::array::Int32Array::from(vec![
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
             ]))],
         )?;
@@ -2024,6 +2148,7 @@ mod tests {
                     )
                     .await?;
             }
+            #[cfg(feature = "parquet")]
             "parquet" => {
                 session_ctx
                     .register_parquet(
@@ -2033,6 +2158,7 @@ mod tests {
                     )
                     .await?;
             }
+            #[cfg(feature = "avro")]
             "avro" => {
                 session_ctx
                     .register_avro(
@@ -2062,6 +2188,8 @@ mod tests {
         session_ctx.register_table("source", source_table.clone())?;
         // Convert the source table into a provider so that it can be used in a query
         let source = provider_as_source(source_table);
+        let target = session_ctx.table_provider("t").await?;
+        let target = Arc::new(DefaultTableSource::new(target));
         // Create a table scan logical plan to read from the source table
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?
             .filter(filter_predicate)?
@@ -2070,7 +2198,7 @@ mod tests {
         // Therefore, we will have 8 partitions in the final plan.
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, InsertOp::Append)?
+            LogicalPlanBuilder::insert_into(scan_plan, "t", target, InsertOp::Append)?
                 .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx

@@ -22,16 +22,21 @@
 Apache DataFusion
 =================
 
-.. Code from https://buttons.github.io/
 .. raw:: html
 
-  <p>
-    <!-- Place this tag where you want the button to render. -->
-    <a class="github-button" href="https://github.com/apache/datafusion" data-size="large" data-show-count="true" aria-label="Star apache/datafusion on GitHub">Star</a>
-    <!-- Place this tag where you want the button to render. -->
-     <a class="github-button" href="https://github.com/apache/datafusion/fork" data-size="large" data-show-count="true" aria-label="Fork apache/datafusion on GitHub">Fork</a>
-  </p>
-
+   <style type="text/css">
+      .custom-social-badge{display:inline;padding:4px}.custom-social-badge a{text-decoration:none;outline:0}.custom-social-badge .widget{display:inline-block;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;font-size:0;line-height:0;white-space:nowrap}.custom-social-badge .btn:not(:last-child){border-radius:.25em 0 0 .25em}.custom-social-badge .widget-lg .btn{height:28px;padding:5px 10px;font-size:12px;line-height:16px}.custom-social-badge .btn{border-radius:.25em;color:#25292e;background-color:#ebf0f4;border-color:#d1d9e0;background-image:url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg'%3e%3clinearGradient id='o' x2='0' y2='1'%3e%3cstop stop-color='%23f6f8fa'/%3e%3cstop offset='90%25' stop-color='%23ebf0f4'/%3e%3c/linearGradient%3e%3crect width='100%25' height='100%25' fill='url(%23o)'/%3e%3c/svg%3e");background-image:-moz-linear-gradient(top,#f6f8fa,#ebf0f4 90%);background-image:linear-gradient(180deg,#f6f8fa,#ebf0f4 90%);filter:progid:DXImageTransform.Microsoft.Gradient(startColorstr='#FFF6F8FA',endColorstr='#FFEAEFF3');filter:none;position:relative;display:inline-block;display:inline-flex;height:14px;padding:2px 5px;font-size:11px;font-weight:600;line-height:14px;vertical-align:bottom;cursor:pointer;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none;background-repeat:repeat-x;background-position:-1px -1px;background-size:110% 110%}.custom-social-badge .btn:hover,.custom-social-badge .btn:focus{background-color:#e5eaee;background-position:0 -.5em;border-color:#d1d9e0;background-image:url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg'%3e%3clinearGradient id='o' x2='0' y2='1'%3e%3cstop stop-color='%23eff2f5'/%3e%3cstop offset='90%25' stop-color='%23e5eaee'/%3e%3c/linearGradient%3e%3crect width='100%25' height='100%25' fill='url(%23o)'/%3e%3c/svg%3e");background-image:-moz-linear-gradient(top,#eff2f5,#e5eaee 90%);background-image:linear-gradient(180deg,#eff2f5,#e5eaee 90%);filter:progid:DXImageTransform.Microsoft.Gradient(startColorstr='#FFEFF2F5',endColorstr='#FFE4E9ED')}.custom-social-badge .btn:hover,.custom-social-badge .btn:focus{filter:none}.custom-social-badge .btn:active{background-color:#e6eaef;border-color:#d1d9e0;background-image:none;filter:none}
+   </style>
+   <div class="custom-social-badge">
+      <span>
+         <div class="widget widget-lg"><a class="btn" href="https://github.com/apache/datafusion" rel="noopener" target="_blank" target="_blank" aria-label="Star Apache Arrow on GitHub"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" role="img" aria-hidden="true"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z" fill="#000"></path></svg>&nbsp;<span>Star</span></a></div>
+      </span>
+   </div>
+      <div class="custom-social-badge">
+      <span>
+         <div class="widget widget-lg"><a class="btn" href="https://github.com/apache/datafusion/fork" rel="noopener" target="_blank" target="_blank" aria-label="Star Apache Arrow on GitHub"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" role="img" aria-hidden="true"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z" fill="#000"></path></svg>&nbsp;<span>Fork</span></a></div>
+      </span>
+   </div>
 
 DataFusion is an extensible query engine written in `Rust <http://rustlang.org>`_ that
 uses `Apache Arrow <https://arrow.apache.org>`_ as its in-memory format.
@@ -103,6 +108,7 @@ To get started, see
 
    user-guide/introduction
    user-guide/example-usage
+   user-guide/features
    user-guide/concepts-readings-events
    user-guide/crate-configuration
    user-guide/cli/index
@@ -131,8 +137,9 @@ To get started, see
    library-user-guide/extending-operators
    library-user-guide/profiling
    library-user-guide/query-optimizer
-   library-user-guide/api-health
-.. _toc.contributor-guide:
+   library-user-guide/upgrading
+
+.. .. _toc.contributor-guide:
 
 .. toctree::
    :maxdepth: 1
@@ -140,14 +147,17 @@ To get started, see
 
    contributor-guide/index
    contributor-guide/communication
-   contributor-guide/getting_started
+   contributor-guide/development_environment
    contributor-guide/architecture
    contributor-guide/testing
+   contributor-guide/api-health
    contributor-guide/howtos
    contributor-guide/roadmap
    contributor-guide/governance
    contributor-guide/inviting
    contributor-guide/specification/index
+   contributor-guide/gsoc_application_guidelines
+   contributor-guide/gsoc_project_ideas
 
 .. _toc.subprojects:
 

@@ -24,8 +24,8 @@ use crate::sorts::{
     stream::{FieldCursorStream, RowCursorStream},
 };
 use crate::SendableRecordBatchStream;
+use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
-use arrow_array::*;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -38,7 +38,8 @@ macro_rules! primitive_merge_helper {
 
 macro_rules! merge_helper {
     ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
-        let streams = FieldCursorStream::<$t>::new($sort, $streams);
+        let streams =
+            FieldCursorStream::<$t>::new($sort, $streams, $reservation.new_empty());
         return Ok(Box::pin(SortPreservingMergeStream::new(
             Box::new(streams),
             $schema,

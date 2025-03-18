@@ -2845,7 +2845,27 @@ NULL
 query T
 SELECT to_char(null, '%d-%m-%Y');
 ----
-(empty)
+NULL
+
+query T
+SELECT to_char(date_column, '%Y-%m-%d')
+FROM (VALUES 
+    (DATE '2020-09-01'),
+    (NULL)
+) AS t(date_column);
+----
+2020-09-01
+NULL
+
+query T
+SELECT to_char(date_column, '%Y-%m-%d')
+FROM (VALUES 
+    (NULL),
+    (DATE '2020-09-01')
+) AS t(date_column);
+----
+NULL
+2020-09-01
 
 query T
 SELECT to_char(column1, column2)
@@ -2871,6 +2891,16 @@ query I
 select to_unixtime('2020-09-08T12:00:00+00:00');
 ----
 1599566400
+
+query I
+select to_unixtime(arrow_cast(to_timestamp('2023-01-14T01:01:30'), 'Timestamp(Second, Some("+05:30"))'));
+----
+1673638290
+
+query I
+select to_unixtime(arrow_cast(to_timestamp('2023-01-14T01:01:30'), 'Timestamp(Millisecond, None)'));
+----
+1673658090
 
 query I
 select to_unixtime('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m-%d-%Y %H:%M:%S%#z');

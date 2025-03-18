@@ -18,17 +18,20 @@
 //! [`ScalarUDFImpl`] definitions for cardinality function.
 
 use crate::utils::make_scalar_function;
-use arrow_array::{
+use arrow::array::{
     Array, ArrayRef, GenericListArray, MapArray, OffsetSizeTrait, UInt64Array,
 };
-use arrow_schema::DataType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List, Map, UInt64};
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, LargeList, List, Map, UInt64},
+};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
+use datafusion_common::utils::take_function_args;
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -47,7 +50,10 @@ impl Cardinality {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: None,
+                    }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::MapArray),
                 ],
                 Volatility::Immutable,
@@ -106,12 +112,11 @@ impl ScalarUDFImpl for Cardinality {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(cardinality_inner)(args)
+        make_scalar_function(cardinality_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -125,21 +130,18 @@ impl ScalarUDFImpl for Cardinality {
 
 /// Cardinality SQL function
 pub fn cardinality_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("cardinality expects one argument");
-    }
-
-    match &args[0].data_type() {
+    let [array] = take_function_args("cardinality", args)?;
+    match &array.data_type() {
         List(_) => {
-            let list_array = as_list_array(&args[0])?;
+            let list_array = as_list_array(&array)?;
             generic_list_cardinality::<i32>(list_array)
         }
         LargeList(_) => {
-            let list_array = as_large_list_array(&args[0])?;
+            let list_array = as_large_list_array(&array)?;
             generic_list_cardinality::<i64>(list_array)
         }
         Map(_, _) => {
-            let map_array = as_map_array(&args[0])?;
+            let map_array = as_map_array(&array)?;
             generic_map_cardinality(map_array)
         }
         other => {

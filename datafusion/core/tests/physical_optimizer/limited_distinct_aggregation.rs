@@ -24,8 +24,8 @@ use crate::physical_optimizer::test_utils::{
     schema, TestAggregate,
 };
 
+use arrow::datatypes::DataType;
 use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
-use arrow_schema::DataType;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
@@ -57,7 +57,7 @@ async fn test_partial_final() -> Result<()> {
     let source = mock_data()?;
     let schema = source.schema();
 
-    // `SELECT a FROM MemoryExec GROUP BY a LIMIT 4;`, Partial/Final AggregateExec
+    // `SELECT a FROM DataSourceExec GROUP BY a LIMIT 4;`, Partial/Final AggregateExec
     let partial_agg = AggregateExec::try_new(
         AggregateMode::Partial,
         build_group_by(&schema.clone(), vec!["a".to_string()]),
@@ -83,7 +83,7 @@ async fn test_partial_final() -> Result<()> {
         "LocalLimitExec: fetch=4",
         "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[], lim=[4]",
         "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], lim=[4]",
-        "MemoryExec: partitions=1, partition_sizes=[1]",
+        "DataSourceExec: partitions=1, partition_sizes=[1]",
     ];
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
     assert_plan_matches_expected(&plan, &expected)?;
@@ -107,7 +107,7 @@ async fn test_single_local() -> Result<()> {
     let source = mock_data()?;
     let schema = source.schema();
 
-    // `SELECT a FROM MemoryExec GROUP BY a LIMIT 4;`, Single AggregateExec
+    // `SELECT a FROM DataSourceExec GROUP BY a LIMIT 4;`, Single AggregateExec
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema.clone(), vec!["a".to_string()]),
@@ -124,7 +124,7 @@ async fn test_single_local() -> Result<()> {
     let expected = [
         "LocalLimitExec: fetch=4",
         "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], lim=[4]",
-        "MemoryExec: partitions=1, partition_sizes=[1]",
+        "DataSourceExec: partitions=1, partition_sizes=[1]",
     ];
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
     assert_plan_matches_expected(&plan, &expected)?;
@@ -148,7 +148,7 @@ async fn test_single_global() -> Result<()> {
     let source = mock_data()?;
     let schema = source.schema();
 
-    // `SELECT a FROM MemoryExec GROUP BY a LIMIT 4;`, Single AggregateExec
+    // `SELECT a FROM DataSourceExec GROUP BY a LIMIT 4;`, Single AggregateExec
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema.clone(), vec!["a".to_string()]),
@@ -166,7 +166,7 @@ async fn test_single_global() -> Result<()> {
     let expected = [
         "GlobalLimitExec: skip=1, fetch=3",
         "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], lim=[4]",
-        "MemoryExec: partitions=1, partition_sizes=[1]",
+        "DataSourceExec: partitions=1, partition_sizes=[1]",
     ];
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
     assert_plan_matches_expected(&plan, &expected)?;
@@ -189,7 +189,7 @@ async fn test_distinct_cols_different_than_group_by_cols() -> Result<()> {
     let source = mock_data()?;
     let schema = source.schema();
 
-    // `SELECT distinct a FROM MemoryExec GROUP BY a, b LIMIT 4;`, Single/Single AggregateExec
+    // `SELECT distinct a FROM DataSourceExec GROUP BY a, b LIMIT 4;`, Single/Single AggregateExec
     let group_by_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema.clone(), vec!["a".to_string(), "b".to_string()]),
@@ -215,7 +215,7 @@ async fn test_distinct_cols_different_than_group_by_cols() -> Result<()> {
         "LocalLimitExec: fetch=4",
         "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], lim=[4]",
         "AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[]",
-        "MemoryExec: partitions=1, partition_sizes=[1]",
+        "DataSourceExec: partitions=1, partition_sizes=[1]",
     ];
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
     assert_plan_matches_expected(&plan, &expected)?;
@@ -243,7 +243,7 @@ fn test_has_order_by() -> Result<()> {
     let source = parquet_exec_with_sort(vec![sort_key]);
     let schema = source.schema();
 
-    // `SELECT a FROM MemoryExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
+    // `SELECT a FROM DataSourceExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
     // the `a > 1` filter is applied in the AggregateExec
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
@@ -261,7 +261,7 @@ fn test_has_order_by() -> Result<()> {
     let expected = [
         "LocalLimitExec: fetch=10",
         "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], ordering_mode=Sorted",
-        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
     assert_plan_matches_expected(&plan, &expected)?;
@@ -273,7 +273,7 @@ fn test_no_group_by() -> Result<()> {
     let source = mock_data()?;
     let schema = source.schema();
 
-    // `SELECT <aggregate with no expressions> FROM MemoryExec LIMIT 10;`, Single AggregateExec
+    // `SELECT <aggregate with no expressions> FROM DataSourceExec LIMIT 10;`, Single AggregateExec
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema, vec![]),
@@ -290,7 +290,7 @@ fn test_no_group_by() -> Result<()> {
     let expected = [
         "LocalLimitExec: fetch=10",
         "AggregateExec: mode=Single, gby=[], aggr=[]",
-        "MemoryExec: partitions=1, partition_sizes=[1]",
+        "DataSourceExec: partitions=1, partition_sizes=[1]",
     ];
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
     assert_plan_matches_expected(&plan, &expected)?;
@@ -303,7 +303,7 @@ fn test_has_aggregate_expression() -> Result<()> {
     let schema = source.schema();
     let agg = TestAggregate::new_count_star();
 
-    // `SELECT <aggregate with no expressions> FROM MemoryExec LIMIT 10;`, Single AggregateExec
+    // `SELECT <aggregate with no expressions> FROM DataSourceExec LIMIT 10;`, Single AggregateExec
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema, vec!["a".to_string()]),
@@ -320,7 +320,7 @@ fn test_has_aggregate_expression() -> Result<()> {
     let expected = [
         "LocalLimitExec: fetch=10",
         "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[COUNT(*)]",
-        "MemoryExec: partitions=1, partition_sizes=[1]",
+        "DataSourceExec: partitions=1, partition_sizes=[1]",
     ];
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
     assert_plan_matches_expected(&plan, &expected)?;
@@ -332,7 +332,7 @@ fn test_has_filter() -> Result<()> {
     let source = mock_data()?;
     let schema = source.schema();
 
-    // `SELECT a FROM MemoryExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
+    // `SELECT a FROM DataSourceExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
     // the `a > 1` filter is applied in the AggregateExec
     let filter_expr = Some(expressions::binary(
         col("a", &schema)?,
@@ -358,7 +358,7 @@ fn test_has_filter() -> Result<()> {
     let expected = [
         "LocalLimitExec: fetch=10",
         "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[COUNT(*)]",
-        "MemoryExec: partitions=1, partition_sizes=[1]",
+        "DataSourceExec: partitions=1, partition_sizes=[1]",
     ];
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
     assert_plan_matches_expected(&plan, &expected)?;

@@ -15,158 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`AvroFormat`] Apache Avro [`FileFormat`] abstractions
+//! Re-exports the [`datafusion_datasource_avro::file_format`] module, and contains tests for it.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::fmt;
-use std::sync::Arc;
-
-use arrow::datatypes::Schema;
-use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
-use datafusion_common::internal_err;
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::GetExt;
-use datafusion_common::DEFAULT_AVRO_EXTENSION;
-use datafusion_physical_expr::PhysicalExpr;
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
-
-use super::file_compression_type::FileCompressionType;
-use super::FileFormat;
-use super::FileFormatFactory;
-use crate::datasource::avro_to_arrow::read_avro_schema_from_reader;
-use crate::datasource::physical_plan::{AvroExec, FileScanConfig};
-use crate::error::Result;
-use crate::execution::context::SessionState;
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::Statistics;
-
-#[derive(Default)]
-/// Factory struct used to create [AvroFormat]
-pub struct AvroFormatFactory;
-
-impl AvroFormatFactory {
-    /// Creates an instance of [AvroFormatFactory]
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl FileFormatFactory for AvroFormatFactory {
-    fn create(
-        &self,
-        _state: &SessionState,
-        _format_options: &HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(AvroFormat))
-    }
-
-    fn default(&self) -> Arc<dyn FileFormat> {
-        Arc::new(AvroFormat)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-impl fmt::Debug for AvroFormatFactory {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AvroFormatFactory").finish()
-    }
-}
-
-impl GetExt for AvroFormatFactory {
-    fn get_ext(&self) -> String {
-        // Removes the dot, i.e. ".parquet" -> "parquet"
-        DEFAULT_AVRO_EXTENSION[1..].to_string()
-    }
-}
-
-/// Avro `FileFormat` implementation.
-#[derive(Default, Debug)]
-pub struct AvroFormat;
-
-#[async_trait]
-impl FileFormat for AvroFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn get_ext(&self) -> String {
-        AvroFormatFactory::new().get_ext()
-    }
-
-    fn get_ext_with_compression(
-        &self,
-        file_compression_type: &FileCompressionType,
-    ) -> Result<String> {
-        let ext = self.get_ext();
-        match file_compression_type.get_variant() {
-            CompressionTypeVariant::UNCOMPRESSED => Ok(ext),
-            _ => internal_err!("Avro FileFormat does not support compression."),
-        }
-    }
-
-    async fn infer_schema(
-        &self,
-        _state: &SessionState,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[ObjectMeta],
-    ) -> Result<SchemaRef> {
-        let mut schemas = vec![];
-        for object in objects {
-            let r = store.as_ref().get(&object.location).await?;
-            let schema = match r.payload {
-                GetResultPayload::File(mut file, _) => {
-                    read_avro_schema_from_reader(&mut file)?
-                }
-                GetResultPayload::Stream(_) => {
-                    // TODO: Fetching entire file to get schema is potentially wasteful
-                    let data = r.bytes().await?;
-                    read_avro_schema_from_reader(&mut data.as_ref())?
-                }
-            };
-            schemas.push(schema);
-        }
-        let merged_schema = Schema::try_merge(schemas)?;
-        Ok(Arc::new(merged_schema))
-    }
-
-    async fn infer_stats(
-        &self,
-        _state: &SessionState,
-        _store: &Arc<dyn ObjectStore>,
-        table_schema: SchemaRef,
-        _object: &ObjectMeta,
-    ) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&table_schema))
-    }
-
-    async fn create_physical_plan(
-        &self,
-        _state: &SessionState,
-        conf: FileScanConfig,
-        _filters: Option<&Arc<dyn PhysicalExpr>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = AvroExec::new(conf);
-        Ok(Arc::new(exec))
-    }
-}
+pub use datafusion_datasource_avro::file_format::*;
 
 #[cfg(test)]
-#[cfg(feature = "avro")]
 mod tests {
-    use super::*;
-    use crate::datasource::file_format::test_util::scan_format;
-    use crate::physical_plan::collect;
-    use crate::prelude::{SessionConfig, SessionContext};
-    use arrow::array::{as_string_array, Array};
-    use datafusion_common::cast::{
-        as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
-        as_int32_array, as_timestamp_microsecond_array,
+    use std::sync::Arc;
+
+    use crate::{
+        datasource::file_format::test_util::scan_format, prelude::SessionContext,
     };
+    use arrow::array::{as_string_array, Array};
+    use datafusion_catalog::Session;
+    use datafusion_common::{
+        assert_batches_eq,
+        cast::{
+            as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
+            as_int32_array, as_timestamp_microsecond_array,
+        },
+        test_util, Result,
+    };
+
+    use datafusion_datasource_avro::AvroFormat;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_physical_plan::{collect, ExecutionPlan};
     use futures::StreamExt;
 
     #[tokio::test]
@@ -255,7 +128,7 @@ mod tests {
             "| 1  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30312f30312f3039 | 31         | 2009-01-01T00:01:00 |",
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"];
 
-        crate::assert_batches_eq!(expected, &batches);
+        assert_batches_eq!(expected, &batches);
         Ok(())
     }
 
@@ -500,41 +373,14 @@ mod tests {
     }
 
     async fn get_exec(
-        state: &SessionState,
+        state: &dyn Session,
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let testdata = crate::test_util::arrow_test_data();
+        let testdata = test_util::arrow_test_data();
         let store_root = format!("{testdata}/avro");
         let format = AvroFormat {};
         scan_format(state, &format, &store_root, file_name, projection, limit).await
-    }
-}
-
-#[cfg(test)]
-#[cfg(not(feature = "avro"))]
-mod tests {
-    use super::*;
-
-    use super::super::test_util::scan_format;
-    use crate::error::DataFusionError;
-    use crate::prelude::SessionContext;
-
-    #[tokio::test]
-    async fn test() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let state = session_ctx.state();
-        let format = AvroFormat {};
-        let testdata = crate::test_util::arrow_test_data();
-        let filename = "avro/alltypes_plain.avro";
-        let result = scan_format(&state, &format, &testdata, filename, None, None).await;
-        assert!(matches!(
-            result,
-            Err(DataFusionError::NotImplemented(msg))
-            if msg == *"cannot read avro schema without the 'avro' feature enabled"
-        ));
-
-        Ok(())
     }
 }

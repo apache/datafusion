@@ -770,6 +770,9 @@ impl serde::Serialize for AliasNode {
         if !self.relation.is_empty() {
             len += 1;
         }
+        if !self.metadata.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AliasNode", len)?;
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
@@ -779,6 +782,9 @@ impl serde::Serialize for AliasNode {
         }
         if !self.relation.is_empty() {
             struct_ser.serialize_field("relation", &self.relation)?;
+        }
+        if !self.metadata.is_empty() {
+            struct_ser.serialize_field("metadata", &self.metadata)?;
         }
         struct_ser.end()
     }
@@ -793,6 +799,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
             "expr",
             "alias",
             "relation",
+            "metadata",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -800,6 +807,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
             Expr,
             Alias,
             Relation,
+            Metadata,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -824,6 +832,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                             "expr" => Ok(GeneratedField::Expr),
                             "alias" => Ok(GeneratedField::Alias),
                             "relation" => Ok(GeneratedField::Relation),
+                            "metadata" => Ok(GeneratedField::Metadata),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -846,6 +855,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                 let mut expr__ = None;
                 let mut alias__ = None;
                 let mut relation__ = None;
+                let mut metadata__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -866,12 +876,21 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                             }
                             relation__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Metadata => {
+                            if metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metadata"));
+                            }
+                            metadata__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(AliasNode {
                     expr: expr__,
                     alias: alias__.unwrap_or_default(),
                     relation: relation__.unwrap_or_default(),
+                    metadata: metadata__.unwrap_or_default(),
                 })
             }
         }
@@ -4764,7 +4783,7 @@ impl serde::Serialize for DmlNode {
         if self.table_name.is_some() {
             len += 1;
         }
-        if self.schema.is_some() {
+        if self.target.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.DmlNode", len)?;
@@ -4779,8 +4798,8 @@ impl serde::Serialize for DmlNode {
         if let Some(v) = self.table_name.as_ref() {
             struct_ser.serialize_field("tableName", v)?;
         }
-        if let Some(v) = self.schema.as_ref() {
-            struct_ser.serialize_field("schema", v)?;
+        if let Some(v) = self.target.as_ref() {
+            struct_ser.serialize_field("target", v)?;
         }
         struct_ser.end()
     }
@@ -4797,7 +4816,7 @@ impl<'de> serde::Deserialize<'de> for DmlNode {
             "input",
             "table_name",
             "tableName",
-            "schema",
+            "target",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4805,7 +4824,7 @@ impl<'de> serde::Deserialize<'de> for DmlNode {
             DmlType,
             Input,
             TableName,
-            Schema,
+            Target,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -4830,7 +4849,7 @@ impl<'de> serde::Deserialize<'de> for DmlNode {
                             "dmlType" | "dml_type" => Ok(GeneratedField::DmlType),
                             "input" => Ok(GeneratedField::Input),
                             "tableName" | "table_name" => Ok(GeneratedField::TableName),
-                            "schema" => Ok(GeneratedField::Schema),
+                            "target" => Ok(GeneratedField::Target),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4853,7 +4872,7 @@ impl<'de> serde::Deserialize<'de> for DmlNode {
                 let mut dml_type__ = None;
                 let mut input__ = None;
                 let mut table_name__ = None;
-                let mut schema__ = None;
+                let mut target__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::DmlType => {
@@ -4874,11 +4893,11 @@ impl<'de> serde::Deserialize<'de> for DmlNode {
                             }
                             table_name__ = map_.next_value()?;
                         }
-                        GeneratedField::Schema => {
-                            if schema__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("schema"));
+                        GeneratedField::Target => {
+                            if target__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("target"));
                             }
-                            schema__ = map_.next_value()?;
+                            target__ = map_.next_value()?;
                         }
                     }
                 }
@@ -4886,7 +4905,7 @@ impl<'de> serde::Deserialize<'de> for DmlNode {
                     dml_type: dml_type__.unwrap_or_default(),
                     input: input__,
                     table_name: table_name__,
-                    schema: schema__,
+                    target: target__,
                 })
             }
         }
@@ -12129,12 +12148,18 @@ impl serde::Serialize for ParquetScanExecNode {
         if self.predicate.is_some() {
             len += 1;
         }
+        if self.parquet_options.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ParquetScanExecNode", len)?;
         if let Some(v) = self.base_conf.as_ref() {
             struct_ser.serialize_field("baseConf", v)?;
         }
         if let Some(v) = self.predicate.as_ref() {
             struct_ser.serialize_field("predicate", v)?;
+        }
+        if let Some(v) = self.parquet_options.as_ref() {
+            struct_ser.serialize_field("parquetOptions", v)?;
         }
         struct_ser.end()
     }
@@ -12149,12 +12174,15 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
             "base_conf",
             "baseConf",
             "predicate",
+            "parquet_options",
+            "parquetOptions",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             BaseConf,
             Predicate,
+            ParquetOptions,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12178,6 +12206,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                         match value {
                             "baseConf" | "base_conf" => Ok(GeneratedField::BaseConf),
                             "predicate" => Ok(GeneratedField::Predicate),
+                            "parquetOptions" | "parquet_options" => Ok(GeneratedField::ParquetOptions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12199,6 +12228,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
             {
                 let mut base_conf__ = None;
                 let mut predicate__ = None;
+                let mut parquet_options__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -12213,11 +12243,18 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                             }
                             predicate__ = map_.next_value()?;
                         }
+                        GeneratedField::ParquetOptions => {
+                            if parquet_options__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("parquetOptions"));
+                            }
+                            parquet_options__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ParquetScanExecNode {
                     base_conf: base_conf__,
                     predicate: predicate__,
+                    parquet_options: parquet_options__,
                 })
             }
         }

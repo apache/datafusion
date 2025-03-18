@@ -44,6 +44,7 @@ use tokio::runtime::Handle;
 
 use crate::{
     arrow_wrappers::WrappedSchema,
+    df_result, rresult_return,
     session_config::ForeignSessionConfig,
     table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
 };
@@ -233,10 +234,7 @@ unsafe extern "C" fn scan_fn_wrapper(
     let runtime = &(*private_data).runtime;
 
     async move {
-        let config = match ForeignSessionConfig::try_from(&session_config) {
-            Ok(c) => c,
-            Err(e) => return RResult::RErr(e.to_string().into()),
-        };
+        let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
         let session = SessionStateBuilder::new()
             .with_default_features()
             .with_config(config.0)
@@ -250,15 +248,13 @@ unsafe extern "C" fn scan_fn_wrapper(
                 let codec = DefaultLogicalExtensionCodec {};
 
                 let proto_filters =
-                    match LogicalExprList::decode(filters_serialized.as_ref()) {
-                        Ok(f) => f,
-                        Err(e) => return RResult::RErr(e.to_string().into()),
-                    };
+                    rresult_return!(LogicalExprList::decode(filters_serialized.as_ref()));
 
-                match parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec) {
-                    Ok(f) => f,
-                    Err(e) => return RResult::RErr(e.to_string().into()),
-                }
+                rresult_return!(parse_exprs(
+                    proto_filters.expr.iter(),
+                    &default_ctx,
+                    &codec
+                ))
             }
         };
 
@@ -268,13 +264,11 @@ unsafe extern "C" fn scan_fn_wrapper(
             false => Some(&projections),
         };
 
-        let plan = match internal_provider
-            .scan(&ctx.state(), maybe_projections, &filters, limit.into())
-            .await
-        {
-            Ok(p) => p,
-            Err(e) => return RResult::RErr(e.to_string().into()),
-        };
+        let plan = rresult_return!(
+            internal_provider
+                .scan(&ctx.state(), maybe_projections, &filters, limit.into())
+                .await
+        );
 
         RResult::ROk(FFI_ExecutionPlan::new(
             plan,
@@ -298,30 +292,22 @@ unsafe extern "C" fn insert_into_fn_wrapper(
     let runtime = &(*private_data).runtime;
 
     async move {
-        let config = match ForeignSessionConfig::try_from(&session_config) {
-            Ok(c) => c,
-            Err(e) => return RResult::RErr(e.to_string().into()),
-        };
+        let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
         let session = SessionStateBuilder::new()
             .with_default_features()
             .with_config(config.0)
             .build();
         let ctx = SessionContext::new_with_state(session);
 
-        let input = match ForeignExecutionPlan::try_from(&input) {
-            Ok(input) => Arc::new(input),
-            Err(e) => return RResult::RErr(e.to_string().into()),
-        };
+        let input = rresult_return!(ForeignExecutionPlan::try_from(&input).map(Arc::new));
 
         let insert_op = InsertOp::from(insert_op);
 
-        let plan = match internal_provider
-            .insert_into(&ctx.state(), input, insert_op)
-            .await
-        {
-            Ok(p) => p,
-            Err(e) => return RResult::RErr(e.to_string().into()),
-        };
+        let plan = rresult_return!(
+            internal_provider
+                .insert_into(&ctx.state(), input, insert_op)
+                .await
+        );
 
         RResult::ROk(FFI_ExecutionPlan::new(
             plan,
@@ -396,7 +382,7 @@ impl FFI_TableProvider {
 /// defined on this struct must only use the stable functions provided in
 /// FFI_TableProvider to interact with the foreign table provider.
 #[derive(Debug)]
-pub struct ForeignTableProvider(FFI_TableProvider);
+pub struct ForeignTableProvider(pub FFI_TableProvider);
 
 unsafe impl Send for ForeignTableProvider {}
 unsafe impl Sync for ForeignTableProvider {}
@@ -456,14 +442,7 @@ impl TableProvider for ForeignTableProvider {
             )
             .await;
 
-            match maybe_plan {
-                RResult::ROk(p) => ForeignExecutionPlan::try_from(&p)?,
-                RResult::RErr(_) => {
-                    return Err(DataFusionError::Internal(
-                        "Unable to perform scan via FFI".to_string(),
-                    ))
-                }
-            }
+            ForeignExecutionPlan::try_from(&df_result!(maybe_plan)?)?
         };
 
         Ok(Arc::new(plan))
@@ -493,12 +472,9 @@ impl TableProvider for ForeignTableProvider {
             };
             let serialized_filters = expr_list.encode_to_vec();
 
-            let pushdowns = pushdown_fn(&self.0, serialized_filters.into());
+            let pushdowns = df_result!(pushdown_fn(&self.0, serialized_filters.into()))?;
 
-            match pushdowns {
-                RResult::ROk(p) => Ok(p.iter().map(|v| v.into()).collect()),
-                RResult::RErr(e) => Err(DataFusionError::Plan(e.to_string())),
-            }
+            Ok(pushdowns.iter().map(|v| v.into()).collect())
         }
     }
 
@@ -519,15 +495,7 @@ impl TableProvider for ForeignTableProvider {
             let maybe_plan =
                 (self.0.insert_into)(&self.0, &session_config, &input, insert_op).await;
 
-            match maybe_plan {
-                RResult::ROk(p) => ForeignExecutionPlan::try_from(&p)?,
-                RResult::RErr(e) => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unable to perform insert_into via FFI: {}",
-                        e
-                    )))
-                }
-            }
+            ForeignExecutionPlan::try_from(&df_result!(maybe_plan)?)?
         };
 
         Ok(Arc::new(plan))

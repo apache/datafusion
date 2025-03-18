@@ -27,7 +27,7 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, udf, Distribution, Partitioning, PhysicalExpr,
+    expressions, Distribution, Partitioning, PhysicalExpr,
 };
 
 use std::any::Any;
@@ -42,9 +42,8 @@ use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::stream::RecordBatchStreamAdapter;
 
+use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, Constraints, Result};
 use datafusion_execution::TaskContext;
@@ -74,7 +73,7 @@ use tokio::task::JoinSet;
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
-    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
     /// Implementation note: this method can just proxy to
     /// [`static_name`](ExecutionPlan::static_name) if no special action is
@@ -83,7 +82,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// range of use cases.
     fn name(&self) -> &str;
 
-    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     /// Like [`name`](ExecutionPlan::name) but can be called without an instance.
     fn static_name() -> &'static str
     where
@@ -261,13 +260,32 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// used.
     /// Thus, [`spawn`] is disallowed, and instead use [`SpawnedTask`].
     ///
+    /// To enable timely cancellation, the [`Stream`] that is returned must not
+    /// block the CPU indefinitely and must yield back to the tokio runtime regularly.
+    /// In a typical [`ExecutionPlan`], this automatically happens unless there are
+    /// special circumstances; e.g. when the computational complexity of processing a
+    /// batch is superlinear. See this [general guideline][async-guideline] for more context
+    /// on this point, which explains why one should avoid spending a long time without
+    /// reaching an `await`/yield point in asynchronous runtimes.
+    /// This can be achieved by manually returning [`Poll::Pending`] and setting up wakers
+    /// appropriately, or the use of [`tokio::task::yield_now()`] when appropriate.
+    /// In special cases that warrant manual yielding, determination for "regularly" may be
+    /// made using a timer (being careful with the overhead-heavy system call needed to
+    /// take the time), or by counting rows or batches.
+    ///
+    /// The [cancellation benchmark] tracks some cases of how quickly queries can
+    /// be cancelled.
+    ///
     /// For more details see [`SpawnedTask`], [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`]
     /// for structures to help ensure all background tasks are cancelled.
     ///
     /// [`spawn`]: tokio::task::spawn
+    /// [cancellation benchmark]: https://github.com/apache/datafusion/blob/main/benchmarks/README.md#cancellation
     /// [`JoinSet`]: tokio::task::JoinSet
     /// [`SpawnedTask`]: datafusion_common_runtime::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
+    /// [`Poll::Pending`]: std::task::Poll::Pending
+    /// [async-guideline]: https://ryhl.io/blog/async-what-is-blocking/
     ///
     /// # Implementation Examples
     ///
@@ -283,8 +301,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::array::RecordBatch;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     /// # use datafusion_physical_plan::memory::MemoryStream;
@@ -313,8 +331,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::array::RecordBatch;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     /// # use datafusion_physical_plan::memory::MemoryStream;
@@ -348,8 +366,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::array::RecordBatch;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use futures::TryStreamExt;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -600,10 +618,10 @@ impl Boundedness {
 ///     |_ on: [col1 ASC]
 ///     FilterExec [EmissionType::Incremental]
 ///       |_ pred: col2 > 100
-///       CsvExec [EmissionType::Incremental]
+///       DataSourceExec [EmissionType::Incremental]
 ///         |_ file: "data.csv"
 /// ```
-/// - CsvExec emits records incrementally as it reads from the file
+/// - DataSourceExec emits records incrementally as it reads from the file
 /// - FilterExec processes and emits filtered records incrementally as they arrive
 /// - SortExec must wait for all input records before it can emit the sorted result,
 ///   since it needs to see all values to determine their final order
@@ -778,7 +796,7 @@ impl PlanProperties {
     }
 
     /// Get schema of the node.
-    fn schema(&self) -> &SchemaRef {
+    pub(crate) fn schema(&self) -> &SchemaRef {
         self.eq_properties.schema()
     }
 }
@@ -1055,8 +1073,8 @@ pub enum CardinalityEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{DictionaryArray, Int32Array, NullArray, RunArray};
-    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use std::any::Any;
     use std::sync::Arc;
 

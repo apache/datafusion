@@ -18,8 +18,9 @@
 //! [`ScalarUDFImpl`] definitions for map_values function.
 
 use crate::utils::{get_map_entry_field, make_scalar_function};
-use arrow_array::{Array, ArrayRef, ListArray};
-use arrow_schema::{DataType, Field};
+use arrow::array::{Array, ArrayRef, ListArray};
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{cast::as_map_array, exec_err, Result};
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
@@ -91,10 +92,7 @@ impl ScalarUDFImpl for MapValuesFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 1 {
-            return exec_err!("map_values expects single argument");
-        }
-        let map_type = &arg_types[0];
+        let [map_type] = take_function_args(self.name(), arg_types)?;
         let map_fields = get_map_entry_field(map_type)?;
         Ok(DataType::List(Arc::new(Field::new_list_field(
             map_fields.last().unwrap().data_type().clone(),
@@ -102,12 +100,11 @@ impl ScalarUDFImpl for MapValuesFunc {
         ))))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(map_values_inner)(args)
+        make_scalar_function(map_values_inner)(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -116,12 +113,10 @@ impl ScalarUDFImpl for MapValuesFunc {
 }
 
 fn map_values_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("map_values expects single argument");
-    }
+    let [map_arg] = take_function_args("map_values", args)?;
 
-    let map_array = match args[0].data_type() {
-        DataType::Map(_, _) => as_map_array(&args[0])?,
+    let map_array = match map_arg.data_type() {
+        DataType::Map(_, _) => as_map_array(&map_arg)?,
         _ => return exec_err!("Argument for map_values should be a map"),
     };
 
@@ -129,6 +124,6 @@ fn map_values_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         Arc::new(Field::new_list_field(map_array.value_type().clone(), true)),
         map_array.offsets().clone(),
         Arc::clone(map_array.values()),
-        None,
+        map_array.nulls().cloned(),
     )))
 }

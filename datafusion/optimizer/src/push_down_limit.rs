@@ -82,6 +82,7 @@ impl OptimizerRule for PushDownLimit {
             });
 
             // recursively reapply the rule on the new plan
+            #[allow(clippy::used_underscore_binding)]
             return self.rewrite(plan, _config);
         }
 

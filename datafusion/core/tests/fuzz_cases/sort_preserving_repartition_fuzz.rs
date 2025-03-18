@@ -19,13 +19,12 @@
 mod sp_repartition_fuzz_tests {
     use std::sync::Arc;
 
-    use arrow::compute::{concat_batches, lexsort, SortColumn};
-    use arrow_array::{ArrayRef, Int64Array, RecordBatch, UInt64Array};
-    use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+    use arrow::array::{ArrayRef, Int64Array, RecordBatch, UInt64Array};
+    use arrow::compute::{concat_batches, lexsort, SortColumn, SortOptions};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use datafusion::physical_plan::{
         collect,
-        memory::MemoryExec,
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet},
         repartition::RepartitionExec,
         sorts::sort_preserving_merge::SortPreservingMergeExec,
@@ -45,6 +44,8 @@ mod sp_repartition_fuzz_tests {
     };
     use test_utils::add_empty_batches;
 
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::datasource::source::DataSourceExec;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
@@ -323,23 +324,23 @@ mod sp_repartition_fuzz_tests {
     ///     "SortPreservingMergeExec: [a@0 ASC,b@1 ASC,c@2 ASC]",
     ///     "  SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=2", (Partitioning can be roundrobin also)
     ///     "    SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=1", (Partitioning can be roundrobin also)
-    ///     "      MemoryExec: partitions=1, partition_sizes=[75]",
+    ///     "      DataSourceExec: partitions=1, partition_sizes=[75]",
     /// and / or
     ///     "SortPreservingMergeExec: [a@0 ASC,b@1 ASC,c@2 ASC]",
     ///     "  SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=2", (Partitioning can be roundrobin also)
     ///     "    RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=1", (Partitioning can be roundrobin also)
-    ///     "      MemoryExec: partitions=1, partition_sizes=[75]",
+    ///     "      DataSourceExec: partitions=1, partition_sizes=[75]",
     /// preserves ordering. Input fed to the plan above should be same with the output of the plan.
     async fn run_sort_preserving_repartition_test(
         input1: Vec<RecordBatch>,
-        // If `true`, first repartition executor after `MemoryExec` will be in `RoundRobin` mode
+        // If `true`, first repartition executor after `DataSourceExec` will be in `RoundRobin` mode
         // else it will be in `Hash` mode
         is_first_roundrobin: bool,
-        // If `true`, first repartition executor after `MemoryExec` will be `SortPreservingRepartitionExec`
-        // If `false`, first repartition executor after `MemoryExec` will be `RepartitionExec` (Since its input
+        // If `true`, first repartition executor after `DataSourceExec` will be `SortPreservingRepartitionExec`
+        // If `false`, first repartition executor after `DataSourceExec` will be `RepartitionExec` (Since its input
         // partition number is 1, `RepartitionExec` also preserves ordering.).
         is_first_sort_preserving: bool,
-        // If `true`, second repartition executor after `MemoryExec` will be in `RoundRobin` mode
+        // If `true`, second repartition executor after `DataSourceExec` will be in `RoundRobin` mode
         // else it will be in `Hash` mode
         is_second_roundrobin: bool,
     ) {
@@ -357,11 +358,12 @@ mod sp_repartition_fuzz_tests {
         let concat_input_record = concat_batches(&schema, &input1).unwrap();
 
         let running_source = Arc::new(
-            MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
+            MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_keys.clone()])
                 .unwrap(),
         );
+        let running_source = Arc::new(DataSourceExec::new(running_source));
         let hash_exprs = vec![col("c", &schema).unwrap()];
 
         let intermediate = match (is_first_roundrobin, is_first_sort_preserving) {

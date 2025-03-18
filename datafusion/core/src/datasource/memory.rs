@@ -27,7 +27,6 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::insert::{DataSink, DataSinkExec};
-use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
@@ -39,6 +38,8 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
+pub use datafusion_datasource::memory::MemorySourceConfig;
+pub use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::SortExpr;
@@ -162,7 +163,11 @@ impl MemTable {
             }
         }
 
-        let mut exec = MemoryExec::try_new(&data, Arc::clone(&schema), None)?;
+        let mut exec = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
+            &data,
+            Arc::clone(&schema),
+            None,
+        )?));
         if let Some(cons) = constraints {
             exec = exec.with_constraints(cons.clone());
         }
@@ -223,11 +228,11 @@ impl TableProvider for MemTable {
             partitions.push(inner_vec.clone())
         }
 
-        let mut exec =
-            MemoryExec::try_new(&partitions, self.schema(), projection.cloned())?;
+        let mut source =
+            MemorySourceConfig::try_new(&partitions, self.schema(), projection.cloned())?;
 
         let show_sizes = state.config_options().explain.show_sizes;
-        exec = exec.with_show_sizes(show_sizes);
+        source = source.with_show_sizes(show_sizes);
 
         // add sort information if present
         let sort_order = self.sort_order.lock();
@@ -244,10 +249,10 @@ impl TableProvider for MemTable {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            exec = exec.try_with_sort_information(file_sort_order)?;
+            source = source.try_with_sort_information(file_sort_order)?;
         }
 
-        Ok(Arc::new(exec))
+        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
     }
 
     /// Returns an ExecutionPlan that inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].
@@ -273,26 +278,9 @@ impl TableProvider for MemTable {
 
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
-        if !self
-            .schema()
-            .logically_equivalent_names_and_types(&input.schema())
-        {
-            return plan_err!(
-                "Inserting query must have the same schema with the table. \
-                Expected: {:?}, got: {:?}",
-                self.schema()
-                    .fields()
-                    .iter()
-                    .map(|field| field.data_type())
-                    .collect::<Vec<_>>(),
-                input
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|field| field.data_type())
-                    .collect::<Vec<_>>()
-            );
-        }
+        self.schema()
+            .logically_equivalent_names_and_types(&input.schema())?;
+
         if insert_op != InsertOp::Append {
             return not_impl_err!("{insert_op} not implemented for MemoryTable yet");
         }
@@ -326,6 +314,10 @@ impl DisplayAs for MemSink {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let partition_count = self.batches.len();
                 write!(f, "MemoryTable (partitions={partition_count})")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -385,7 +377,7 @@ impl DataSink for MemSink {
 mod tests {
 
     use super::*;
-    use crate::datasource::provider_as_source;
+    use crate::datasource::{provider_as_source, DefaultTableSource};
     use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
 
@@ -635,6 +627,7 @@ mod tests {
         // Create and register the initial table with the provided schema and data
         let initial_table = Arc::new(MemTable::try_new(schema.clone(), initial_data)?);
         session_ctx.register_table("t", initial_table.clone())?;
+        let target = Arc::new(DefaultTableSource::new(initial_table.clone()));
         // Create and register the source table with the provided schema and inserted data
         let source_table = Arc::new(MemTable::try_new(schema.clone(), inserted_data)?);
         session_ctx.register_table("source", source_table.clone())?;
@@ -644,7 +637,7 @@ mod tests {
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, InsertOp::Append)?
+            LogicalPlanBuilder::insert_into(scan_plan, "t", target, InsertOp::Append)?
                 .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx

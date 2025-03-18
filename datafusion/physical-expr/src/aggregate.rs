@@ -40,8 +40,8 @@ use std::sync::Arc;
 
 use crate::expressions::Column;
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow_schema::SortOptions;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
@@ -91,6 +91,9 @@ impl AggregateExprBuilder {
         }
     }
 
+    /// Constructs an `AggregateFunctionExpr` from the builder
+    ///
+    /// Note that an [`Self::alias`] must be provided before calling this method.
     pub fn build(self) -> Result<AggregateFunctionExpr> {
         let Self {
             fun,
@@ -132,7 +135,11 @@ impl AggregateExprBuilder {
         let data_type = fun.return_type(&input_exprs_types)?;
         let is_nullable = fun.is_nullable();
         let name = match alias {
-            None => return internal_err!("alias should be provided"),
+            None => {
+                return internal_err!(
+                    "AggregateExprBuilder::alias must be provided prior to calling build"
+                )
+            }
             Some(alias) => alias,
         };
 
@@ -199,6 +206,8 @@ impl AggregateExprBuilder {
 }
 
 /// Physical aggregate expression of a UDAF.
+///
+/// Instances are constructed via [`AggregateExprBuilder`].
 #[derive(Debug, Clone)]
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,

@@ -75,7 +75,9 @@ struct JoinLeftData {
     probe_threads_counter: AtomicUsize,
     /// Memory reservation for tracking batch and bitmap
     /// Cleared on `JoinLeftData` drop
-    _reservation: MemoryReservation,
+    /// reservation is cleared on Drop
+    #[expect(dead_code)]
+    reservation: MemoryReservation,
 }
 
 impl JoinLeftData {
@@ -83,13 +85,13 @@ impl JoinLeftData {
         batch: RecordBatch,
         bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
-        _reservation: MemoryReservation,
+        reservation: MemoryReservation,
     ) -> Self {
         Self {
             batch,
             bitmap,
             probe_threads_counter,
-            _reservation,
+            reservation,
         }
     }
 
@@ -423,6 +425,13 @@ impl DisplayAs for NestedLoopJoinExec {
                     "NestedLoopJoinExec: join_type={:?}{}{}",
                     self.join_type, display_filter, display_projections
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                if *self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)
+                } else {
+                    Ok(())
+                }
             }
         }
     }
@@ -1030,14 +1039,14 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::test::TestMemoryExec;
     use crate::{
-        common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
-        test::build_table_i32,
+        common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
 
+    use arrow::array::Int32Array;
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
-    use arrow_array::Int32Array;
-    use arrow_schema::SortOptions;
     use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
@@ -1070,8 +1079,8 @@ pub(crate) mod tests {
             vec![batch]
         };
 
-        let mut exec =
-            MemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
+        let mut source =
+            TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
         if !sorted_column_names.is_empty() {
             let mut sort_info = LexOrdering::default();
             for name in sorted_column_names {
@@ -1085,10 +1094,10 @@ pub(crate) mod tests {
                 };
                 sort_info.push(sort_expr);
             }
-            exec = exec.try_with_sort_information(vec![sort_info]).unwrap();
+            source = source.try_with_sort_information(vec![sort_info]).unwrap();
         }
 
-        Arc::new(exec)
+        Arc::new(TestMemoryExec::update_cache(Arc::new(source)))
     }
 
     fn build_left_table() -> Arc<dyn ExecutionPlan> {
@@ -1513,7 +1522,7 @@ pub(crate) mod tests {
 
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]"
             );
         }
 

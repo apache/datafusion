@@ -30,7 +30,6 @@ use datafusion_catalog::Session;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Column;
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
-use datafusion_optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::Analyzer;
 
@@ -68,11 +67,11 @@ impl ViewTable {
 
     fn apply_required_rule(logical_plan: LogicalPlan) -> Result<LogicalPlan> {
         let options = ConfigOptions::default();
-        Analyzer::with_rules(vec![
-            Arc::new(ExpandWildcardRule::new()),
-            Arc::new(TypeCoercion::new()),
-        ])
-        .execute_and_check(logical_plan, &options, |_, _| {})
+        Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())]).execute_and_check(
+            logical_plan,
+            &options,
+            |_, _| {},
+        )
     }
 
     /// Get definition ref
@@ -504,11 +503,12 @@ mod tests {
             .select_columns(&["bool_col", "int_col"])?;
 
         let plan = df.explain(false, false)?.collect().await?;
-        // Limit is included in ParquetExec
+        // Limit is included in DataSourceExec
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        assert!(formatted.contains("ParquetExec: "));
+        assert!(formatted.contains("DataSourceExec: "));
+        assert!(formatted.contains("file_type=parquet"));
         assert!(formatted.contains("projection=[bool_col, int_col], limit=10"));
         Ok(())
     }

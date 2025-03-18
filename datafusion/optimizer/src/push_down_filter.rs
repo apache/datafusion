@@ -285,6 +285,8 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::TryCast(_)
         | Expr::InList { .. }
         | Expr::ScalarFunction(_) => Ok(TreeNodeRecursion::Continue),
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
         Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
         | Expr::Wildcard { .. }
@@ -797,6 +799,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     child_filter.input,
                 )?);
+                #[allow(clippy::used_underscore_binding)]
                 self.rewrite(new_filter, _config)
             }
             LogicalPlan::Repartition(repartition) => {
@@ -1003,7 +1006,8 @@ impl OptimizerRule for PushDownFilter {
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
                 let extract_partition_keys = |func: &WindowFunction| {
-                    func.partition_by
+                    func.params
+                        .partition_by
                         .iter()
                         .map(|c| Column::from_qualified_name(c.schema_name().to_string()))
                         .collect::<HashSet<_>>()
@@ -1137,6 +1141,12 @@ impl OptimizerRule for PushDownFilter {
                 })
             }
             LogicalPlan::Extension(extension_plan) => {
+                // This check prevents the Filter from being removed when the extension node has no children,
+                // so we return the original Filter unchanged.
+                if extension_plan.node.inputs().is_empty() {
+                    filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
+                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                }
                 let prevent_cols =
                     extension_plan.node.prevent_predicate_push_down_columns();
 
@@ -1386,8 +1396,9 @@ mod tests {
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         col, in_list, in_subquery, lit, ColumnarValue, ExprFunctionExt, Extension,
-        LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
-        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition,
+        LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
+        WindowFunctionDefinition,
     };
 
     use crate::optimizer::Optimizer;
@@ -3615,11 +3626,7 @@ Projection: a, b
             Ok(DataType::Int32)
         }
 
-        fn invoke_batch(
-            &self,
-            _args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Scalar(ScalarValue::from(1)))
         }
     }
@@ -3784,6 +3791,85 @@ Projection: a, b
         let expected_after = "Projection: a, b\
         \n  Filter: t.a > Int32(5) AND t.b > Int32(10) AND TestScalarUDF() > Float64(0.1)\
         \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected_after)
+    }
+
+    #[test]
+    fn test_push_down_filter_to_user_defined_node() -> Result<()> {
+        // Define a custom user-defined logical node
+        #[derive(Debug, Hash, Eq, PartialEq)]
+        struct TestUserNode {
+            schema: DFSchemaRef,
+        }
+
+        impl PartialOrd for TestUserNode {
+            fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+                None
+            }
+        }
+
+        impl TestUserNode {
+            fn new() -> Self {
+                let schema = Arc::new(
+                    DFSchema::new_with_metadata(
+                        vec![(None, Field::new("a", DataType::Int64, false).into())],
+                        Default::default(),
+                    )
+                    .unwrap(),
+                );
+
+                Self { schema }
+            }
+        }
+
+        impl UserDefinedLogicalNodeCore for TestUserNode {
+            fn name(&self) -> &str {
+                "test_node"
+            }
+
+            fn inputs(&self) -> Vec<&LogicalPlan> {
+                vec![]
+            }
+
+            fn schema(&self) -> &DFSchemaRef {
+                &self.schema
+            }
+
+            fn expressions(&self) -> Vec<Expr> {
+                vec![]
+            }
+
+            fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+                write!(f, "TestUserNode")
+            }
+
+            fn with_exprs_and_inputs(
+                &self,
+                exprs: Vec<Expr>,
+                inputs: Vec<LogicalPlan>,
+            ) -> Result<Self> {
+                assert!(exprs.is_empty());
+                assert!(inputs.is_empty());
+                Ok(Self {
+                    schema: Arc::clone(&self.schema),
+                })
+            }
+        }
+
+        // Create a node and build a plan with a filter
+        let node = LogicalPlan::Extension(Extension {
+            node: Arc::new(TestUserNode::new()),
+        });
+
+        let plan = LogicalPlanBuilder::from(node).filter(lit(false))?.build()?;
+
+        // Check the original plan format (not part of the test assertions)
+        let expected_before = "Filter: Boolean(false)\
+        \n  TestUserNode";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        // Check that the filter is pushed down to the user-defined node
+        let expected_after = "Filter: Boolean(false)\n  TestUserNode";
         assert_optimized_plan_eq(plan, expected_after)
     }
 }

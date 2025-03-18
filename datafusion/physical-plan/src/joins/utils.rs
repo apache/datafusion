@@ -33,15 +33,14 @@ use crate::{
 pub use super::join_filter::JoinFilter;
 
 use arrow::array::{
-    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
-    UInt32Builder, UInt64Array,
+    builder::UInt64Builder, downcast_array, new_null_array, Array, ArrowPrimitiveType,
+    BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch, RecordBatchOptions,
+    UInt32Array, UInt32Builder, UInt64Array,
 };
 use arrow::compute;
-use arrow::datatypes::{Field, Schema, SchemaBuilder, UInt32Type, UInt64Type};
-use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use arrow_array::builder::UInt64Builder;
-use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
-use arrow_buffer::ArrowNativeType;
+use arrow::datatypes::{
+    ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
+};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -55,12 +54,13 @@ use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
 use datafusion_physical_expr::{
     LexOrdering, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
+use hashbrown::hash_table::Entry::{Occupied, Vacant};
+use hashbrown::HashTable;
 
 use crate::joins::SharedBitmapBuilder;
 use crate::projection::ProjectionExec;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
-use hashbrown::raw::RawTable;
 use parking_lot::Mutex;
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
@@ -127,20 +127,20 @@ use parking_lot::Mutex;
 /// ```
 pub struct JoinHashMap {
     // Stores hash value to last row index
-    map: RawTable<(u64, u64)>,
+    map: HashTable<(u64, u64)>,
     // Stores indices in chained list data structure
     next: Vec<u64>,
 }
 
 impl JoinHashMap {
     #[cfg(test)]
-    pub(crate) fn new(map: RawTable<(u64, u64)>, next: Vec<u64>) -> Self {
+    pub(crate) fn new(map: HashTable<(u64, u64)>, next: Vec<u64>) -> Self {
         Self { map, next }
     }
 
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         JoinHashMap {
-            map: RawTable::with_capacity(capacity),
+            map: HashTable::with_capacity(capacity),
             next: vec![0; capacity],
         }
     }
@@ -200,9 +200,9 @@ pub trait JoinHashMapType {
     /// Extend with zero
     fn extend_zero(&mut self, len: usize);
     /// Returns mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType);
+    fn get_mut(&mut self) -> (&mut HashTable<(u64, u64)>, &mut Self::NextType);
     /// Returns a reference to the hash map.
-    fn get_map(&self) -> &RawTable<(u64, u64)>;
+    fn get_map(&self) -> &HashTable<(u64, u64)>;
     /// Returns a reference to the next.
     fn get_list(&self) -> &Self::NextType;
 
@@ -213,24 +213,28 @@ pub trait JoinHashMapType {
         deleted_offset: usize,
     ) {
         let (mut_map, mut_list) = self.get_mut();
-        for (row, hash_value) in iter {
-            let item = mut_map.get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
-            if let Some((_, index)) = item {
-                // Already exists: add index to next array
-                let prev_index = *index;
-                // Store new value inside hashmap
-                *index = (row + 1) as u64;
-                // Update chained Vec at `row` with previous value
-                mut_list[row - deleted_offset] = prev_index;
-            } else {
-                mut_map.insert(
-                    *hash_value,
-                    // store the value + 1 as 0 value reserved for end of list
-                    (*hash_value, (row + 1) as u64),
-                    |(hash, _)| *hash,
-                );
-                // chained list at `row` is already initialized with 0
-                // meaning end of list
+        for (row, &hash_value) in iter {
+            let entry = mut_map.entry(
+                hash_value,
+                |&(hash, _)| hash_value == hash,
+                |&(hash, _)| hash,
+            );
+
+            match entry {
+                Occupied(mut occupied_entry) => {
+                    // Already exists: add index to next array
+                    let (_, index) = occupied_entry.get_mut();
+                    let prev_index = *index;
+                    // Store new value inside hashmap
+                    *index = (row + 1) as u64;
+                    // Update chained Vec at `row` with previous value
+                    mut_list[row - deleted_offset] = prev_index;
+                }
+                Vacant(vacant_entry) => {
+                    vacant_entry.insert((hash_value, (row + 1) as u64));
+                    // chained list at `row` is already initialized with 0
+                    // meaning end of list
+                }
             }
         }
     }
@@ -252,7 +256,7 @@ pub trait JoinHashMapType {
         for (row_idx, hash_value) in iter {
             // Get the hash and find it in the index
             if let Some((_, index)) =
-                hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
+                hash_map.find(*hash_value, |(hash, _)| *hash_value == *hash)
             {
                 let mut i = *index - 1;
                 loop {
@@ -300,7 +304,7 @@ pub trait JoinHashMapType {
 
         let mut remaining_output = limit;
 
-        let hash_map: &RawTable<(u64, u64)> = self.get_map();
+        let hash_map: &HashTable<(u64, u64)> = self.get_map();
         let next_chain = self.get_list();
 
         // Calculate initial `hash_values` index before iterating
@@ -331,7 +335,7 @@ pub trait JoinHashMapType {
         let mut row_idx = to_skip;
         for hash_value in &hash_values[to_skip..] {
             if let Some((_, index)) =
-                hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
+                hash_map.find(*hash_value, |(hash, _)| *hash_value == *hash)
             {
                 chain_traverse!(
                     input_indices,
@@ -359,12 +363,12 @@ impl JoinHashMapType for JoinHashMap {
     fn extend_zero(&mut self, _: usize) {}
 
     /// Get mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
+    fn get_mut(&mut self) -> (&mut HashTable<(u64, u64)>, &mut Self::NextType) {
         (&mut self.map, &mut self.next)
     }
 
     /// Get a reference to the hash map.
-    fn get_map(&self) -> &RawTable<(u64, u64)> {
+    fn get_map(&self) -> &HashTable<(u64, u64)> {
         &self.map
     }
 
@@ -625,7 +629,7 @@ pub fn build_join_schema(
         JoinType::LeftSemi | JoinType::LeftAnti => left_fields().unzip(),
         JoinType::LeftMark => {
             let right_field = once((
-                Field::new("mark", arrow_schema::DataType::Boolean, false),
+                Field::new("mark", arrow::datatypes::DataType::Boolean, false),
                 ColumnIndex {
                     index: 0,
                     side: JoinSide::None,
@@ -1076,7 +1080,7 @@ impl<T: 'static> OnceFut<T> {
             OnceFutState::Ready(r) => Poll::Ready(
                 r.as_ref()
                     .map(|r| r.as_ref())
-                    .map_err(|e| DataFusionError::External(Box::new(Arc::clone(e)))),
+                    .map_err(DataFusionError::from),
             ),
         }
     }
@@ -1090,10 +1094,9 @@ impl<T: 'static> OnceFut<T> {
 
         match &self.state {
             OnceFutState::Pending(_) => unreachable!(),
-            OnceFutState::Ready(r) => Poll::Ready(
-                r.clone()
-                    .map_err(|e| DataFusionError::External(Box::new(e))),
-            ),
+            OnceFutState::Ready(r) => {
+                Poll::Ready(r.clone().map_err(DataFusionError::Shared))
+            }
         }
     }
 }
@@ -1820,14 +1823,13 @@ pub(super) fn swap_join_projection(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::pin::Pin;
 
-    use super::*;
-
+    use arrow::array::Int32Array;
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
-    use arrow_array::Int32Array;
-    use arrow_schema::SortOptions;
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
 

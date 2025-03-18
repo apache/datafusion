@@ -33,8 +33,8 @@ use datafusion_common::{
     DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::{
-    self, Alias, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like,
-    ScalarFunction, Sort, WindowFunction,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
+    InSubquery, Like, ScalarFunction, Sort, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -46,7 +46,7 @@ use datafusion_expr::type_coercion::functions::{
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
+use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_utf8view_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
@@ -214,7 +214,10 @@ impl<'a> TypeCoercionRewriter<'a> {
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
     /// This occurs after wildcard expansion and the coercion of the input expressions.
     pub fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
-        let union_schema = Arc::new(coerce_union_schema(&union_plan.inputs)?);
+        let union_schema = Arc::new(coerce_union_schema_with_schema(
+            &union_plan.inputs,
+            &union_plan.schema,
+        )?);
         let new_inputs = union_plan
             .inputs
             .into_iter()
@@ -311,12 +314,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             Expr::ScalarSubquery(Subquery {
                 subquery,
                 outer_ref_columns,
+                spans,
             }) => {
                 let new_plan =
                     analyze_internal(self.schema, Arc::unwrap_or_clone(subquery))?.data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
+                    spans,
                 })))
             }
             Expr::Exists(Exists { subquery, negated }) => {
@@ -329,6 +334,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
                         outer_ref_columns: subquery.outer_ref_columns,
+                        spans: subquery.spans,
                     },
                     negated,
                 })))
@@ -352,6 +358,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
+                    spans: subquery.spans,
                 };
                 Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
                     Box::new(expr.cast_to(&common_type, self.schema)?),
@@ -506,11 +513,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }
             Expr::AggregateFunction(expr::AggregateFunction {
                 func,
-                args,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
+                params:
+                    AggregateFunctionParams {
+                        args,
+                        distinct,
+                        filter,
+                        order_by,
+                        null_treatment,
+                    },
             }) => {
                 let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
                     args,
@@ -530,11 +540,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }
             Expr::WindowFunction(WindowFunction {
                 fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
+                params:
+                    expr::WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        null_treatment,
+                    },
             }) => {
                 let window_frame =
                     coerce_window_frame(window_frame, self.schema, &order_by)?;
@@ -559,6 +572,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         .build()?,
                 ))
             }
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
             Expr::Alias(_)
             | Expr::Column(_)
             | Expr::ScalarVariable(_, _)
@@ -701,7 +716,7 @@ fn coerce_frame_bound(
 
 fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
-        || is_utf8_or_large_utf8(col_type)
+        || is_utf8_or_utf8view_or_large_utf8(col_type)
         || matches!(col_type, DataType::Null)
         || matches!(col_type, DataType::Boolean)
     {
@@ -922,7 +937,12 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 /// This method presumes that the wildcard expansion is unneeded, or has already
 /// been applied.
 pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
-    let base_schema = inputs[0].schema();
+    coerce_union_schema_with_schema(&inputs[1..], inputs[0].schema())
+}
+fn coerce_union_schema_with_schema(
+    inputs: &[Arc<LogicalPlan>],
+    base_schema: &DFSchemaRef,
+) -> Result<DFSchema> {
     let mut union_datatypes = base_schema
         .fields()
         .iter()
@@ -941,7 +961,7 @@ pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
 
     let mut metadata = base_schema.metadata().clone();
 
-    for (i, plan) in inputs.iter().enumerate().skip(1) {
+    for (i, plan) in inputs.iter().enumerate() {
         let plan_schema = plan.schema();
         metadata.extend(plan_schema.metadata().clone());
 
@@ -981,15 +1001,15 @@ pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
         }
     }
     let union_qualified_fields = izip!(
-        base_schema.iter(),
+        base_schema.fields(),
         union_datatypes.into_iter(),
         union_nullabilities,
         union_field_meta.into_iter()
     )
-    .map(|((qualifier, field), datatype, nullable, metadata)| {
+    .map(|(field, datatype, nullable, metadata)| {
         let mut field = Field::new(field.name().clone(), datatype, nullable);
         field.set_metadata(metadata);
-        (qualifier.cloned(), field.into())
+        (None, field.into())
     })
     .collect::<Vec<_>>();
 
@@ -1015,6 +1035,7 @@ fn project_with_column_index(
                 spans: _,
             }) if name != schema.field(i).name() => Ok(e.alias(schema.field(i).name())),
             Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => {
                 plan_err!("Wildcard should be expanded before type coercion")
             }
@@ -1032,25 +1053,27 @@ mod test {
     use std::sync::Arc;
 
     use arrow::datatypes::DataType::Utf8;
-    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
     };
+    use crate::analyzer::Analyzer;
     use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
+    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, Spans};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
         BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
-        Operator, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery,
-        Volatility,
+        Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        SimpleAggregateUDF, Subquery, Union, Volatility,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
+    use datafusion_sql::TableReference;
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -1079,6 +1102,42 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: a < CAST(UInt32(2) AS Float64)\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
+    }
+
+    #[test]
+    fn test_coerce_union() -> Result<()> {
+        let left_plan = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(
+                DFSchema::try_from_qualified_schema(
+                    TableReference::full("datafusion", "test", "foo"),
+                    &Schema::new(vec![Field::new("a", DataType::Int32, false)]),
+                )
+                .unwrap(),
+            ),
+        }));
+        let right_plan = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(
+                DFSchema::try_from_qualified_schema(
+                    TableReference::full("datafusion", "test", "foo"),
+                    &Schema::new(vec![Field::new("a", DataType::Int64, false)]),
+                )
+                .unwrap(),
+            ),
+        }));
+        let union = LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+            left_plan, right_plan,
+        ])?);
+        let analyzed_union = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
+            .execute_and_check(union, &ConfigOptions::default(), |_, _| {})?;
+        let top_level_plan = LogicalPlan::Projection(Projection::try_new(
+            vec![col("a")],
+            Arc::new(analyzed_union),
+        )?);
+
+        let expected = "Projection: a\n  Union\n    Projection: CAST(datafusion.test.foo.a AS Int64) AS a\n      EmptyRelation\n    EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), top_level_plan, expected)
     }
 
     fn coerce_on_output_if_viewtype(plan: LogicalPlan, expected: &str) -> Result<()> {
@@ -1266,11 +1325,7 @@ mod test {
             Ok(Utf8)
         }
 
-        fn invoke_batch(
-            &self,
-            _args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
         }
     }
@@ -1372,7 +1427,7 @@ mod test {
 
         let err = Projection::try_new(vec![udaf], empty).err().unwrap();
         assert!(
-            err.strip_backtrace().starts_with("Error during planning: Failed to coerce arguments to satisfy a call to MY_AVG function: coercion from [Utf8] to the signature Uniform(1, [Float64]) failed")
+            err.strip_backtrace().starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'MY_AVG' function: coercion from [Utf8] to the signature Uniform(1, [Float64]) failed")
         );
         Ok(())
     }
@@ -1422,7 +1477,7 @@ mod test {
             .err()
             .unwrap()
             .strip_backtrace();
-        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to avg function: coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed."));
+        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'avg' function: coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed"));
         Ok(())
     }
 
@@ -2084,6 +2139,7 @@ mod test {
             Subquery {
                 subquery: empty_int32,
                 outer_ref_columns: vec![],
+                spans: Spans::new(),
             },
             false,
         ));
@@ -2109,6 +2165,7 @@ mod test {
             Subquery {
                 subquery: empty_int64,
                 outer_ref_columns: vec![],
+                spans: Spans::new(),
             },
             false,
         ));
@@ -2133,6 +2190,7 @@ mod test {
             Subquery {
                 subquery: empty_inside,
                 outer_ref_columns: vec![],
+                spans: Spans::new(),
             },
             false,
         ));

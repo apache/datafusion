@@ -53,6 +53,16 @@ pub struct RunOpt {
     )]
     path: PathBuf,
 
+    /// Path to data files (parquet or csv), using , to separate the paths
+    /// Default value is the small files for join x table, small table, medium table, big table files in the h2o benchmark
+    /// This is the small csv file case
+    #[structopt(
+        short = "join-paths",
+        long = "join-paths",
+        default_value = "benchmarks/data/h2o/J1_1e7_NA_0.csv,benchmarks/data/h2o/J1_1e7_1e1_0.csv,benchmarks/data/h2o/J1_1e7_1e4_0.csv,benchmarks/data/h2o/J1_1e7_1e7_NA.csv"
+    )]
+    join_paths: String,
+
     /// If present, write results json here
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
@@ -68,10 +78,19 @@ impl RunOpt {
         };
 
         let config = self.common.config();
-        let ctx = SessionContext::new_with_config(config);
+        let rt_builder = self.common.runtime_env_builder()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
 
-        // Register data
-        self.register_data(&ctx).await?;
+        if self.queries_path.to_str().unwrap().contains("join") {
+            let join_paths: Vec<&str> = self.join_paths.split(',').collect();
+            let table_name: Vec<&str> = vec!["x", "small", "medium", "large"];
+            for (i, path) in join_paths.iter().enumerate() {
+                ctx.register_csv(table_name[i], path, Default::default())
+                    .await?;
+            }
+        } else if self.queries_path.to_str().unwrap().contains("groupby") {
+            self.register_data(&ctx).await?;
+        }
 
         let iterations = self.common.iterations;
         let mut benchmark_run = BenchmarkRun::new();
@@ -80,17 +99,22 @@ impl RunOpt {
             let sql = queries.get_query(query_id)?;
             println!("Q{query_id}: {sql}");
 
+            let mut millis = Vec::with_capacity(iterations);
             for i in 1..=iterations {
                 let start = Instant::now();
                 let results = ctx.sql(sql).await?.collect().await?;
                 let elapsed = start.elapsed();
                 let ms = elapsed.as_secs_f64() * 1000.0;
+                millis.push(ms);
                 let row_count: usize = results.iter().map(|b| b.num_rows()).sum();
                 println!(
                     "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
                 );
                 benchmark_run.write_iter(elapsed, row_count);
             }
+            let avg = millis.iter().sum::<f64>() / millis.len() as f64;
+            println!("Query {query_id} avg time: {avg:.2} ms");
+
             if self.common.debug {
                 ctx.sql(sql).await?.explain(false, false)?.show().await?;
             }

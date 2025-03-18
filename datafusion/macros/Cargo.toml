@@ -27,6 +27,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -39,4 +42,4 @@ proc-macro = true
 [dependencies]
 datafusion-expr = { workspace = true }
 quote = "1.0.37"
-syn = { version = "2.0.79", features = ["full"] }
+syn = { version = "2.0.100", features = ["full"] }

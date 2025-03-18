@@ -22,9 +22,13 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
 use crate::utils::make_scalar_function;
+use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -62,7 +66,13 @@ impl Default for EndsWithFunc {
 impl EndsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -84,14 +94,10 @@ impl ScalarUDFImpl for EndsWithFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
-                make_scalar_function(ends_with, vec![])(args)
+                make_scalar_function(ends_with, vec![])(&args.args)
             }
             other => {
                 internal_err!("Unsupported data type {other:?} for function ends_with. Expected Utf8, LargeUtf8 or Utf8View")?
@@ -106,10 +112,29 @@ impl ScalarUDFImpl for EndsWithFunc {
 
 /// Returns true if string ends with suffix.
 /// ends_with('alphabet', 'abet') = 't'
-pub fn ends_with(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let result = arrow::compute::kernels::comparison::ends_with(&args[0], &args[1])?;
-
-    Ok(Arc::new(result) as ArrayRef)
+fn ends_with(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if let Some(coercion_data_type) =
+        string_coercion(args[0].data_type(), args[1].data_type()).or_else(|| {
+            binary_to_string_coercion(args[0].data_type(), args[1].data_type())
+        })
+    {
+        let arg0 = if args[0].data_type() == &coercion_data_type {
+            Arc::clone(&args[0])
+        } else {
+            arrow::compute::kernels::cast::cast(&args[0], &coercion_data_type)?
+        };
+        let arg1 = if args[1].data_type() == &coercion_data_type {
+            Arc::clone(&args[1])
+        } else {
+            arrow::compute::kernels::cast::cast(&args[1], &coercion_data_type)?
+        };
+        let result = arrow::compute::kernels::comparison::ends_with(&arg0, &arg1)?;
+        Ok(Arc::new(result) as ArrayRef)
+    } else {
+        internal_err!(
+            "Unsupported data types for ends_with. Expected Utf8, LargeUtf8 or Utf8View"
+        )
+    }
 }
 
 #[cfg(test)]

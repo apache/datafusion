@@ -638,46 +638,6 @@ statement ok
 set datafusion.catalog.information_schema = true;
 
 statement ok
-CREATE OR REPLACE TABLE TABLE_WITH_NORMALIZATION(FIELD1 BIGINT, FIELD2 BIGINT);
-
-# Check table name is in lowercase
-query TTTT
-show create table table_with_normalization
-----
-datafusion public table_with_normalization NULL
-
-# Check column name is in uppercase
-query TTT
-describe table_with_normalization
-----
-field1 Int64 YES
-field2 Int64 YES
-
-# Disable ident normalization
-statement ok
-set datafusion.sql_parser.enable_ident_normalization = false;
-
-statement ok
-CREATE TABLE TABLE_WITHOUT_NORMALIZATION(FIELD1 BIGINT, FIELD2 BIGINT) AS VALUES (1,2);
-
-# Check table name is in uppercase
-query TTTT
-show create table TABLE_WITHOUT_NORMALIZATION
-----
-datafusion public TABLE_WITHOUT_NORMALIZATION NULL
-
-# Check column name is in uppercase
-query TTT
-describe TABLE_WITHOUT_NORMALIZATION
-----
-FIELD1 Int64 YES
-FIELD2 Int64 YES
-
-statement ok
-set datafusion.sql_parser.enable_ident_normalization = true;
-
-
-statement ok
 create table foo(x int);
 
 statement ok
@@ -771,7 +731,7 @@ query TT
 explain select c1 from t;
 ----
 logical_plan TableScan: t projection=[c1]
-physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/empty.csv]]}, projection=[c1], has_header=true
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/empty.csv]]}, projection=[c1], file_type=csv, has_header=true
 
 statement ok
 drop table t;
@@ -834,6 +794,61 @@ c2 Int32 YES
 
 statement ok
 DROP VIEW v1;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+# Test memory table fields with correct nullable
+statement ok
+CREATE or replace TABLE table_with_pk (
+          sn INT PRIMARY KEY NOT NULL,
+          ts TIMESTAMP WITH TIME ZONE NOT NULL,
+          currency VARCHAR(3) NOT NULL,
+          amount FLOAT
+        ) as VALUES
+          (0, '2022-01-01 06:00:00Z'::timestamp, 'EUR', 30.0),
+          (1, '2022-01-01 08:00:00Z'::timestamp, 'EUR', 50.0),
+          (2, '2022-01-01 11:30:00Z'::timestamp, 'TRY', 75.0),
+          (3, '2022-01-02 12:00:00Z'::timestamp, 'EUR', 200.0);
+
+query TTTTTT
+show columns FROM table_with_pk;
+----
+datafusion public table_with_pk sn Int32 NO
+datafusion public table_with_pk ts Timestamp(Nanosecond, Some("+00:00")) NO
+datafusion public table_with_pk currency Utf8 NO
+datafusion public table_with_pk amount Float32 YES
+
+statement ok
+drop table table_with_pk;
+
+statement ok
+set datafusion.catalog.information_schema = false;
+
+# Test VARCHAR is mapped to Utf8View during SQL planning when setting map_varchar_to_utf8view to true
+statement ok
+CREATE TABLE t1(c1 VARCHAR(10) NOT NULL, c2 VARCHAR);
+
+query TTT
+DESCRIBE t1;
+----
+c1 Utf8 NO
+c2 Utf8 YES
+
+statement ok
+set datafusion.sql_parser.map_varchar_to_utf8view = true;
+
+statement ok
+CREATE TABLE t2(c1 VARCHAR(10) NOT NULL, c2 VARCHAR);
+
+query TTT
+DESCRIBE t2;
+----
+c1 Utf8View NO
+c2 Utf8View YES
 
 statement ok
 DROP TABLE t1;

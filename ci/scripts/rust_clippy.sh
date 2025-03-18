@@ -19,5 +19,3 @@
 
 set -ex
 cargo clippy --all-targets --workspace --features avro,pyarrow,integration-tests -- -D warnings
-cd datafusion-cli
-cargo clippy --all-targets --all-features -- -D warnings

@@ -19,10 +19,14 @@
 //! and return types of functions in DataFusion.
 
 use std::fmt::Display;
+use std::hash::Hash;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::types::{LogicalTypeRef, NativeType};
+use datafusion_common::internal_err;
+use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
+use datafusion_common::utils::ListCoercion;
+use indexmap::IndexSet;
 use itertools::Itertools;
 
 /// Constant that is used as a placeholder for any valid timezone.
@@ -126,12 +130,11 @@ pub enum TypeSignature {
     Exact(Vec<DataType>),
     /// One or more arguments belonging to the [`TypeSignatureClass`], in order.
     ///
-    /// For example, `Coercible(vec![logical_float64()])` accepts
-    /// arguments like `vec![Int32]` or `vec![Float32]`
-    /// since i32 and f32 can be cast to f64
+    /// [`Coercion`] contains not only the desired type but also the allowed casts.
+    /// For example, if you expect a function has string type, but you also allow it to be casted from binary type.
     ///
     /// For functions that take no arguments (e.g. `random()`) see [`TypeSignature::Nullary`].
-    Coercible(Vec<TypeSignatureClass>),
+    Coercible(Vec<Coercion>),
     /// One or more arguments coercible to a single, comparable type.
     ///
     /// Each argument will be coerced to a single type using the
@@ -208,14 +211,13 @@ impl TypeSignature {
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
 pub enum TypeSignatureClass {
     Timestamp,
-    Date,
     Time,
     Interval,
     Duration,
     Native(LogicalTypeRef),
     // TODO:
     // Numeric
-    // Integer
+    Integer,
 }
 
 impl Display for TypeSignatureClass {
@@ -224,27 +226,98 @@ impl Display for TypeSignatureClass {
     }
 }
 
+impl TypeSignatureClass {
+    /// Get example acceptable types for this `TypeSignatureClass`
+    ///
+    /// This is used for `information_schema` and can be used to generate
+    /// documentation or error messages.
+    fn get_example_types(&self) -> Vec<DataType> {
+        match self {
+            TypeSignatureClass::Native(l) => get_data_types(l.native()),
+            TypeSignatureClass::Timestamp => {
+                vec![
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    DataType::Timestamp(
+                        TimeUnit::Nanosecond,
+                        Some(TIMEZONE_WILDCARD.into()),
+                    ),
+                ]
+            }
+            TypeSignatureClass::Time => {
+                vec![DataType::Time64(TimeUnit::Nanosecond)]
+            }
+            TypeSignatureClass::Interval => {
+                vec![DataType::Interval(IntervalUnit::DayTime)]
+            }
+            TypeSignatureClass::Duration => {
+                vec![DataType::Duration(TimeUnit::Nanosecond)]
+            }
+            TypeSignatureClass::Integer => {
+                vec![DataType::Int64]
+            }
+        }
+    }
+
+    /// Does the specified `NativeType` match this type signature class?
+    pub fn matches_native_type(
+        self: &TypeSignatureClass,
+        logical_type: &NativeType,
+    ) -> bool {
+        if logical_type == &NativeType::Null {
+            return true;
+        }
+
+        match self {
+            TypeSignatureClass::Native(t) if t.native() == logical_type => true,
+            TypeSignatureClass::Timestamp if logical_type.is_timestamp() => true,
+            TypeSignatureClass::Time if logical_type.is_time() => true,
+            TypeSignatureClass::Interval if logical_type.is_interval() => true,
+            TypeSignatureClass::Duration if logical_type.is_duration() => true,
+            TypeSignatureClass::Integer if logical_type.is_integer() => true,
+            _ => false,
+        }
+    }
+
+    /// What type would `origin_type` be casted to when casting to the specified native type?
+    pub fn default_casted_type(
+        &self,
+        native_type: &NativeType,
+        origin_type: &DataType,
+    ) -> datafusion_common::Result<DataType> {
+        match self {
+            TypeSignatureClass::Native(logical_type) => {
+                logical_type.native().default_cast_for(origin_type)
+            }
+            // If the given type is already a timestamp, we don't change the unit and timezone
+            TypeSignatureClass::Timestamp if native_type.is_timestamp() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Time if native_type.is_time() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Interval if native_type.is_interval() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Duration if native_type.is_duration() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Integer if native_type.is_integer() => {
+                Ok(origin_type.to_owned())
+            }
+            _ => internal_err!("May miss the matching logic in `matches_native_type`"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum ArrayFunctionSignature {
-    /// Specialized Signature for ArrayAppend and similar functions
-    /// The first argument should be List/LargeList/FixedSizedList, and the second argument should be non-list or list.
-    /// The second argument's list dimension should be one dimension less than the first argument's list dimension.
-    /// List dimension of the List/LargeList is equivalent to the number of List.
-    /// List dimension of the non-list is 0.
-    ArrayAndElement,
-    /// Specialized Signature for ArrayPrepend and similar functions
-    /// The first argument should be non-list or list, and the second argument should be List/LargeList.
-    /// The first argument's list dimension should be one dimension less than the second argument's list dimension.
-    ElementAndArray,
-    /// Specialized Signature for Array functions of the form (List/LargeList, Index)
-    /// The first argument should be List/LargeList/FixedSizedList, and the second argument should be Int64.
-    ArrayAndIndex,
-    /// Specialized Signature for Array functions of the form (List/LargeList, Element, Optional Index)
-    ArrayAndElementAndOptionalIndex,
-    /// Specialized Signature for ArrayEmpty and similar functions
-    /// The function takes a single argument that must be a List/LargeList/FixedSizeList
-    /// or something that can be coerced to one of those types.
-    Array,
+    /// A function takes at least one List/LargeList/FixedSizeList argument.
+    Array {
+        /// A full list of the arguments accepted by this function.
+        arguments: Vec<ArrayFunctionArgument>,
+        /// Additional information about how array arguments should be coerced.
+        array_coercion: Option<ListCoercion>,
+    },
     /// A function takes a single argument that must be a List/LargeList/FixedSizeList
     /// which gets coerced to List, with element type recursively coerced to List too if it is list-like.
     RecursiveArray,
@@ -256,26 +329,53 @@ pub enum ArrayFunctionSignature {
 impl Display for ArrayFunctionSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ArrayFunctionSignature::ArrayAndElement => {
-                write!(f, "array, element")
-            }
-            ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
-                write!(f, "array, element, [index]")
-            }
-            ArrayFunctionSignature::ElementAndArray => {
-                write!(f, "element, array")
-            }
-            ArrayFunctionSignature::ArrayAndIndex => {
-                write!(f, "array, index")
-            }
-            ArrayFunctionSignature::Array => {
-                write!(f, "array")
+            ArrayFunctionSignature::Array { arguments, .. } => {
+                for (idx, argument) in arguments.iter().enumerate() {
+                    write!(f, "{argument}")?;
+                    if idx != arguments.len() - 1 {
+                        write!(f, ", ")?;
+                    }
+                }
+                Ok(())
             }
             ArrayFunctionSignature::RecursiveArray => {
                 write!(f, "recursive_array")
             }
             ArrayFunctionSignature::MapArray => {
                 write!(f, "map_array")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum ArrayFunctionArgument {
+    /// A non-list or list argument. The list dimensions should be one less than the Array's list
+    /// dimensions.
+    Element,
+    /// An Int64 index argument.
+    Index,
+    /// An argument of type List/LargeList/FixedSizeList. All Array arguments must be coercible
+    /// to the same type.
+    Array,
+    // A Utf8 argument.
+    String,
+}
+
+impl Display for ArrayFunctionArgument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArrayFunctionArgument::Element => {
+                write!(f, "element")
+            }
+            ArrayFunctionArgument::Index => {
+                write!(f, "index")
+            }
+            ArrayFunctionArgument::Array => {
+                write!(f, "array")
+            }
+            ArrayFunctionArgument::String => {
+                write!(f, "string")
             }
         }
     }
@@ -305,8 +405,8 @@ impl TypeSignature {
             TypeSignature::Comparable(num) => {
                 vec![format!("Comparable({num})")]
             }
-            TypeSignature::Coercible(types) => {
-                vec![Self::join_types(types, ", ")]
+            TypeSignature::Coercible(coercions) => {
+                vec![Self::join_types(coercions, ", ")]
             }
             TypeSignature::Exact(types) => {
                 vec![Self::join_types(types, ", ")]
@@ -360,44 +460,45 @@ impl TypeSignature {
         }
     }
 
-    /// get all possible types for the given `TypeSignature`
+    #[deprecated(since = "46.0.0", note = "See get_example_types instead")]
     pub fn get_possible_types(&self) -> Vec<Vec<DataType>> {
+        self.get_example_types()
+    }
+
+    /// Return example acceptable types for this `TypeSignature`'
+    ///
+    /// Returns a `Vec<DataType>` for each argument to the function
+    ///
+    /// This is used for `information_schema` and can be used to generate
+    /// documentation or error messages.
+    pub fn get_example_types(&self) -> Vec<Vec<DataType>> {
         match self {
             TypeSignature::Exact(types) => vec![types.clone()],
             TypeSignature::OneOf(types) => types
                 .iter()
-                .flat_map(|type_sig| type_sig.get_possible_types())
+                .flat_map(|type_sig| type_sig.get_example_types())
                 .collect(),
             TypeSignature::Uniform(arg_count, types) => types
                 .iter()
                 .cloned()
                 .map(|data_type| vec![data_type; *arg_count])
                 .collect(),
-            TypeSignature::Coercible(types) => types
+            TypeSignature::Coercible(coercions) => coercions
                 .iter()
-                .map(|logical_type| match logical_type {
-                    TypeSignatureClass::Native(l) => get_data_types(l.native()),
-                    TypeSignatureClass::Timestamp => {
-                        vec![
-                            DataType::Timestamp(TimeUnit::Nanosecond, None),
-                            DataType::Timestamp(
-                                TimeUnit::Nanosecond,
-                                Some(TIMEZONE_WILDCARD.into()),
-                            ),
-                        ]
+                .map(|c| {
+                    let mut all_types: IndexSet<DataType> =
+                        c.desired_type().get_example_types().into_iter().collect();
+
+                    if let Some(implicit_coercion) = c.implicit_coercion() {
+                        let allowed_casts: Vec<DataType> = implicit_coercion
+                            .allowed_source_types
+                            .iter()
+                            .flat_map(|t| t.get_example_types())
+                            .collect();
+                        all_types.extend(allowed_casts);
                     }
-                    TypeSignatureClass::Date => {
-                        vec![DataType::Date64]
-                    }
-                    TypeSignatureClass::Time => {
-                        vec![DataType::Time64(TimeUnit::Nanosecond)]
-                    }
-                    TypeSignatureClass::Interval => {
-                        vec![DataType::Interval(IntervalUnit::DayTime)]
-                    }
-                    TypeSignatureClass::Duration => {
-                        vec![DataType::Duration(TimeUnit::Nanosecond)]
-                    }
+
+                    all_types.into_iter().collect::<Vec<_>>()
                 })
                 .multi_cartesian_product()
                 .collect(),
@@ -452,6 +553,186 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
         }
         // TODO: support other native types
         _ => vec![],
+    }
+}
+
+/// Represents type coercion rules for function arguments, specifying both the desired type
+/// and optional implicit coercion rules for source types.
+///
+/// # Examples
+///
+/// ```
+/// use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+/// use datafusion_common::types::{NativeType, logical_binary, logical_string};
+///
+/// // Exact coercion that only accepts timestamp types
+/// let exact = Coercion::new_exact(TypeSignatureClass::Timestamp);
+///
+/// // Implicit coercion that accepts string types but can coerce from binary types
+/// let implicit = Coercion::new_implicit(
+///     TypeSignatureClass::Native(logical_string()),
+///     vec![TypeSignatureClass::Native(logical_binary())],
+///     NativeType::String
+/// );
+/// ```
+///
+/// There are two variants:
+///
+/// * `Exact` - Only accepts arguments that exactly match the desired type
+/// * `Implicit` - Accepts the desired type and can coerce from specified source types
+#[derive(Debug, Clone, Eq, PartialOrd)]
+pub enum Coercion {
+    /// Coercion that only accepts arguments exactly matching the desired type.
+    Exact {
+        /// The required type for the argument
+        desired_type: TypeSignatureClass,
+    },
+
+    /// Coercion that accepts the desired type and can implicitly coerce from other types.
+    Implicit {
+        /// The primary desired type for the argument
+        desired_type: TypeSignatureClass,
+        /// Rules for implicit coercion from other types
+        implicit_coercion: ImplicitCoercion,
+    },
+}
+
+impl Coercion {
+    pub fn new_exact(desired_type: TypeSignatureClass) -> Self {
+        Self::Exact { desired_type }
+    }
+
+    /// Create a new coercion with implicit coercion rules.
+    ///
+    /// `allowed_source_types` defines the possible types that can be coerced to `desired_type`.
+    /// `default_casted_type` is the default type to be used for coercion if we cast from other types via `allowed_source_types`.
+    pub fn new_implicit(
+        desired_type: TypeSignatureClass,
+        allowed_source_types: Vec<TypeSignatureClass>,
+        default_casted_type: NativeType,
+    ) -> Self {
+        Self::Implicit {
+            desired_type,
+            implicit_coercion: ImplicitCoercion {
+                allowed_source_types,
+                default_casted_type,
+            },
+        }
+    }
+
+    pub fn allowed_source_types(&self) -> &[TypeSignatureClass] {
+        match self {
+            Coercion::Exact { .. } => &[],
+            Coercion::Implicit {
+                implicit_coercion, ..
+            } => implicit_coercion.allowed_source_types.as_slice(),
+        }
+    }
+
+    pub fn default_casted_type(&self) -> Option<&NativeType> {
+        match self {
+            Coercion::Exact { .. } => None,
+            Coercion::Implicit {
+                implicit_coercion, ..
+            } => Some(&implicit_coercion.default_casted_type),
+        }
+    }
+
+    pub fn desired_type(&self) -> &TypeSignatureClass {
+        match self {
+            Coercion::Exact { desired_type } => desired_type,
+            Coercion::Implicit { desired_type, .. } => desired_type,
+        }
+    }
+
+    pub fn implicit_coercion(&self) -> Option<&ImplicitCoercion> {
+        match self {
+            Coercion::Exact { .. } => None,
+            Coercion::Implicit {
+                implicit_coercion, ..
+            } => Some(implicit_coercion),
+        }
+    }
+}
+
+impl Display for Coercion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Coercion({}", self.desired_type())?;
+        if let Some(implicit_coercion) = self.implicit_coercion() {
+            write!(f, ", implicit_coercion={implicit_coercion}",)
+        } else {
+            write!(f, ")")
+        }
+    }
+}
+
+impl PartialEq for Coercion {
+    fn eq(&self, other: &Self) -> bool {
+        self.desired_type() == other.desired_type()
+            && self.implicit_coercion() == other.implicit_coercion()
+    }
+}
+
+impl Hash for Coercion {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.desired_type().hash(state);
+        self.implicit_coercion().hash(state);
+    }
+}
+
+/// Defines rules for implicit type coercion, specifying which source types can be
+/// coerced and the default type to use when coercing.
+///
+/// This is used by functions to specify which types they can accept via implicit
+/// coercion in addition to their primary desired type.
+///
+/// # Examples
+///
+/// ```
+/// use arrow::datatypes::TimeUnit;
+///
+/// use datafusion_expr_common::signature::{Coercion, ImplicitCoercion, TypeSignatureClass};
+/// use datafusion_common::types::{NativeType, logical_binary};
+///
+/// // Allow coercing from binary types to timestamp, coerce to specific timestamp unit and timezone
+/// let implicit = Coercion::new_implicit(
+///     TypeSignatureClass::Timestamp,
+///     vec![TypeSignatureClass::Native(logical_binary())],
+///     NativeType::Timestamp(TimeUnit::Second, None),
+/// );
+/// ```
+#[derive(Debug, Clone, Eq, PartialOrd)]
+pub struct ImplicitCoercion {
+    /// The types that can be coerced from via implicit casting
+    allowed_source_types: Vec<TypeSignatureClass>,
+
+    /// The default type to use when coercing from allowed source types.
+    /// This is particularly important for types like Timestamp that have multiple
+    /// possible configurations (different time units and timezones).
+    default_casted_type: NativeType,
+}
+
+impl Display for ImplicitCoercion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ImplicitCoercion({:?}, default_type={:?})",
+            self.allowed_source_types, self.default_casted_type
+        )
+    }
+}
+
+impl PartialEq for ImplicitCoercion {
+    fn eq(&self, other: &Self) -> bool {
+        self.allowed_source_types == other.allowed_source_types
+            && self.default_casted_type == other.default_casted_type
+    }
+}
+
+impl Hash for ImplicitCoercion {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.allowed_source_types.hash(state);
+        self.default_casted_type.hash(state);
     }
 }
 
@@ -531,11 +812,9 @@ impl Signature {
             volatility,
         }
     }
+
     /// Target coerce types in order
-    pub fn coercible(
-        target_types: Vec<TypeSignatureClass>,
-        volatility: Volatility,
-    ) -> Self {
+    pub fn coercible(target_types: Vec<Coercion>, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
             volatility,
@@ -575,7 +854,13 @@ impl Signature {
     pub fn array_and_element(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ArrayAndElement,
+                ArrayFunctionSignature::Array {
+                    arguments: vec![
+                        ArrayFunctionArgument::Array,
+                        ArrayFunctionArgument::Element,
+                    ],
+                    array_coercion: Some(ListCoercion::FixedSizedListToList),
+                },
             ),
             volatility,
         }
@@ -583,26 +868,38 @@ impl Signature {
     /// Specialized Signature for Array functions with an optional index
     pub fn array_and_element_and_optional_index(volatility: Volatility) -> Self {
         Signature {
-            type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ArrayAndElementAndOptionalIndex,
-            ),
+            type_signature: TypeSignature::OneOf(vec![
+                TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                    arguments: vec![
+                        ArrayFunctionArgument::Array,
+                        ArrayFunctionArgument::Element,
+                    ],
+                    array_coercion: None,
+                }),
+                TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                    arguments: vec![
+                        ArrayFunctionArgument::Array,
+                        ArrayFunctionArgument::Element,
+                        ArrayFunctionArgument::Index,
+                    ],
+                    array_coercion: None,
+                }),
+            ]),
             volatility,
         }
     }
-    /// Specialized Signature for ArrayPrepend and similar functions
-    pub fn element_and_array(volatility: Volatility) -> Self {
-        Signature {
-            type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ElementAndArray,
-            ),
-            volatility,
-        }
-    }
+
     /// Specialized Signature for ArrayElement and similar functions
     pub fn array_and_index(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ArrayAndIndex,
+                ArrayFunctionSignature::Array {
+                    arguments: vec![
+                        ArrayFunctionArgument::Array,
+                        ArrayFunctionArgument::Index,
+                    ],
+                    array_coercion: None,
+                },
             ),
             volatility,
         }
@@ -610,7 +907,12 @@ impl Signature {
     /// Specialized Signature for ArrayEmpty and similar functions
     pub fn array(volatility: Volatility) -> Self {
         Signature {
-            type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
+            type_signature: TypeSignature::ArraySignature(
+                ArrayFunctionSignature::Array {
+                    arguments: vec![ArrayFunctionArgument::Array],
+                    array_coercion: None,
+                },
+            ),
             volatility,
         }
     }
@@ -687,14 +989,14 @@ mod tests {
     #[test]
     fn test_get_possible_types() {
         let type_signature = TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(possible_types, vec![vec![DataType::Int32, DataType::Int64]]);
 
         let type_signature = TypeSignature::OneOf(vec![
             TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]),
             TypeSignature::Exact(vec![DataType::Float32, DataType::Float64]),
         ]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![
@@ -708,7 +1010,7 @@ mod tests {
             TypeSignature::Exact(vec![DataType::Float32, DataType::Float64]),
             TypeSignature::Exact(vec![DataType::Utf8]),
         ]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![
@@ -720,7 +1022,7 @@ mod tests {
 
         let type_signature =
             TypeSignature::Uniform(2, vec![DataType::Float32, DataType::Int64]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![
@@ -730,10 +1032,10 @@ mod tests {
         );
 
         let type_signature = TypeSignature::Coercible(vec![
-            TypeSignatureClass::Native(logical_string()),
-            TypeSignatureClass::Native(logical_int64()),
+            Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+            Coercion::new_exact(TypeSignatureClass::Native(logical_int64())),
         ]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![
@@ -745,14 +1047,14 @@ mod tests {
 
         let type_signature =
             TypeSignature::Variadic(vec![DataType::Int32, DataType::Int64]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![vec![DataType::Int32], vec![DataType::Int64]]
         );
 
         let type_signature = TypeSignature::Numeric(2);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![
@@ -770,7 +1072,7 @@ mod tests {
         );
 
         let type_signature = TypeSignature::String(2);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![

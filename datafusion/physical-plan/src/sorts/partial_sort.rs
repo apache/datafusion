@@ -226,6 +226,15 @@ impl DisplayAs for PartialSortExec {
                     None => write!(f, "PartialSortExec: expr=[{}], common_prefix_length=[{common_prefix_length}]", self.expr),
                 }
             }
+            DisplayFormatType::TreeRender => match self.fetch {
+                Some(fetch) => {
+                    writeln!(f, "{}", self.expr)?;
+                    writeln!(f, "limit={fetch}")
+                }
+                None => {
+                    writeln!(f, "{}", self.expr)
+                }
+            },
         }
     }
 }
@@ -466,11 +475,11 @@ mod tests {
     use crate::collect;
     use crate::expressions::col;
     use crate::expressions::PhysicalSortExpr;
-    use crate::memory::MemoryExec;
     use crate::sorts::sort::SortExec;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::TestMemoryExec;
 
     use super::*;
 
@@ -695,14 +704,13 @@ mod tests {
             ("c", &(0..100).rev().collect()),
         );
         let schema = batch1.schema();
-        Arc::new(
-            MemoryExec::try_new(
-                &[vec![batch1, batch2, batch3, batch4]],
-                Arc::clone(&schema),
-                None,
-            )
-            .unwrap(),
-        ) as Arc<dyn ExecutionPlan>
+
+        TestMemoryExec::try_new_exec(
+            &[vec![batch1, batch2, batch3, batch4]],
+            Arc::clone(&schema),
+            None,
+        )
+        .unwrap() as Arc<dyn ExecutionPlan>
     }
 
     #[tokio::test]
@@ -881,11 +889,8 @@ mod tests {
             Arc::new(vec![1, 1, 2].into_iter().map(Some).collect::<UInt64Array>());
 
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data])?;
-        let input = Arc::new(MemoryExec::try_new(
-            &[vec![batch]],
-            Arc::clone(&schema),
-            None,
-        )?);
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
 
         let partial_sort_exec = Arc::new(PartialSortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
@@ -991,7 +996,7 @@ mod tests {
                     options: option_desc,
                 },
             ]),
-            Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None)?),
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?,
             2,
         ));
 

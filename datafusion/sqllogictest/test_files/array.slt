@@ -950,9 +950,9 @@ select column1[2:4], column2[1:4], column3[3:4] from arrays;
 [[5, 6]] [NULL, 5.5, 6.6] [NULL, u]
 [[7, 8]] [7.7, 8.8, 9.9] [l, o]
 [[9, 10]] [10.1, NULL, 12.2] [t]
-[] [13.3, 14.4, 15.5] [e, t]
-[[13, 14]] [] []
-[[NULL, 18]] [16.6, 17.7, 18.8] []
+NULL [13.3, 14.4, 15.5] [e, t]
+[[13, 14]] NULL []
+[[NULL, 18]] [16.6, 17.7, 18.8] NULL
 
 # multiple index with columns #2 (zero index)
 query ???
@@ -962,9 +962,9 @@ select column1[0:5], column2[0:3], column3[0:9] from arrays;
 [[3, 4], [5, 6]] [NULL, 5.5, 6.6] [i, p, NULL, u, m]
 [[5, 6], [7, 8]] [7.7, 8.8, 9.9] [d, NULL, l, o, r]
 [[7, NULL], [9, 10]] [10.1, NULL, 12.2] [s, i, t]
-[] [13.3, 14.4, 15.5] [a, m, e, t]
-[[11, 12], [13, 14]] [] [,]
-[[15, 16], [NULL, 18]] [16.6, 17.7, 18.8] []
+NULL [13.3, 14.4, 15.5] [a, m, e, t]
+[[11, 12], [13, 14]] NULL [,]
+[[15, 16], [NULL, 18]] [16.6, 17.7, 18.8] NULL
 
 # TODO: support negative index
 # multiple index with columns #3 (negative index)
@@ -1026,9 +1026,9 @@ select column1[2:4:2], column2[1:4:2], column3[3:4:2] from arrays;
 [[5, 6]] [NULL, 6.6] [NULL]
 [[7, 8]] [7.7, 9.9] [l]
 [[9, 10]] [10.1, 12.2] [t]
-[] [13.3, 15.5] [e]
-[[13, 14]] [] []
-[[NULL, 18]] [16.6, 18.8] []
+NULL [13.3, 15.5] [e]
+[[13, 14]] NULL []
+[[NULL, 18]] [16.6, 18.8] NULL
 
 # multiple index with columns #2 (zero index)
 query ???
@@ -1038,9 +1038,9 @@ select column1[0:5:2], column2[0:3:2], column3[0:9:2] from arrays;
 [[3, 4]] [NULL, 6.6] [i, NULL, m]
 [[5, 6]] [7.7, 9.9] [d, l, r]
 [[7, NULL]] [10.1, 12.2] [s, t]
-[] [13.3, 15.5] [a, e]
-[[11, 12]] [] [,]
-[[15, 16]] [16.6, 18.8] []
+NULL [13.3, 15.5] [a, e]
+[[11, 12]] NULL [,]
+[[15, 16]] [16.6, 18.8] NULL
 
 
 ### Array function tests
@@ -1191,7 +1191,7 @@ from arrays_values_without_nulls;
 ## array_element (aliases: array_extract, list_extract, list_element)
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: array_element does not support zero arguments
+query error DataFusion error: Error during planning: 'array_element' does not support zero arguments
 select array_element();
 
 # array_element error
@@ -1204,8 +1204,10 @@ select array_element([1, 2], NULL);
 ----
 NULL
 
-query error
+query I
 select array_element(NULL, 2);
+----
+NULL
 
 # array_element scalar function #1 (with positive index)
 query IT
@@ -1433,6 +1435,93 @@ NULL 23
 NULL 43
 5 NULL
 
+
+## array_max
+# array_max scalar function #1 (with positive index)
+query I
+select array_max(make_array(5, 3, 6, 4));
+----
+6
+
+query I
+select array_max(make_array(5, 3, 4, NULL, 6, NULL));
+----
+6
+
+query I
+select array_max(make_array(NULL, NULL));
+----
+NULL
+
+query T
+select array_max(make_array('h', 'e', 'o', 'l', 'l'));
+----
+o
+
+query T
+select array_max(make_array('h', 'e', 'l', NULL, 'l', 'o', NULL));
+----
+o
+
+query B
+select array_max(make_array(false, true, false, true));
+----
+true
+
+query B
+select array_max(make_array(false, true, NULL, false, true));
+----
+true
+
+query D
+select array_max(make_array(DATE '1992-09-01', DATE '1993-03-01', DATE '1999-05-01', DATE '1985-11-01'));
+----
+1999-05-01
+
+query D
+select array_max(make_array(DATE '1995-09-01', DATE '1999-05-01', DATE '1993-03-01', NULL));
+----
+1999-05-01
+
+query P
+select array_max(make_array(TIMESTAMP '1992-09-01', TIMESTAMP '1995-06-01', TIMESTAMP '1984-10-01'));
+----
+1995-06-01T00:00:00
+
+query P
+select array_max(make_array(NULL, TIMESTAMP '1996-10-01', TIMESTAMP '1995-06-01'));
+----
+1996-10-01T00:00:00
+
+query R
+select array_max(make_array(5.1, -3.2, 6.3, 4.9));
+----
+6.3
+
+query ?I
+select input, array_max(input) from (select make_array(d - 1, d, d + 1) input from (values (0), (10), (20), (30), (NULL)) t(d))
+----
+[-1, 0, 1] 1
+[9, 10, 11] 11
+[19, 20, 21] 21
+[29, 30, 31] 31
+[NULL, NULL, NULL] NULL
+
+query II
+select array_max(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_max(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'));
+----
+3 1
+
+query I
+select array_max(make_array());
+----
+NULL
+
+# Testing with empty arguments should result in an error
+query error DataFusion error: Error during planning: 'array_max' does not support zero arguments
+select array_max();
+
+
 ## array_pop_back (aliases: `list_pop_back`)
 
 # array_pop_back scalar function with null
@@ -1579,7 +1668,7 @@ select array_pop_back(column1) from arrayspop;
 [3, 4, 5]
 [6, 7, 8, NULL]
 [NULL, NULL]
-[]
+NULL
 [NULL, 10, 11]
 
 query ?
@@ -1589,7 +1678,7 @@ select array_pop_back(arrow_cast(column1, 'LargeList(Int64)')) from arrayspop;
 [3, 4, 5]
 [6, 7, 8, NULL]
 [NULL, NULL]
-[]
+NULL
 [NULL, 10, 11]
 
 query ?
@@ -1599,7 +1688,7 @@ select array_pop_back(column1) from large_arrayspop;
 [3, 4, 5]
 [6, 7, 8, NULL]
 [NULL, NULL]
-[]
+NULL
 [NULL, 10, 11]
 
 query ?
@@ -1609,7 +1698,7 @@ select array_pop_back(arrow_cast(column1, 'LargeList(Int64)')) from large_arrays
 [3, 4, 5]
 [6, 7, 8, NULL]
 [NULL, NULL]
-[]
+NULL
 [NULL, 10, 11]
 
 ## array_pop_front (aliases: `list_pop_front`)
@@ -1817,18 +1906,26 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0,
 [1, 2, 3, 4] [h, e, l]
 
 # array_slice scalar function #8 (with NULL and positive number)
-query error
+query ??
 select array_slice(make_array(1, 2, 3, 4, 5), NULL, 4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL, 3);
+----
+NULL NULL
 
-query error
+query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL, 4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), NULL, 3);
+----
+NULL NULL
 
 # array_slice scalar function #9 (with positive number and NULL)
-query error
+query ??
 select array_slice(make_array(1, 2, 3, 4, 5), 2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, NULL);
+----
+NULL NULL
 
-query error
+query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, NULL), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 3, NULL);
+----
+NULL NULL
 
 # array_slice scalar function #10 (with zero-zero)
 query ??
@@ -1848,7 +1945,6 @@ select array_slice(make_array(1, 2, 3, 4, 5), NULL), array_slice(make_array('h',
 query error
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), NULL);
 
-
 # array_slice scalar function #12 (with zero and negative number)
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), 0, -4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 0, -3);
@@ -1861,18 +1957,26 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0,
 [1, 2] [h, e, l]
 
 # array_slice scalar function #13 (with negative number and NULL)
-query error
+query ??
 select array_slice(make_array(1, 2, 3, 4, 5), -2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -3, NULL);
+----
+NULL NULL
 
-query error
+query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -2, NULL), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -3, NULL);
+----
+NULL NULL
 
 # array_slice scalar function #14 (with NULL and negative number)
-query error
+query ??
 select array_slice(make_array(1, 2, 3, 4, 5), NULL, -4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL, -3);
+----
+NULL NULL
 
-query error
+query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL, -4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), NULL, -3);
+----
+NULL NULL
 
 # array_slice scalar function #15 (with negative indexes)
 query ??
@@ -1922,12 +2026,12 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -4
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), -7, -2), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -7, -3);
 ----
-[] []
+[1, 2, 3, 4] [h, e, l]
 
 query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -7, -2), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -7, -3);
 ----
-[] []
+[1, 2, 3, 4] [h, e, l]
 
 # array_slice scalar function #20 (with negative indexes; nested array)
 query ??
@@ -1974,6 +2078,28 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2,
 ----
 [2, 3, 4] [h, e]
 
+# array_slice scalar function #24 (with first negative index larger than len)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), -2147483648, 1), list_slice(make_array('h', 'e', 'l', 'l', 'o'), -2147483648, 1);
+----
+[1] [h]
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -9223372036854775808, 1), list_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -9223372036854775808, 1);
+----
+[1] [h]
+
+# array_slice scalar function #25 (with negative step and equal indexes)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 2, 2, -1), list_slice(make_array('h', 'e', 'l', 'l', 'o'), 2, 2, -1);
+----
+[2] [e]
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, 2, -1), list_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 2, 2, -1);
+----
+[2] [e]
+
 # array_slice with columns
 query ?
 select array_slice(column1, column2, column3) from slices;
@@ -1982,9 +2108,9 @@ select array_slice(column1, column2, column3) from slices;
 [12, 13, 14, 15, 16, 17]
 []
 []
-[]
-[41, 42, 43, 44, 45, 46]
-[55, 56, 57, 58, 59, 60]
+NULL
+NULL
+NULL
 
 query ?
 select array_slice(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) from slices;
@@ -1993,9 +2119,9 @@ select array_slice(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) fr
 [12, 13, 14, 15, 16, 17]
 []
 []
-[]
-[41, 42, 43, 44, 45, 46]
-[55, 56, 57, 58, 59, 60]
+NULL
+NULL
+NULL
 
 # TODO: support NULLS in output instead of `[]`
 # array_slice with columns and scalars
@@ -2006,9 +2132,9 @@ select array_slice(make_array(1, 2, 3, 4, 5), column2, column3), array_slice(col
 [2] [13, 14, 15, 16, 17] [12, 13, 14, 15]
 [] [] [21, 22, 23, NULL, 25]
 [] [33, 34] []
-[4, 5] [] []
-[1, 2, 3, 4, 5] [43, 44, 45, 46] [41, 42, 43, 44, 45]
-[5] [NULL, 54, 55, 56, 57, 58, 59, 60] [55]
+[4, 5] NULL NULL
+NULL [43, 44, 45, 46] NULL
+NULL NULL [55]
 
 query ???
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), column2, column3), array_slice(arrow_cast(column1, 'LargeList(Int64)'), 3, column3), array_slice(arrow_cast(column1, 'LargeList(Int64)'), column2, 5) from slices;
@@ -2017,9 +2143,9 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), co
 [2] [13, 14, 15, 16, 17] [12, 13, 14, 15]
 [] [] [21, 22, 23, NULL, 25]
 [] [33, 34] []
-[4, 5] [] []
-[1, 2, 3, 4, 5] [43, 44, 45, 46] [41, 42, 43, 44, 45]
-[5] [NULL, 54, 55, 56, 57, 58, 59, 60] [55]
+[4, 5] NULL NULL
+NULL [43, 44, 45, 46] NULL
+NULL NULL [55]
 
 # Test issue: https://github.com/apache/datafusion/issues/10425
 # `from` may be larger than `to` and `stride` is positive
@@ -2033,8 +2159,11 @@ select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
 [6.0] [6.0] [] []
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: array_slice does not support zero arguments
+query error DataFusion error: Error during planning: 'array_slice' does not support zero arguments
 select array_slice();
+
+query error Failed to coerce arguments
+select array_slice(3.5, NULL, NULL);
 
 ## array_any_value (aliases: list_any_value)
 
@@ -2225,6 +2354,52 @@ select array_sort([]);
 ----
 []
 
+# test with null arguments
+query ?
+select array_sort(NULL);
+----
+NULL
+
+query ?
+select array_sort(column1, NULL) from arrays_values;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query ??
+select array_sort(column1, 'DESC', NULL), array_sort(column1, 'ASC', NULL) from arrays_values;
+----
+NULL NULL
+NULL NULL
+NULL NULL
+NULL NULL
+NULL NULL
+NULL NULL
+NULL NULL
+NULL NULL
+
+query ??
+select array_sort(column1, NULL, 'NULLS FIRST'), array_sort(column1, NULL, 'NULLS LAST') from arrays_values;
+----
+NULL NULL
+NULL NULL
+NULL NULL
+NULL NULL
+NULL NULL
+NULL NULL
+NULL NULL
+NULL NULL
+
+## test with argument of incorrect types
+query error DataFusion error: Execution error: the second parameter of array_sort expects DESC or ASC
+select array_sort([1, 3, null, 5, NULL, -5], 1), array_sort([1, 3, null, 5, NULL, -5], 'DESC', 1), array_sort([1, 3, null, 5, NULL, -5], 1, 1);
+
 # test with empty row, the row that does not match the condition has row count 0
 statement ok
 create table t1(a int, b int) as values (100, 1), (101, 2), (102, 3), (101, 2);
@@ -2250,8 +2425,10 @@ select list_sort(make_array(1, 3, null, 5, NULL, -5)), list_sort(make_array(1, 3
 
 # array_append with NULLs
 
-query error
+query ?
 select array_append(null, 1);
+----
+[1]
 
 query error
 select array_append(null, [2, 3]);
@@ -2499,8 +2676,10 @@ select array_append(column1, arrow_cast(make_array(1, 11, 111), 'FixedSizeList(3
 # DuckDB: [4]
 # ClickHouse: Null
 # Since they dont have the same result, we just follow Postgres, return error
-query error
+query ?
 select array_prepend(4, NULL);
+----
+[4]
 
 query ?
 select array_prepend(4, []);
@@ -2535,11 +2714,10 @@ select array_prepend(null, [[1,2,3]]);
 query error
 select array_prepend([], []);
 
-# DuckDB: [null]
-# ClickHouse: [null]
-# TODO: We may also return [null]
-query error
+query ?
 select array_prepend(null, null);
+----
+[NULL]
 
 query ?
 select array_append([], null);
@@ -2615,6 +2793,28 @@ query ???
 select list_push_front(1, arrow_cast(make_array(2, 3, 4), 'LargeList(Int64)')), list_push_front(1.0, arrow_cast(make_array(2.0, 3.0, 4.0), 'LargeList(Float64)')), list_push_front('h', arrow_cast(make_array('e', 'l', 'l', 'o'), 'LargeList(Utf8)'));
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array_prepend scalar function #7 (element is fixed size list)
+query ???
+select array_prepend(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'), make_array(arrow_cast(make_array(2), 'FixedSizeList(1, Int64)'), arrow_cast(make_array(3), 'FixedSizeList(1, Int64)'), arrow_cast(make_array(4), 'FixedSizeList(1, Int64)'))),
+       array_prepend(arrow_cast(make_array(1.0), 'FixedSizeList(1, Float64)'), make_array(arrow_cast([2.0], 'FixedSizeList(1, Float64)'), arrow_cast([3.0], 'FixedSizeList(1, Float64)'), arrow_cast([4.0], 'FixedSizeList(1, Float64)'))),
+       array_prepend(arrow_cast(make_array('h'), 'FixedSizeList(1, Utf8)'), make_array(arrow_cast(['e'], 'FixedSizeList(1, Utf8)'), arrow_cast(['l'], 'FixedSizeList(1, Utf8)'), arrow_cast(['l'], 'FixedSizeList(1, Utf8)'), arrow_cast(['o'], 'FixedSizeList(1, Utf8)')));
+----
+[[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+
+query ???
+select array_prepend(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'), arrow_cast(make_array(make_array(2), make_array(3), make_array(4)), 'LargeList(FixedSizeList(1, Int64))')),
+       array_prepend(arrow_cast(make_array(1.0), 'FixedSizeList(1, Float64)'), arrow_cast(make_array([2.0], [3.0], [4.0]), 'LargeList(FixedSizeList(1, Float64))')),
+       array_prepend(arrow_cast(make_array('h'), 'FixedSizeList(1, Utf8)'), arrow_cast(make_array(['e'], ['l'], ['l'], ['o']), 'LargeList(FixedSizeList(1, Utf8))'));
+----
+[[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+
+query ???
+select array_prepend(arrow_cast([1], 'FixedSizeList(1, Int64)'), arrow_cast([[1], [2], [3]], 'FixedSizeList(3, FixedSizeList(1, Int64))')),
+       array_prepend(arrow_cast([1.0], 'FixedSizeList(1, Float64)'), arrow_cast([[2.0], [3.0], [4.0]], 'FixedSizeList(3, FixedSizeList(1, Float64))')),
+       array_prepend(arrow_cast(['h'], 'FixedSizeList(1, Utf8)'), arrow_cast([['e'], ['l'], ['l'], ['o']], 'FixedSizeList(4, FixedSizeList(1, Utf8))'));
+----
+[[1], [1], [2], [3]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
 
 # array_prepend with columns #1
 query ?
@@ -2847,6 +3047,47 @@ query ?
 select array_concat([]);
 ----
 []
+
+# Concatenating strings arrays
+query ?
+select array_concat(
+  ['1', '2'],
+  ['3']
+);
+----
+[1, 2, 3]
+
+# Concatenating string arrays
+query ?
+select array_concat(
+  [arrow_cast('1', 'LargeUtf8'), arrow_cast('2', 'LargeUtf8')],
+  [arrow_cast('3', 'LargeUtf8')]
+);
+----
+[1, 2, 3]
+
+# Concatenating stringview
+query ?
+select array_concat(
+  [arrow_cast('1', 'Utf8View'), arrow_cast('2', 'Utf8View')],
+  [arrow_cast('3', 'Utf8View')]
+);
+----
+[1, 2, 3]
+
+# Concatenating Mixed types (doesn't work)
+query error DataFusion error: Error during planning: It is not possible to concatenate arrays of different types\. Expected: List\(Field \{ name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), got: List\(Field \{ name: "item", data_type: LargeUtf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+select array_concat(
+  [arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')],
+  [arrow_cast('3', 'LargeUtf8')]
+);
+
+# Concatenating Mixed types (doesn't work)
+query error DataFusion error: Error during planning: It is not possible to concatenate arrays of different types\. Expected: List\(Field \{ name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), got: List\(Field \{ name: "item", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+select array_concat(
+  [arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')],
+  [arrow_cast('3', 'Utf8View')]
+);
 
 # array_concat error
 query error DataFusion error: Error during planning: The array_concat function can only accept list as the args\.
@@ -3482,6 +3723,17 @@ select list_replace(
 ----
 [1, 3, 3, 4] [1, 0, 4, 5, 4, 6, 7] [1, 2, 3]
 
+# array_replace scalar function #4 (null input)
+query ?
+select array_replace(make_array(1, 2, 3, 4, 5), NULL, NULL);
+----
+[1, 2, 3, 4, 5]
+
+query ?
+select array_replace(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL, NULL);
+----
+[1, 2, 3, 4, 5]
+
 # array_replace scalar function with columns #1
 query ?
 select array_replace(column1, column2, column3) from arrays_with_repeating_elements;
@@ -3646,6 +3898,17 @@ select
   list_replace_n(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4, 0, 3);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
+
+# array_replace_n scalar function #4 (null input)
+query ?
+select array_replace_n(make_array(1, 2, 3, 4, 5), NULL, NULL, NULL);
+----
+[1, 2, 3, 4, 5]
+
+query ?
+select array_replace_n(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL, NULL, NULL);
+----
+[1, 2, 3, 4, 5]
 
 # array_replace_n scalar function with columns #1
 query ?
@@ -3822,6 +4085,17 @@ select
   list_replace_all(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4, 0);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
+
+# array_replace_all scalar function #4 (null input)
+query ?
+select array_replace_all(make_array(1, 2, 3, 4, 5), NULL, NULL);
+----
+[1, 2, 3, 4, 5]
+
+query ?
+select array_replace_all(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL, NULL);
+----
+[1, 2, 3, 4, 5]
 
 # array_replace_all scalar function with columns #1
 query ?
@@ -5128,9 +5402,11 @@ NULL [3] [5]
 # array_ndims scalar function #1
 
 #follow PostgreSQL
-query error
+query I
 select
   array_ndims(null);
+----
+NULL
 
 query I
 select
@@ -6799,9 +7075,8 @@ select make_array(f0) from fixed_size_list_array
 query T
 select arrow_typeof(make_array(f0)) from fixed_size_list_array
 ----
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-
+List(Field { name: "item", data_type: FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 query ?
 select array_concat(column1, [7]) from arrays_values_v2;

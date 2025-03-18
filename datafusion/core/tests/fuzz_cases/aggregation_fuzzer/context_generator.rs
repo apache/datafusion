@@ -253,8 +253,8 @@ impl SkipPartialParams {
 
 #[cfg(test)]
 mod test {
-    use arrow_array::{RecordBatch, StringArray, UInt32Array};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow::array::{RecordBatch, StringArray, UInt32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
 
     use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
 

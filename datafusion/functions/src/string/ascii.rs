@@ -19,9 +19,11 @@ use crate::utils::make_scalar_function;
 use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
+use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignatureClass};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -61,7 +63,12 @@ impl Default for AsciiFunc {
 impl AsciiFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Native(
+                    logical_string(),
+                ))],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -85,12 +92,8 @@ impl ScalarUDFImpl for AsciiFunc {
         Ok(Int32)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        make_scalar_function(ascii, vec![])(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(ascii, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

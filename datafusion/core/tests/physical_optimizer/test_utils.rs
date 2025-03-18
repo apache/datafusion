@@ -22,24 +22,28 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow::array::Int32Array;
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{JoinType, Result};
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
-use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{expressions, PhysicalExpr};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexRequirement, PhysicalSortExpr,
+};
 use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::{
@@ -51,7 +55,6 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::memory::MemoryExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -59,31 +62,34 @@ use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec};
-use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::{
-    displayable, DisplayAs, DisplayFormatType, PlanProperties,
+    displayable, DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode,
+    Partitioning, PlanProperties,
 };
-use datafusion_physical_plan::{InputOrderMode, Partitioning};
 
 /// Create a non sorted parquet exec
-pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-    ParquetExec::builder(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
-            .with_file(PartitionedFile::new("x".to_string(), 100)),
+pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
+    FileScanConfig::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        schema.clone(),
+        Arc::new(ParquetSource::default()),
     )
-    .build_arc()
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .build()
 }
 
 /// Create a single parquet file that is sorted
 pub(crate) fn parquet_exec_with_sort(
     output_ordering: Vec<LexOrdering>,
-) -> Arc<ParquetExec> {
-    ParquetExec::builder(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_output_ordering(output_ordering),
+) -> Arc<DataSourceExec> {
+    FileScanConfig::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        schema(),
+        Arc::new(ParquetSource::default()),
     )
-    .build_arc()
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .with_output_ordering(output_ordering)
+    .build()
 }
 
 pub fn schema() -> SchemaRef {
@@ -117,17 +123,6 @@ pub fn create_test_schema3() -> Result<SchemaRef> {
     let c = Field::new("c", DataType::Int32, true);
     let d = Field::new("d", DataType::Int32, false);
     let e = Field::new("e", DataType::Int32, false);
-    let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
-    Ok(schema)
-}
-
-// Generate a schema which consists of 5 columns (a, b, c, d, e) of Uint64
-pub fn create_test_schema4() -> Result<SchemaRef> {
-    let a = Field::new("a", DataType::UInt64, true);
-    let b = Field::new("b", DataType::UInt64, false);
-    let c = Field::new("c", DataType::UInt64, true);
-    let d = Field::new("d", DataType::UInt64, false);
-    let e = Field::new("e", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
     Ok(schema)
 }
@@ -174,7 +169,7 @@ pub fn coalesce_partitions_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
 }
 
 pub fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-    Arc::new(MemoryExec::try_new(&[vec![]], Arc::clone(schema), None).unwrap())
+    MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
 }
 
 pub fn hash_join_exec(
@@ -201,68 +196,26 @@ pub fn bounded_window_exec(
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    bounded_window_exec_with_partition(col_name, sort_exprs, &[], input, false)
-}
-
-pub fn bounded_window_exec_with_partition(
-    col_name: &str,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-    partition_by: &[Arc<dyn PhysicalExpr>],
-    input: Arc<dyn ExecutionPlan>,
-    should_reverse: bool,
-) -> Arc<dyn ExecutionPlan> {
     let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
     let schema = input.schema();
-    let mut window_expr = create_window_expr(
+    let window_expr = create_window_expr(
         &WindowFunctionDefinition::AggregateUDF(count_udaf()),
         "count".to_owned(),
         &[col(col_name, &schema).unwrap()],
-        partition_by,
+        &[],
         sort_exprs.as_ref(),
         Arc::new(WindowFrame::new(Some(false))),
         schema.as_ref(),
         false,
     )
     .unwrap();
-    if should_reverse {
-        window_expr = window_expr.get_reverse_expr().unwrap();
-    }
 
     Arc::new(
         BoundedWindowAggExec::try_new(
             vec![window_expr],
             Arc::clone(&input),
-            vec![],
             InputOrderMode::Sorted,
-        )
-        .unwrap(),
-    )
-}
-
-pub fn bounded_window_exec_non_set_monotonic(
-    col_name: &str,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-    input: Arc<dyn ExecutionPlan>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
-    let schema = input.schema();
-
-    Arc::new(
-        BoundedWindowAggExec::try_new(
-            vec![create_window_expr(
-                &WindowFunctionDefinition::AggregateUDF(avg_udaf()),
-                "avg".to_owned(),
-                &[col(col_name, &schema).unwrap()],
-                &[],
-                sort_exprs.as_ref(),
-                Arc::new(WindowFrame::new(Some(false))),
-                schema.as_ref(),
-                false,
-            )
-            .unwrap()],
-            Arc::clone(&input),
-            vec![],
-            InputOrderMode::Sorted,
+            false,
         )
         .unwrap(),
     )
@@ -281,6 +234,15 @@ pub fn sort_preserving_merge_exec(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
     Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
+}
+
+pub fn sort_preserving_merge_exec_with_fetch(
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    input: Arc<dyn ExecutionPlan>,
+    fetch: usize,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+    Arc::new(SortPreservingMergeExec::new(sort_exprs, input).with_fetch(Some(fetch)))
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
@@ -334,8 +296,16 @@ pub fn sort_exec(
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
+    sort_exec_with_fetch(sort_exprs, None, input)
+}
+
+pub fn sort_exec_with_fetch(
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    fetch: Option<usize>,
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortExec::new(sort_exprs, input))
+    Arc::new(SortExec::new(sort_exprs, input).with_fetch(fetch))
 }
 
 /// A test [`ExecutionPlan`] whose requirements can be configured.
@@ -377,8 +347,16 @@ impl RequirementsTestExec {
 }
 
 impl DisplayAs for RequirementsTestExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "RequiredInputOrderingExec")
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "RequiredInputOrderingExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
+        }
     }
 }
 
@@ -521,7 +499,7 @@ pub fn stream_exec_ordered_with_projection(
     )
 }
 
-pub fn mock_data() -> Result<Arc<MemoryExec>> {
+pub fn mock_data() -> Result<Arc<DataSourceExec>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
         Field::new("b", DataType::Int32, true),
@@ -549,11 +527,7 @@ pub fn mock_data() -> Result<Arc<MemoryExec>> {
         ],
     )?;
 
-    Ok(Arc::new(MemoryExec::try_new(
-        &[vec![batch]],
-        Arc::clone(&schema),
-        None,
-    )?))
+    MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
 }
 
 pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> PhysicalGroupBy {

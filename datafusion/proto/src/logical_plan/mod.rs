@@ -35,6 +35,8 @@ use crate::{
 use crate::protobuf::{proto_error, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::datasource::cte_worktable::CteWorkTable;
+#[cfg(feature = "avro")]
+use datafusion::datasource::file_format::avro::AvroFormat;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::{
@@ -43,8 +45,7 @@ use datafusion::datasource::file_format::{
 use datafusion::{
     datasource::{
         file_format::{
-            avro::AvroFormat, csv::CsvFormat, json::JsonFormat as OtherNdJsonFormat,
-            FileFormat,
+            csv::CsvFormat, json::JsonFormat as OtherNdJsonFormat, FileFormat,
         },
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
         view::ViewTable,
@@ -55,8 +56,8 @@ use datafusion::{
 };
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    context, internal_datafusion_err, internal_err, not_impl_err, DataFusionError,
-    Result, TableReference,
+    context, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    DataFusionError, Result, TableReference, ToDFSchema,
 };
 use datafusion_expr::{
     dml,
@@ -71,7 +72,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{
     AggregateUDF, ColumnUnnestList, DmlStatement, FetchType, RecursiveQuery, SkipType,
-    Unnest,
+    TableSource, Unnest,
 };
 
 use self::to_proto::{serialize_expr, serialize_exprs};
@@ -234,6 +235,45 @@ fn from_table_reference(
     })?;
 
     Ok(table_ref.clone().try_into()?)
+}
+
+/// Converts [LogicalPlan::TableScan] to [TableSource]
+/// method to be used to deserialize nodes
+/// serialized by [from_table_source]
+fn to_table_source(
+    node: &Option<Box<LogicalPlanNode>>,
+    ctx: &SessionContext,
+    extension_codec: &dyn LogicalExtensionCodec,
+) -> Result<Arc<dyn TableSource>> {
+    if let Some(node) = node {
+        match node.try_into_logical_plan(ctx, extension_codec)? {
+            LogicalPlan::TableScan(TableScan { source, .. }) => Ok(source),
+            _ => plan_err!("expected TableScan node"),
+        }
+    } else {
+        plan_err!("LogicalPlanNode should be provided")
+    }
+}
+
+/// converts [TableSource] to [LogicalPlan::TableScan]
+/// using [LogicalPlan::TableScan] was the best approach to
+/// serialize [TableSource] to [LogicalPlan::TableScan]
+fn from_table_source(
+    table_name: TableReference,
+    target: Arc<dyn TableSource>,
+    extension_codec: &dyn LogicalExtensionCodec,
+) -> Result<LogicalPlanNode> {
+    let projected_schema = target.schema().to_dfschema_ref()?;
+    let r = LogicalPlan::TableScan(TableScan {
+        table_name,
+        source: target,
+        projection: None,
+        projected_schema,
+        filters: vec![],
+        fetch: None,
+    });
+
+    LogicalPlanNode::try_from_logical_plan(&r, extension_codec)
 }
 
 impl AsLogicalPlan for LogicalPlanNode {
@@ -401,7 +441,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                             }
                             Arc::new(json)
                         }
-                        FileFormatType::Avro(..) => Arc::new(AvroFormat),
+                        #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
+                        FileFormatType::Avro(..) => {
+                            #[cfg(feature = "avro")] 
+                            {
+                                Arc::new(AvroFormat)
+                            }
+                            #[cfg(not(feature = "avro"))]
+                            panic!("Unable to process avro file since `avro` feature is not enabled");
+                        }
                     };
 
                 let table_paths = &scan
@@ -454,7 +502,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
-            CustomScan(scan) => {
+            LogicalPlanType::CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
                 let schema = Arc::new(schema);
                 let mut projection = None;
@@ -942,7 +990,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Dml(dml_node) => Ok(LogicalPlan::Dml(
                 datafusion::logical_expr::DmlStatement::new(
                     from_table_reference(dml_node.table_name.as_ref(), "DML ")?,
-                    Arc::new(convert_required!(dml_node.schema)?),
+                    to_table_source(&dml_node.target, ctx, extension_codec)?,
                     dml_node.dml_type().into(),
                     Arc::new(into_logical_plan!(dml_node.input, ctx, extension_codec)?),
                 ),
@@ -1033,6 +1081,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 }))
                         }
 
+                        #[cfg(feature = "avro")]
                         if any.is::<AvroFormat>() {
                             maybe_some_type =
                                 Some(FileFormatType::Avro(protobuf::AvroFormat {}))
@@ -1658,7 +1707,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             )),
             LogicalPlan::Dml(DmlStatement {
                 table_name,
-                table_schema,
+                target,
                 op,
                 input,
                 ..
@@ -1669,7 +1718,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Dml(Box::new(DmlNode {
                         input: Some(Box::new(input)),
-                        schema: Some(table_schema.try_into()?),
+                        target: Some(Box::new(from_table_source(
+                            table_name.clone(),
+                            Arc::clone(target),
+                            extension_codec,
+                        )?)),
                         table_name: Some(table_name.clone().into()),
                         dml_type: dml_type.into(),
                     }))),

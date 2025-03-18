@@ -38,10 +38,9 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use arrow_array::RecordBatchOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, JoinType, Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -240,6 +239,10 @@ impl DisplayAs for CrossJoinExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "CrossJoinExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // no extra info to display
+                Ok(())
             }
         }
     }
@@ -867,7 +870,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: CrossJoinExec"
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: CrossJoinExec"
         );
 
         Ok(())

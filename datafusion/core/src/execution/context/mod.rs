@@ -25,10 +25,10 @@ use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
 use crate::{
+    catalog::listing_schema::ListingSchemaProvider,
     catalog::{
         CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
     },
-    catalog_common::listing_schema::ListingSchemaProvider,
     dataframe::DataFrame,
     datasource::listing::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -49,9 +49,8 @@ use crate::{
     variable::{VarProvider, VarType},
 };
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::Schema;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -84,11 +83,13 @@ use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
 
-mod avro;
 mod csv;
 mod json;
 #[cfg(feature = "parquet")]
 mod parquet;
+
+#[cfg(feature = "avro")]
+mod avro;
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
 /// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
@@ -1817,7 +1818,7 @@ mod tests {
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
-    use arrow_schema::{DataType, TimeUnit};
+    use arrow::datatypes::{DataType, TimeUnit};
     use std::env;
     use std::error::Error;
     use std::path::PathBuf;

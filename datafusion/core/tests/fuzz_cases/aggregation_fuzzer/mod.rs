@@ -15,8 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Fuzzer for aggregation functions
+//!
+//! The main idea behind aggregate fuzzing is: for aggregation, DataFusion has many
+//! specialized implementations for performance. For example, when the group cardinality
+//! is high, DataFusion will skip the first stage of two-stage hash aggregation; when
+//! the input is ordered by the group key, there is a separate implementation to perform
+//! streaming group by.
+//! This fuzzer checks the results of different specialized implementations and
+//! ensures their results are consistent. The execution path can be controlled by
+//! changing the input ordering or by setting related configuration parameters in
+//! `SessionContext`.
+//!
+//! # Architecture
+//! - `aggregate_fuzz.rs` includes the entry point for fuzzer runs.
+//! - `QueryBuilder` is used to generate candidate queries.
+//! - `DatasetGenerator` is used to generate random datasets.
+//! - `SessionContextGenerator` is used to generate `SessionContext` with
+//!   different configuration parameters to control the execution path of aggregate
+//!   queries.
+
+use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_array::RecordBatch;
 use datafusion::prelude::SessionContext;
 use datafusion_common::error::Result;
 

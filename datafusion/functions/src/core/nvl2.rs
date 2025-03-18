@@ -19,10 +19,10 @@ use arrow::array::Array;
 use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{internal_err, utils::take_function_args, Result};
 use datafusion_expr::{
     type_coercion::binary::comparison_coercion, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, Volatility,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -95,36 +95,27 @@ impl ScalarUDFImpl for NVL2Func {
         Ok(arg_types[1].clone())
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        nvl2_func(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        nvl2_func(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 3 {
-            return exec_err!(
-                "NVL2 takes exactly three arguments, but got {}",
-                arg_types.len()
-            );
-        }
-        let new_type = arg_types.iter().skip(1).try_fold(
-            arg_types.first().unwrap().clone(),
-            |acc, x| {
-                // The coerced types found by `comparison_coercion` are not guaranteed to be
-                // coercible for the arguments. `comparison_coercion` returns more loose
-                // types that can be coerced to both `acc` and `x` for comparison purpose.
-                // See `maybe_data_types` for the actual coercion.
-                let coerced_type = comparison_coercion(&acc, x);
-                if let Some(coerced_type) = coerced_type {
-                    Ok(coerced_type)
-                } else {
-                    internal_err!("Coercion from {acc:?} to {x:?} failed.")
-                }
-            },
-        )?;
+        let [tested, if_non_null, if_null] = take_function_args(self.name(), arg_types)?;
+        let new_type =
+            [if_non_null, if_null]
+                .iter()
+                .try_fold(tested.clone(), |acc, x| {
+                    // The coerced types found by `comparison_coercion` are not guaranteed to be
+                    // coercible for the arguments. `comparison_coercion` returns more loose
+                    // types that can be coerced to both `acc` and `x` for comparison purpose.
+                    // See `maybe_data_types` for the actual coercion.
+                    let coerced_type = comparison_coercion(&acc, x);
+                    if let Some(coerced_type) = coerced_type {
+                        Ok(coerced_type)
+                    } else {
+                        internal_err!("Coercion from {acc:?} to {x:?} failed.")
+                    }
+                })?;
         Ok(vec![new_type; arg_types.len()])
     }
 
@@ -134,12 +125,6 @@ impl ScalarUDFImpl for NVL2Func {
 }
 
 fn nvl2_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 3 {
-        return internal_err!(
-            "{:?} args were supplied but NVL2 takes exactly three args",
-            args.len()
-        );
-    }
     let mut len = 1;
     let mut is_array = false;
     for arg in args {
@@ -157,20 +142,22 @@ fn nvl2_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 ColumnarValue::Array(array) => Ok(Arc::clone(array)),
             })
             .collect::<Result<Vec<_>>>()?;
-        let to_apply = is_not_null(&args[0])?;
-        let value = zip(&to_apply, &args[1], &args[2])?;
+        let [tested, if_non_null, if_null] = take_function_args("nvl2", args)?;
+        let to_apply = is_not_null(&tested)?;
+        let value = zip(&to_apply, &if_non_null, &if_null)?;
         Ok(ColumnarValue::Array(value))
     } else {
-        let mut current_value = &args[1];
-        match &args[0] {
+        let [tested, if_non_null, if_null] = take_function_args("nvl2", args)?;
+        match &tested {
             ColumnarValue::Array(_) => {
                 internal_err!("except Scalar value, but got Array")
             }
             ColumnarValue::Scalar(scalar) => {
                 if scalar.is_null() {
-                    current_value = &args[2];
+                    Ok(if_null.clone())
+                } else {
+                    Ok(if_non_null.clone())
                 }
-                Ok(current_value.clone())
             }
         }
     }

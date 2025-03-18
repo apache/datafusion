@@ -20,13 +20,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::execution_plan::{Boundedness, EmissionType};
+use crate::memory::MemoryStream;
+use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::{
-    memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
-    PhysicalExpr,
+    ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
-
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
@@ -34,16 +33,10 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
 /// Execution plan for values list based relation (produces constant rows)
-///
-/// Note this structure is the same as [`MemoryExec`] and is deprecated.
-/// Please see the following for alternatives
-/// * [`MemoryExec::try_new`]
-/// * [`MemoryExec::try_new_from_batches`]
-///
-/// [`MemoryExec`]: crate::memory::MemoryExec
-/// [`MemoryExec::try_new`]: crate::memory::MemoryExec::try_new
-/// [`MemoryExec::try_new_from_batches`]: crate::memory::MemoryExec::try_new_from_batches
-#[deprecated(since = "45.0.0", note = "Use `MemoryExec` instead")]
+#[deprecated(
+    since = "45.0.0",
+    note = "Use `MemorySourceConfig::try_new_as_values` instead"
+)]
 #[derive(Debug, Clone)]
 pub struct ValuesExec {
     /// The schema
@@ -169,6 +162,10 @@ impl DisplayAs for ValuesExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ValuesExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -239,7 +236,7 @@ mod tests {
     use crate::expressions::lit;
     use crate::test::{self, make_partition};
 
-    use arrow_schema::{DataType, Field};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::stats::{ColumnStatistics, Precision};
 
     #[tokio::test]

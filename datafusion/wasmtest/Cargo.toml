@@ -27,6 +27,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -42,28 +45,17 @@ chrono = { version = "0.4", features = ["wasmbind"] }
 # all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
 # code size when deploying.
 console_error_panic_hook = { version = "0.1.1", optional = true }
-datafusion = { workspace = true }
-datafusion-catalog = { workspace = true }
+datafusion = { workspace = true, features = ["parquet"] }
 datafusion-common = { workspace = true, default-features = true }
-datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-expr-common = { workspace = true }
-datafusion-functions = { workspace = true }
-datafusion-functions-aggregate = { workspace = true }
-datafusion-functions-aggregate-common = { workspace = true }
-datafusion-functions-table = { workspace = true }
 datafusion-optimizer = { workspace = true, default-features = true }
-datafusion-physical-expr = { workspace = true, default-features = true }
-datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 # getrandom must be compiled with js feature
 getrandom = { version = "0.2.8", features = ["js"] }
 
-parquet = { workspace = true }
 wasm-bindgen = "0.2.99"
-wasm-bindgen-futures = "0.4.49"
 
 [dev-dependencies]
 tokio = { workspace = true }

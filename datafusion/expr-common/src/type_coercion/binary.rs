@@ -30,8 +30,8 @@ use arrow::datatypes::{
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err,
-    Diagnostic, Result, Span, Spans,
+    exec_err, internal_err, plan_datafusion_err, plan_err, Diagnostic, Result, Span,
+    Spans,
 };
 use itertools::Itertools;
 
@@ -537,8 +537,16 @@ fn type_union_resolution_coercion(
         }
         (DataType::Dictionary(index_type, value_type), other_type)
         | (other_type, DataType::Dictionary(index_type, value_type)) => {
-            let new_value_type = type_union_resolution_coercion(value_type, other_type);
-            new_value_type.map(|t| DataType::Dictionary(index_type.clone(), Box::new(t)))
+            match type_union_resolution_coercion(value_type, other_type) {
+                // Dict with View type is redundant, use value type instead
+                // TODO: Add binary view, list view with tests
+                Some(DataType::Utf8View) => Some(DataType::Utf8View),
+                Some(new_value_type) => Some(DataType::Dictionary(
+                    index_type.clone(),
+                    Box::new(new_value_type),
+                )),
+                None => None,
+            }
         }
         (DataType::Struct(lhs), DataType::Struct(rhs)) => {
             if lhs.len() != rhs.len() {
@@ -566,18 +574,19 @@ fn type_union_resolution_coercion(
                 None
             }
 
-            let types = lhs
+            let coerced_types = lhs
                 .iter()
                 .map(|lhs_field| search_corresponding_coerced_type(lhs_field, rhs))
                 .collect::<Option<Vec<_>>>()?;
 
-            let fields = types
+            // preserve the field name and nullability
+            let orig_fields = std::iter::zip(lhs.iter(), rhs.iter());
+
+            let fields: Vec<FieldRef> = coerced_types
                 .into_iter()
-                .enumerate()
-                .map(|(i, datatype)| {
-                    Arc::new(Field::new(format!("c{i}"), datatype, true))
-                })
-                .collect::<Vec<FieldRef>>();
+                .zip(orig_fields)
+                .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
+                .collect();
             Some(DataType::Struct(fields.into()))
         }
         _ => {
@@ -588,6 +597,7 @@ fn type_union_resolution_coercion(
                 .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
                 .or_else(|| string_coercion(lhs_type, rhs_type))
                 .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
+                .or_else(|| binary_coercion(lhs_type, rhs_type))
         }
     }
 }
@@ -743,8 +753,10 @@ fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     match (lhs_type, rhs_type) {
         (Utf8, _) if rhs_type.is_numeric() => Some(Utf8),
         (LargeUtf8, _) if rhs_type.is_numeric() => Some(LargeUtf8),
+        (Utf8View, _) if rhs_type.is_numeric() => Some(Utf8View),
         (_, Utf8) if lhs_type.is_numeric() => Some(Utf8),
         (_, LargeUtf8) if lhs_type.is_numeric() => Some(LargeUtf8),
+        (_, Utf8View) if lhs_type.is_numeric() => Some(Utf8View),
         _ => None,
     }
 }
@@ -926,54 +938,6 @@ fn get_wider_decimal_type(
         }
         (_, _) => None,
     }
-}
-
-/// Returns the wider type among arguments `lhs` and `rhs`.
-/// The wider type is the type that can safely represent values from both types
-/// without information loss. Returns an Error if types are incompatible.
-pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
-    use arrow::datatypes::DataType::*;
-    Ok(match (lhs, rhs) {
-        (lhs, rhs) if lhs == rhs => lhs.clone(),
-        // Right UInt is larger than left UInt.
-        (UInt8, UInt16 | UInt32 | UInt64) | (UInt16, UInt32 | UInt64) | (UInt32, UInt64) |
-        // Right Int is larger than left Int.
-        (Int8, Int16 | Int32 | Int64) | (Int16, Int32 | Int64) | (Int32, Int64) |
-        // Right Float is larger than left Float.
-        (Float16, Float32 | Float64) | (Float32, Float64) |
-        // Right String is larger than left String.
-        (Utf8, LargeUtf8) |
-        // Any right type is wider than a left hand side Null.
-        (Null, _) => rhs.clone(),
-        // Left UInt is larger than right UInt.
-        (UInt16 | UInt32 | UInt64, UInt8) | (UInt32 | UInt64, UInt16) | (UInt64, UInt32) |
-        // Left Int is larger than right Int.
-        (Int16 | Int32 | Int64, Int8) | (Int32 | Int64, Int16) | (Int64, Int32) |
-        // Left Float is larger than right Float.
-        (Float32 | Float64, Float16) | (Float64, Float32) |
-        // Left String is larger than right String.
-        (LargeUtf8, Utf8) |
-        // Any left type is wider than a right hand side Null.
-        (_, Null) => lhs.clone(),
-        (List(lhs_field), List(rhs_field)) => {
-            let field_type =
-                get_wider_type(lhs_field.data_type(), rhs_field.data_type())?;
-            if lhs_field.name() != rhs_field.name() {
-                return Err(exec_datafusion_err!(
-                    "There is no wider type that can represent both {lhs} and {rhs}."
-                ));
-            }
-            assert_eq!(lhs_field.name(), rhs_field.name());
-            let field_name = lhs_field.name();
-            let nullable = lhs_field.is_nullable() | rhs_field.is_nullable();
-            List(Arc::new(Field::new(field_name, field_type, nullable)))
-        }
-        (_, _) => {
-            return Err(exec_datafusion_err!(
-                "There is no wider type that can represent both {lhs} and {rhs}."
-            ));
-        }
-    })
 }
 
 /// Convert the numeric data type to the decimal data type.
@@ -1213,26 +1177,6 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
     }
 }
 
-/// This will be deprecated when binary operators native support
-/// for Utf8View (use `string_coercion` instead).
-fn regex_comparison_string_coercion(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
-    match (lhs_type, rhs_type) {
-        // If Utf8View is in any side, we coerce to Utf8.
-        (Utf8View, Utf8View | Utf8 | LargeUtf8) | (Utf8 | LargeUtf8, Utf8View) => {
-            Some(Utf8)
-        }
-        // Then, if LargeUtf8 is in any side, we coerce to LargeUtf8.
-        (LargeUtf8, Utf8 | LargeUtf8) | (Utf8, LargeUtf8) => Some(LargeUtf8),
-        // Utf8 coerces to Utf8
-        (Utf8, Utf8) => Some(Utf8),
-        _ => None,
-    }
-}
-
 fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
@@ -1292,7 +1236,7 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 /// Coercion rules for binary (Binary/LargeBinary) to string (Utf8/LargeUtf8):
 /// If one argument is binary and the other is a string then coerce to string
 /// (e.g. for `like`)
-fn binary_to_string_coercion(
+pub fn binary_to_string_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
@@ -1363,7 +1307,7 @@ fn regex_null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 /// Coercion rules for regular expression comparison operations.
 /// This is a union of string coercion rules and dictionary coercion rules
 pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    regex_comparison_string_coercion(lhs_type, rhs_type)
+    string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, false))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
 }
@@ -1840,15 +1784,69 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
+            DataType::Utf8View,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8View,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
             DataType::Utf8,
             Operator::RegexNotMatch,
             DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Utf8View,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8View,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
             DataType::Utf8,
             Operator::RegexNotIMatch,
             DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Utf8View,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8View,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
         );
         test_coercion_binary_rule!(
             DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
@@ -1858,9 +1856,45 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8View,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8View,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
             DataType::Utf8,
             Operator::RegexIMatch,
             DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8,
+            Operator::RegexIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8View,
+            Operator::RegexIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8View,
+            Operator::RegexIMatch,
+            DataType::Utf8View
         );
         test_coercion_binary_rule!(
             DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
@@ -1870,9 +1904,45 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8View,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8View,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
             DataType::Utf8,
             Operator::RegexNotIMatch,
             DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8View,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8View,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
         );
         test_coercion_binary_rule!(
             DataType::Int16,

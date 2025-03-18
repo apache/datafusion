@@ -18,18 +18,20 @@
 //! [`ScalarUDFImpl`] definitions for array_repeat function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Capacities, MutableArrayData};
+use arrow::array::{
+    new_null_array, Array, ArrayRef, Capacities, GenericListArray, ListArray,
+    MutableArrayData, OffsetSizeTrait, UInt64Array,
+};
+use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::compute::cast;
-use arrow_array::{
-    new_null_array, Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait,
-    UInt64Array,
+use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    DataType::{LargeList, List},
+    Field,
 };
-use arrow_buffer::OffsetBuffer;
-use arrow_schema::DataType::{LargeList, List};
-use arrow_schema::{DataType, Field};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -113,12 +115,11 @@ impl ScalarUDFImpl for ArrayRepeat {
         ))))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_repeat_inner)(args)
+        make_scalar_function(array_repeat_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -126,17 +127,10 @@ impl ScalarUDFImpl for ArrayRepeat {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
-            return exec_err!("array_repeat expects two arguments");
-        }
-
-        let element_type = &arg_types[0];
-        let first = element_type.clone();
-
-        let count_type = &arg_types[1];
+        let [first_type, second_type] = take_function_args(self.name(), arg_types)?;
 
         // Coerce the second argument to Int64/UInt64 if it's a numeric type
-        let second = match count_type {
+        let second = match second_type {
             DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
                 DataType::Int64
             }
@@ -146,7 +140,7 @@ impl ScalarUDFImpl for ArrayRepeat {
             _ => return exec_err!("count must be an integer type"),
         };
 
-        Ok(vec![first, second])
+        Ok(vec![first_type.clone(), second])
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -220,7 +214,7 @@ fn general_repeat<O: OffsetSizeTrait>(
             }
 
             let data = mutable.freeze();
-            arrow_array::make_array(data)
+            arrow::array::make_array(data)
         };
         new_values.push(repeated_array);
     }
@@ -277,7 +271,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
                 }
 
                 let data = mutable.freeze();
-                let repeated_array = arrow_array::make_array(data);
+                let repeated_array = arrow::array::make_array(data);
 
                 let list_arr = GenericListArray::<O>::try_new(
                     Arc::new(Field::new_list_field(value_type.clone(), true)),

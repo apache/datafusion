@@ -20,14 +20,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::execution_plan::{Boundedness, EmissionType};
-use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning};
-
+use crate::memory::MemoryStream;
+use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::array::{ArrayRef, NullArray};
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use arrow_array::RecordBatchOptions;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -113,6 +112,8 @@ impl DisplayAs for PlaceholderRowExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "PlaceholderRowExec")
             }
+
+            DisplayFormatType::TreeRender => Ok(()),
         }
     }
 }
@@ -179,7 +180,8 @@ impl ExecutionPlan for PlaceholderRowExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{test, with_new_children_if_necessary};
+    use crate::test;
+    use crate::with_new_children_if_necessary;
 
     #[test]
     fn with_new_children() -> Result<()> {

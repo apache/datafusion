@@ -15,26 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tests for passing user provided [`ParquetAccessPlan`]` to `ParquetExec`]`
+//! Tests for passing user provided [`ParquetAccessPlan`]` to `DataSourceExec`]`
+
+use std::path::Path;
+use std::sync::Arc;
+
 use crate::parquet::utils::MetricsFinder;
 use crate::parquet::{create_data_batch, Scenario};
+
+use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::SchemaRef;
 use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::{ParquetAccessPlan, RowGroupAccess};
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{assert_contains, DFSchema};
+use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::ExecutionPlan;
+
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
-use std::path::Path;
-use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 #[tokio::test]
@@ -274,7 +278,7 @@ struct Test {
 impl Test {
     /// Runs the test case, panic'ing on error.
     ///
-    /// Returns the [`MetricsSet`] from the [`ParquetExec`]
+    /// Returns the [`MetricsSet`] from the [`DataSourceExec`]
     async fn run_success(self) -> MetricsSet {
         let Self {
             access_plan,
@@ -334,23 +338,22 @@ impl TestFull {
             partitioned_file = partitioned_file.with_extensions(Arc::new(access_plan));
         }
 
-        // Create a ParquetExec to read the file
+        // Create a DataSourceExec to read the file
         let object_store_url = ObjectStoreUrl::local_filesystem();
-        let config = FileScanConfig::new(object_store_url, schema.clone())
-            .with_file(partitioned_file);
-
-        let mut builder = ParquetExec::builder(config);
-
         // add the predicate, if requested
-        if let Some(predicate) = predicate {
+        let source = if let Some(predicate) = predicate {
             let df_schema = DFSchema::try_from(schema.clone())?;
             let predicate = ctx.create_physical_expr(predicate, &df_schema)?;
-            builder = builder.with_predicate(predicate);
-        }
+            Arc::new(ParquetSource::default().with_predicate(schema.clone(), predicate))
+        } else {
+            Arc::new(ParquetSource::default())
+        };
+        let config = FileScanConfig::new(object_store_url, schema.clone(), source)
+            .with_file(partitioned_file);
 
-        let plan: Arc<dyn ExecutionPlan> = builder.build_arc();
+        let plan: Arc<dyn ExecutionPlan> = config.build();
 
-        // run the ParquetExec and collect the results
+        // run the DataSourceExec and collect the results
         let results =
             datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx()).await?;
 

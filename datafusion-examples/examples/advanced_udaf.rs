@@ -423,11 +423,11 @@ impl AggregateUDFImpl for SimplifiedGeoMeanUdaf {
             // In real-world scenarios, you might create UDFs from built-in expressions.
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                 Arc::new(AggregateUDF::from(GeoMeanUdaf::new())),
-                aggregate_function.args,
-                aggregate_function.distinct,
-                aggregate_function.filter,
-                aggregate_function.order_by,
-                aggregate_function.null_treatment,
+                aggregate_function.params.args,
+                aggregate_function.params.distinct,
+                aggregate_function.params.filter,
+                aggregate_function.params.order_by,
+                aggregate_function.params.null_treatment,
             )))
         };
         Some(Box::new(simplify))

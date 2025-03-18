@@ -20,12 +20,12 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use super::{
+use crate::execution_plan::{Boundedness, EmissionType};
+use crate::memory::MemoryStream;
+use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution_plan::{Boundedness, EmissionType};
-use crate::memory::MemoryStream;
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use arrow::datatypes::SchemaRef;
@@ -162,6 +162,9 @@ impl DisplayAs for WorkTableExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "WorkTableExec: name={}", self.name)
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "name={}", self.name)
+            }
         }
     }
 }
@@ -229,7 +232,7 @@ impl ExecutionPlan for WorkTableExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{ArrayRef, Int32Array};
+    use arrow::array::{ArrayRef, Int32Array};
     use datafusion_execution::memory_pool::{MemoryConsumer, UnboundedMemoryPool};
 
     #[test]

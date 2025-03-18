@@ -17,13 +17,15 @@
 
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
-use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, Datum, GenericListArray, OffsetSizeTrait, Scalar,
+};
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
-use arrow_array::{Datum, GenericListArray, Scalar};
-use arrow_buffer::BooleanBuffer;
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -119,15 +121,15 @@ impl ScalarUDFImpl for ArrayHas {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        match &args[1] {
+        let [first_arg, second_arg] = take_function_args(self.name(), &args.args)?;
+        match &second_arg {
             ColumnarValue::Array(array_needle) => {
                 // the needle is already an array, convert the haystack to an array of the same length
-                let haystack = args[0].to_array(array_needle.len())?;
+                let haystack = first_arg.to_array(array_needle.len())?;
                 let array = array_has_inner_for_array(&haystack, array_needle)?;
                 Ok(ColumnarValue::Array(array))
             }
@@ -139,11 +141,11 @@ impl ScalarUDFImpl for ArrayHas {
                 }
 
                 // since the needle is a scalar, convert it to an array of size 1
-                let haystack = args[0].to_array(1)?;
+                let haystack = first_arg.to_array(1)?;
                 let needle = scalar_needle.to_array_of_size(1)?;
                 let needle = Scalar::new(needle);
                 let array = array_has_inner_for_scalar(&haystack, &needle)?;
-                if let ColumnarValue::Scalar(_) = &args[0] {
+                if let ColumnarValue::Scalar(_) = &first_arg {
                     // If both inputs are scalar, keeps output as scalar
                     let scalar_value = ScalarValue::try_from_array(&array, 0)?;
                     Ok(ColumnarValue::Scalar(scalar_value))
@@ -331,12 +333,11 @@ impl ScalarUDFImpl for ArrayHasAll {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_has_all_inner)(args)
+        make_scalar_function(array_has_all_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -406,12 +407,11 @@ impl ScalarUDFImpl for ArrayHasAny {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_has_any_inner)(args)
+        make_scalar_function(array_has_any_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {

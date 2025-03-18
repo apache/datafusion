@@ -28,8 +28,8 @@ use std::sync::Arc;
 use crate::catalog::{TableProvider, TableProviderFactory};
 use crate::datasource::create_ordering;
 
-use arrow_array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
-use arrow_schema::SchemaRef;
+use arrow::array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
+use arrow::datatypes::SchemaRef;
 use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -400,8 +400,8 @@ impl PartitionStream for StreamRead {
 struct StreamWrite(Arc<StreamConfig>);
 
 impl DisplayAs for StreamWrite {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        self.0.source.stream_write_display(_t, f)
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        self.0.source.stream_write_display(t, f)
     }
 }
 

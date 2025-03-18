@@ -20,17 +20,22 @@
 use std::sync::Arc;
 use std::{any::Any, cmp::Ordering};
 
-use arrow::array::{Capacities, MutableArrayData};
-use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
-use arrow_schema::{DataType, Field};
+use arrow::array::{
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullBufferBuilder,
+    OffsetSizeTrait,
+};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::Result;
 use datafusion_common::{
-    cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
+    cast::as_generic_list_array,
+    exec_err, not_impl_err, plan_err,
+    utils::{list_ndims, take_function_args},
 };
 use datafusion_expr::{
-    type_coercion::binary::get_wider_type, ColumnarValue, Documentation, ScalarUDFImpl,
-    Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -104,12 +109,11 @@ impl ScalarUDFImpl for ArrayAppend {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_append_inner)(args)
+        make_scalar_function(array_append_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -162,7 +166,18 @@ impl Default for ArrayPrepend {
 impl ArrayPrepend {
     pub fn new() -> Self {
         Self {
-            signature: Signature::element_and_array(Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Array,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![
                 String::from("list_prepend"),
                 String::from("array_push_front"),
@@ -189,12 +204,11 @@ impl ScalarUDFImpl for ArrayPrepend {
         Ok(arg_types[1].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_prepend_inner)(args)
+        make_scalar_function(array_prepend_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -276,37 +290,43 @@ impl ScalarUDFImpl for ArrayConcat {
         let mut expr_type = DataType::Null;
         let mut max_dims = 0;
         for arg_type in arg_types {
-            match arg_type {
-                DataType::List(field) => {
-                    if !field.data_type().equals_datatype(&DataType::Null) {
-                        let dims = list_ndims(arg_type);
-                        expr_type = match max_dims.cmp(&dims) {
-                            Ordering::Greater => expr_type,
-                            Ordering::Equal => get_wider_type(&expr_type, arg_type)?,
-                            Ordering::Less => {
-                                max_dims = dims;
-                                arg_type.clone()
-                            }
-                        };
+            let DataType::List(field) = arg_type else {
+                return plan_err!(
+                    "The array_concat function can only accept list as the args."
+                );
+            };
+            if !field.data_type().equals_datatype(&DataType::Null) {
+                let dims = list_ndims(arg_type);
+                expr_type = match max_dims.cmp(&dims) {
+                    Ordering::Greater => expr_type,
+                    Ordering::Equal => {
+                        if expr_type == DataType::Null {
+                            arg_type.clone()
+                        } else if !expr_type.equals_datatype(arg_type) {
+                            return plan_err!(
+                            "It is not possible to concatenate arrays of different types. Expected: {}, got: {}", expr_type, arg_type
+                                );
+                        } else {
+                            expr_type
+                        }
                     }
-                }
-                _ => {
-                    return plan_err!(
-                        "The array_concat function can only accept list as the args."
-                    )
-                }
+
+                    Ordering::Less => {
+                        max_dims = dims;
+                        arg_type.clone()
+                    }
+                };
             }
         }
 
         Ok(expr_type)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_concat_inner)(args)
+        make_scalar_function(array_concat_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -407,11 +427,9 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_append SQL function
 pub(crate) fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_append expects two arguments");
-    }
+    let [array, _] = take_function_args("array_append", args)?;
 
-    match args[0].data_type() {
+    match array.data_type() {
         DataType::LargeList(_) => general_append_and_prepend::<i64>(args, true),
         _ => general_append_and_prepend::<i32>(args, true),
     }
@@ -419,11 +437,9 @@ pub(crate) fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_prepend SQL function
 pub(crate) fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_prepend expects two arguments");
-    }
+    let [_, array] = take_function_args("array_prepend", args)?;
 
-    match args[1].data_type() {
+    match array.data_type() {
         DataType::LargeList(_) => general_append_and_prepend::<i64>(args, false),
         _ => general_append_and_prepend::<i32>(args, false),
     }
@@ -449,8 +465,8 @@ where
     };
 
     let res = match list_array.value_type() {
-        DataType::List(_) => concat_internal::<i32>(args)?,
-        DataType::LargeList(_) => concat_internal::<i64>(args)?,
+        DataType::List(_) => concat_internal::<O>(args)?,
+        DataType::LargeList(_) => concat_internal::<O>(args)?,
         data_type => {
             return generic_append_and_prepend::<O>(
                 list_array,
@@ -525,7 +541,7 @@ where
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(data_type.to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         None,
     )?))
 }

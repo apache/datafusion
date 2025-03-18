@@ -17,9 +17,9 @@
 
 //! This program demonstrates the DataFusion expression simplification API.
 
+use arrow::array::types::IntervalDayTime;
+use arrow::array::{ArrayRef, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow_array::{ArrayRef, Int32Array};
-use arrow_buffer::IntervalDayTime;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_common::cast::as_int32_array;
@@ -362,6 +362,33 @@ fn test_const_evaluator() {
     test_evaluate(
         (lit("foo").not_eq(lit("foo"))).or(col("c").eq(lit(1))),
         col("c").eq(lit(1)),
+    );
+}
+
+#[test]
+fn test_const_evaluator_alias() {
+    // true --> true
+    test_evaluate(lit(true).alias("a"), lit(true));
+    // true or true --> true
+    test_evaluate(lit(true).alias("a").or(lit(true).alias("b")), lit(true));
+    // "foo" == "foo" --> true
+    test_evaluate(lit("foo").alias("a").eq(lit("foo").alias("b")), lit(true));
+    // c = 1 + 2 --> c + 3
+    test_evaluate(
+        col("c")
+            .alias("a")
+            .eq(lit(1).alias("b") + lit(2).alias("c")),
+        col("c").alias("a").eq(lit(3)),
+    );
+    // (foo != foo) OR (c = 1) --> false OR (c = 1)
+    test_evaluate(
+        lit("foo")
+            .alias("a")
+            .not_eq(lit("foo").alias("b"))
+            .alias("c")
+            .or(col("c").alias("d").eq(lit(1).alias("e")))
+            .alias("f"),
+        col("c").alias("d").eq(lit(1)).alias("f"),
     );
 }
 

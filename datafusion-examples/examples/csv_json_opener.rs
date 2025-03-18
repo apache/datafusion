@@ -24,12 +24,15 @@ use datafusion::{
         file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
-        physical_plan::{CsvConfig, CsvOpener, FileScanConfig, FileStream, JsonOpener},
+        physical_plan::{
+            CsvSource, FileScanConfig, FileSource, FileStream, JsonOpener, JsonSource,
+        },
     },
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
     test_util::aggr_test_schema,
 };
+
 use futures::StreamExt;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
@@ -48,29 +51,27 @@ async fn csv_opener() -> Result<()> {
     let object_store = Arc::new(LocalFileSystem::new());
     let schema = aggr_test_schema();
 
-    let config = CsvConfig::new(
-        8192,
-        schema.clone(),
-        Some(vec![12, 0]),
-        true,
-        b',',
-        b'"',
-        None,
-        object_store,
-        Some(b'#'),
-    );
-
-    let opener = CsvOpener::new(Arc::new(config), FileCompressionType::UNCOMPRESSED);
-
     let testdata = datafusion::test_util::arrow_test_data();
     let path = format!("{testdata}/csv/aggregate_test_100.csv");
 
     let path = std::path::Path::new(&path).canonicalize()?;
 
-    let scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
-        .with_projection(Some(vec![12, 0]))
-        .with_limit(Some(5))
-        .with_file(PartitionedFile::new(path.display().to_string(), 10));
+    let scan_config = FileScanConfig::new(
+        ObjectStoreUrl::local_filesystem(),
+        Arc::clone(&schema),
+        Arc::new(CsvSource::default()),
+    )
+    .with_projection(Some(vec![12, 0]))
+    .with_limit(Some(5))
+    .with_file(PartitionedFile::new(path.display().to_string(), 10));
+
+    let config = CsvSource::new(true, b',', b'"')
+        .with_comment(Some(b'#'))
+        .with_schema(schema)
+        .with_batch_size(8192)
+        .with_projection(&scan_config);
+
+    let opener = config.create_file_opener(object_store, &scan_config, 0);
 
     let mut result = vec![];
     let mut stream =
@@ -120,13 +121,21 @@ async fn json_opener() -> Result<()> {
         Arc::new(object_store),
     );
 
-    let scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
-        .with_projection(Some(vec![1, 0]))
-        .with_limit(Some(5))
-        .with_file(PartitionedFile::new(path.to_string(), 10));
+    let scan_config = FileScanConfig::new(
+        ObjectStoreUrl::local_filesystem(),
+        schema,
+        Arc::new(JsonSource::default()),
+    )
+    .with_projection(Some(vec![1, 0]))
+    .with_limit(Some(5))
+    .with_file(PartitionedFile::new(path.to_string(), 10));
 
-    let mut stream =
-        FileStream::new(&scan_config, 0, opener, &ExecutionPlanMetricsSet::new())?;
+    let mut stream = FileStream::new(
+        &scan_config,
+        0,
+        Arc::new(opener),
+        &ExecutionPlanMetricsSet::new(),
+    )?;
     let mut result = vec![];
     while let Some(batch) = stream.next().await.transpose()? {
         result.push(batch);

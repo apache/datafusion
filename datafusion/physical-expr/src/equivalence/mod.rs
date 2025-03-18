@@ -72,12 +72,44 @@ mod tests {
     use crate::expressions::col;
     use crate::PhysicalSortExpr;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{SchemaRef, SortOptions};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{plan_datafusion_err, Result};
     use datafusion_physical_expr_common::sort_expr::{
         LexOrdering, PhysicalSortRequirement,
     };
+
+    /// Converts a string to a physical sort expression
+    ///
+    /// # Example
+    /// * `"a"` -> (`"a"`, `SortOptions::default()`)
+    /// * `"a ASC"` -> (`"a"`, `SortOptions { descending: false, nulls_first: false }`)
+    pub fn parse_sort_expr(name: &str, schema: &SchemaRef) -> PhysicalSortExpr {
+        let mut parts = name.split_whitespace();
+        let name = parts.next().expect("empty sort expression");
+        let mut sort_expr = PhysicalSortExpr::new(
+            col(name, schema).expect("invalid column name"),
+            SortOptions::default(),
+        );
+
+        if let Some(options) = parts.next() {
+            sort_expr = match options {
+                "ASC" => sort_expr.asc(),
+                "DESC" => sort_expr.desc(),
+                _ => panic!(
+                    "unknown sort options. Expected 'ASC' or 'DESC', got {}",
+                    options
+                ),
+            }
+        }
+
+        assert!(
+            parts.next().is_none(),
+            "unexpected tokens in column name. Expected 'name' / 'name ASC' / 'name DESC' but got  '{name}'"
+        );
+
+        sort_expr
+    }
 
     pub fn output_schema(
         mapping: &ProjectionMapping,

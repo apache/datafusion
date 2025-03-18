@@ -32,7 +32,6 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
     WindowFunctionDefinition,
@@ -42,17 +41,25 @@ use datafusion_expr::{
     expr::{InList, InSubquery, WindowFunction},
     utils::{iter_conjunction, iter_conjunction_owned},
 };
+use datafusion_expr::{simplify::ExprSimplifyResult, Cast, TryCast};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
-
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
-use crate::simplify_expressions::regex::simplify_regex_expr;
-use crate::simplify_expressions::SimplifyInfo;
-use indexmap::IndexSet;
-use regex::Regex;
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
+use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::unwrap_cast::{
+    is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
+    is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
+    unwrap_cast_in_comparison_for_binary,
+};
+use crate::simplify_expressions::SimplifyInfo;
+use crate::{
+    analyzer::type_coercion::TypeCoercionRewriter,
+    simplify_expressions::unwrap_cast::try_cast_literal_to_type,
+};
+use indexmap::IndexSet;
+use regex::Regex;
 
 /// This structure handles API for expression simplification
 ///
@@ -515,30 +522,27 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
 
         // NB: do not short circuit recursion even if we find a non
         // evaluatable node (so we can fold other children, args to
-        // functions, etc)
+        // functions, etc.)
         Ok(Transformed::no(expr))
     }
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match self.can_evaluate.pop() {
-            // Certain expressions such as `CASE` and `COALESCE` are short circuiting
-            // and may not evaluate all their sub expressions. Thus if
-            // if any error is countered during simplification, return the original
+            // Certain expressions such as `CASE` and `COALESCE` are short-circuiting
+            // and may not evaluate all their sub expressions. Thus, if
+            // any error is countered during simplification, return the original
             // so that normal evaluation can occur
-            Some(true) => {
-                let result = self.evaluate_to_scalar(expr);
-                match result {
-                    ConstSimplifyResult::Simplified(s) => {
-                        Ok(Transformed::yes(Expr::Literal(s)))
-                    }
-                    ConstSimplifyResult::NotSimplified(s) => {
-                        Ok(Transformed::no(Expr::Literal(s)))
-                    }
-                    ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
-                        Ok(Transformed::yes(expr))
-                    }
+            Some(true) => match self.evaluate_to_scalar(expr) {
+                ConstSimplifyResult::Simplified(s) => {
+                    Ok(Transformed::yes(Expr::Literal(s)))
                 }
-            }
+                ConstSimplifyResult::NotSimplified(s) => {
+                    Ok(Transformed::no(Expr::Literal(s)))
+                }
+                ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
+                    Ok(Transformed::yes(expr))
+                }
+            },
             Some(false) => Ok(Transformed::no(expr)),
             _ => internal_err!("Failed to pop can_evaluate"),
         }
@@ -586,9 +590,9 @@ impl<'a> ConstEvaluator<'a> {
         // added they can be checked for their ability to be evaluated
         // at plan time
         match expr {
-            // Has no runtime cost, but needed during planning
-            Expr::Alias(..)
-            | Expr::AggregateFunction { .. }
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
+            Expr::AggregateFunction { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
@@ -603,6 +607,7 @@ impl<'a> ConstEvaluator<'a> {
                 Self::volatility_ok(func.signature().volatility)
             }
             Expr::Literal(_)
+            | Expr::Alias(..)
             | Expr::Unnest(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
@@ -945,6 +950,27 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 op: And,
                 right,
             }) if is_op_with(Or, &left, &right) => Transformed::yes(*right),
+            // A >= constant AND constant <= A --> A = constant
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if can_reduce_to_equal_statement(&left, &right) => {
+                if let Expr::BinaryExpr(BinaryExpr {
+                    left: left_left,
+                    right: left_right,
+                    ..
+                }) = *left
+                {
+                    Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                        left: left_left,
+                        op: Eq,
+                        right: left_right,
+                    }))
+                } else {
+                    return internal_err!("can_reduce_to_equal_statement should only be called with a BinaryExpr");
+                }
+            }
 
             //
             // Rules for Multiply
@@ -1722,6 +1748,86 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     // Matched previously once
                     _ => unreachable!(),
                 }
+            }
+
+            // =======================================
+            // unwrap_cast_in_comparison
+            // =======================================
+            //
+            // For case:
+            // try_cast/cast(expr as data_type) op literal
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
+                    info, &left, &right,
+                ) && op.supports_propagation() =>
+            {
+                unwrap_cast_in_comparison_for_binary(info, left, right, op)?
+            }
+            // literal op try_cast/cast(expr as data_type)
+            // -->
+            // try_cast/cast(expr as data_type) op_swap literal
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
+                    info, &right, &left,
+                ) && op.supports_propagation()
+                    && op.swap().is_some() =>
+            {
+                unwrap_cast_in_comparison_for_binary(
+                    info,
+                    right,
+                    left,
+                    op.swap().unwrap(),
+                )?
+            }
+            // For case:
+            // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
+            Expr::InList(InList {
+                expr: mut left,
+                list,
+                negated,
+            }) if is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
+                info, &left, &list,
+            ) =>
+            {
+                let (Expr::TryCast(TryCast {
+                    expr: left_expr, ..
+                })
+                | Expr::Cast(Cast {
+                    expr: left_expr, ..
+                })) = left.as_mut()
+                else {
+                    return internal_err!("Expect cast expr, but got {:?}", left)?;
+                };
+
+                let expr_type = info.get_data_type(left_expr)?;
+                let right_exprs = list
+                    .into_iter()
+                    .map(|right| {
+                        match right {
+                            Expr::Literal(right_lit_value) => {
+                                // if the right_lit_value can be casted to the type of internal_left_expr
+                                // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
+                                let Some(value) = try_cast_literal_to_type(&right_lit_value, &expr_type) else {
+                                    internal_err!(
+                                        "Can't cast the list expr {:?} to type {:?}",
+                                        right_lit_value, &expr_type
+                                    )?
+                                };
+                                Ok(lit(value))
+                            }
+                            other_expr => internal_err!(
+                                "Only support literal expr to optimize, but the expr is {:?}",
+                                &other_expr
+                            ),
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Transformed::yes(Expr::InList(InList {
+                    expr: std::mem::take(left_expr),
+                    list: right_exprs,
+                    negated,
+                }))
             }
 
             // no additional rewrites possible
@@ -4200,6 +4306,10 @@ mod tests {
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int16)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("dummy - not implemented")
         }
     }
 

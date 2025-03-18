@@ -18,17 +18,21 @@
 //! [ScalarUDFImpl] definitions for array_distance function.
 
 use crate::utils::make_scalar_function;
-use arrow_array::{
+use arrow::array::{
     Array, ArrayRef, Float64Array, LargeListArray, ListArray, OffsetSizeTrait,
 };
-use arrow_schema::DataType;
-use arrow_schema::DataType::{FixedSizeList, Float64, LargeList, List};
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, Float64, LargeList, List},
+};
 use datafusion_common::cast::{
     as_float32_array, as_float64_array, as_generic_list_array, as_int32_array,
     as_int64_array,
 };
 use datafusion_common::utils::coerced_fixed_size_list_to_list;
-use datafusion_common::{exec_err, internal_datafusion_err, Result};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, utils::take_function_args, Result,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -108,9 +112,7 @@ impl ScalarUDFImpl for ArrayDistance {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
-            return exec_err!("array_distance expects exactly two arguments");
-        }
+        let [_, _] = take_function_args(self.name(), arg_types)?;
         let mut result = Vec::new();
         for arg_type in arg_types {
             match arg_type {
@@ -122,12 +124,11 @@ impl ScalarUDFImpl for ArrayDistance {
         Ok(result)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_distance_inner)(args)
+        make_scalar_function(array_distance_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -140,11 +141,9 @@ impl ScalarUDFImpl for ArrayDistance {
 }
 
 pub fn array_distance_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_distance expects exactly two arguments");
-    }
+    let [array1, array2] = take_function_args("array_distance", args)?;
 
-    match (&args[0].data_type(), &args[1].data_type()) {
+    match (&array1.data_type(), &array2.data_type()) {
         (List(_), List(_)) => general_array_distance::<i32>(args),
         (LargeList(_), LargeList(_)) => general_array_distance::<i64>(args),
         (array_type1, array_type2) => {

@@ -17,26 +17,341 @@
 
 //! Utilities for testing datafusion-physical-plan
 
+use std::any::Any;
 use std::collections::HashMap;
+use std::fmt;
+use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Context;
 
-use arrow_array::{ArrayRef, Int32Array, RecordBatch};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use futures::{Future, FutureExt};
-
-use crate::memory::MemoryExec;
+use crate::common;
+use crate::execution_plan::{Boundedness, EmissionType};
+use crate::memory::MemoryStream;
+use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
 use crate::ExecutionPlan;
+use crate::{DisplayAs, DisplayFormatType, PlanProperties};
+
+use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::{
+    config::ConfigOptions, internal_err, project_schema, Result, Statistics,
+};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::{
+    equivalence::ProjectionMapping, expressions::Column, utils::collect_columns,
+    EquivalenceProperties, LexOrdering, Partitioning,
+};
+
+use futures::{Future, FutureExt};
 
 pub mod exec;
+
+/// `TestMemoryExec` is a mock equivalent to [`MemorySourceConfig`] with [`ExecutionPlan`] implemented for testing.
+/// i.e. It has some but not all the functionality of [`MemorySourceConfig`].
+/// This implements an in-memory DataSource rather than explicitly implementing a trait.
+/// It is implemented in this manner to keep relevant unit tests in place
+/// while avoiding circular dependencies between `datafusion-physical-plan` and `datafusion-datasource`.
+///
+/// [`MemorySourceConfig`]: https://github.com/apache/datafusion/tree/main/datafusion/datasource/src/memory.rs
+#[derive(Clone, Debug)]
+pub struct TestMemoryExec {
+    /// The partitions to query
+    partitions: Vec<Vec<RecordBatch>>,
+    /// Schema representing the data before projection
+    schema: SchemaRef,
+    /// Schema representing the data after the optional projection is applied
+    projected_schema: SchemaRef,
+    /// Optional projection
+    projection: Option<Vec<usize>>,
+    /// Sort information: one or more equivalent orderings
+    sort_information: Vec<LexOrdering>,
+    /// if partition sizes should be displayed
+    show_sizes: bool,
+    /// The maximum number of records to read from this plan. If `None`,
+    /// all records after filtering are returned.
+    fetch: Option<usize>,
+    cache: PlanProperties,
+}
+
+impl DisplayAs for TestMemoryExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        write!(f, "DataSourceExec: ")?;
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let partition_sizes: Vec<_> =
+                    self.partitions.iter().map(|b| b.len()).collect();
+
+                let output_ordering = self
+                    .sort_information
+                    .first()
+                    .map(|output_ordering| {
+                        format!(", output_ordering={}", output_ordering)
+                    })
+                    .unwrap_or_default();
+
+                let eq_properties = self.eq_properties();
+                let constraints = eq_properties.constraints();
+                let constraints = if constraints.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {}", constraints)
+                };
+
+                let limit = self
+                    .fetch
+                    .map_or(String::new(), |limit| format!(", fetch={}", limit));
+                if self.show_sizes {
+                    write!(
+                                f,
+                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                                partition_sizes.len(),
+                            )
+                } else {
+                    write!(
+                        f,
+                        "partitions={}{limit}{output_ordering}{constraints}",
+                        partition_sizes.len(),
+                    )
+                }
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for TestMemoryExec {
+    fn name(&self) -> &'static str {
+        "DataSourceExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        unimplemented!()
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        Vec::new()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        unimplemented!()
+    }
+
+    fn repartitioned(
+        &self,
+        _target_partitions: usize,
+        _config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        unimplemented!()
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.open(partition, context)
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        unimplemented!()
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        self.statistics()
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+}
+
+impl TestMemoryExec {
+    fn open(
+        &self,
+        partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        Ok(Box::pin(
+            MemoryStream::try_new(
+                self.partitions[partition].clone(),
+                Arc::clone(&self.projected_schema),
+                self.projection.clone(),
+            )?
+            .with_fetch(self.fetch),
+        ))
+    }
+
+    fn compute_properties(&self) -> PlanProperties {
+        PlanProperties::new(
+            self.eq_properties(),
+            self.output_partitioning(),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(self.partitions.len())
+    }
+
+    fn eq_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(
+            Arc::clone(&self.projected_schema),
+            self.sort_information.as_slice(),
+        )
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(common::compute_record_batch_statistics(
+            &self.partitions,
+            &self.schema,
+            self.projection.clone(),
+        ))
+    }
+
+    pub fn try_new(
+        partitions: &[Vec<RecordBatch>],
+        schema: SchemaRef,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self> {
+        let projected_schema = project_schema(&schema, projection.as_ref())?;
+        Ok(Self {
+            partitions: partitions.to_vec(),
+            schema,
+            cache: PlanProperties::new(
+                EquivalenceProperties::new_with_orderings(
+                    Arc::clone(&projected_schema),
+                    vec![].as_slice(),
+                ),
+                Partitioning::UnknownPartitioning(partitions.len()),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            ),
+            projected_schema,
+            projection,
+            sort_information: vec![],
+            show_sizes: true,
+            fetch: None,
+        })
+    }
+
+    /// Create a new `DataSourceExec` Equivalent plan for reading in-memory record batches
+    /// The provided `schema` should not have the projection applied.
+    pub fn try_new_exec(
+        partitions: &[Vec<RecordBatch>],
+        schema: SchemaRef,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Arc<TestMemoryExec>> {
+        let mut source = Self::try_new(partitions, schema, projection)?;
+        let cache = source.compute_properties();
+        source.cache = cache;
+        Ok(Arc::new(source))
+    }
+
+    // Equivalent of `DataSourceExec::new`
+    pub fn update_cache(source: Arc<TestMemoryExec>) -> TestMemoryExec {
+        let cache = source.compute_properties();
+        let source = &*source;
+        let mut source = source.clone();
+        source.cache = cache;
+        source
+    }
+
+    /// Set the limit of the files
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.fetch = limit;
+        self
+    }
+
+    /// Ref to partitions
+    pub fn partitions(&self) -> &[Vec<RecordBatch>] {
+        &self.partitions
+    }
+
+    /// Ref to projection
+    pub fn projection(&self) -> &Option<Vec<usize>> {
+        &self.projection
+    }
+
+    /// Ref to sort information
+    pub fn sort_information(&self) -> &[LexOrdering] {
+        &self.sort_information
+    }
+
+    /// refer to `try_with_sort_information` at MemorySourceConfig for more information.
+    /// https://github.com/apache/datafusion/tree/main/datafusion/datasource/src/memory.rs
+    pub fn try_with_sort_information(
+        mut self,
+        mut sort_information: Vec<LexOrdering>,
+    ) -> Result<Self> {
+        // All sort expressions must refer to the original schema
+        let fields = self.schema.fields();
+        let ambiguous_column = sort_information
+            .iter()
+            .flat_map(|ordering| ordering.clone())
+            .flat_map(|expr| collect_columns(&expr.expr))
+            .find(|col| {
+                fields
+                    .get(col.index())
+                    .map(|field| field.name() != col.name())
+                    .unwrap_or(true)
+            });
+        if let Some(col) = ambiguous_column {
+            return internal_err!(
+                "Column {:?} is not found in the original schema of the TestMemoryExec",
+                col
+            );
+        }
+
+        // If there is a projection on the source, we also need to project orderings
+        if let Some(projection) = &self.projection {
+            let base_eqp = EquivalenceProperties::new_with_orderings(
+                self.original_schema(),
+                &sort_information,
+            );
+            let proj_exprs = projection
+                .iter()
+                .map(|idx| {
+                    let base_schema = self.original_schema();
+                    let name = base_schema.field(*idx).name();
+                    (Arc::new(Column::new(name, *idx)) as _, name.to_string())
+                })
+                .collect::<Vec<_>>();
+            let projection_mapping =
+                ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
+            sort_information = base_eqp
+                .project(&projection_mapping, Arc::clone(&self.projected_schema))
+                .into_oeq_class()
+                .into_inner();
+        }
+
+        self.sort_information = sort_information;
+        Ok(self)
+    }
+
+    /// Arc clone of ref to original schema
+    pub fn original_schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
 
 /// Asserts that given future is pending.
 pub fn assert_is_pending<'a, T>(fut: &mut Pin<Box<dyn Future<Output = T> + Send + 'a>>) {
     let waker = futures::task::noop_waker();
-    let mut cx = futures::task::Context::from_waker(&waker);
+    let mut cx = Context::from_waker(&waker);
     let poll = fut.poll_unpin(&mut cx);
 
     assert!(poll.is_pending());
@@ -116,7 +431,7 @@ pub fn build_table_scan_i32(
 ) -> Arc<dyn ExecutionPlan> {
     let batch = build_table_i32(a, b, c);
     let schema = batch.schema();
-    Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
+    TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
 }
 
 /// Return a RecordBatch with a single Int32 array with values (0..sz) in a field named "i"
@@ -131,18 +446,49 @@ pub fn make_partition(sz: i32) -> RecordBatch {
     RecordBatch::try_new(schema, vec![arr]).unwrap()
 }
 
-/// Returns a `MemoryExec` that scans `partitions` of 100 batches each
+pub fn make_partition_utf8(sz: i32) -> RecordBatch {
+    let seq_start = 0;
+    let seq_end = sz;
+    let values = (seq_start..seq_end)
+        .map(|i| format!("test_long_string_that_is_roughly_42_bytes_{}", i))
+        .collect::<Vec<_>>();
+    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Utf8, true)]));
+    let mut string_array = arrow::array::StringArray::from(values);
+    string_array.shrink_to_fit();
+    let arr = Arc::new(string_array);
+    let arr = arr as ArrayRef;
+
+    RecordBatch::try_new(schema, vec![arr]).unwrap()
+}
+
+/// Returns a `DataSourceExec` that scans `partitions` of 100 batches each
 pub fn scan_partitioned(partitions: usize) -> Arc<dyn ExecutionPlan> {
     Arc::new(mem_exec(partitions))
 }
 
-/// Returns a `MemoryExec` that scans `partitions` of 100 batches each
-pub fn mem_exec(partitions: usize) -> MemoryExec {
+pub fn scan_partitioned_utf8(partitions: usize) -> Arc<dyn ExecutionPlan> {
+    Arc::new(mem_exec_utf8(partitions))
+}
+
+/// Returns a `DataSourceExec` that scans `partitions` of 100 batches each
+pub fn mem_exec(partitions: usize) -> TestMemoryExec {
     let data: Vec<Vec<_>> = (0..partitions).map(|_| vec![make_partition(100)]).collect();
 
     let schema = data[0][0].schema();
     let projection = None;
-    MemoryExec::try_new(&data, schema, projection).unwrap()
+
+    TestMemoryExec::try_new(&data, schema, projection).unwrap()
+}
+
+pub fn mem_exec_utf8(partitions: usize) -> TestMemoryExec {
+    let data: Vec<Vec<_>> = (0..partitions)
+        .map(|_| vec![make_partition_utf8(100)])
+        .collect();
+
+    let schema = data[0][0].schema();
+    let projection = None;
+
+    TestMemoryExec::try_new(&data, schema, projection).unwrap()
 }
 
 // Construct a stream partition for test purposes

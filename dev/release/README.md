@@ -141,15 +141,6 @@ git checkout apache/main
 
 Manually update the datafusion version in the root `Cargo.toml` to `38.0.0`.
 
-Run `cargo update` in the root directory and also in `datafusion-cli`:
-
-```shell
-cargo update
-cd datafustion-cli
-cargo update
-cd ..
-```
-
 Run `cargo test` to re-generate some example files:
 
 ```shell
@@ -275,21 +266,23 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/functions-aggregate-common && cargo publish)
 (cd datafusion/functions-window-common && cargo publish)
 (cd datafusion/doc && cargo publish)
-(cd datafusion/macros && cargo publish)
 (cd datafusion/expr && cargo publish)
+(cd datafusion/macros && cargo publish)
 (cd datafusion/execution && cargo publish)
 (cd datafusion/functions && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
 (cd datafusion/functions-aggregate && cargo publish)
 (cd datafusion/functions-window && cargo publish)
 (cd datafusion/functions-nested && cargo publish)
-(cd datafusion/functions-table && cargo publish)
 (cd datafusion/sql && cargo publish)
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/common-runtime && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
 (cd datafusion/physical-optimizer && cargo publish)
 (cd datafusion/catalog && cargo publish)
+(cd datafusion/datasource && cargo publish)
+(cd datafusion/catalog-listing && cargo publish)
+(cd datafusion/functions-table && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto-common && cargo publish)
 (cd datafusion/proto && cargo publish)

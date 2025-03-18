@@ -24,7 +24,6 @@ use arrow::array::{
     UInt8Array,
 };
 use arrow::datatypes::{DataType, Field};
-use datafusion_expr::TypeSignature;
 
 use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_err, DataFusionError, Result,
@@ -33,17 +32,21 @@ use datafusion_common::{
 use std::any::Any;
 
 use crate::utils::make_scalar_function;
+use arrow::array::{
+    builder::{ArrayBuilder, LargeStringBuilder, StringViewBuilder},
+    cast::AsArray,
+    GenericStringArray, StringArrayType, StringViewArray,
+};
 use arrow::compute::cast;
-use arrow_array::builder::{ArrayBuilder, LargeStringBuilder, StringViewBuilder};
-use arrow_array::cast::AsArray;
-use arrow_array::{GenericStringArray, StringArrayType, StringViewArray};
-use arrow_schema::DataType::{
+use arrow::datatypes::DataType::{
     Dictionary, FixedSizeList, LargeList, LargeUtf8, List, Null, Utf8, Utf8View,
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::exec_err;
+use datafusion_common::types::logical_string;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions::{downcast_arg, downcast_named_arg};
 use datafusion_macros::user_doc;
@@ -190,12 +193,11 @@ impl ScalarUDFImpl for ArrayToString {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_to_string_inner)(args)
+        make_scalar_function(array_to_string_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -250,7 +252,17 @@ impl StringToArray {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::String(2), TypeSignature::String(3)],
+                vec![
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    ]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    ]),
+                ],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("string_to_list")],
@@ -284,11 +296,11 @@ impl ScalarUDFImpl for StringToArray {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = &args.args;
         match args[0].data_type() {
             Utf8 | Utf8View => make_scalar_function(string_to_array_inner::<i32>)(args),
             LargeUtf8 => make_scalar_function(string_to_array_inner::<i64>)(args),

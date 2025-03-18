@@ -22,7 +22,8 @@ use crate::physical_optimizer::test_utils::{
     repartition_exec, sort_exec, sort_expr_options, sort_merge_join_exec,
 };
 
-use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;
@@ -422,7 +423,7 @@ async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
     assert_plan(bw.as_ref(), vec![
         "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]",
-        "    MemoryExec: partitions=1, partition_sizes=[0]"
+        "    DataSourceExec: partitions=1, partition_sizes=[0]"
     ]);
     assert_sanity_check(&bw, true);
     Ok(())
@@ -444,7 +445,7 @@ async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
     let bw = bounded_window_exec("c9", sort_exprs, source);
     assert_plan(bw.as_ref(), vec![
         "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
-        "  MemoryExec: partitions=1, partition_sizes=[0]"
+        "  DataSourceExec: partitions=1, partition_sizes=[0]"
     ]);
     // Order requirement of the `BoundedWindowAggExec` is not satisfied. We expect to receive error during sanity check.
     assert_sanity_check(&bw, false);
@@ -463,7 +464,7 @@ async fn test_global_limit_single_partition() -> Result<()> {
         limit.as_ref(),
         vec![
             "GlobalLimitExec: skip=0, fetch=100",
-            "  MemoryExec: partitions=1, partition_sizes=[0]",
+            "  DataSourceExec: partitions=1, partition_sizes=[0]",
         ],
     );
     assert_sanity_check(&limit, true);
@@ -483,7 +484,7 @@ async fn test_global_limit_multi_partition() -> Result<()> {
         vec![
             "GlobalLimitExec: skip=0, fetch=100",
             "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "    MemoryExec: partitions=1, partition_sizes=[0]",
+            "    DataSourceExec: partitions=1, partition_sizes=[0]",
         ],
     );
     // Distribution requirement of the `GlobalLimitExec` is not satisfied. We expect to receive error during sanity check.
@@ -502,7 +503,7 @@ async fn test_local_limit() -> Result<()> {
         limit.as_ref(),
         vec![
             "LocalLimitExec: fetch=100",
-            "  MemoryExec: partitions=1, partition_sizes=[0]",
+            "  DataSourceExec: partitions=1, partition_sizes=[0]",
         ],
     );
     assert_sanity_check(&limit, true);
@@ -543,10 +544,10 @@ async fn test_sort_merge_join_satisfied() -> Result<()> {
             "SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]",
             "  RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1",
             "    SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]",
-            "      MemoryExec: partitions=1, partition_sizes=[0]",
+            "      DataSourceExec: partitions=1, partition_sizes=[0]",
             "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
             "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-            "      MemoryExec: partitions=1, partition_sizes=[0]",
+            "      DataSourceExec: partitions=1, partition_sizes=[0]",
         ],
     );
     assert_sanity_check(&smj, true);
@@ -590,9 +591,9 @@ async fn test_sort_merge_join_order_missing() -> Result<()> {
             "SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]",
             "  RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1",
             "    SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]",
-            "      MemoryExec: partitions=1, partition_sizes=[0]",
+            "      DataSourceExec: partitions=1, partition_sizes=[0]",
             "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
-            "    MemoryExec: partitions=1, partition_sizes=[0]",
+            "    DataSourceExec: partitions=1, partition_sizes=[0]",
         ],
     );
     // Order requirement for the `SortMergeJoin` is not satisfied for right child. We expect to receive error during sanity check.
@@ -636,10 +637,10 @@ async fn test_sort_merge_join_dist_missing() -> Result<()> {
             "SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]",
             "  RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1",
             "    SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]",
-            "      MemoryExec: partitions=1, partition_sizes=[0]",
+            "      DataSourceExec: partitions=1, partition_sizes=[0]",
             "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-            "      MemoryExec: partitions=1, partition_sizes=[0]",
+            "      DataSourceExec: partitions=1, partition_sizes=[0]",
         ],
     );
     // Distribution requirement for the `SortMergeJoin` is not satisfied for right child (has round-robin partitioning). We expect to receive error during sanity check.

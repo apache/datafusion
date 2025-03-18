@@ -25,4 +25,7 @@ mkdir temp
 cp -rf source/* temp/
 # replace relative URLs with absolute URLs
 sed -i -e 's/\.\.\/\.\.\/\.\.\//https:\/\/github.com\/apache\/arrow-datafusion\/blob\/main\//g' temp/contributor-guide/index.md
-make SOURCEDIR=`pwd`/temp html
+
+python rustdoc_trim.py
+
+make SOURCEDIR=`pwd`/temp SPHINXOPTS=-W html

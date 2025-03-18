@@ -20,9 +20,13 @@ use arrow::datatypes::DataType;
 use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
-use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_common::types::logical_string;
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -55,7 +59,12 @@ impl Default for BitLengthFunc {
 impl BitLengthFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Native(
+                    logical_string(),
+                ))],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -77,19 +86,10 @@ impl ScalarUDFImpl for BitLengthFunc {
         utf8_to_int_type(&arg_types[0], "bit_length")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        if args.len() != 1 {
-            return exec_err!(
-                "bit_length function requires 1 argument, got {}",
-                args.len()
-            );
-        }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [array] = take_function_args(self.name(), &args.args)?;
 
-        match &args[0] {
+        match array {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {
                 ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(

@@ -32,8 +32,8 @@ use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
-    Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
-    Values, Volatility,
+    Extension, InvariantLevel, LogicalPlan, PartitionEvaluator, Repartition,
+    UserDefinedLogicalNode, Values, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -109,6 +109,14 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
 
     fn schema(&self) -> &DFSchemaRef {
         &self.empty_schema
+    }
+
+    fn check_invariants(
+        &self,
+        _check: InvariantLevel,
+        _plan: &LogicalPlan,
+    ) -> Result<()> {
+        Ok(())
     }
 
     fn expressions(&self) -> Vec<Expr> {
@@ -296,6 +304,17 @@ async fn aggregate_grouping_rollup() -> Result<()> {
         "Projection: data.a, data.c, data.e, avg(data.b)\
         \n  Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
         \n    TableScan: data projection=[a, b, c, e]",
+        true
+    ).await
+}
+
+#[tokio::test]
+async fn multilayer_aggregate() -> Result<()> {
+    assert_expected_plan(
+        "SELECT a, sum(partial_count_b) FROM (SELECT a, count(b) as partial_count_b FROM data GROUP BY a) GROUP BY a",
+        "Aggregate: groupBy=[[data.a]], aggr=[[sum(count(data.b)) AS sum(partial_count_b)]]\
+        \n  Aggregate: groupBy=[[data.a]], aggr=[[count(data.b)]]\
+        \n    TableScan: data projection=[a, b]",
         true
     ).await
 }
@@ -676,18 +695,51 @@ async fn roundtrip_union_all() -> Result<()> {
 
 #[tokio::test]
 async fn simple_intersect() -> Result<()> {
-    // Substrait treats both count(*) and count(1) the same
-    assert_expected_plan(
-        "SELECT count(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
-        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
-         \n  Projection: \
-         \n    LeftSemi Join: data.a = data2.a\
-         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
-         \n        TableScan: data projection=[a]\
-         \n      TableScan: data2 projection=[a]",
-        true
+    async fn check_wildcard(syntax: &str) -> Result<()> {
+        let expected_plan_str = format!(
+            "Projection: count(Int64(1)) AS {syntax}\
+        \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+        \n    Projection: \
+        \n      LeftSemi Join: data.a = data2.a\
+        \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n          TableScan: data projection=[a]\
+        \n        TableScan: data2 projection=[a]"
+        );
+
+        assert_expected_plan(
+            &format!("SELECT {syntax} FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);"),
+            &expected_plan_str,
+            true
+        ).await
+    }
+
+    async fn check_constant(sql_syntax: &str, plan_expr: &str) -> Result<()> {
+        let expected_plan_str = format!(
+            "Aggregate: groupBy=[[]], aggr=[[{plan_expr}]]\
+        \n  Projection: \
+        \n    LeftSemi Join: data.a = data2.a\
+        \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n        TableScan: data projection=[a]\
+        \n      TableScan: data2 projection=[a]"
+        );
+
+        assert_expected_plan(
+            &format!("SELECT {sql_syntax} FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);"),
+            &expected_plan_str,
+            true
+        ).await
+    }
+
+    check_wildcard("count(*)").await?;
+    check_wildcard("count()").await?;
+    check_constant("count(1)", "count(Int64(1))").await?;
+    check_constant("count(2)", "count(Int64(2))").await?;
+    check_constant(
+        "count(1 + 2)",
+        "count(Int64(3)) AS count(Int64(1) + Int64(2))",
     )
-        .await
+    .await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -812,18 +864,57 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
     // In this case the aliasing happens at a different point in the plan, so we cannot use roundtrip.
     // Schema check works because we set aliases to what the Substrait consumer will generate.
-    assert_expected_plan(
-        "SELECT count(1) FROM (SELECT left.a FROM data AS left INTERSECT SELECT right.a FROM data AS right);",
-        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+
+    async fn check_wildcard(syntax: &str) -> Result<()> {
+        let expected_plan_str = format!(
+            "Projection: count(Int64(1)) AS {syntax}\
+        \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+        \n    Projection: \
+        \n      LeftSemi Join: left.a = right.a\
+        \n        SubqueryAlias: left\
+        \n          Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n            TableScan: data projection=[a]\
+        \n        SubqueryAlias: right\
+        \n          TableScan: data projection=[a]"
+        );
+
+        assert_expected_plan(
+            &format!("SELECT {syntax} FROM (SELECT left.a FROM data AS left INTERSECT SELECT right.a FROM data AS right);"),
+            &expected_plan_str,
+            true
+        ).await
+    }
+
+    async fn check_constant(sql_syntax: &str, plan_expr: &str) -> Result<()> {
+        let expected_plan_str = format!(
+            "Aggregate: groupBy=[[]], aggr=[[{plan_expr}]]\
         \n  Projection: \
         \n    LeftSemi Join: left.a = right.a\
         \n      SubqueryAlias: left\
         \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
         \n          TableScan: data projection=[a]\
         \n      SubqueryAlias: right\
-        \n        TableScan: data projection=[a]",
-        true
-    ).await
+        \n        TableScan: data projection=[a]"
+        );
+
+        assert_expected_plan(
+            &format!("SELECT {sql_syntax} FROM (SELECT left.a FROM data AS left INTERSECT SELECT right.a FROM data AS right);"),
+            &expected_plan_str,
+            true
+        ).await
+    }
+
+    check_wildcard("count(*)").await?;
+    check_wildcard("count()").await?;
+    check_constant("count(1)", "count(Int64(1))").await?;
+    check_constant("count(2)", "count(Int64(2))").await?;
+    check_constant(
+        "count(1 + 2)",
+        "count(Int64(3)) AS count(Int64(1) + Int64(2))",
+    )
+    .await?;
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -1143,6 +1234,11 @@ async fn roundtrip_repartition_hash() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_read_filter() -> Result<()> {
+    roundtrip_verify_read_filter_count("SELECT a FROM data where a < 5", 1).await
+}
+
 fn check_post_join_filters(rel: &Rel) -> Result<()> {
     // search for target_rel and field value in proto
     match &rel.rel_type {
@@ -1224,6 +1320,56 @@ async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
             None => return plan_err!("Cannot parse plan relation: None"),
         }
     }
+
+    Ok(())
+}
+
+fn count_read_filters(rel: &Rel, filter_count: &mut u32) -> Result<()> {
+    // search for target_rel and field value in proto
+    match &rel.rel_type {
+        Some(RelType::Read(read)) => {
+            // increment counter for read filter if not None
+            if read.filter.is_some() {
+                *filter_count += 1;
+            }
+            Ok(())
+        }
+        Some(RelType::Filter(filter)) => {
+            count_read_filters(filter.input.as_ref().unwrap().as_ref(), filter_count)
+        }
+        _ => Ok(()),
+    }
+}
+
+async fn assert_read_filter_count(
+    proto: Box<Plan>,
+    expected_filter_count: u32,
+) -> Result<()> {
+    let mut filter_count: u32 = 0;
+    for relation in &proto.relations {
+        match relation.rel_type.as_ref() {
+            Some(rt) => match rt {
+                plan_rel::RelType::Rel(rel) => {
+                    match count_read_filters(rel, &mut filter_count) {
+                        Err(e) => return Err(e),
+                        Ok(_) => continue,
+                    }
+                }
+                plan_rel::RelType::Root(root) => {
+                    match count_read_filters(
+                        root.input.as_ref().unwrap(),
+                        &mut filter_count,
+                    ) {
+                        Err(e) => return Err(e),
+                        Ok(_) => continue,
+                    }
+                }
+            },
+            None => return plan_err!("Cannot parse plan relation: None"),
+        }
+    }
+
+    assert_eq!(expected_filter_count, filter_count);
 
     Ok(())
 }
@@ -1396,6 +1542,17 @@ async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
 
     // verify that the join filters are None
     verify_post_join_filter_value(proto).await
+}
+
+async fn roundtrip_verify_read_filter_count(
+    sql: &str,
+    expected_filter_count: u32,
+) -> Result<()> {
+    let ctx = create_context().await?;
+    let proto = roundtrip_with_ctx(sql, ctx).await?;
+
+    // verify that filter counts in read relations are as expected
+    assert_read_filter_count(proto, expected_filter_count).await
 }
 
 async fn roundtrip_all_types(sql: &str) -> Result<()> {

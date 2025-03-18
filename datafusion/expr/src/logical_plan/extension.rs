@@ -22,6 +22,8 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, collections::HashSet, fmt, sync::Arc};
 
+use super::InvariantLevel;
+
 /// This defines the interface for [`LogicalPlan`] nodes that can be
 /// used to extend DataFusion with custom relational operators.
 ///
@@ -54,6 +56,9 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Return the output schema of this logical plan node.
     fn schema(&self) -> &DFSchemaRef;
 
+    /// Perform check of invariants for the extension node.
+    fn check_invariants(&self, check: InvariantLevel, plan: &LogicalPlan) -> Result<()>;
+
     /// Returns all expressions in the current logical plan node. This should
     /// not include expressions of any inputs (aka non-recursively).
     ///
@@ -76,17 +81,6 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     ///
     /// For example: `TopK: k=10`
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result;
-
-    #[deprecated(since = "39.0.0", note = "use with_exprs_and_inputs instead")]
-    #[allow(clippy::wrong_self_convention)]
-    fn from_template(
-        &self,
-        exprs: &[Expr],
-        inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode> {
-        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
-            .unwrap()
-    }
 
     /// Create a new `UserDefinedLogicalNode` with the specified children
     /// and expressions. This function is used during optimization
@@ -244,6 +238,17 @@ pub trait UserDefinedLogicalNodeCore:
     /// Return the output schema of this logical plan node.
     fn schema(&self) -> &DFSchemaRef;
 
+    /// Perform check of invariants for the extension node.
+    ///
+    /// This is the default implementation for extension nodes.
+    fn check_invariants(
+        &self,
+        _check: InvariantLevel,
+        _plan: &LogicalPlan,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Returns all expressions in the current logical plan node. This
     /// should not include expressions of any inputs (aka
     /// non-recursively). These expressions are used for optimizer
@@ -265,13 +270,6 @@ pub trait UserDefinedLogicalNodeCore:
     ///
     /// For example: `TopK: k=10`
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result;
-
-    #[deprecated(since = "39.0.0", note = "use with_exprs_and_inputs instead")]
-    #[allow(clippy::wrong_self_convention)]
-    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
-        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
-            .unwrap()
-    }
 
     /// Create a new `UserDefinedLogicalNode` with the specified children
     /// and expressions. This function is used during optimization
@@ -334,6 +332,10 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
 
     fn schema(&self) -> &DFSchemaRef {
         self.schema()
+    }
+
+    fn check_invariants(&self, check: InvariantLevel, plan: &LogicalPlan) -> Result<()> {
+        self.check_invariants(check, plan)
     }
 
     fn expressions(&self) -> Vec<Expr> {

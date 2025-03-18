@@ -20,27 +20,28 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::as_string_array;
-use arrow::compute::kernels::numeric::add;
-use arrow_array::builder::BooleanBuilder;
-use arrow_array::cast::AsArray;
-use arrow_array::{
-    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
+use arrow::array::{
+    builder::BooleanBuilder, cast::AsArray, Array, ArrayRef, Float32Array, Float64Array,
+    Int32Array, RecordBatch, StringArray,
 };
-use arrow_schema::{DataType, Field, Schema};
+use arrow::compute::kernels::numeric::add;
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::test_util::batches_to_string;
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
-    not_impl_err, plan_err, DFSchema, DataFusionError, HashMap, Result, ScalarValue,
+    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
+    plan_err, DFSchema, DataFusionError, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
-    OperateFunctionArg, ReturnInfo, ReturnTypeArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility,
+    OperateFunctionArg, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
@@ -57,14 +58,15 @@ async fn csv_query_custom_udf_with_cast() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c11)) FROM aggregate_test_100";
     let actual = plan_and_collect(&ctx, sql).await.unwrap();
-    let expected = [
-        "+------------------------------------------+",
-        "| avg(custom_sqrt(aggregate_test_100.c11)) |",
-        "+------------------------------------------+",
-        "| 0.6584408483418835                       |",
-        "+------------------------------------------+",
-    ];
-    assert_batches_eq!(&expected, &actual);
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    +------------------------------------------+
+    | avg(custom_sqrt(aggregate_test_100.c11)) |
+    +------------------------------------------+
+    | 0.6584408483418835                       |
+    +------------------------------------------+
+    "###);
+
     Ok(())
 }
 
@@ -75,14 +77,15 @@ async fn csv_query_avg_sqrt() -> Result<()> {
     // Note it is a different column (c12) than above (c11)
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
     let actual = plan_and_collect(&ctx, sql).await.unwrap();
-    let expected = [
-        "+------------------------------------------+",
-        "| avg(custom_sqrt(aggregate_test_100.c12)) |",
-        "+------------------------------------------+",
-        "| 0.6706002946036459                       |",
-        "+------------------------------------------+",
-    ];
-    assert_batches_eq!(&expected, &actual);
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    +------------------------------------------+
+    | avg(custom_sqrt(aggregate_test_100.c12)) |
+    +------------------------------------------+
+    | 0.6706002946036459                       |
+    +------------------------------------------+
+    "###);
+
     Ok(())
 }
 
@@ -146,17 +149,16 @@ async fn scalar_udf() -> Result<()> {
 
     let result = DataFrame::new(ctx.state(), plan).collect().await?;
 
-    let expected = [
-        "+-----+-----+-----------------+",
-        "| a   | b   | my_add(t.a,t.b) |",
-        "+-----+-----+-----------------+",
-        "| 1   | 2   | 3               |",
-        "| 10  | 12  | 22              |",
-        "| 10  | 12  | 22              |",
-        "| 100 | 120 | 220             |",
-        "+-----+-----+-----------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +-----+-----+-----------------+
+    | a   | b   | my_add(t.a,t.b) |
+    +-----+-----+-----------------+
+    | 1   | 2   | 3               |
+    | 10  | 12  | 22              |
+    | 10  | 12  | 22              |
+    | 100 | 120 | 220             |
+    +-----+-----+-----------------+
+    "###);
 
     let batch = &result[0];
     let a = as_int32_array(batch.column(0))?;
@@ -208,11 +210,7 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
     }
 }
@@ -276,34 +274,32 @@ async fn scalar_udf_zero_params() -> Result<()> {
     ctx.register_udf(ScalarUDF::from(get_100_udf));
 
     let result = plan_and_collect(&ctx, "select get_100() a from t").await?;
-    let expected = [
-        "+-----+", //
-        "| a   |", //
-        "+-----+", //
-        "| 100 |", //
-        "| 100 |", //
-        "| 100 |", //
-        "| 100 |", //
-        "+-----+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +-----+
+    | a   |
+    +-----+
+    | 100 |
+    | 100 |
+    | 100 |
+    | 100 |
+    +-----+
+    "###);
 
     let result = plan_and_collect(&ctx, "select get_100() a").await?;
-    let expected = [
-        "+-----+", //
-        "| a   |", //
-        "+-----+", //
-        "| 100 |", //
-        "+-----+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +-----+
+    | a   |
+    +-----+
+    | 100 |
+    +-----+
+    "###);
 
     let result = plan_and_collect(&ctx, "select get_100() from t where a=999").await?;
-    let expected = [
-        "++", //
-        "++",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    ++
+    ++
+    "###);
+
     Ok(())
 }
 
@@ -329,14 +325,14 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
 
     // Make sure that the UDF is used instead of the built-in function
     let result = plan_and_collect(&ctx, "select abs(a) a from t").await?;
-    let expected = [
-        "+---+", //
-        "| a |", //
-        "+---+", //
-        "| 1 |", //
-        "+---+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +---+
+    | a |
+    +---+
+    | 1 |
+    +---+
+    "###);
+
     Ok(())
 }
 
@@ -431,14 +427,13 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     // Can call it if you put quotes
     let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
 
-    let expected = [
-        "+--------------+",
-        "| MY_FUNC(t.i) |",
-        "+--------------+",
-        "| 1            |",
-        "+--------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +--------------+
+    | MY_FUNC(t.i) |
+    +--------------+
+    | 1            |
+    +--------------+
+    "###);
 
     Ok(())
 }
@@ -468,18 +463,23 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     ctx.register_udf(udf);
 
-    let expected = [
-        "+------------+",
-        "| dummy(t.i) |",
-        "+------------+",
-        "| 1          |",
-        "+------------+",
-    ];
     let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +------------+
+    | dummy(t.i) |
+    +------------+
+    | 1          |
+    +------------+
+    "###);
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
-    assert_batches_eq!(expected, &alias_result);
+    insta::assert_snapshot!(batches_to_string(&alias_result), @r###"
+    +------------+
+    | dummy(t.i) |
+    +------------+
+    | 1          |
+    +------------+
+    "###);
 
     Ok(())
 }
@@ -519,16 +519,13 @@ impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let answer = match &args[0] {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [arg] = take_function_args(self.name(), &args.args)?;
+        let answer = match arg {
             // When called with static arguments, the result is returned as an array.
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(value))) => {
                 let mut answer = vec![];
-                for index in 1..=number_rows {
+                for index in 1..=args.number_rows {
                     // When calling a function with immutable arguments, the result is returned with ")".
                     // Example: SELECT add_index_to_string('const_value') FROM table;
                     answer.push(index.to_string() + ") " + value);
@@ -686,6 +683,10 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(DataType::Int64)
     }
 
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("dummy - not implemented")
+    }
+
     // Demonstrate simplifying a UDF
     fn simplify(
         &self,
@@ -713,14 +714,6 @@ impl ScalarUDFImpl for CastToI64UDF {
         };
         // return the newly written argument to DataFusion
         Ok(ExprSimplifyResult::Simplified(new_expr))
-    }
-
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        unimplemented!("Function should have been simplified prior to evaluation")
     }
 }
 
@@ -810,7 +803,7 @@ impl ScalarUDFImpl for TakeUDF {
         &self.signature
     }
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        not_impl_err!("Not called because the return_type_from_exprs is implemented")
+        not_impl_err!("Not called because the return_type_from_args is implemented")
     }
 
     /// This function returns the type of the first or second argument based on
@@ -851,17 +844,14 @@ impl ScalarUDFImpl for TakeUDF {
     }
 
     // The actual implementation
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let take_idx = match &args[2] {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [_arg0, _arg1, arg2] = take_function_args(self.name(), &args.args)?;
+        let take_idx = match arg2 {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "0" => 0,
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "1" => 1,
             _ => unreachable!(),
         };
-        match &args[take_idx] {
+        match &args.args[take_idx] {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(array.clone())),
             ColumnarValue::Scalar(_) => unimplemented!(),
         }
@@ -964,12 +954,8 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         Ok(self.return_type.clone())
     }
 
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        internal_err!("This function should not get invoked!")
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("dummy - not implemented")
     }
 
     fn simplify(
@@ -1254,12 +1240,8 @@ impl ScalarUDFImpl for MyRegexUdf {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args.as_slice() {
             [ColumnarValue::Scalar(ScalarValue::Utf8(value))] => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
                     self.matches(value.as_deref()),

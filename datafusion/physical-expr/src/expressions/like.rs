@@ -19,8 +19,8 @@ use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use crate::PhysicalExpr;
+use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::{DataType, Schema};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::apply_cmp;
@@ -145,6 +145,12 @@ impl PhysicalExpr for LikeExpr {
             Arc::clone(&children[1]),
         )))
     }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.expr.fmt_sql(f)?;
+        write!(f, " {} ", self.op_name())?;
+        self.pattern.fmt_sql(f)
+    }
 }
 
 /// used for optimize Dictionary like
@@ -183,8 +189,9 @@ mod test {
     use super::*;
     use crate::expressions::col;
     use arrow::array::*;
-    use arrow_schema::Field;
+    use arrow::datatypes::Field;
     use datafusion_common::cast::as_boolean_array;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     macro_rules! test_like {
         ($A_VEC:expr, $B_VEC:expr, $VEC:expr, $NULLABLE: expr, $NEGATED:expr, $CASE_INSENSITIVE:expr,) => {{
@@ -253,6 +260,32 @@ mod test {
             true,
             true,
         ); // not ilike
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+
+        let expr = like(
+            false,
+            false,
+            col("a", &schema)?,
+            col("b", &schema)?,
+            &schema,
+        )?;
+
+        // Display format
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "a@0 LIKE b@1");
+
+        // fmt_sql format
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "a LIKE b");
 
         Ok(())
     }

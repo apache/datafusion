@@ -27,7 +27,7 @@ use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_execution::TaskContext;
 
 use futures::stream::BoxStream;
@@ -128,7 +128,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
                             // the JoinSet were aborted, which in turn
                             // would imply that the receiver has been
                             // dropped and this code is not running
-                            return Some(internal_err!("Non Panic Task error: {e}"));
+                            return Some(exec_err!("Non Panic Task error: {e}"));
                         }
                     }
                 }
@@ -223,6 +223,10 @@ impl RecordBatchReceiverStreamBuilder {
     }
 
     /// Get a handle for sending [`RecordBatch`] to the output
+    ///
+    /// If the stream is dropped / canceled, the sender will be closed and
+    /// calling `tx().send()` will return an error. Producers should stop
+    /// producing in this case and return control.
     pub fn tx(&self) -> Sender<Result<RecordBatch>> {
         self.inner.tx()
     }
@@ -241,8 +245,21 @@ impl RecordBatchReceiverStreamBuilder {
         self.inner.spawn(task)
     }
 
-    /// Spawn a blocking task that will be aborted if this builder (or the stream
-    /// built from it) are dropped
+    /// Spawn a blocking task tied to the builder and stream.
+    ///
+    /// # Drop / Cancel Behavior
+    ///
+    /// If this builder (or the stream built from it) is dropped **before** the
+    /// task starts, the task is also dropped and will never start execute.
+    ///
+    /// **Note:** Once the blocking task has started, it **will not** be
+    /// forcibly stopped on drop as Rust does not allow forcing a running thread
+    /// to terminate. The task will continue running until it completes or
+    /// encounters an error.
+    ///
+    /// Users should ensure that their blocking function periodically checks for
+    /// errors calling `tx.blocking_send`. An error signals that the stream has
+    /// been dropped / cancelled and the blocking task should exit.
     ///
     /// This is often used to spawn tasks that write to the sender
     /// retrieved from [`Self::tx`], for examples, see the document
@@ -444,17 +461,43 @@ impl Stream for EmptyRecordBatchStream {
 pub(crate) struct ObservedStream {
     inner: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
+    fetch: Option<usize>,
+    produced: usize,
 }
 
 impl ObservedStream {
     pub fn new(
         inner: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
+        fetch: Option<usize>,
     ) -> Self {
         Self {
             inner,
             baseline_metrics,
+            fetch,
+            produced: 0,
         }
+    }
+
+    fn limit_reached(
+        &mut self,
+        poll: Poll<Option<Result<RecordBatch>>>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        let Some(fetch) = self.fetch else { return poll };
+
+        if self.produced >= fetch {
+            return Poll::Ready(None);
+        }
+
+        if let Poll::Ready(Some(Ok(batch))) = &poll {
+            if self.produced + batch.num_rows() > fetch {
+                let batch = batch.slice(0, fetch.saturating_sub(self.produced));
+                self.produced += batch.num_rows();
+                return Poll::Ready(Some(Ok(batch)));
+            };
+            self.produced += batch.num_rows()
+        }
+        poll
     }
 }
 
@@ -471,7 +514,10 @@ impl Stream for ObservedStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let poll = self.inner.poll_next_unpin(cx);
+        let mut poll = self.inner.poll_next_unpin(cx);
+        if self.fetch.is_some() {
+            poll = self.limit_reached(poll);
+        }
         self.baseline_metrics.record_poll(poll)
     }
 }
@@ -483,7 +529,7 @@ mod test {
         assert_strong_count_converges_to_zero, BlockingExec, MockExec, PanicExec,
     };
 
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::exec_err;
 
     fn schema() -> SchemaRef {

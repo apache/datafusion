@@ -67,7 +67,7 @@ use datafusion_common::{
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Unnest,
+    Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -1494,20 +1494,6 @@ fn round_trip_scalar_values_and_data_types() {
                 Field::new("b", DataType::Boolean, false),
                 ScalarValue::from(false),
             )
-            .with_scalar(
-                Field::new(
-                    "c",
-                    DataType::Dictionary(
-                        Box::new(DataType::UInt16),
-                        Box::new(DataType::Utf8),
-                    ),
-                    false,
-                ),
-                ScalarValue::Dictionary(
-                    Box::new(DataType::UInt16),
-                    Box::new("value".into()),
-                ),
-            )
             .build()
             .unwrap(),
         ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
@@ -1518,25 +1504,6 @@ fn round_trip_scalar_values_and_data_types() {
         ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Boolean, false),
-            Field::new(
-                "c",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt16),
-                    Box::new(DataType::Binary),
-                ),
-                false,
-            ),
-            Field::new(
-                "d",
-                DataType::new_list(
-                    DataType::Dictionary(
-                        Box::new(DataType::UInt16),
-                        Box::new(DataType::Binary),
-                    ),
-                    false,
-                ),
-                false,
-            ),
         ])))
         .unwrap(),
         ScalarValue::try_from(&DataType::Map(
@@ -1815,45 +1782,6 @@ fn round_trip_datatype() {
     }
 }
 
-// See https://github.com/apache/datafusion/issues/14173 to remove deprecated dict_id
-#[allow(deprecated)]
-#[test]
-fn roundtrip_dict_id() -> Result<()> {
-    let dict_id = 42;
-    let field = Field::new(
-        "keys",
-        DataType::List(Arc::new(Field::new_dict(
-            "item",
-            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
-            true,
-            dict_id,
-            false,
-        ))),
-        false,
-    );
-    let schema = Arc::new(Schema::new(vec![field]));
-
-    // encode
-    let mut buf: Vec<u8> = vec![];
-    let schema_proto: protobuf::Schema = schema.try_into().unwrap();
-    schema_proto.encode(&mut buf).unwrap();
-
-    // decode
-    let schema_proto = protobuf::Schema::decode(buf.as_slice()).unwrap();
-    let decoded: Schema = (&schema_proto).try_into()?;
-
-    // assert
-    let keys = decoded.fields().iter().last().unwrap();
-    match keys.data_type() {
-        DataType::List(field) => {
-            assert_eq!(field.dict_id(), Some(dict_id), "dict_id should be retained");
-        }
-        _ => panic!("Invalid type"),
-    }
-
-    Ok(())
-}
-
 #[test]
 fn roundtrip_null_scalar_values() {
     let test_types = vec![
@@ -2101,7 +2029,11 @@ fn roundtrip_unnest() {
 
 #[test]
 fn roundtrip_wildcard() {
-    let test_expr = wildcard();
+    #[expect(deprecated)]
+    let test_expr = Expr::Wildcard {
+        qualifier: None,
+        options: Box::new(WildcardOptions::default()),
+    };
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2109,7 +2041,11 @@ fn roundtrip_wildcard() {
 
 #[test]
 fn roundtrip_qualified_wildcard() {
-    let test_expr = qualified_wildcard("foo");
+    #[expect(deprecated)]
+    let test_expr = Expr::Wildcard {
+        qualifier: Some("foo".into()),
+        options: Box::new(WildcardOptions::default()),
+    };
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
