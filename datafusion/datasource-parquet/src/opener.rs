@@ -19,14 +19,11 @@
 
 use std::sync::Arc;
 
-use crate::file_format::{
-    coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
-};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
-    row_filter, should_enable_page_index, ParquetAccessPlan, ParquetFileMetrics,
-    ParquetFileReaderFactory,
+    apply_file_schema_type_coercions, row_filter, should_enable_page_index,
+    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
@@ -131,14 +128,8 @@ impl FileOpener for ParquetOpener {
                 ArrowReaderMetadata::load_async(&mut reader, options.clone()).await?;
             let mut schema = Arc::clone(metadata.schema());
 
-            if let Some(merged) =
-                coerce_file_schema_to_string_type(&table_schema, &schema)
-            {
-                schema = Arc::new(merged);
-            }
-
             // read with view types
-            if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &schema)
+            if let Some(merged) = apply_file_schema_type_coercions(&table_schema, &schema)
             {
                 schema = Arc::new(merged);
             }
