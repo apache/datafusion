@@ -206,7 +206,7 @@ impl AggregateUDFImpl for FirstValue {
                 .map(|e| e.expr.data_type(args.schema))
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(Box::new(FirstGroupsAccumulator::<T>::try_new(
+            Ok(Box::new(FirstPrimitiveGroupsAccumulator::<T>::try_new(
                 args.ordering_req.clone(),
                 args.ignore_nulls,
                 args.return_type,
@@ -292,7 +292,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 }
 
-struct FirstGroupsAccumulator<T>
+struct FirstPrimitiveGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
 {
@@ -329,7 +329,7 @@ where
     default_orderings: Vec<ScalarValue>,
 }
 
-impl<T> FirstGroupsAccumulator<T>
+impl<T> FirstPrimitiveGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
 {
@@ -513,9 +513,9 @@ where
         for (idx_in_val, group_idx) in group_indices.iter().enumerate() {
             let group_idx = *group_idx;
 
-            let passed_filter = opt_filter.map(|x| x.value(idx_in_val)).unwrap_or(true);
+            let passed_filter = opt_filter.is_none_or(|x| x.value(idx_in_val));
 
-            let is_set = is_set_arr.map(|x| x.value(idx_in_val)).unwrap_or(true);
+            let is_set = is_set_arr.is_none_or(|x| x.value(idx_in_val));
 
             if !passed_filter || !is_set {
                 continue;
@@ -552,7 +552,7 @@ where
     }
 }
 
-impl<T> GroupsAccumulator for FirstGroupsAccumulator<T>
+impl<T> GroupsAccumulator for FirstPrimitiveGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
 {
@@ -569,6 +569,7 @@ where
 
         let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
 
+        // The overhead of calling `extract_row_at_idx_to_buf` is somewhat high, so we need to minimize its calls as much as possible.
         for (group_idx, idx) in self
             .get_filtered_min_of_each_group(
                 &values_with_orderings[1..],
@@ -655,7 +656,7 @@ where
         let is_set_arr = as_boolean_array(is_set_arr)?;
 
         let vals = values[0].as_primitive::<T>();
-
+        // The overhead of calling `extract_row_at_idx_to_buf` is somewhat high, so we need to minimize its calls as much as possible.
         let groups = self.get_filtered_min_of_each_group(
             &val_and_orderings[1..],
             group_indices,
@@ -1370,7 +1371,7 @@ mod tests {
             options: SortOptions::default(),
         }]);
 
-        let mut group_acc = FirstGroupsAccumulator::<Int64Type>::try_new(
+        let mut group_acc = FirstPrimitiveGroupsAccumulator::<Int64Type>::try_new(
             sort_key,
             true,
             &DataType::Int64,
@@ -1462,7 +1463,7 @@ mod tests {
             options: SortOptions::default(),
         }]);
 
-        let mut group_acc = FirstGroupsAccumulator::<Int64Type>::try_new(
+        let mut group_acc = FirstPrimitiveGroupsAccumulator::<Int64Type>::try_new(
             sort_key,
             true,
             &DataType::Int64,
