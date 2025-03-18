@@ -159,7 +159,7 @@ fn check_column_satisfies_expr(
 ) -> Result<()> {
     if !columns.contains(expr) {
         return plan_err!(
-            "{}: Expression {} could not be resolved from available columns: {}, it must be in GROUP BY or an aggregate function",
+            "{}: While expanding wildcard, column \"{}\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"{}\" appears in the SELECT clause satisfies this requirement",
             purpose.message_prefix(),
             expr,
             expr_vec_fmt!(columns)

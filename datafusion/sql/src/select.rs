@@ -25,10 +25,9 @@ use crate::utils::{
     CheckColumnsSatisfyExprsPurpose,
 };
 
-use datafusion_common::error::{DataFusionError, DataFusionErrorBuilder};
+use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::SchemaError::GroupByColumnNotInSelectList;
-use datafusion_common::{not_impl_err, plan_err, Diagnostic, Result};
+use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -827,13 +826,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
             .collect::<Result<Vec<Expr>>>()?;
 
-        // check if the columns in the SELECT list are in the GROUP BY clause
-        // or are part of an aggregate function, if not, throw an error.
-        validate_columns_in_group_by_or_aggregate(
-            &select_exprs_post_aggr,
-            &column_exprs_post_aggr,
-        )?;
-
         // finally, we have some validation that the re-written projection can be resolved
         // from the aggregate output columns
         check_columns_satisfy_exprs(
@@ -861,52 +853,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
-}
-
-/// This function is for checking if the columns in the SELECT list are
-/// in the GROUP BY clause or are part of an aggregate function.
-/// If not, throw an SchemaError::GroupByColumnInvalid and return an error.
-///
-fn validate_columns_in_group_by_or_aggregate(
-    expanded: &Vec<Expr>,
-    aggregate_columns: &[Expr],
-) -> Result<(), DataFusionError> {
-    if !aggregate_columns.is_empty() {
-        for e in expanded {
-            if let Expr::Column(col) = e {
-                let mut table_name = String::new();
-                if let Some(relation) = &col.relation {
-                    table_name = relation.to_string();
-                }
-                let name = &col.name;
-                if !aggregate_columns.contains(e) {
-                    if table_name.is_empty() {
-                        let mut diagnostic =
-                            Diagnostic::new_error(format!("Column '{}' must appear in the GROUP BY clause or be used in an aggregate function", &name), col.spans().first());
-                        diagnostic.add_help(format!("Either add '{}' to GROUP BY clause, or use an aggregare function like ANY_VALUE({})", &name, &name), None);
-                        return Err(DataFusionError::SchemaError(
-                            GroupByColumnNotInSelectList {
-                                column: name.clone(),
-                            },
-                            Box::new(Some(DataFusionError::get_back_trace())),
-                        )
-                        .with_diagnostic(diagnostic));
-                    }
-                    let mut diagnostic =
-                        Diagnostic::new_error(format!("Column '{}.{}' must appear in the GROUP BY clause or be used in an aggregate function", &table_name, &name), col.spans().first());
-                    diagnostic.add_help(format!("Either add '{}.{}' to GROUP BY clause, or use an aggregare function like ANY_VALUE({}.{})", &table_name, &name, &table_name, &name), None);
-                    return Err(DataFusionError::SchemaError(
-                        GroupByColumnNotInSelectList {
-                            column: (format!("{}.{}", &table_name, &name)),
-                        },
-                        Box::new(Some(DataFusionError::get_back_trace())),
-                    )
-                    .with_diagnostic(diagnostic));
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 // If there are any multiple-defined windows, we raise an error.

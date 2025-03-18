@@ -795,7 +795,7 @@ select unnest(unnest(column2)) c2, count(column3) from recursive_unnest_table gr
 [NULL, 6] 1
 NULL 1
 
-query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: Expression nested_unnest_table\.column1 could not be resolved from available columns: UNNEST\(nested_unnest_table\.column1\)\[c0\], it must be in GROUP BY or an aggregate function
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "nested_unnest_table\.column1" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "UNNEST\(nested_unnest_table\.column1\)\[c0\]" appears in the SELECT clause satisfies this requirement
 select unnest(column1) c1 from nested_unnest_table group by c1.c0;
 
 # TODO: this query should work. see issue: https://github.com/apache/datafusion/issues/12794
