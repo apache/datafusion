@@ -473,46 +473,10 @@ mod tests {
     #[test]
     fn test_adapt_simple_to_nested_schema() -> Result<()> {
         // Simple source schema with flat fields
-        let source_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("user", DataType::Utf8, true),
-            Field::new(
-                "timestamp",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ),
-        ]));
+        let source_schema = create_flat_schema();
 
         // Target schema with nested struct fields
-        let target_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new(
-                "user_info",
-                DataType::Struct(
-                    vec![
-                        Field::new("name", DataType::Utf8, true), // will map from "user" field
-                        Field::new(
-                            "created_at",
-                            DataType::Timestamp(TimeUnit::Millisecond, None),
-                            true,
-                        ), // will map from "timestamp" field
-                        Field::new(
-                            "settings",
-                            DataType::Struct(
-                                vec![
-                                    Field::new("theme", DataType::Utf8, true),
-                                    Field::new("notifications", DataType::Boolean, true),
-                                ]
-                                .into(),
-                            ),
-                            true,
-                        ),
-                    ]
-                    .into(),
-                ),
-                true,
-            ),
-        ]));
+        let target_schema = create_nested_schema();
 
         // Create mapping with our adapter - should handle missing nested fields
         let nested_adapter =
@@ -568,5 +532,51 @@ mod tests {
         assert_eq!(adapted.fields().len(), 2);
 
         Ok(())
+    }
+
+    fn create_nested_schema() -> Arc<Schema> {
+        let nested_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "user_info",
+                DataType::Struct(
+                    vec![
+                        Field::new("name", DataType::Utf8, true), // will map from "user" field
+                        Field::new(
+                            "created_at",
+                            DataType::Timestamp(TimeUnit::Millisecond, None),
+                            true,
+                        ), // will map from "timestamp" field
+                        Field::new(
+                            "settings",
+                            DataType::Struct(
+                                vec![
+                                    Field::new("theme", DataType::Utf8, true),
+                                    Field::new("notifications", DataType::Boolean, true),
+                                ]
+                                .into(),
+                            ),
+                            true,
+                        ),
+                    ]
+                    .into(),
+                ),
+                true,
+            ),
+        ]));
+        nested_schema
+    }
+
+    fn create_flat_schema() -> Arc<Schema> {
+        let flat_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("user", DataType::Utf8, true),
+            Field::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+        ]));
+        flat_schema
     }
 }
