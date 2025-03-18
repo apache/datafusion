@@ -31,8 +31,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
     schema_name_from_exprs, schema_name_from_exprs_comma_separated_without_space,
-    schema_name_from_sorts, sql_name_from_exprs_comma_separated_without_space,
-    AggregateFunction, AggregateFunctionParams, WindowFunctionParams,
+    schema_name_from_sorts, AggregateFunction, AggregateFunctionParams, ExprListDisplay,
+    WindowFunctionParams,
 };
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
@@ -471,7 +471,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             "{}({}{})",
             self.name(),
             if *distinct { "DISTINCT " } else { "" },
-            sql_name_from_exprs_comma_separated_without_space(args)?
+            ExprListDisplay::comma_separated(args.as_slice())
         ))?;
 
         if let Some(null_treatment) = null_treatment {

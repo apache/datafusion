@@ -2612,14 +2612,22 @@ impl Display for SchemaDisplay<'_> {
     }
 }
 
-struct SqlDisplay<'a>(&'a Expr);
+/// A helper struct for displaying an `Expr` as an SQL-like string.
+///
+/// This struct provides a simple way to convert an `Expr` to a string representation that resembles SQL.
+/// It is intended for explain display purpose rather than generating production-ready SQL.
+/// If you need syntactically correct SQL for use in other systems, it is recommended to use `Unparser` from the `datafusion-sql` crate.
+///
+/// # Note
+///
+/// For generating syntactically correct SQL that can be fed to other systems, consider using `Unparser`.
+/// For more details, see the [Unparser documentation](https://docs.rs/datafusion/latest/datafusion/sql/unparser/struct.Unparser.html).struct SqlDisplay<'a>(&'a Expr);
+pub struct SqlDisplay<'a>(&'a Expr);
+
 impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
             Expr::Literal(scalar) => scalar.fmt(f),
-            Expr::Placeholder(holder) => {
-                write!(f, "{}", holder.id)
-            }
             Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
             Expr::Between(Between {
                 expr,
@@ -2677,26 +2685,38 @@ impl Display for SqlDisplay<'_> {
                 list,
                 negated,
             }) => {
-                let inlist_name = sql_name_from_exprs(list)?;
-
-                if *negated {
-                    write!(f, "{} NOT IN {}", SqlDisplay(expr), inlist_name)
-                } else {
-                    write!(f, "{} IN {}", SqlDisplay(expr), inlist_name)
-                }
+                write!(
+                    f,
+                    "{}{} IN {}",
+                    SqlDisplay(expr),
+                    if *negated { " NOT" } else { "" },
+                    ExprListDisplay::comma_separated(list.as_slice())
+                )
             }
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
-                write!(f, "ROLLUP ({})", sql_name_from_exprs(exprs)?)
+                write!(
+                    f,
+                    "ROLLUP ({})",
+                    ExprListDisplay::comma_separated(exprs.as_slice())
+                )
             }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 write!(f, "GROUPING SETS (")?;
                 for exprs in lists_of_exprs.iter() {
-                    write!(f, "({})", sql_name_from_exprs(exprs)?)?;
+                    write!(
+                        f,
+                        "({})",
+                        ExprListDisplay::comma_separated(exprs.as_slice())
+                    )?;
                 }
                 write!(f, ")")
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
-                write!(f, "ROLLUP ({})", sql_name_from_exprs(exprs)?)
+                write!(
+                    f,
+                    "ROLLUP ({})",
+                    ExprListDisplay::comma_separated(exprs.as_slice())
+                )
             }
             Expr::IsNull(expr) => write!(f, "{} IS NULL", SqlDisplay(expr)),
             Expr::IsNotNull(expr) => {
@@ -2777,7 +2797,7 @@ impl Display for SqlDisplay<'_> {
                     }
                 }
             }
-            _ => write!(f, "{}", self.0.schema_name()),
+            _ => write!(f, "{}", self.0),
         }
     }
 }
@@ -2793,21 +2813,41 @@ pub(crate) fn schema_name_from_exprs_comma_separated_without_space(
     schema_name_from_exprs_inner(exprs, ",")
 }
 
-/// Get `sql_name` for Vector of expressions.
-pub(crate) fn sql_name_from_exprs_comma_separated_without_space(
-    exprs: &[Expr],
-) -> Result<String, fmt::Error> {
-    sql_name_from_exprs_inner(exprs, ",")
+/// Formats a list of `&Expr` with a custom separator using SQL display format
+pub struct ExprListDisplay<'a> {
+    exprs: &'a [Expr],
+    sep: &'a str,
+}
+
+impl<'a> ExprListDisplay<'a> {
+    /// Create a new display struct with the given expressions and separator
+    pub fn new(exprs: &'a [Expr], sep: &'a str) -> Self {
+        Self { exprs, sep }
+    }
+
+    /// Create a new display struct with comma-space separator
+    pub fn comma_separated(exprs: &'a [Expr]) -> Self {
+        Self::new(exprs, ", ")
+    }
+}
+
+impl Display for ExprListDisplay<'_> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let mut first = true;
+        for expr in self.exprs {
+            if !first {
+                write!(f, "{}", self.sep)?;
+            }
+            write!(f, "{}", SqlDisplay(expr))?;
+            first = false;
+        }
+        Ok(())
+    }
 }
 
 /// Get schema_name for Vector of expressions
 pub fn schema_name_from_exprs(exprs: &[Expr]) -> Result<String, fmt::Error> {
     schema_name_from_exprs_inner(exprs, ", ")
-}
-
-/// Get `sql_name` for Vector of expressions.
-pub fn sql_name_from_exprs(exprs: &[Expr]) -> Result<String, fmt::Error> {
-    sql_name_from_exprs_inner(exprs, ", ")
 }
 
 fn schema_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt::Error> {
@@ -2817,18 +2857,6 @@ fn schema_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt
             write!(&mut s, "{sep}")?;
         }
         write!(&mut s, "{}", SchemaDisplay(e))?;
-    }
-
-    Ok(s)
-}
-
-fn sql_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt::Error> {
-    let mut s = String::new();
-    for (i, e) in exprs.iter().enumerate() {
-        if i > 0 {
-            write!(&mut s, "{sep}")?;
-        }
-        write!(&mut s, "{}", SqlDisplay(e))?;
     }
 
     Ok(s)
