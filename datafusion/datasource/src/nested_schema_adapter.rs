@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_create_appropriate_adapter() -> Result<()> {
-        println!("==> Starting test_create_appropriate_adapter");
+        // Setup test schemas
         let simple_schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, true),
@@ -372,17 +372,7 @@ mod tests {
             ),
         ]));
 
-        // Test has_nested_structs method - this is the core logic that determines which adapter is used
-        println!("==> Testing has_nested_structs method");
-        assert!(!NestedStructSchemaAdapterFactory::has_nested_structs(
-            &simple_schema
-        ));
-        assert!(NestedStructSchemaAdapterFactory::has_nested_structs(
-            &nested_schema
-        ));
-
-        // Create a schema that would require nested struct handling
-        println!("==> Creating source schema");
+        // Create source schema with missing field in struct
         let source_schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new(
@@ -398,68 +388,45 @@ mod tests {
             ),
         ]);
 
-        // Create instances of each adapter type
-        println!("==> Creating nested adapter");
-        let nested_adapter = NestedStructSchemaAdapterFactory
-            .create(nested_schema.clone(), nested_schema.clone());
+        // Test has_nested_structs detection
+        assert!(!NestedStructSchemaAdapterFactory::has_nested_structs(
+            &simple_schema
+        ));
+        assert!(NestedStructSchemaAdapterFactory::has_nested_structs(
+            &nested_schema
+        ));
 
-        // Test that DefaultSchemaAdapter fails with nested structs having different schemas
-        println!("==> Testing DefaultSchemaAdapter with incompatible nested structs");
+        // Test DefaultSchemaAdapter fails with nested schema evolution
         let default_adapter = DefaultSchemaAdapterFactory
             .create(nested_schema.clone(), nested_schema.clone());
-
-        // This should fail because DefaultSchemaAdapter cannot handle schema evolution in nested structs
         let default_result = default_adapter.map_schema(&source_schema);
-        assert!(
-            default_result.is_err(),
-            "DefaultSchemaAdapter should fail with incompatible nested structs"
-        );
 
+        assert!(default_result.is_err());
         if let Err(e) = default_result {
-            println!("==> Expected error from DefaultSchemaAdapter: {}", e);
-            let error_msg = format!("{}", e);
             assert!(
-                error_msg.contains("Cannot cast file schema field metadata"),
-                "Expected casting error, got: {}",
-                error_msg
+                format!("{}", e).contains("Cannot cast file schema field metadata"),
+                "Expected casting error, got: {e}"
             );
         }
 
-        // Test that NestedStructSchemaAdapter handles the same case successfully
-        println!(
-            "==> Testing NestedStructSchemaAdapter with incompatible nested structs"
-        );
-        let nested_result = nested_adapter.map_schema(&source_schema);
-        assert!(
-            nested_result.is_ok(),
-            "NestedStructSchemaAdapter should handle incompatible nested structs"
-        );
+        // Test NestedStructSchemaAdapter handles the same case successfully
+        let nested_adapter = NestedStructSchemaAdapterFactory
+            .create(nested_schema.clone(), nested_schema.clone());
+        assert!(nested_adapter.map_schema(&source_schema).is_ok());
 
-        // The real test: verify create_appropriate_adapter selects the right one based on schema
-        println!("==> Testing create_appropriate_adapter with simple schema (uses DefaultSchemaAdapter)");
-        let _simple_adapter =
-            NestedStructSchemaAdapterFactory::create_appropriate_adapter(
-                simple_schema.clone(),
-                simple_schema.clone(),
-            );
-
-        println!("==> Testing create_appropriate_adapter with nested schema (uses NestedStructSchemaAdapter)");
+        // Test factory selects appropriate adapter based on schema
         let complex_adapter =
             NestedStructSchemaAdapterFactory::create_appropriate_adapter(
                 nested_schema.clone(),
                 nested_schema.clone(),
             );
 
-        // Verify that complex_adapter can handle the source_schema with missing field
-        // while simple_adapter would fail if we tried to use it with nested structures
-        println!("==> Verifying that complex_adapter handles schema with missing fields");
-        let complex_result = complex_adapter.map_schema(&source_schema);
+        // Verify complex_adapter can handle schema evolution
         assert!(
-            complex_result.is_ok(),
+            complex_adapter.map_schema(&source_schema).is_ok(),
             "Complex adapter should handle schema with missing fields"
         );
 
-        println!("==> Test completed successfully");
         Ok(())
     }
 }
