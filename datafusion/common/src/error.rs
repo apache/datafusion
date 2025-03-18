@@ -182,7 +182,7 @@ pub enum SchemaError {
         valid_fields: Vec<Column>,
     },
     // Group by column does contains all the columns in the select list
-    GoupByColumnNotInSelectList {
+    GroupByColumnNotInSelectList {
         column: String,
     },
 }
@@ -264,7 +264,7 @@ impl Display for SchemaError {
                     )
                 }
             }
-            Self::GoupByColumnNotInSelectList { column } => {
+            Self::GroupByColumnNotInSelectList { column } => {
                 write!(
                     f,
                     "While expanding wildcard, column ’{}‘ must appear in the GROUP BY clause or must be part of an aggregate function.",

@@ -25,10 +25,10 @@ use crate::utils::{
     CheckColumnsSatisfyExprsPurpose,
 };
 
-use datafusion_common::error::DataFusionErrorBuilder;
+use datafusion_common::error::{DataFusionError, DataFusionErrorBuilder};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::DataFusionError;
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::SchemaError::GroupByColumnNotInSelectList;
+use datafusion_common::{not_impl_err, plan_err, Diagnostic, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -874,14 +874,34 @@ fn validate_columns_in_group_by_or_aggregate(
     if !aggregate_columns.is_empty() {
         for e in expanded {
             if let Expr::Column(col) = e {
+                let mut table_name = String::new();
+                if let Some(relation) = &col.relation {
+                    table_name = relation.to_string();
+                }
                 let name = &col.name;
                 if !aggregate_columns.contains(e) {
+                    if table_name.is_empty() {
+                        let mut diagnostic =
+                            Diagnostic::new_error(format!("Column '{}' must appear in the GROUP BY clause or be used in an aggregate function", &name), col.spans().first());
+                        diagnostic.add_help(format!("Either add '{}' to GROUP BY clause, or use an aggregare function like ANY_VALUE({})", &name, &name), None);
+                        return Err(DataFusionError::SchemaError(
+                            GroupByColumnNotInSelectList {
+                                column: name.clone(),
+                            },
+                            Box::new(Some(DataFusionError::get_back_trace())),
+                        )
+                        .with_diagnostic(diagnostic));
+                    }
+                    let mut diagnostic =
+                        Diagnostic::new_error(format!("Column '{}.{}' must appear in the GROUP BY clause or be used in an aggregate function", &table_name, &name), col.spans().first());
+                    diagnostic.add_help(format!("Either add '{}.{}' to GROUP BY clause, or use an aggregare function like ANY_VALUE({}.{})", &table_name, &name, &table_name, &name), None);
                     return Err(DataFusionError::SchemaError(
-                        datafusion_common::SchemaError::GoupByColumnNotInSelectList {
-                            column: (name.clone().to_string()),
+                        GroupByColumnNotInSelectList {
+                            column: (format!("{}.{}", &table_name, &name)),
                         },
-                        Box::new(None),
-                    ));
+                        Box::new(Some(DataFusionError::get_back_trace())),
+                    )
+                    .with_diagnostic(diagnostic));
                 }
             }
         }
