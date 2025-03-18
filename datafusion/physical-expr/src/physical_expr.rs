@@ -84,7 +84,7 @@ use datafusion_expr::{Expr, SortExpr};
 /// ```
 /// // Create orderings from columns "id" and "name"
 /// # use arrow::datatypes::{Schema, Field, DataType};
-/// # use datafusion_catalog::create_ordering;
+/// # use datafusion_physical_expr::create_ordering;
 /// # use datafusion_common::Column;
 /// # use datafusion_expr::{Expr, SortExpr};
 /// #
