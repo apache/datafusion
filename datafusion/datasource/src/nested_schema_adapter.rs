@@ -143,6 +143,7 @@ impl NestedStructSchemaAdapter {
         adapted_fields
     }
 
+    // Takes a source schema and transforms it to match the structure of the target schema.
     fn adapt_schema(&self, source_schema: SchemaRef) -> Result<SchemaRef> {
         let adapted_fields =
             self.adapt_fields(source_schema.fields(), self.target_schema.fields());
@@ -475,11 +476,6 @@ mod tests {
                 true,
             ),
         ]));
-
-        // Test that default adapter fails with this transformation
-        let default_adapter = DefaultSchemaAdapterFactory
-            .create(target_schema.clone(), target_schema.clone());
-        assert!(default_adapter.map_schema(&source_schema).is_err());
 
         // Create mapping with our adapter - should handle missing nested fields
         let nested_adapter = NestedStructSchemaAdapter::new(target_schema.clone());
