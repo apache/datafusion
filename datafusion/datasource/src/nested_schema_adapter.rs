@@ -26,9 +26,62 @@ use datafusion_common::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::schema_adapter::DefaultSchemaAdapterFactory;
 use crate::schema_adapter::SchemaAdapter;
+use crate::schema_adapter::SchemaAdapterFactory;
 use crate::schema_adapter::SchemaMapper;
 use crate::schema_adapter::SchemaMapping;
+
+/// Factory for creating [`NestedStructSchemaAdapter`]
+///
+/// This factory creates schema adapters that properly handle schema evolution
+/// for nested struct fields, allowing new fields to be added to struct columns
+/// over time.
+#[derive(Debug, Clone, Default)]
+pub struct NestedStructSchemaAdapterFactory;
+
+impl SchemaAdapterFactory for NestedStructSchemaAdapterFactory {
+    fn create(
+        &self,
+        projected_table_schema: SchemaRef,
+        _table_schema: SchemaRef,
+    ) -> Box<dyn SchemaAdapter> {
+        Box::new(NestedStructSchemaAdapter::new(projected_table_schema))
+    }
+}
+
+impl NestedStructSchemaAdapterFactory {
+    /// Create a new factory for mapping batches from a file schema to a table
+    /// schema with support for nested struct evolution.
+    ///
+    /// This is a convenience method that handles nested struct fields properly.
+    pub fn from_schema(table_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
+        Self.create(Arc::clone(&table_schema), table_schema)
+    }
+
+    /// Determines if a schema contains nested struct fields that would benefit
+    /// from special handling during schema evolution
+    pub fn has_nested_structs(schema: &Schema) -> bool {
+        schema
+            .fields()
+            .iter()
+            .any(|field| matches!(field.data_type(), DataType::Struct(_)))
+    }
+
+    /// Create an appropriate schema adapter based on schema characteristics.
+    /// Returns a NestedStructSchemaAdapter for schemas with nested structs,
+    /// or falls back to DefaultSchemaAdapter for simple schemas.
+    pub fn create_appropriate_adapter(
+        projected_table_schema: SchemaRef,
+        table_schema: SchemaRef,
+    ) -> Box<dyn SchemaAdapter> {
+        if Self::has_nested_structs(projected_table_schema.as_ref()) {
+            NestedStructSchemaAdapterFactory.create(projected_table_schema, table_schema)
+        } else {
+            DefaultSchemaAdapterFactory.create(projected_table_schema, table_schema)
+        }
+    }
+}
 
 /// A SchemaAdapter that handles schema evolution for nested struct types
 #[derive(Debug, Clone)]
