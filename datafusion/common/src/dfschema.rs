@@ -563,6 +563,30 @@ impl DFSchema {
             .all(|(dffield, arrowfield)| dffield.name() == arrowfield.name())
     }
 
+    /// Check to see if fields in 2 Arrow schemas are compatible
+    #[deprecated(since = "47.0.0", note = "This method is no longer used")]
+    pub fn check_arrow_schema_type_compatible(
+        &self,
+        arrow_schema: &Schema,
+    ) -> Result<()> {
+        let self_arrow_schema: Schema = self.into();
+        self_arrow_schema
+            .fields()
+            .iter()
+            .zip(arrow_schema.fields().iter())
+            .try_for_each(|(l_field, r_field)| {
+                if !can_cast_types(r_field.data_type(), l_field.data_type()) {
+                    _plan_err!("Column {} (type: {}) is not compatible with column {} (type: {})",
+                                r_field.name(),
+                                r_field.data_type(),
+                                l_field.name(),
+                                l_field.data_type())
+                } else {
+                    Ok(())
+                }
+            })
+    }
+
     /// Returns true if the two schemas have the same qualified named
     /// fields with logically equivalent data types. Returns false otherwise.
     ///
@@ -590,7 +614,12 @@ impl DFSchema {
     /// Use [DFSchema]::logically_equivalent_names_and_types for a weaker
     /// logical type checking, which for example would consider a dictionary
     /// encoded UTF8 array to be equivalent to a plain UTF8 array.
-    pub fn equivalent_names_and_types(&self, other: &Self) -> Result<()> {
+    #[deprecated(since = "47.0.0", note = "Use has_equivalent_names_and_types` instead")]
+    pub fn equivalent_names_and_types(&self, other: &Self) -> bool {
+        self.has_equivalent_names_and_types(other).is_ok()
+    }
+
+    pub fn has_equivalent_names_and_types(&self, other: &Self) -> Result<()> {
         // case 1 : schema length mismatch
         if self.fields().len() != other.fields().len() {
             _plan_err!(
