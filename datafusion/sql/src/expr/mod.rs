@@ -369,20 +369,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 negated,
                 low,
                 high,
-            } => Ok(Expr::Between(Between::new(
-                Box::new(self.sql_expr_to_logical_expr(
-                    *expr,
-                    schema,
-                    planner_context,
-                )?),
-                negated,
-                Box::new(self.sql_expr_to_logical_expr(*low, schema, planner_context)?),
-                Box::new(self.sql_expr_to_logical_expr(
-                    *high,
-                    schema,
-                    planner_context,
-                )?),
-            ))),
+            } => self.sql_between_to_expr(negated, *expr, *low, *high, schema, planner_context),
 
             SQLExpr::InList {
                 expr,
@@ -605,6 +592,41 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
+        }
+    }
+
+    fn sql_between_to_expr(
+        &self,
+        negated: bool,
+        expr: SQLExpr,
+        low: SQLExpr,
+        high: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let expr = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
+        let low = self.sql_expr_to_logical_expr(low, schema, planner_context)?;
+        let high = self.sql_expr_to_logical_expr(high, schema, planner_context)?;
+
+        // Check if either low or high is a subquery
+        let has_subquery = matches!(low, Expr::ScalarSubquery(_)) || matches!(high, Expr::ScalarSubquery(_));
+
+        if has_subquery {
+            // Use new_with_subqueries for subquery support
+            Ok(Expr::Between(Between::new_with_subqueries(
+                Box::new(expr),
+                negated,
+                Box::new(low),
+                Box::new(high),
+            )?))
+        } else {
+            // Use regular Between for non-subquery expressions
+            Ok(Expr::Between(Between::new(
+                Box::new(expr),
+                negated,
+                Box::new(low),
+                Box::new(high),
+            )))
         }
     }
 

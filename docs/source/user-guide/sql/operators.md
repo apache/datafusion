@@ -613,3 +613,45 @@ bar") |
 bar         |
 +-----------------+
 ```
+
+### `BETWEEN`
+
+The `BETWEEN` operator checks if a value is within a range (inclusive). The range can be specified using literal values or scalar subqueries.
+
+```sql
+expression BETWEEN low AND high
+```
+
+#### Arguments
+
+- **expression**: The value to check. Can be a column, constant, or function.
+- **low**: The lower bound of the range. Can be a literal value or a scalar subquery.
+- **high**: The upper bound of the range. Can be a literal value or a scalar subquery.
+
+#### Examples
+
+Using literal values:
+```sql
+SELECT * FROM table1 WHERE column1 BETWEEN 10 AND 20;
+```
+
+Using scalar subqueries:
+```sql
+SELECT * FROM table1 
+WHERE column1 BETWEEN (SELECT min_value FROM table2) AND (SELECT max_value FROM table3);
+```
+
+The `BETWEEN` operator is equivalent to:
+```sql
+expression >= low AND expression <= high
+```
+
+The `NOT BETWEEN` operator is also supported:
+```sql
+expression NOT BETWEEN low AND high
+```
+
+This is equivalent to:
+```sql
+expression < low OR expression > high
+```

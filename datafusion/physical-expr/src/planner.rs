@@ -318,23 +318,27 @@ pub fn create_physical_expr(
             let low_expr = create_physical_expr(low, input_dfschema, execution_props)?;
             let high_expr = create_physical_expr(high, input_dfschema, execution_props)?;
 
-            // rewrite the between into the two binary operators
-            let binary_expr = binary(
-                binary(
-                    Arc::clone(&value_expr),
-                    Operator::GtEq,
-                    low_expr,
-                    input_schema,
-                )?,
-                Operator::And,
-                binary(
-                    Arc::clone(&value_expr),
-                    Operator::LtEq,
-                    high_expr,
-                    input_schema,
-                )?,
-                input_schema,
-            );
+            // Handle subqueries in low and high expressions
+            let low_is_subquery = matches!(low.as_ref(), Expr::ScalarSubquery(_));
+            let high_is_subquery = matches!(high.as_ref(), Expr::ScalarSubquery(_));
+
+            // Create the binary expressions for the BETWEEN comparison
+            let low_comparison = if low_is_subquery {
+                // For subqueries, we need to evaluate them first
+                binary(Arc::clone(&value_expr), Operator::GtEq, low_expr, input_schema)?
+            } else {
+                binary(Arc::clone(&value_expr), Operator::GtEq, low_expr, input_schema)?
+            };
+
+            let high_comparison = if high_is_subquery {
+                // For subqueries, we need to evaluate them first
+                binary(Arc::clone(&value_expr), Operator::LtEq, high_expr, input_schema)?
+            } else {
+                binary(Arc::clone(&value_expr), Operator::LtEq, high_expr, input_schema)?
+            };
+
+            // Combine the comparisons with AND
+            let binary_expr = binary(low_comparison, Operator::And, high_comparison, input_schema);
 
             if *negated {
                 expressions::not(binary_expr?)

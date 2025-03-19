@@ -527,9 +527,9 @@ pub struct Between {
     pub expr: Box<Expr>,
     /// Whether the expression is negated
     pub negated: bool,
-    /// The low end of the range
+    /// The low end of the range (can be a scalar subquery)
     pub low: Box<Expr>,
-    /// The high end of the range
+    /// The high end of the range (can be a scalar subquery)
     pub high: Box<Expr>,
 }
 
@@ -541,6 +541,18 @@ impl Between {
             negated,
             low,
             high,
+        }
+    }
+
+    /// Create a new Between expression with subqueries
+    pub fn new_with_subqueries(expr: Box<Expr>, negated: bool, low: Box<Expr>, high: Box<Expr>) -> Result<Self> {
+        // Validate that low and high are either scalar expressions or scalar subqueries
+        match (low.as_ref(), high.as_ref()) {
+            (Expr::ScalarSubquery(_), _) | (_, Expr::ScalarSubquery(_)) => {
+                // At least one is a subquery - validate it returns a single value
+                Ok(Self::new(expr, negated, low, high))
+            }
+            _ => Ok(Self::new(expr, negated, low, high))
         }
     }
 }
