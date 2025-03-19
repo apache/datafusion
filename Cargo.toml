@@ -140,7 +140,7 @@ datafusion-sql = { path = "datafusion/sql", version = "46.0.1" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
-half = { version = "2.2.1", default-features = false }
+half = { version = "2.5.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 indexmap = "2.7.1"
 itertools = "0.14"
