@@ -1061,6 +1061,26 @@ SELECT t1_id, (SELECT case when max(t2.t2_id) > 1 then 'a' else 'b' end FROM t2 
 33 a
 44 b
 
+query IB rowsort
+SELECT t1_id, (SELECT max(t2.t2_id) is null FROM t2 WHERE t2.t2_int = t1.t1_int) x from t1
+----
+11 false
+22 true
+33 false
+44 true
+
+query TT
+explain SELECT t1_id, (SELECT max(t2.t2_id) is null FROM t2 WHERE t2.t2_int = t1.t1_int) x from t1
+----
+logical_plan
+01)Projection: t1.t1_id, __scalar_sq_1.__always_true IS NULL OR __scalar_sq_1.__always_true IS NOT NULL AND __scalar_sq_1.max(t2.t2_id) IS NULL AS x
+02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
+03)----TableScan: t1 projection=[t1_id, t1_int]
+04)----SubqueryAlias: __scalar_sq_1
+05)------Projection: max(t2.t2_id) IS NULL, t2.t2_int, Boolean(true) AS __always_true
+06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[max(t2.t2_id)]]
+07)----------TableScan: t2 projection=[t2_id, t2_int]
+
 query TT
 explain SELECT t1_id, (SELECT max(t2.t2_id) FROM t2 WHERE t2.t2_int = t1.t1_int) x from t1
 ----
