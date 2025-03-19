@@ -133,7 +133,7 @@ fn preserves_table_type() {
 
         async fn scan(
             &self,
-            _: &dyn datafusion_catalog::Session,
+            _: &dyn crate::Session,
             _: Option<&Vec<usize>>,
             _: &[Expr],
             _: Option<usize>,
