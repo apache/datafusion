@@ -20,7 +20,7 @@
 use std::sync::Arc;
 use std::{any::Any, borrow::Cow};
 
-use crate::datasource::TableProvider;
+use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, Constraints};
