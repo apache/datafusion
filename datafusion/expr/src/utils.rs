@@ -575,7 +575,7 @@ pub fn compare_sort_expr(
 
 /// Group a slice of window expression expr by their order by expressions
 pub fn group_window_expr_by_sort_keys(
-    window_expr: Vec<Expr>,
+    window_expr: impl IntoIterator<Item = Expr>,
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
     window_expr.into_iter().try_for_each(|expr| match &expr {
