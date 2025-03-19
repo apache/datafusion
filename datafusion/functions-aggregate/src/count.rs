@@ -952,7 +952,7 @@ impl GroupsAccumulator for DistinctCountGroupsAccumulator {
     ) -> Result<Vec<ArrayRef>> {
         // For a single distinct value per row, create a list array with that value
         assert_eq!(values.len(), 1, "COUNT DISTINCT expects a single argument");
-        let values = values[0].clone();
+        let values = ArrayRef::clone(&values[0]);
 
         let offsets =
             OffsetBuffer::new(ScalarBuffer::from_iter(0..values.len() as i32 + 1));
