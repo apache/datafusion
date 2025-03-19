@@ -956,11 +956,10 @@ mod tests {
     use arrow::array::{
         GenericListArray, NullBufferBuilder, OffsetSizeTrait, StringArray,
     };
-    use arrow::util::pretty;
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{Field, Int32Type};
-    use datafusion_common::assert_batches_eq;
     use insta::assert_snapshot;
+    use datafusion_common::test_util::batches_to_string;
 
     // Create a GenericListArray with the following list values:
     //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
@@ -1042,10 +1041,6 @@ mod tests {
         let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
         assert_eq!(strs, expected);
         Ok(())
-    }
-
-    fn fmt_batches(batches: &[RecordBatch]) -> String {
-        pretty::pretty_format_batches(batches).unwrap().to_string()
     }
 
     #[test]
@@ -1151,7 +1146,7 @@ mod tests {
         )?
         .unwrap();
 
-        assert_snapshot!(fmt_batches(&[ret]),
+        assert_snapshot!(batches_to_string(&[ret]),
         @r###"
 +---------------------------------+---------------------------------+---------------------------------+
 | col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
