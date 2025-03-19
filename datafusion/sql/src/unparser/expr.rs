@@ -94,6 +94,7 @@ impl Unparser<'_> {
         Ok(root_expr)
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn expr_to_sql_inner(&self, expr: &Expr) -> Result<ast::Expr> {
         match expr {
             Expr::InList(InList {
@@ -674,7 +675,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
+    pub fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
         if let Some(table_ref) = &col.relation {
             let mut id = if self.dialect.full_qualified_col() {
                 table_ref.to_vec()
