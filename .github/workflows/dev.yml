@@ -46,7 +46,7 @@ jobs:
           npx prettier@2.7.1 --write \
             '{benchmarks,datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md' \
             '!datafusion/CHANGELOG.md' \
-            '!benchmarks/venv/**/*.md' \ 
+            '!benchmarks/venv/**/*.md' \
             README.md \
             CONTRIBUTING.md
           git diff --exit-code
