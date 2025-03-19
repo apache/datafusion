@@ -292,10 +292,7 @@ pub(crate) fn calc_requirements<
     let mut sort_reqs = LexRequirement::new(vec![]);
     for element in orderby_sort_exprs.into_iter() {
         let PhysicalSortExpr { expr, options } = element.borrow();
-        let sort_req = PhysicalSortRequirement::new(
-            Arc::clone(expr),
-            Some(*options),
-        );
+        let sort_req = PhysicalSortRequirement::new(Arc::clone(expr), Some(*options));
         if !sort_reqs_with_partition.iter().any(|e| e.expr.eq(expr)) {
             sort_reqs_with_partition.push(sort_req.clone());
         }
@@ -729,23 +726,16 @@ mod tests {
                 vec!["a"],
                 vec![("b", true, true)],
                 vec![
-                    vec![
-                        ("a", None),
-                        ("b", Some((true, true)))
-                    ],
-                    vec![
-                        ("b", Some((true, true)))
-                    ],
+                    vec![("a", None), ("b", Some((true, true)))],
+                    vec![("b", Some((true, true)))],
                 ],
             ),
             // PARTITION BY a, ORDER BY a ASC NULLS FIRST
-            (vec!["a"], vec![("a", true, true)], vec![
-                vec![
-                    ("a", None)
-                ],
-                vec![
-                    ("a", Some((true, true)))]
-            ]),
+            (
+                vec!["a"],
+                vec![("a", true, true)],
+                vec![vec![("a", None)], vec![("a", Some((true, true)))]],
+            ),
             // PARTITION BY a, ORDER BY b ASC NULLS FIRST, c DESC NULLS LAST
             (
                 vec!["a"],
@@ -756,25 +746,16 @@ mod tests {
                         ("b", Some((true, true))),
                         ("c", Some((false, false))),
                     ],
-                    vec![
-                        ("b", Some((true, true))),
-                        ("c", Some((false, false))),
-                    ]
-
+                    vec![("b", Some((true, true))), ("c", Some((false, false)))],
                 ],
             ),
             // PARTITION BY a, c, ORDER BY b ASC NULLS FIRST, c DESC NULLS LAST
             (
                 vec!["a", "c"],
                 vec![("b", true, true), ("c", false, false)],
-                vec![vec![
-                        ("a", None), ("c", None),
-                        ("b", Some((true, true)))
-                    ],
-                     vec![
-                        ("b", Some((true, true))),
-                        ("c", Some((false, false)))
-                    ]
+                vec![
+                    vec![("a", None), ("c", None), ("b", Some((true, true)))],
+                    vec![("b", Some((true, true))), ("c", Some((false, false)))],
                 ],
             ),
         ];
@@ -808,9 +789,13 @@ mod tests {
                 }
                 if !lex_requirement.is_empty() {
                     if let Some(expect) = expected {
-                        expected = Some(RequiredInputOrdering::Hard(vec![expect.lex_requirement().clone(), lex_requirement]))
+                        expected = Some(RequiredInputOrdering::Hard(vec![
+                            expect.lex_requirement().clone(),
+                            lex_requirement,
+                        ]))
                     } else {
-                        expected = Some(RequiredInputOrdering::Hard(vec![lex_requirement]))
+                        expected =
+                            Some(RequiredInputOrdering::Hard(vec![lex_requirement]))
                     }
                 }
             }
