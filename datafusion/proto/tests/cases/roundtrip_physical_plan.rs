@@ -1277,6 +1277,15 @@ fn roundtrip_analyze() -> Result<()> {
     )))
 }
 
+#[tokio::test]
+async fn roundtrip_json_source() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_json("t1", "../core/tests/data/1.json", Default::default())
+        .await?;
+    let plan = ctx.table("t1").await?.create_physical_plan().await?;
+    roundtrip_test(plan)
+}
+
 #[test]
 fn roundtrip_json_sink() -> Result<()> {
     let field_a = Field::new("plan_type", DataType::Utf8, false);
