@@ -255,8 +255,15 @@ impl DisplayAs for BoundedWindowAggExec {
                 write!(f, "wdw=[{}], mode=[{:?}]", g.join(", "), mode)?;
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")?;
+                let g: Vec<String> = self
+                    .window_expr
+                    .iter()
+                    .map(|e| e.name().to_owned().to_string())
+                    .collect();
+                writeln!(f, "select_list={}", g.join(", "))?;
+
+                let mode = &self.input_order_mode;
+                writeln!(f, "mode={:?}", mode)?;
             }
         }
         Ok(())

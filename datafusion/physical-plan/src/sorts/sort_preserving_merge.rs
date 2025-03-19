@@ -187,8 +187,17 @@ impl DisplayAs for SortPreservingMergeExec {
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                for (i, e) in self.expr().iter().enumerate() {
+                    e.fmt_sql(f)?;
+                    if i != self.expr().len() - 1 {
+                        write!(f, ", ")?;
+                    }
+                }
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "limit={fetch}")?;
+                };
+
+                Ok(())
             }
         }
     }

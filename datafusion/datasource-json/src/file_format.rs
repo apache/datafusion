@@ -325,8 +325,8 @@ impl DisplayAs for JsonSink {
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                writeln!(f, "format: json")?;
+                write!(f, "file={}", &self.config.original_url)
             }
         }
     }

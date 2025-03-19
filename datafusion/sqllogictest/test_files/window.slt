@@ -5533,3 +5533,62 @@ physical_plan
 01)ProjectionExec: expr=[max(aggregate_test_100_ordered.c5) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as max_c5]
 02)--WindowAggExec: wdw=[max(aggregate_test_100_ordered.c5) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "max(aggregate_test_100_ordered.c5) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5], file_type=csv, has_header=true
+
+# Testing Utf8View with window
+statement ok
+CREATE TABLE aggregate_test_100_utf8view AS SELECT
+      arrow_cast(c1, 'Utf8View') as c1,
+      c9,
+      c13
+FROM aggregate_test_100;
+
+
+#fn window_frame_ranges_string_check
+query II
+SELECT
+SUM(LENGTH(c13)) OVER(ORDER BY c13),
+SUM(LENGTH(c1)) OVER(ORDER BY c1)
+FROM aggregate_test_100_utf8view
+ORDER BY c9
+LIMIT 5
+----
+2100 100
+510 79
+1440 21
+1830 61
+2010 21
+
+
+#fn test_window_rank
+query IIIIIRR
+SELECT
+  c9,
+  RANK() OVER(ORDER BY c1) AS rank1,
+  RANK() OVER(ORDER BY c1 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as rank2,
+  DENSE_RANK() OVER(ORDER BY c1) as dense_rank1,
+  DENSE_RANK() OVER(ORDER BY c1 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as dense_rank2,
+  PERCENT_RANK() OVER(ORDER BY c1) as percent_rank1,
+  PERCENT_RANK() OVER(ORDER BY c1 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as percent_rank2
+  FROM aggregate_test_100_utf8view
+  ORDER BY c9
+  LIMIT 5
+----
+28774375 80 80 5 5 0.79797979798 0.79797979798
+63044568 62 62 4 4 0.616161616162 0.616161616162
+141047417 1 1 1 1 0 0
+141680161 41 41 3 3 0.40404040404 0.40404040404
+145294611 1 1 1 1 0 0
+
+
+# CTAS with NTILE function
+statement ok
+CREATE TABLE new_table AS SELECT NTILE(2) OVER(ORDER BY c1) AS ntile_2 FROM aggregate_test_100_utf8view;
+
+statement ok
+DROP TABLE new_table;
+
+statement ok
+DROP TABLE aggregate_test_100_utf8view;
+
+statement ok
+DROP TABLE aggregate_test_100

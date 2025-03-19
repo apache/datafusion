@@ -37,9 +37,9 @@ backtrace = ["datafusion/backtrace"]
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.5.18"
+aws-config = "1.6.0"
 aws-credential-types = "1.2.0"
-clap = { version = "4.5.30", features = ["derive", "cargo"] }
+clap = { version = "4.5.32", features = ["derive", "cargo"] }
 datafusion = { workspace = true, features = [
     "avro",
     "crypto_expressions",
@@ -67,5 +67,7 @@ url = { workspace = true }
 [dev-dependencies]
 assert_cmd = "2.0"
 ctor = { workspace = true }
+insta = { workspace = true }
+insta-cmd = "0.6.0"
 predicates = "3.0"
 rstest = { workspace = true }

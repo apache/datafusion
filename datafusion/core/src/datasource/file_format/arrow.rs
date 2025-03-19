@@ -302,8 +302,8 @@ impl DisplayAs for ArrowFileSink {
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                writeln!(f, "format: arrow")?;
+                write!(f, "file={}", &self.config.original_url)
             }
         }
     }
