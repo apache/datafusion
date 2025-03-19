@@ -25,10 +25,10 @@ use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
 use crate::{
+    catalog::listing_schema::ListingSchemaProvider,
     catalog::{
         CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
     },
-    catalog_common::listing_schema::ListingSchemaProvider,
     dataframe::DataFrame,
     datasource::listing::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -75,9 +75,12 @@ use chrono::{DateTime, Utc};
 use datafusion_catalog::{
     DynamicFileCatalog, SessionStore, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
+use datafusion_common::config::ConfigOptions;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
+use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use object_store::ObjectStore;
 use parking_lot::RwLock;
@@ -856,6 +859,16 @@ impl SessionContext {
         }
     }
 
+    /// Applies the `TypeCoercion` rewriter to the logical plan.
+    fn apply_type_coercion(logical_plan: LogicalPlan) -> Result<LogicalPlan> {
+        let options = ConfigOptions::default();
+        Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())]).execute_and_check(
+            logical_plan,
+            &options,
+            |_, _| {},
+        )
+    }
+
     async fn create_view(&self, cmd: CreateView) -> Result<DataFrame> {
         let CreateView {
             name,
@@ -874,13 +887,14 @@ impl SessionContext {
         match (or_replace, view) {
             (true, Ok(_)) => {
                 self.deregister_table(name.clone())?;
-                let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
-
+                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
-                let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
+                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }

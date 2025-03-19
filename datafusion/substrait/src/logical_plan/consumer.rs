@@ -24,7 +24,8 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::common::{
     not_impl_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, TableReference,
+    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, Spans,
+    TableReference,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort, WindowFunctionParams};
@@ -775,7 +776,7 @@ pub async fn from_substrait_plan_with_consumer(
                             return Ok(plan);
                         }
                         let renamed_schema = make_renamed_schema(plan.schema(), &root.names)?;
-                        if renamed_schema.equivalent_names_and_types(plan.schema()) {
+                        if renamed_schema.has_equivalent_names_and_types(plan.schema()).is_ok() {
                             // Nothing to do if the schema is already equivalent
                             return Ok(plan);
                         }
@@ -1059,7 +1060,7 @@ pub async fn from_project_rel(
 ) -> Result<LogicalPlan> {
     if let Some(input) = p.input.as_ref() {
         let input = consumer.consume_rel(input).await?;
-        let original_schema = input.schema().clone();
+        let original_schema = Arc::clone(input.schema());
 
         // Ensure that all expressions have a unique display name, so that
         // validate_unique_names does not fail when constructing the project.
@@ -1634,7 +1635,7 @@ fn apply_emit_kind(
                             .get(field as usize)
                             .ok_or_else(|| substrait_datafusion_err!(
                                   "Emit output field {} cannot be resolved in input schema {}",
-                                  field, proj.input.schema().clone()
+                                  field, proj.input.schema()
                                 ))?;
                         exprs.push(name_tracker.get_uniquely_named_expr(expr.clone())?);
                     }
@@ -2289,6 +2290,7 @@ pub async fn from_subquery(
                             subquery: Subquery {
                                 subquery: Arc::new(haystack_expr),
                                 outer_ref_columns: outer_refs,
+                                spans: Spans::new(),
                             },
                             negated: false,
                         }))
@@ -2307,6 +2309,7 @@ pub async fn from_subquery(
                 Ok(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(plan),
                     outer_ref_columns,
+                    spans: Spans::new(),
                 }))
             }
             SubqueryType::SetPredicate(predicate) => {
@@ -2322,6 +2325,7 @@ pub async fn from_subquery(
                             Subquery {
                                 subquery: Arc::new(plan),
                                 outer_ref_columns,
+                                spans: Spans::new(),
                             },
                             false,
                         )))

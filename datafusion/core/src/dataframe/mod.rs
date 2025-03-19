@@ -54,6 +54,7 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
     DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
 };
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     case,
     dml::InsertOp,
@@ -342,13 +343,28 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn select(self, expr_list: Vec<Expr>) -> Result<DataFrame> {
-        let window_func_exprs = find_window_exprs(&expr_list);
+    pub fn select(
+        self,
+        expr_list: impl IntoIterator<Item = impl Into<SelectExpr>>,
+    ) -> Result<DataFrame> {
+        let expr_list: Vec<SelectExpr> =
+            expr_list.into_iter().map(|e| e.into()).collect::<Vec<_>>();
+
+        let expressions = expr_list
+            .iter()
+            .filter_map(|e| match e {
+                SelectExpr::Expression(expr) => Some(expr.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let window_func_exprs = find_window_exprs(&expressions);
         let plan = if window_func_exprs.is_empty() {
             self.plan
         } else {
             LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
         };
+
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
 
         Ok(DataFrame {
@@ -2039,6 +2055,7 @@ impl DataFrame {
                             })),
                             relation: None,
                             name: field.name().to_string(),
+                            metadata: None,
                         }),
                         Err(_) => col(field.name()),
                     }

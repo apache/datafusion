@@ -391,11 +391,34 @@ impl Unnest {
 }
 
 /// Alias expression
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
     pub name: String,
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+}
+
+impl Hash for Alias {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.relation.hash(state);
+        self.name.hash(state);
+    }
+}
+
+impl PartialOrd for Alias {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let cmp = self.expr.partial_cmp(&other.expr);
+        let Some(std::cmp::Ordering::Equal) = cmp else {
+            return cmp;
+        };
+        let cmp = self.relation.partial_cmp(&other.relation);
+        let Some(std::cmp::Ordering::Equal) = cmp else {
+            return cmp;
+        };
+        self.name.partial_cmp(&other.name)
+    }
 }
 
 impl Alias {
@@ -409,7 +432,16 @@ impl Alias {
             expr: Box::new(expr),
             relation: relation.map(|r| r.into()),
             name: name.into(),
+            metadata: None,
         }
+    }
+
+    pub fn with_metadata(
+        mut self,
+        metadata: Option<std::collections::HashMap<String, String>>,
+    ) -> Self {
+        self.metadata = metadata;
+        self
     }
 }
 
@@ -1278,6 +1310,27 @@ impl Expr {
         Expr::Alias(Alias::new(self, None::<&str>, name.into()))
     }
 
+    /// Return `self AS name` alias expression with metadata
+    ///
+    /// The metadata will be attached to the Arrow Schema field when the expression
+    /// is converted to a field via `Expr.to_field()`.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// use std::collections::HashMap;
+    /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let expr = col("foo").alias_with_metadata("bar", Some(metadata));
+    /// ```
+    ///
+    pub fn alias_with_metadata(
+        self,
+        name: impl Into<String>,
+        metadata: Option<std::collections::HashMap<String, String>>,
+    ) -> Expr {
+        Expr::Alias(Alias::new(self, None::<&str>, name.into()).with_metadata(metadata))
+    }
+
     /// Return `self AS name` alias expression with a specific qualifier
     pub fn alias_qualified(
         self,
@@ -1285,6 +1338,28 @@ impl Expr {
         name: impl Into<String>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, relation, name.into()))
+    }
+
+    /// Return `self AS name` alias expression with a specific qualifier and metadata
+    ///
+    /// The metadata will be attached to the Arrow Schema field when the expression
+    /// is converted to a field via `Expr.to_field()`.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// use std::collections::HashMap;
+    /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let expr = col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
+    /// ```
+    ///
+    pub fn alias_qualified_with_metadata(
+        self,
+        relation: Option<impl Into<TableReference>>,
+        name: impl Into<String>,
+        metadata: Option<std::collections::HashMap<String, String>>,
+    ) -> Expr {
+        Expr::Alias(Alias::new(self, relation, name.into()).with_metadata(metadata))
     }
 
     /// Remove an alias from an expression if one exists.
@@ -1738,11 +1813,13 @@ impl NormalizeEq for Expr {
                     expr: self_expr,
                     relation: self_relation,
                     name: self_name,
+                    ..
                 }),
                 Expr::Alias(Alias {
                     expr: other_expr,
                     relation: other_relation,
                     name: other_name,
+                    ..
                 }),
             ) => {
                 self_name == other_name
@@ -2088,6 +2165,7 @@ impl HashNode for Expr {
                 expr: _expr,
                 relation,
                 name,
+                ..
             }) => {
                 relation.hash(state);
                 name.hash(state);

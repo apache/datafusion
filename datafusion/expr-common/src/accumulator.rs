@@ -109,6 +109,7 @@ pub trait Accumulator: Send + Sync + Debug {
     ///                  │(AggregateMode::Final)   │      state() is called for each
     ///                  │                         │      group and the resulting
     ///                  └─────────────────────────┘      RecordBatches passed to the
+    ///                                                   Final GroupBy via merge_batch()
     ///                               ▲
     ///                               │
     ///              ┌────────────────┴───────────────┐

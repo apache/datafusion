@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::logical_expr::select_expr::SelectExpr;
 use datafusion_common::instant::Instant;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -89,7 +90,8 @@ impl ConvertOpt {
                 .iter()
                 .take(schema.fields.len() - 1)
                 .map(Expr::from)
-                .collect();
+                .map(SelectExpr::from)
+                .collect::<Vec<_>>();
 
             csv = csv.select(selection)?;
             // optionally, repartition the file
