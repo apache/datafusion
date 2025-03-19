@@ -2319,6 +2319,7 @@ name = "datafusion-functions-nested"
 version = "47.0.0"
 dependencies = [
  "arrow",
+ "arrow-array",
  "arrow-ord",
  "criterion",
  "datafusion-common",
