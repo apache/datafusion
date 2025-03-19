@@ -1,0 +1,389 @@
+{"run_id":"1742390383-66053400","line":1930,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"partitioned_join_inner_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":1930,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742390482-56772300","line":1887,"new":null,"old":null}
+{"run_id":"1742390482-56772300","line":1887,"new":null,"old":null}
+{"run_id":"1742390482-56772300","line":1887,"new":null,"old":null}
+{"run_id":"1742390482-56772300","line":1887,"new":null,"old":null}
+{"run_id":"1742390482-56772300","line":1887,"new":null,"old":null}
+{"run_id":"1742390482-56772300","line":1933,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"partitioned_join_inner_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":1933,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742390482-56772300","line":1933,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"partitioned_join_inner_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":1933,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742390482-56772300","line":1933,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"partitioned_join_inner_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":1933,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742390482-56772300","line":1933,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"partitioned_join_inner_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":1933,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742390482-56772300","line":1933,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"partitioned_join_inner_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":1933,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":2460,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2460,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2460,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2460,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2460,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":1887,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":1887,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":1887,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":1887,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":1887,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":1972,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2011,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2144,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2144,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2144,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2144,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2144,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2193,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2262,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2262,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2287,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2262,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2287,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2262,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2287,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2287,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2262,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2287,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2074,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2074,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2074,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2074,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2074,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2423,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2423,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2423,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2423,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2423,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2503,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2503,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2503,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2503,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2503,"new":null,"old":null}
+{"run_id":"1742391112-43158700","line":2382,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_full_multi_batch","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2382,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b2 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n|    |    |    | 30 | 6  | 90 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b2 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":2382,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_full_multi_batch","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2382,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b2 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n|    |    |    | 30 | 6  | 90 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b2 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":2382,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_full_multi_batch","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2382,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b2 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n|    |    |    | 30 | 6  | 90 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b2 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":2382,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_full_multi_batch","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2382,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b2 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n|    |    |    | 30 | 6  | 90 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b2 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":2382,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_full_multi_batch","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2382,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b2 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n|    |    |    | 30 | 6  | 90 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b2 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":2339,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_multi_batch","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2339,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":2339,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_multi_batch","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2339,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":2339,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_multi_batch","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2339,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":2339,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_multi_batch","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2339,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":2339,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_multi_batch","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2339,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 7  | 9  |    |    |    |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":1933,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"partitioned_join_inner_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":1933,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":1933,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"partitioned_join_inner_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":1933,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":1933,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"partitioned_join_inner_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":1933,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":1933,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"partitioned_join_inner_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":1933,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742391112-43158700","line":1933,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"partitioned_join_inner_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":1933,"expression":"batches_to_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n| 3  | 5  | 9  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"}}
+{"run_id":"1742392248-782282400","line":2460,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2460,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2460,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2460,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2460,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2382,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2382,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2382,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2382,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2382,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3219,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3219,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3219,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3219,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3219,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":1887,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":1887,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":1887,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":1887,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":1887,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":1972,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2011,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2144,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2144,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2144,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2144,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2144,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2193,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2262,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2287,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2262,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2262,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2262,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2287,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2262,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2287,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2287,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2074,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2287,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2074,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2074,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2074,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2074,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2861,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2861,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2861,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2861,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2861,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2921,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2921,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2921,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2957,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2957,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2957,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2921,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2423,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2921,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2423,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2957,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2423,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2423,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2957,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3265,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2423,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3265,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3265,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3265,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3265,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2339,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2339,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2339,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2339,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2339,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2503,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2503,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2503,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2503,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2503,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2604,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2604,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2604,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2604,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2604,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2995,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2995,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2995,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2995,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2995,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3056,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3056,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3056,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3097,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3097,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3097,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3056,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3056,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3097,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3097,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2733,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2733,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2733,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2733,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2733,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2796,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2796,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2796,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2827,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2827,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2827,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2796,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2827,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2796,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2827,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":1933,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":1933,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":1933,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":1933,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":1933,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3310,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3310,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3310,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3310,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3310,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2548,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2548,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2548,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2548,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2548,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3177,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3177,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3177,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3177,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3177,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3137,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_right_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3137,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+ \n| a1 | b1 | c1 | a2 | b1 | c2 | \n+----+----+----+----+----+----+ \n|    |    |    | 30 | 6  | 90 | \n| 1  | 4  | 7  | 10 | 4  | 70 | \n| 2  | 5  | 8  | 20 | 5  | 80 | \n+----+----+----+----+----+----+"}}
+{"run_id":"1742392248-782282400","line":2666,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_semi_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2666,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+-----+\n| a1 | b1 | c1  |\n+----+----+-----+\n| 11 | 8  | 110 |\n| 13 | 10 | 130 |\n| 9  | 8  | 90  |\n+----+----+-----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+-----+ \n| a1 | b1 | c1  | \n+----+----+-----+ \n| 11 | 8  | 110 | \n| 13 | 10 | 130 | \n| 9  | 8  | 90  | \n+----+----+-----+"}}
+{"run_id":"1742392248-782282400","line":3137,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_right_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3137,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+ \n| a1 | b1 | c1 | a2 | b1 | c2 | \n+----+----+----+----+----+----+ \n|    |    |    | 30 | 6  | 90 | \n| 1  | 4  | 7  | 10 | 4  | 70 | \n| 2  | 5  | 8  | 20 | 5  | 80 | \n+----+----+----+----+----+----+"}}
+{"run_id":"1742392248-782282400","line":2666,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_semi_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2666,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+-----+\n| a1 | b1 | c1  |\n+----+----+-----+\n| 11 | 8  | 110 |\n| 13 | 10 | 130 |\n| 9  | 8  | 90  |\n+----+----+-----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+-----+ \n| a1 | b1 | c1  | \n+----+----+-----+ \n| 11 | 8  | 110 | \n| 13 | 10 | 130 | \n| 9  | 8  | 90  | \n+----+----+-----+"}}
+{"run_id":"1742392248-782282400","line":2698,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2698,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2666,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_semi_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2666,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+-----+\n| a1 | b1 | c1  |\n+----+----+-----+\n| 11 | 8  | 110 |\n| 13 | 10 | 130 |\n| 9  | 8  | 90  |\n+----+----+-----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+-----+ \n| a1 | b1 | c1  | \n+----+----+-----+ \n| 11 | 8  | 110 | \n| 13 | 10 | 130 | \n| 9  | 8  | 90  | \n+----+----+-----+"}}
+{"run_id":"1742392248-782282400","line":3137,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_right_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3137,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+ \n| a1 | b1 | c1 | a2 | b1 | c2 | \n+----+----+----+----+----+----+ \n|    |    |    | 30 | 6  | 90 | \n| 1  | 4  | 7  | 10 | 4  | 70 | \n| 2  | 5  | 8  | 20 | 5  | 80 | \n+----+----+----+----+----+----+"}}
+{"run_id":"1742392248-782282400","line":3137,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_right_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3137,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+ \n| a1 | b1 | c1 | a2 | b1 | c2 | \n+----+----+----+----+----+----+ \n|    |    |    | 30 | 6  | 90 | \n| 1  | 4  | 7  | 10 | 4  | 70 | \n| 2  | 5  | 8  | 20 | 5  | 80 | \n+----+----+----+----+----+----+"}}
+{"run_id":"1742392248-782282400","line":2666,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_semi_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2666,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+-----+\n| a1 | b1 | c1  |\n+----+----+-----+\n| 11 | 8  | 110 |\n| 13 | 10 | 130 |\n| 9  | 8  | 90  |\n+----+----+-----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+-----+ \n| a1 | b1 | c1  | \n+----+----+-----+ \n| 11 | 8  | 110 | \n| 13 | 10 | 130 | \n| 9  | 8  | 90  | \n+----+----+-----+"}}
+{"run_id":"1742392248-782282400","line":2698,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2698,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":2666,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_semi_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2666,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+-----+\n| a1 | b1 | c1  |\n+----+----+-----+\n| 11 | 8  | 110 |\n| 13 | 10 | 130 |\n| 9  | 8  | 90  |\n+----+----+-----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+-----+ \n| a1 | b1 | c1  | \n+----+----+-----+ \n| 11 | 8  | 110 | \n| 13 | 10 | 130 | \n| 9  | 8  | 90  | \n+----+----+-----+"}}
+{"run_id":"1742392248-782282400","line":2698,"new":null,"old":null}
+{"run_id":"1742392248-782282400","line":3137,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_right_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3137,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+ \n| a1 | b1 | c1 | a2 | b1 | c2 | \n+----+----+----+----+----+----+ \n|    |    |    | 30 | 6  | 90 | \n| 1  | 4  | 7  | 10 | 4  | 70 | \n| 2  | 5  | 8  | 20 | 5  | 80 | \n+----+----+----+----+----+----+"}}
+{"run_id":"1742392733-894443500","line":2460,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3789,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2460,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2460,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2460,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2460,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2382,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2382,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2382,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2382,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2382,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3219,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3219,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3219,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3219,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3219,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":1887,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":1887,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":1887,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":1887,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":1887,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":1972,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2011,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2144,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2144,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2144,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2144,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2144,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2262,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2193,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2262,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2287,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2262,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2287,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2262,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2287,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2287,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2262,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2074,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2074,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2074,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2287,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2074,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2074,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3487,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3487,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3487,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3487,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3487,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2861,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2861,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2861,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2861,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2921,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2861,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2921,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2957,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2957,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2921,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2921,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2957,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2957,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2423,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2423,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2921,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2423,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2423,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2957,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2423,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3265,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3265,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3265,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3265,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3265,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2339,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2339,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2339,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2339,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2503,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2503,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2339,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2503,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2503,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2503,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2604,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2604,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2604,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2604,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2604,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3529,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3529,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3529,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3529,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2995,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3529,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":4184,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":4221,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2995,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2995,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2995,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3056,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3056,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3097,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3097,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3056,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3056,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2995,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3097,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3097,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3056,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3097,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2733,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2733,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2733,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2733,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2733,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2796,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2827,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2796,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2827,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2796,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2827,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2796,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2827,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2796,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2827,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3574,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3574,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3574,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3574,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3574,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3137,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_right_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3137,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+ \n| a1 | b1 | c1 | a2 | b1 | c2 | \n+----+----+----+----+----+----+ \n|    |    |    | 30 | 6  | 90 | \n| 1  | 4  | 7  | 10 | 4  | 70 | \n| 2  | 5  | 8  | 20 | 5  | 80 | \n+----+----+----+----+----+----+"}}
+{"run_id":"1742392733-894443500","line":3417,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3618,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_full_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3618,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+---+---+---+----+---+---+\n| a | b | c | a  | b | c |\n+---+---+---+----+---+---+\n|   |   |   | 30 | 3 | 6 |\n|   |   |   | 40 | 4 | 4 |\n| 0 | 4 | 7 |    |   |   |\n| 1 | 5 | 8 |    |   |   |\n| 2 | 7 | 9 | 10 | 2 | 7 |\n| 2 | 7 | 9 | 20 | 2 | 5 |\n| 2 | 8 | 1 |    |   |   |\n+---+---+---+----+---+---+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+---+---+---+----+---+---+\n| a | b | c | a  | b | c |\n+---+---+---+----+---+---+\n|   |   |   | 30 | 3 | 6 |\n|   |   |   | 40 | 4 | 4 |\n| 2 | 7 | 9 | 10 | 2 | 7 |\n| 2 | 7 | 9 | 20 | 2 | 5 |\n| 0 | 4 | 7 |    |   |   |\n| 1 | 5 | 8 |    |   |   |\n| 2 | 8 | 1 |    |   |   |\n+---+---+---+----+---+---+"}}
+{"run_id":"1742392733-894443500","line":3618,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_full_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3618,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+---+---+---+----+---+---+\n| a | b | c | a  | b | c |\n+---+---+---+----+---+---+\n|   |   |   | 30 | 3 | 6 |\n|   |   |   | 40 | 4 | 4 |\n| 0 | 4 | 7 |    |   |   |\n| 1 | 5 | 8 |    |   |   |\n| 2 | 7 | 9 | 10 | 2 | 7 |\n| 2 | 7 | 9 | 20 | 2 | 5 |\n| 2 | 8 | 1 |    |   |   |\n+---+---+---+----+---+---+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+---+---+---+----+---+---+\n| a | b | c | a  | b | c |\n+---+---+---+----+---+---+\n|   |   |   | 30 | 3 | 6 |\n|   |   |   | 40 | 4 | 4 |\n| 2 | 7 | 9 | 10 | 2 | 7 |\n| 2 | 7 | 9 | 20 | 2 | 5 |\n| 0 | 4 | 7 |    |   |   |\n| 1 | 5 | 8 |    |   |   |\n| 2 | 8 | 1 |    |   |   |\n+---+---+---+----+---+---+"}}
+{"run_id":"1742392733-894443500","line":3137,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_right_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3137,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+ \n| a1 | b1 | c1 | a2 | b1 | c2 | \n+----+----+----+----+----+----+ \n|    |    |    | 30 | 6  | 90 | \n| 1  | 4  | 7  | 10 | 4  | 70 | \n| 2  | 5  | 8  | 20 | 5  | 80 | \n+----+----+----+----+----+----+"}}
+{"run_id":"1742392733-894443500","line":2666,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_semi_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2666,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+-----+\n| a1 | b1 | c1  |\n+----+----+-----+\n| 11 | 8  | 110 |\n| 13 | 10 | 130 |\n| 9  | 8  | 90  |\n+----+----+-----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+-----+ \n| a1 | b1 | c1  | \n+----+----+-----+ \n| 11 | 8  | 110 | \n| 13 | 10 | 130 | \n| 9  | 8  | 90  | \n+----+----+-----+"}}
+{"run_id":"1742392733-894443500","line":3137,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_right_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3137,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+ \n| a1 | b1 | c1 | a2 | b1 | c2 | \n+----+----+----+----+----+----+ \n|    |    |    | 30 | 6  | 90 | \n| 1  | 4  | 7  | 10 | 4  | 70 | \n| 2  | 5  | 8  | 20 | 5  | 80 | \n+----+----+----+----+----+----+"}}
+{"run_id":"1742392733-894443500","line":2698,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3618,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_full_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3618,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+---+---+---+----+---+---+\n| a | b | c | a  | b | c |\n+---+---+---+----+---+---+\n|   |   |   | 30 | 3 | 6 |\n|   |   |   | 40 | 4 | 4 |\n| 0 | 4 | 7 |    |   |   |\n| 1 | 5 | 8 |    |   |   |\n| 2 | 7 | 9 | 10 | 2 | 7 |\n| 2 | 7 | 9 | 20 | 2 | 5 |\n| 2 | 8 | 1 |    |   |   |\n+---+---+---+----+---+---+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+---+---+---+----+---+---+\n| a | b | c | a  | b | c |\n+---+---+---+----+---+---+\n|   |   |   | 30 | 3 | 6 |\n|   |   |   | 40 | 4 | 4 |\n| 2 | 7 | 9 | 10 | 2 | 7 |\n| 2 | 7 | 9 | 20 | 2 | 5 |\n| 0 | 4 | 7 |    |   |   |\n| 1 | 5 | 8 |    |   |   |\n| 2 | 8 | 1 |    |   |   |\n+---+---+---+----+---+---+"}}
+{"run_id":"1742392733-894443500","line":1933,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":1933,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":1933,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3310,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":1933,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":1933,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3618,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_full_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3618,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+---+---+---+----+---+---+\n| a | b | c | a  | b | c |\n+---+---+---+----+---+---+\n|   |   |   | 30 | 3 | 6 |\n|   |   |   | 40 | 4 | 4 |\n| 0 | 4 | 7 |    |   |   |\n| 1 | 5 | 8 |    |   |   |\n| 2 | 7 | 9 | 10 | 2 | 7 |\n| 2 | 7 | 9 | 20 | 2 | 5 |\n| 2 | 8 | 1 |    |   |   |\n+---+---+---+----+---+---+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+---+---+---+----+---+---+\n| a | b | c | a  | b | c |\n+---+---+---+----+---+---+\n|   |   |   | 30 | 3 | 6 |\n|   |   |   | 40 | 4 | 4 |\n| 2 | 7 | 9 | 10 | 2 | 7 |\n| 2 | 7 | 9 | 20 | 2 | 5 |\n| 0 | 4 | 7 |    |   |   |\n| 1 | 5 | 8 |    |   |   |\n| 2 | 8 | 1 |    |   |   |\n+---+---+---+----+---+---+"}}
+{"run_id":"1742392733-894443500","line":3618,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_full_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3618,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+---+---+---+----+---+---+\n| a | b | c | a  | b | c |\n+---+---+---+----+---+---+\n|   |   |   | 30 | 3 | 6 |\n|   |   |   | 40 | 4 | 4 |\n| 0 | 4 | 7 |    |   |   |\n| 1 | 5 | 8 |    |   |   |\n| 2 | 7 | 9 | 10 | 2 | 7 |\n| 2 | 7 | 9 | 20 | 2 | 5 |\n| 2 | 8 | 1 |    |   |   |\n+---+---+---+----+---+---+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+---+---+---+----+---+---+\n| a | b | c | a  | b | c |\n+---+---+---+----+---+---+\n|   |   |   | 30 | 3 | 6 |\n|   |   |   | 40 | 4 | 4 |\n| 2 | 7 | 9 | 10 | 2 | 7 |\n| 2 | 7 | 9 | 20 | 2 | 5 |\n| 0 | 4 | 7 |    |   |   |\n| 1 | 5 | 8 |    |   |   |\n| 2 | 8 | 1 |    |   |   |\n+---+---+---+----+---+---+"}}
+{"run_id":"1742392733-894443500","line":2666,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_semi_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2666,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+-----+\n| a1 | b1 | c1  |\n+----+----+-----+\n| 11 | 8  | 110 |\n| 13 | 10 | 130 |\n| 9  | 8  | 90  |\n+----+----+-----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+-----+ \n| a1 | b1 | c1  | \n+----+----+-----+ \n| 11 | 8  | 110 | \n| 13 | 10 | 130 | \n| 9  | 8  | 90  | \n+----+----+-----+"}}
+{"run_id":"1742392733-894443500","line":2666,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_semi_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2666,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+-----+\n| a1 | b1 | c1  |\n+----+----+-----+\n| 11 | 8  | 110 |\n| 13 | 10 | 130 |\n| 9  | 8  | 90  |\n+----+----+-----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+-----+ \n| a1 | b1 | c1  | \n+----+----+-----+ \n| 11 | 8  | 110 | \n| 13 | 10 | 130 | \n| 9  | 8  | 90  | \n+----+----+-----+"}}
+{"run_id":"1742392733-894443500","line":3137,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_right_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3137,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+ \n| a1 | b1 | c1 | a2 | b1 | c2 | \n+----+----+----+----+----+----+ \n|    |    |    | 30 | 6  | 90 | \n| 1  | 4  | 7  | 10 | 4  | 70 | \n| 2  | 5  | 8  | 20 | 5  | 80 | \n+----+----+----+----+----+----+"}}
+{"run_id":"1742392733-894443500","line":3137,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_right_one","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":3137,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+----+----+----+----+\n| a1 | b1 | c1 | a2 | b1 | c2 |\n+----+----+----+----+----+----+\n|    |    |    | 30 | 6  | 90 |\n| 1  | 4  | 7  | 10 | 4  | 70 |\n| 2  | 5  | 8  | 20 | 5  | 80 |\n+----+----+----+----+----+----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+----+----+----+----+ \n| a1 | b1 | c1 | a2 | b1 | c2 | \n+----+----+----+----+----+----+ \n|    |    |    | 30 | 6  | 90 | \n| 1  | 4  | 7  | 10 | 4  | 70 | \n| 2  | 5  | 8  | 20 | 5  | 80 | \n+----+----+----+----+----+----+"}}
+{"run_id":"1742392733-894443500","line":3310,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2698,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3310,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2698,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2548,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3310,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3310,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2666,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_semi_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2666,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+-----+\n| a1 | b1 | c1  |\n+----+----+-----+\n| 11 | 8  | 110 |\n| 13 | 10 | 130 |\n| 9  | 8  | 90  |\n+----+----+-----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+-----+ \n| a1 | b1 | c1  | \n+----+----+-----+ \n| 11 | 8  | 110 | \n| 13 | 10 | 130 | \n| 9  | 8  | 90  | \n+----+----+-----+"}}
+{"run_id":"1742392733-894443500","line":2548,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2548,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2698,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2548,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2548,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3177,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2666,"new":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","snapshot_name":"join_left_semi_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/hash_join.rs","assertion_line":2666,"expression":"batches_to_sort_string(&batches)"},"snapshot":"+----+----+-----+\n| a1 | b1 | c1  |\n+----+----+-----+\n| 11 | 8  | 110 |\n| 13 | 10 | 130 |\n| 9  | 8  | 90  |\n+----+----+-----+"},"old":{"module_name":"datafusion_physical_plan__joins__hash_join__tests","metadata":{},"snapshot":"+----+----+-----+ \n| a1 | b1 | c1  | \n+----+----+-----+ \n| 11 | 8  | 110 | \n| 13 | 10 | 130 | \n| 9  | 8  | 90  | \n+----+----+-----+"}}
+{"run_id":"1742392733-894443500","line":3177,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3177,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":2698,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3177,"new":null,"old":null}
+{"run_id":"1742392733-894443500","line":3177,"new":null,"old":null}

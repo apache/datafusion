@@ -1413,7 +1413,7 @@ mod tests {
     use arrow::datatypes::{DataType, Int32Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, internal_err, DataFusionError,
+        internal_err, DataFusionError,
         ScalarValue,
     };
     use datafusion_execution::config::SessionConfig;
