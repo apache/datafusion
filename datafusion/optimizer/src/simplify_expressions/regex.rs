@@ -22,6 +22,8 @@ use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 /// Maximum number of regex alternations (`foo|bar|...`) that will be expanded into multiple `LIKE` expressions.
 const MAX_REGEX_ALTERNATIONS_EXPANSION: usize = 4;
 
+const ANY_CHAR_REGEX_PATTERN: &str = ".*";
+
 /// Tries to convert a regexp expression to a `LIKE` or `Eq`/`NotEq` expression.
 ///
 /// This function also validates the regex pattern. And will return error if the
@@ -46,7 +48,7 @@ pub fn simplify_regex_expr(
 
     if let Expr::Literal(ScalarValue::Utf8(Some(pattern))) = right.as_ref() {
         // Handle the special case for ".*" pattern
-        if pattern == ".*" {
+        if pattern == ANY_CHAR_REGEX_PATTERN {
             let new_expr = if mode.not {
                 // not empty
                 let empty_lit = Box::new(lit(""));
