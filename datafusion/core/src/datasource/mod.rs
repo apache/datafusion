@@ -262,12 +262,5 @@ mod tests {
 
             Ok(RecordBatch::try_new(schema, new_columns).unwrap())
         }
-
-        fn map_partial_batch(
-            &self,
-            batch: RecordBatch,
-        ) -> datafusion_common::Result<RecordBatch> {
-            self.map_batch(batch)
-        }
     }
 }
