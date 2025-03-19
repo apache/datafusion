@@ -429,10 +429,7 @@ where
     fn resize_states(&mut self, new_size: usize) {
         self.vals.resize(new_size, T::default_value());
 
-        if self.null_builder.len() < new_size {
-            self.null_builder
-                .append_n(new_size - self.null_builder.len(), false);
-        }
+        self.null_builder.resize(new_size);
 
         if self.orderings.len() < new_size {
             let current_len = self.orderings.len();
@@ -449,9 +446,7 @@ where
                 );
         }
 
-        if self.is_sets.len() < new_size {
-            self.is_sets.append_n(new_size - self.is_sets.len(), false);
-        }
+        self.is_sets.resize(new_size);
     }
 
     fn update_state(
@@ -1431,12 +1426,13 @@ mod tests {
         val_with_orderings.push(Arc::new(Int64Array::from(vec![6, 6])));
         val_with_orderings.push(Arc::new(Int64Array::from(vec![6, 6])));
 
-        group_acc.update_batch(&val_with_orderings, &[1, 2], None, 3)?;
+        group_acc.update_batch(&val_with_orderings, &[1, 2], None, 4)?;
 
         let binding = group_acc.evaluate(EmitTo::All)?;
         let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
-        let expect: PrimitiveArray<Int64Type> = Int64Array::from(vec![1, 6, 6]);
+        let expect: PrimitiveArray<Int64Type> =
+            Int64Array::from(vec![Some(1), Some(6), Some(6), None]);
 
         assert_eq!(eval_result, &expect);
 
