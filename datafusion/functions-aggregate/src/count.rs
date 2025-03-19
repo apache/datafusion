@@ -16,7 +16,6 @@
 // under the License.
 
 use ahash::RandomState;
-use arrow::array::NullArray;
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion_common::stats::Precision;
 use datafusion_expr::expr::WindowFunction;
@@ -212,7 +211,9 @@ impl AggregateUDFImpl for Count {
                 format_state_name(args.name, "count distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
                 Field::new_list_field(args.input_types[0].clone(), true),
-                false,
+                // For group count distinct accumulator, null list item stands for an
+                // empty value set (i.e., all NULL value so far for that group).
+                true,
             )])
         } else {
             Ok(vec![Field::new(
@@ -360,7 +361,9 @@ impl AggregateUDFImpl for Count {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         // instantiate specialized accumulator
         if args.is_distinct {
-            Ok(Box::new(DistinctCountGroupsAccumulator::new()))
+            Ok(Box::new(DistinctCountGroupsAccumulator::new(
+                args.exprs[0].data_type(args.schema)?,
+            )))
         } else {
             Ok(Box::new(CountGroupsAccumulator::new()))
         }
@@ -759,15 +762,19 @@ impl Accumulator for DistinctCountAccumulator {
 }
 
 /// GroupsAccumulator for COUNT DISTINCT operations
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DistinctCountGroupsAccumulator {
     /// One HashSet per group to track distinct values
     distinct_sets: Vec<HashSet<ScalarValue, RandomState>>,
+    data_type: DataType,
 }
 
 impl DistinctCountGroupsAccumulator {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(data_type: DataType) -> Self {
+        Self {
+            distinct_sets: vec![],
+            data_type,
+        }
     }
 
     fn ensure_sets(&mut self, total_num_groups: usize) {
@@ -850,30 +857,13 @@ impl GroupsAccumulator for DistinctCountGroupsAccumulator {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        // Convert counts to Int64Array
-        let counts = match emit_to {
-            EmitTo::All => {
-                let counts: Vec<i64> = self
-                    .distinct_sets
-                    .iter()
-                    .map(|set| set.len() as i64)
-                    .collect();
-                self.distinct_sets.clear();
-                counts
-            }
-            EmitTo::First(n) => {
-                let counts: Vec<i64> = self
-                    .distinct_sets
-                    .iter()
-                    .take(n)
-                    .map(|set| set.len() as i64)
-                    .collect();
-                self.distinct_sets = self.distinct_sets.split_off(n);
-                counts
-            }
-        };
+        let distinct_sets: Vec<HashSet<ScalarValue, RandomState>> =
+            emit_to.take_needed(&mut self.distinct_sets);
 
-        // COUNT DISTINCT never returns nulls
+        let counts = distinct_sets
+            .iter()
+            .map(|set| set.len() as i64)
+            .collect::<Vec<_>>();
         Ok(Arc::new(Int64Array::from(counts)))
     }
 
@@ -929,14 +919,14 @@ impl GroupsAccumulator for DistinctCountGroupsAccumulator {
             })
             .peekable();
         let data_array: ArrayRef = if value_iter.peek().is_none() {
-            Arc::new(NullArray::new(0)) as _
+            arrow::array::new_empty_array(&self.data_type) as _
         } else {
             Arc::new(ScalarValue::iter_to_array(value_iter)?) as _
         };
         let offset_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets));
 
         let list_array = ListArray::new(
-            Arc::new(Field::new_list_field(data_array.data_type().clone(), true)),
+            Arc::new(Field::new_list_field(self.data_type.clone(), true)),
             offset_buffer,
             data_array,
             None,
@@ -1021,7 +1011,7 @@ mod tests {
 
     #[test]
     fn test_distinct_count_groups_basic() -> Result<()> {
-        let mut accumulator = DistinctCountGroupsAccumulator::new();
+        let mut accumulator = DistinctCountGroupsAccumulator::new(DataType::Int32);
         let values = vec![Arc::new(Int32Array::from(vec![1, 2, 1, 3, 2, 1])) as ArrayRef];
 
         // 3 groups
@@ -1043,7 +1033,7 @@ mod tests {
 
     #[test]
     fn test_distinct_count_groups_with_filter() -> Result<()> {
-        let mut accumulator = DistinctCountGroupsAccumulator::new();
+        let mut accumulator = DistinctCountGroupsAccumulator::new(DataType::Utf8);
         let values = vec![
             Arc::new(StringArray::from(vec!["a", "b", "a", "c", "b", "d"])) as ArrayRef,
         ];
