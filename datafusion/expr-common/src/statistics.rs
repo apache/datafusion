@@ -206,6 +206,23 @@ impl Distribution {
 
     /// Merges two distributions into a single distribution that represents their combined statistics.
     /// This creates a more general distribution that approximates the mixture of the input distributions.
+    ///
+    /// # Important Notes
+    ///
+    /// - The resulting mean, median, and variance are approximations of the mixture
+    ///   distribution parameters. They are calculated using weighted averages based on
+    ///   the input distributions. Users should not make definitive assumptions based on these values.
+    ///
+    /// - The range of the merged distribution is computed as the union of the input ranges
+    ///   and its accuracy directly depends on the accuracy of the input ranges.
+    ///
+    /// - The result is always a [`Generic`] distribution, which may lose some specific
+    ///   properties of the original distribution types.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new [`Distribution`] that approximates the combined statistics of the
+    /// input distributions.
     pub fn merge(&self, other: &Self) -> Result<Self> {
         let range_a = self.range()?;
         let range_b = other.range()?;
