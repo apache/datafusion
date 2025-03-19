@@ -16,7 +16,9 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{assert_contains, DFSchema, DFSchemaRef, Result, TableReference};
+use datafusion_common::{
+    assert_contains, Column, DFSchema, DFSchemaRef, Result, TableReference,
+};
 use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
@@ -32,7 +34,8 @@ use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
     CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect, DefaultDialect,
-    Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect, SqliteDialect,
+    Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect,
+    PostgreSqlDialect as UnparserPostgreSqlDialect, SqliteDialect,
 };
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 use sqlparser::ast::Statement;
@@ -43,7 +46,7 @@ use std::{fmt, vec};
 
 use crate::common::{MockContextProvider, MockSessionState};
 use datafusion_expr::builder::{
-    project, table_scan_with_filter_and_fetch, table_scan_with_filters,
+    project, subquery_alias, table_scan_with_filter_and_fetch, table_scan_with_filters,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_nested::extract::array_element_udf;
@@ -1744,5 +1747,169 @@ fn test_unparse_subquery_alias_with_table_pushdown() -> Result<()> {
     let sql = unparser.plan_to_sql(&plan)?;
     let expected = "SELECT customer_view.c_custkey, customer_view.c_name, customer_view.custkey_plus FROM (SELECT customer.c_custkey, (CAST(customer.c_custkey AS BIGINT) + 1) AS custkey_plus, customer.c_name FROM (SELECT customer.c_custkey, customer.c_name FROM customer AS customer) AS customer) AS customer_view";
     assert_eq!(sql.to_string(), expected);
+    Ok(())
+}
+
+#[test]
+fn test_unparse_left_anti_join() -> Result<()> {
+    // select t1.d from t1 where c not in (select c from t2)
+    let schema = Schema::new(vec![
+        Field::new("c", DataType::Int32, false),
+        Field::new("d", DataType::Int32, false),
+    ]);
+
+    // LeftAnti Join: t1.c = __correlated_sq_1.c
+    //   TableScan: t1 projection=[c]
+    //   SubqueryAlias: __correlated_sq_1
+    //     TableScan: t2 projection=[c]
+
+    let table_scan1 = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
+    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![0]))?.build()?;
+    let subquery = subquery_alias(table_scan2, "__correlated_sq_1")?;
+    let plan = LogicalPlanBuilder::from(table_scan1)
+        .project(vec![col("t1.d")])?
+        .join_on(
+            subquery,
+            datafusion_expr::JoinType::LeftAnti,
+            vec![col("t1.c").eq(col("__correlated_sq_1.c"))],
+        )?
+        .build()?;
+
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_eq!("SELECT \"t1\".\"d\" FROM \"t1\" WHERE NOT EXISTS (SELECT 1 FROM \"t2\" AS \"__correlated_sq_1\" WHERE (\"t1\".\"c\" = \"__correlated_sq_1\".\"c\"))", sql.to_string());
+    Ok(())
+}
+
+#[test]
+fn test_unparse_left_semi_join() -> Result<()> {
+    // select t1.d from t1 where c in (select c from t2)
+    let schema = Schema::new(vec![
+        Field::new("c", DataType::Int32, false),
+        Field::new("d", DataType::Int32, false),
+    ]);
+
+    // LeftSemi Join: t1.c = __correlated_sq_1.c
+    //   TableScan: t1 projection=[c]
+    //   SubqueryAlias: __correlated_sq_1
+    //     TableScan: t2 projection=[c]
+
+    let table_scan1 = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
+    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![0]))?.build()?;
+    let subquery = subquery_alias(table_scan2, "__correlated_sq_1")?;
+    let plan = LogicalPlanBuilder::from(table_scan1)
+        .project(vec![col("t1.d")])?
+        .join_on(
+            subquery,
+            datafusion_expr::JoinType::LeftSemi,
+            vec![col("t1.c").eq(col("__correlated_sq_1.c"))],
+        )?
+        .build()?;
+
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_eq!("SELECT \"t1\".\"d\" FROM \"t1\" WHERE EXISTS (SELECT 1 FROM \"t2\" AS \"__correlated_sq_1\" WHERE (\"t1\".\"c\" = \"__correlated_sq_1\".\"c\"))", sql.to_string());
+    Ok(())
+}
+
+#[test]
+fn test_unparse_left_mark_join() -> Result<()> {
+    // select t1.d from t1 where t1.d < 0 OR exists (select 1 from t2 where t1.c = t2.c)
+    let schema = Schema::new(vec![
+        Field::new("c", DataType::Int32, false),
+        Field::new("d", DataType::Int32, false),
+    ]);
+    // Filter: __correlated_sq_1.mark OR t1.d < Int32(0)
+    //   Projection: t1.d
+    //     LeftMark Join:  Filter: t1.c = __correlated_sq_1.c
+    //       TableScan: t1 projection=[c, d]
+    //       SubqueryAlias: __correlated_sq_1
+    //         TableScan: t2 projection=[c]
+    let table_scan1 = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
+    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![0]))?.build()?;
+    let subquery = subquery_alias(table_scan2, "__correlated_sq_1")?;
+    let plan = LogicalPlanBuilder::from(table_scan1)
+        .join_on(
+            subquery,
+            datafusion_expr::JoinType::LeftMark,
+            vec![col("t1.c").eq(col("__correlated_sq_1.c"))],
+        )?
+        .project(vec![col("t1.d")])?
+        .filter(col("mark").or(col("t1.d").lt(lit(0))))?
+        .build()?;
+
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_eq!("SELECT \"t1\".\"d\" FROM \"t1\" WHERE (EXISTS (SELECT 1 FROM \"t2\" AS \"__correlated_sq_1\" WHERE (\"t1\".\"c\" = \"__correlated_sq_1\".\"c\")) OR (\"t1\".\"d\" < 0))", sql.to_string());
+    Ok(())
+}
+
+#[test]
+fn test_unparse_right_semi_join() -> Result<()> {
+    // select t2.c, t2.d from t1 right semi join t2 on t1.c = t2.c where t2.c <= 1
+    let schema = Schema::new(vec![
+        Field::new("c", DataType::Int32, false),
+        Field::new("d", DataType::Int32, false),
+    ]);
+    // Filter: t2.c <= Int64(1)
+    //   RightSemi Join: t1.c = t2.c
+    //     TableScan: t1 projection=[c, d]
+    //     Projection: t2.c, t2.d
+    //       TableScan: t2 projection=[c, d]
+    let left = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
+    let right_table_scan = table_scan(Some("t2"), &schema, Some(vec![0, 1]))?.build()?;
+    let right = LogicalPlanBuilder::from(right_table_scan)
+        .project(vec![col("c"), col("d")])?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(left)
+        .join(
+            right,
+            datafusion_expr::JoinType::RightSemi,
+            (
+                vec![Column::from_qualified_name("t1.c")],
+                vec![Column::from_qualified_name("t2.c")],
+            ),
+            None,
+        )?
+        .filter(col("t2.c").lt_eq(lit(1i64)))?
+        .build()?;
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_eq!("SELECT \"t2\".\"c\", \"t2\".\"d\" FROM \"t2\" WHERE (\"t2\".\"c\" <= 1) AND EXISTS (SELECT 1 FROM \"t1\" WHERE (\"t1\".\"c\" = \"t2\".\"c\"))", sql.to_string());
+    Ok(())
+}
+
+#[test]
+fn test_unparse_right_anti_join() -> Result<()> {
+    // select t2.c, t2.d from t1 right anti join t2 on t1.c = t2.c where t2.c <= 1
+    let schema = Schema::new(vec![
+        Field::new("c", DataType::Int32, false),
+        Field::new("d", DataType::Int32, false),
+    ]);
+    // Filter: t2.c <= Int64(1)
+    //   RightAnti Join: t1.c = t2.c
+    //     TableScan: t1 projection=[c, d]
+    //     Projection: t2.c, t2.d
+    //       TableScan: t2 projection=[c, d]
+    let left = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
+    let right_table_scan = table_scan(Some("t2"), &schema, Some(vec![0, 1]))?.build()?;
+    let right = LogicalPlanBuilder::from(right_table_scan)
+        .project(vec![col("c"), col("d")])?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(left)
+        .join(
+            right,
+            datafusion_expr::JoinType::RightAnti,
+            (
+                vec![Column::from_qualified_name("t1.c")],
+                vec![Column::from_qualified_name("t2.c")],
+            ),
+            None,
+        )?
+        .filter(col("t2.c").lt_eq(lit(1i64)))?
+        .build()?;
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_eq!("SELECT \"t2\".\"c\", \"t2\".\"d\" FROM \"t2\" WHERE (\"t2\".\"c\" <= 1) AND NOT EXISTS (SELECT 1 FROM \"t1\" WHERE (\"t1\".\"c\" = \"t2\".\"c\"))", sql.to_string());
     Ok(())
 }
