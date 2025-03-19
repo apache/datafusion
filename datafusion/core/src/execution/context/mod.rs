@@ -2122,7 +2122,7 @@ mod tests {
             .await
             .unwrap();
 
-            results.extend([result]);
+            results.push(result);
         }
         allow_duplicates! {
             for result in &results {
