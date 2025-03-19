@@ -49,7 +49,7 @@ use arrow::array::{
 };
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
 use arrow::datatypes::{DataType, SchemaRef};
-use arrow::row::{RowConverter, SortField};
+use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -212,6 +212,8 @@ struct ExternalSorter {
     schema: SchemaRef,
     /// Sort expressions
     expr: Arc<[PhysicalSortExpr]>,
+    /// RowConverter corresponding to the sort expressions
+    sort_keys_row_converter: Arc<RowConverter>,
     /// If Some, the maximum number of output rows that will be produced
     fetch: Option<usize>,
     /// The target number of rows for output batches
@@ -278,12 +280,29 @@ impl ExternalSorter {
             MemoryConsumer::new(format!("ExternalSorterMerge[{partition_id}]"))
                 .register(&runtime.memory_pool);
 
+        // Construct RowConverter for sort keys
+        let sort_fields = expr
+            .iter()
+            .map(|e| {
+                let data_type = e
+                    .expr
+                    .data_type(&schema)
+                    .map_err(|e| e.context("Resolving sort expression data type"))?;
+                Ok(SortField::new_with_options(data_type, e.options))
+            })
+            .collect::<Result<Vec<_>>>()
+            .expect("Valid sort fields");
+
+        let converter = RowConverter::new(sort_fields)
+            .expect("Should create valid RowConverter for sort expressions");
+
         Self {
             schema,
             in_mem_batches: vec![],
             in_mem_batches_sorted: false,
             spills: vec![],
             expr: expr.into(),
+            sort_keys_row_converter: Arc::new(converter),
             metrics,
             fetch,
             reservation,
@@ -688,15 +707,29 @@ impl ExternalSorter {
 
         let fetch = self.fetch;
         let expressions: LexOrdering = self.expr.iter().cloned().collect();
-        let stream = futures::stream::once(futures::future::lazy(move |_| {
-            let timer = metrics.elapsed_compute().timer();
-            let sorted = sort_batch(&batch, &expressions, fetch)?;
-            timer.done();
+        let row_converter = Arc::clone(&self.sort_keys_row_converter);
+        let stream = futures::stream::once(async move {
+            let _timer = metrics.elapsed_compute().timer();
+
+            let sort_columns = expressions
+                .iter()
+                .map(|expr| expr.evaluate_to_sort_column(&batch))
+                .collect::<Result<Vec<_>>>()?;
+
+            let sorted = if is_multi_column_with_lists(&sort_columns) {
+                // lex_sort_to_indices doesn't support List with more than one column
+                // https://github.com/apache/arrow-rs/issues/5454
+                sort_batch_row_based(&batch, &expressions, row_converter, fetch)?
+            } else {
+                sort_batch(&batch, &expressions, fetch)?
+            };
+
             metrics.record_output(sorted.num_rows());
             drop(batch);
             drop(reservation);
             Ok(sorted)
-        }));
+        });
+
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
@@ -739,6 +772,45 @@ impl Debug for ExternalSorter {
             .field("spill_count", &self.spill_count())
             .finish()
     }
+}
+
+/// Converts rows into a sorted array of indices based on their order.
+/// This function returns the indices that represent the sorted order of the rows.
+fn rows_to_indices(rows: Rows, limit: Option<usize>) -> Result<UInt32Array> {
+    let mut sort: Vec<_> = rows.iter().enumerate().collect();
+    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+
+    let mut len = rows.num_rows();
+    if let Some(limit) = limit {
+        len = limit.min(len);
+    }
+    let indices =
+        UInt32Array::from_iter_values(sort.iter().take(len).map(|(i, _)| *i as u32));
+    Ok(indices)
+}
+
+/// Sorts a `RecordBatch` by converting its sort columns into Arrow Row Format for faster comparison.
+fn sort_batch_row_based(
+    batch: &RecordBatch,
+    expressions: &LexOrdering,
+    row_converter: Arc<RowConverter>,
+    fetch: Option<usize>,
+) -> Result<RecordBatch> {
+    let sort_columns = expressions
+        .iter()
+        .map(|expr| expr.evaluate_to_sort_column(batch).map(|col| col.values))
+        .collect::<Result<Vec<_>>>()?;
+    let rows = row_converter.convert_columns(&sort_columns)?;
+    let indices = rows_to_indices(rows, fetch)?;
+    let columns = take_arrays(batch.columns(), &indices, None)?;
+
+    let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
+
+    Ok(RecordBatch::try_new_with_options(
+        batch.schema(),
+        columns,
+        &options,
+    )?)
 }
 
 pub fn sort_batch(
@@ -803,7 +875,9 @@ pub(crate) fn lexsort_to_indices_multi_columns(
         },
     );
 
-    // TODO reuse converter and rows, refer to TopK.
+    // Note: row converter is reused through `sort_batch_row_based()`, this function
+    // is not used during normal sort execution, but it's kept temporarily because
+    // it's inside a public interface `sort_batch()`.
     let converter = RowConverter::new(fields)?;
     let rows = converter.convert_columns(&columns)?;
     let mut sort: Vec<_> = rows.iter().enumerate().collect();
