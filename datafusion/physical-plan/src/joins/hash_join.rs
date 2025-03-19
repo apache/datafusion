@@ -2337,7 +2337,6 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+----+----+----+----+

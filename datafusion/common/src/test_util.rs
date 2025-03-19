@@ -282,7 +282,7 @@ pub fn get_data_dir(
                     pb.display(),
                     udf_env
                 )
-                    .into());
+                .into());
             }
         }
     }

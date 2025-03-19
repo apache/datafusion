@@ -958,8 +958,8 @@ mod tests {
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{Field, Int32Type};
-    use insta::assert_snapshot;
     use datafusion_common::test_util::batches_to_string;
+    use insta::assert_snapshot;
 
     // Create a GenericListArray with the following list values:
     //  [A, B, C], [], NULL, [D], NULL, [NULL, F]

@@ -1413,10 +1413,7 @@ mod tests {
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Int32Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{
-        internal_err, DataFusionError,
-        ScalarValue,
-    };
+    use datafusion_common::{internal_err, DataFusionError, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -1647,7 +1644,7 @@ mod tests {
             );
             }
         };
-        
+
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
         let final_grouping_set = grouping_set.as_final();
@@ -2725,7 +2722,7 @@ mod tests {
         let ctx = TaskContext::default().with_session_config(session_config);
         let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
 
-        allow_duplicates!{
+        allow_duplicates! {
             assert_snapshot!(batches_to_string(&output), @r"
             +-----+-------------------+
             | key | COUNT(val)[count] |
@@ -2813,7 +2810,7 @@ mod tests {
         let ctx = TaskContext::default().with_session_config(session_config);
         let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
 
-        allow_duplicates!{
+        allow_duplicates! {
             assert_snapshot!(batches_to_string(&output), @r"
             +-----+-------------------+
             | key | COUNT(val)[count] |
@@ -2958,7 +2955,7 @@ mod tests {
 
         assert_spill_count_metric(expect_spill, single_aggregate);
 
-        allow_duplicates!{
+        allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
                 +---+--------+--------+
                 | a | MIN(b) | AVG(b) |
