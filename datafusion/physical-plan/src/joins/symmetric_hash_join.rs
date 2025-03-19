@@ -76,7 +76,7 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::PhysicalExprRef;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt};

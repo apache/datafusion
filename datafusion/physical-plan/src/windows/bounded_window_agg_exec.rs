@@ -288,7 +288,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             .ordered_partition_by_indices
             .iter()
             .map(|idx| &partition_bys[*idx]);
-        vec![calc_requirements(partition_bys, order_keys.iter(), true)]
+        vec![calc_requirements(partition_bys, order_keys.iter())]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

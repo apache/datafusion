@@ -216,13 +216,13 @@ impl ExecutionPlan for WindowAggExec {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         if self.ordered_partition_by_indices.len() < partition_bys.len() {
-            vec![calc_requirements(partition_bys, order_keys.iter(), false)]
+            vec![calc_requirements(partition_bys, order_keys.iter())]
         } else {
             let partition_bys = self
                 .ordered_partition_by_indices
                 .iter()
                 .map(|idx| &partition_bys[*idx]);
-            vec![calc_requirements(partition_bys, order_keys.iter(), false)]
+            vec![calc_requirements(partition_bys, order_keys.iter())]
         }
     }
 

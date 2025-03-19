@@ -280,9 +280,8 @@ pub(crate) fn calc_requirements<
 >(
     partition_by_exprs: impl IntoIterator<Item = T>,
     orderby_sort_exprs: impl IntoIterator<Item = S>,
-    is_soft_requirements: bool,
 ) -> Option<RequiredInputOrdering> {
-    let mut sort_reqs = LexRequirement::new(
+    let mut sort_reqs_with_partition = LexRequirement::new(
         partition_by_exprs
             .into_iter()
             .map(|partition_by| {
@@ -290,21 +289,25 @@ pub(crate) fn calc_requirements<
             })
             .collect::<Vec<_>>(),
     );
+    let mut sort_reqs = LexRequirement::new(vec![]);
     for element in orderby_sort_exprs.into_iter() {
         let PhysicalSortExpr { expr, options } = element.borrow();
+        let sort_req = PhysicalSortRequirement::new(
+            Arc::clone(expr),
+            Some(*options),
+        );
+        if !sort_reqs_with_partition.iter().any(|e| e.expr.eq(expr)) {
+            sort_reqs_with_partition.push(sort_req.clone());
+        }
         if !sort_reqs.iter().any(|e| e.expr.eq(expr)) {
-            sort_reqs.push(PhysicalSortRequirement::new(
-                Arc::clone(expr),
-                Some(*options),
-            ));
+            sort_reqs.push(sort_req);
         }
     }
 
-    if is_soft_requirements {
-        (!sort_reqs.is_empty()).then_some(RequiredInputOrdering::Soft(vec![sort_reqs]))
-    } else {
-        (!sort_reqs.is_empty()).then_some(RequiredInputOrdering::Hard(vec![sort_reqs]))
-    }
+    (!sort_reqs_with_partition.is_empty()).then_some(RequiredInputOrdering::Hard(vec![
+        sort_reqs_with_partition,
+        sort_reqs,
+    ]))
 }
 
 /// This function calculates the indices such that when partition by expressions reordered with the indices
@@ -725,25 +728,54 @@ mod tests {
             (
                 vec!["a"],
                 vec![("b", true, true)],
-                vec![("a", None), ("b", Some((true, true)))],
+                vec![
+                    vec![
+                        ("a", None),
+                        ("b", Some((true, true)))
+                    ],
+                    vec![
+                        ("b", Some((true, true)))
+                    ],
+                ],
             ),
             // PARTITION BY a, ORDER BY a ASC NULLS FIRST
-            (vec!["a"], vec![("a", true, true)], vec![("a", None)]),
+            (vec!["a"], vec![("a", true, true)], vec![
+                vec![
+                    ("a", None)
+                ],
+                vec![
+                    ("a", Some((true, true)))]
+            ]),
             // PARTITION BY a, ORDER BY b ASC NULLS FIRST, c DESC NULLS LAST
             (
                 vec!["a"],
                 vec![("b", true, true), ("c", false, false)],
                 vec![
-                    ("a", None),
-                    ("b", Some((true, true))),
-                    ("c", Some((false, false))),
+                    vec![
+                        ("a", None),
+                        ("b", Some((true, true))),
+                        ("c", Some((false, false))),
+                    ],
+                    vec![
+                        ("b", Some((true, true))),
+                        ("c", Some((false, false))),
+                    ]
+
                 ],
             ),
             // PARTITION BY a, c, ORDER BY b ASC NULLS FIRST, c DESC NULLS LAST
             (
                 vec!["a", "c"],
                 vec![("b", true, true), ("c", false, false)],
-                vec![("a", None), ("c", None), ("b", Some((true, true)))],
+                vec![vec![
+                        ("a", None), ("c", None),
+                        ("b", Some((true, true)))
+                    ],
+                     vec![
+                        ("b", Some((true, true))),
+                        ("c", Some((false, false)))
+                    ]
+                ],
             ),
         ];
         for (pb_params, ob_params, expected_params) in test_data {
@@ -762,35 +794,30 @@ mod tests {
                 orderbys.push(PhysicalSortExpr { expr, options });
             }
 
-            for is_soft in [true, false] {
-                let mut expected: Option<LexRequirement> = None;
-                for (col_name, reqs) in expected_params.clone() {
+            let mut expected: Option<RequiredInputOrdering> = None;
+            for expected_param in expected_params.clone() {
+                let mut lex_requirement = LexRequirement::new(vec![]);
+                for (col_name, reqs) in expected_param {
                     let options = reqs.map(|(descending, nulls_first)| SortOptions {
                         descending,
                         nulls_first,
                     });
                     let expr = col(col_name, &schema)?;
                     let res = PhysicalSortRequirement::new(expr, options);
-                    if let Some(expected) = &mut expected {
-                        expected.push(res);
+                    lex_requirement.push(res);
+                }
+                if !lex_requirement.is_empty() {
+                    if let Some(expect) = expected {
+                        expected = Some(RequiredInputOrdering::Hard(vec![expect.lex_requirement().clone(), lex_requirement]))
                     } else {
-                        expected = Some(LexRequirement::new(vec![res]));
+                        expected = Some(RequiredInputOrdering::Hard(vec![lex_requirement]))
                     }
                 }
-                let expected_result = if let Some(expected) = expected {
-                    if is_soft {
-                        Some(RequiredInputOrdering::Soft(vec![expected]))
-                    } else {
-                        Some(RequiredInputOrdering::Hard(vec![expected]))
-                    }
-                } else {
-                    None
-                };
-                assert_eq!(
-                    calc_requirements(partitionbys.clone(), orderbys.clone(), is_soft),
-                    expected_result
-                );
             }
+            assert_eq!(
+                calc_requirements(partitionbys.clone(), orderbys.clone()),
+                expected
+            );
         }
         Ok(())
     }
