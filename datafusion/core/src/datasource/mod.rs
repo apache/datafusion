@@ -33,6 +33,7 @@ mod statistics;
 pub mod stream;
 pub mod view;
 
+pub use datafusion_datasource::nested_schema_adapter;
 pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::source;
 
