@@ -2667,6 +2667,23 @@ TUR [100.0, 75.0] 175
 # that have contradictory requirements at first glance.
 
 statement ok
+CREATE TABLE null_group (
+          a INT, b INT, c INT, d INT
+) as VALUES
+  (6, 6, null, null),
+  (6, 6, 1, null),
+  (6, 6, null, 1)
+
+query III rowsort
+select c, d, first_value(a order by b) from null_group group by c, d;
+----
+1 NULL 6
+NULL 1 6
+NULL NULL 6
+
+
+
+statement ok
 CREATE TABLE first_null (
           k INT,
           val INT,

@@ -553,21 +553,22 @@ where
 {
     fn update_batch(
         &mut self,
-        values_with_orderings: &[ArrayRef],
+        // e.g. first_value(a order by b): values_and_order_cols will be [a, b]
+        values_and_order_cols: &[ArrayRef],
         group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         self.resize_states(total_num_groups);
 
-        let vals = values_with_orderings[0].as_primitive::<T>();
+        let vals = values_and_order_cols[0].as_primitive::<T>();
 
         let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
 
         // The overhead of calling `extract_row_at_idx_to_buf` is somewhat high, so we need to minimize its calls as much as possible.
         for (group_idx, idx) in self
             .get_filtered_min_of_each_group(
-                &values_with_orderings[1..],
+                &values_and_order_cols[1..],
                 group_indices,
                 opt_filter,
                 vals,
@@ -576,7 +577,7 @@ where
             .into_iter()
         {
             extract_row_at_idx_to_buf(
-                &values_with_orderings[1..],
+                &values_and_order_cols[1..],
                 idx,
                 &mut ordering_buf,
             )?;
@@ -643,7 +644,7 @@ where
 
         let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
 
-        let (is_set_arr, val_and_orderings) = match values.split_last() {
+        let (is_set_arr, val_and_order_cols) = match values.split_last() {
             Some(result) => result,
             None => return internal_err!("Empty row in FISRT_VALUE"),
         };
@@ -653,7 +654,7 @@ where
         let vals = values[0].as_primitive::<T>();
         // The overhead of calling `extract_row_at_idx_to_buf` is somewhat high, so we need to minimize its calls as much as possible.
         let groups = self.get_filtered_min_of_each_group(
-            &val_and_orderings[1..],
+            &val_and_order_cols[1..],
             group_indices,
             opt_filter,
             vals,
@@ -661,7 +662,7 @@ where
         )?;
 
         for (group_idx, idx) in groups.into_iter() {
-            extract_row_at_idx_to_buf(&val_and_orderings[1..], idx, &mut ordering_buf)?;
+            extract_row_at_idx_to_buf(&val_and_order_cols[1..], idx, &mut ordering_buf)?;
 
             if self.should_update_state(group_idx, &ordering_buf)? {
                 self.update_state(
