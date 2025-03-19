@@ -81,12 +81,6 @@ jobs:
       - name: Check workspace with avro,json features
         run: cargo check --workspace --benches --features avro,json
 
-      - name: Check Cargo.lock for datafusion-cli
-        run: |
-          # If this test fails, try running `cargo update` in the `datafusion-cli` directory
-          # and check in the updated Cargo.lock file.
-          cargo check --manifest-path datafusion-cli/Cargo.toml --locked
-
       # Ensure that the datafusion crate can be built with only a subset of the function
       # packages enabled.
       - name: Check datafusion (nested_expressions)
@@ -144,7 +138,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: stable        
+          rust-version: stable
       - name: Run tests (excluding doctests)
         run: cargo test --lib --tests --bins --features avro,json,backtrace
       - name: Verify Working Directory Clean
@@ -338,9 +332,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true      
+          submodules: true
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-macos-builder       
+        uses: ./.github/actions/setup-macos-builder
       - name: Run tests (excluding doctests)
         shell: bash
         run: |

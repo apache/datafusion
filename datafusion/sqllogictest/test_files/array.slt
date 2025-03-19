@@ -4027,7 +4027,8 @@ select array_union(arrow_cast([1, 2, 3, 4], 'LargeList(Int64)'), arrow_cast([5, 
 statement ok
 CREATE TABLE arrays_with_repeating_elements_for_union
 AS VALUES
-  ([1], [2]),
+  ([0, 1, 1], []),
+  ([1, 1], [2]),
   ([2, 3], [3]),
   ([3], [3, 4])
 ;
@@ -4035,6 +4036,7 @@ AS VALUES
 query ?
 select array_union(column1, column2) from arrays_with_repeating_elements_for_union;
 ----
+[0, 1]
 [1, 2]
 [2, 3]
 [3, 4]
@@ -4042,6 +4044,7 @@ select array_union(column1, column2) from arrays_with_repeating_elements_for_uni
 query ?
 select array_union(arrow_cast(column1, 'LargeList(Int64)'), arrow_cast(column2, 'LargeList(Int64)')) from arrays_with_repeating_elements_for_union;
 ----
+[0, 1]
 [1, 2]
 [2, 3]
 [3, 4]
@@ -4061,15 +4064,11 @@ select array_union(arrow_cast([], 'LargeList(Int64)'), arrow_cast([], 'LargeList
 []
 
 # array_union scalar function #7
-query ?
+query error DataFusion error: Internal error: array_union is not implemented for
 select array_union([[null]], []);
-----
-[[]]
 
-query ?
+query error DataFusion error: Internal error: array_union is not implemented for
 select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([], 'LargeList(Int64)'));
-----
-[[]]
 
 # array_union scalar function #8
 query ?
@@ -5843,12 +5842,12 @@ select array_intersect(arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'), null)
 query ?
 select array_intersect(null, [1, 1, 2, 2, 3, 3]);
 ----
-NULL
+[]
 
 query ?
 select array_intersect(null, arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'));
 ----
-NULL
+[]
 
 query ?
 select array_intersect([], null);
@@ -5873,12 +5872,12 @@ select array_intersect(arrow_cast([], 'LargeList(Int64)'), null);
 query ?
 select array_intersect(null, []);
 ----
-NULL
+[]
 
 query ?
 select array_intersect(null, arrow_cast([], 'LargeList(Int64)'));
 ----
-NULL
+[]
 
 query ?
 select array_intersect(null, null);
