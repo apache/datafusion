@@ -33,6 +33,8 @@ const MAX_REGEX_ALTERNATIONS_EXPANSION: usize = 4;
 /// - full anchored regex patterns (e.g. `^foo$`) to `= 'foo'`
 /// - partial anchored regex patterns (e.g. `^foo`) to `LIKE 'foo%'`
 /// - combinations (alternatives) of the above, will be concatenated with `OR` or `AND`
+/// - `EQ .*` is always true
+/// - `NE .*` means IS EMPTY
 ///
 /// Dev note: unit tests of this function are in `expr_simplifier.rs`, case `test_simplify_regex`.
 pub fn simplify_regex_expr(
@@ -43,6 +45,23 @@ pub fn simplify_regex_expr(
     let mode = OperatorMode::new(&op);
 
     if let Expr::Literal(ScalarValue::Utf8(Some(pattern))) = right.as_ref() {
+        // Handle the special case for ".*" pattern
+        if pattern == ".*" {
+            let new_expr = if mode.not {
+                // not empty
+                let empty_lit = Box::new(lit(""));
+                Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right: empty_lit,
+                })
+            } else {
+                // always true
+                lit(true)
+            };
+            return Ok(new_expr);
+        }
+
         match regex_syntax::Parser::new().parse(pattern) {
             Ok(hir) => {
                 let kind = hir.kind();
