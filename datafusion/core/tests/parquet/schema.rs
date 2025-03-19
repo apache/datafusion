@@ -21,7 +21,7 @@ use std::{collections::HashMap, fs, path::Path};
 use tempfile::TempDir;
 
 use super::*;
-use datafusion_common::test_util::batches_to_sort_string;
+use datafusion_common::test_util::batches_to_string;
 use insta::assert_snapshot;
 
 #[tokio::test]
@@ -69,7 +69,7 @@ async fn schema_merge_ignores_metadata_by_default() {
         .unwrap();
     let actual = df.collect().await.unwrap();
 
-    assert_snapshot!(batches_to_sort_string(&actual), @r"
+    assert_snapshot!(batches_to_string(&actual), @r"
     +----+------+
     | id | name |
     +----+------+
@@ -95,7 +95,7 @@ async fn schema_merge_ignores_metadata_by_default() {
         .collect()
         .await
         .unwrap();
-    assert_snapshot!(batches_to_sort_string(&actual), @r"
+    assert_snapshot!(batches_to_string(&actual), @r"
     +----+------+
     | id | name |
     +----+------+
@@ -151,7 +151,7 @@ async fn schema_merge_can_preserve_metadata() {
 
     let actual = df.collect().await.unwrap();
 
-    assert_snapshot!(batches_to_sort_string(&actual), @r"
+    assert_snapshot!(batches_to_string(&actual), @r"
     +----+------+
     | id | name |
     +----+------+
@@ -173,7 +173,7 @@ async fn schema_merge_can_preserve_metadata() {
     assert_eq!(actual.clone(), expected_metadata);
 
     let actual = df.collect().await.unwrap();
-    assert_snapshot!(batches_to_sort_string(&actual), @r"
+    assert_snapshot!(batches_to_string(&actual), @r"
     +----+------+
     | id | name |
     +----+------+

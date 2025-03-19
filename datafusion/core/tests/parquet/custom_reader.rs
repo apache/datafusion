@@ -32,7 +32,7 @@ use datafusion::datasource::physical_plan::{
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::SessionContext;
-use datafusion_common::test_util::batches_to_sort_string;
+use datafusion_common::test_util::batches_to_string;
 use datafusion_common::Result;
 
 use bytes::Bytes;
@@ -97,12 +97,12 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
     let task_ctx = session_ctx.task_ctx();
     let read = collect(parquet_exec, task_ctx).await.unwrap();
 
-    assert_snapshot!(batches_to_sort_string(&read), @r"
+    assert_snapshot!(batches_to_string(&read), @r"
     +-----+----+----+
     | c1  | c2 | c3 |
     +-----+----+----+
-    |     | 2  | 20 |
     | Foo | 1  | 10 |
+    |     | 2  | 20 |
     | bar |    |    |
     +-----+----+----+
     ");
