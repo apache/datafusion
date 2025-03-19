@@ -768,14 +768,17 @@ mod tests {
 
     #[test]
     fn test_simplify_regex_special_cases() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, false),
+        ]);
         let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
 
         // Test `= ".*"` transforms to true (except for empty strings)
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexMatch, lit(".*")))?
             .build()?;
-        let expected = "Filter: Boolean(true)\
+        let expected = "Filter: test.a IS NOT NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(plan, expected)?;
@@ -793,7 +796,7 @@ mod tests {
 
         // Test `=~ ".*"` (case-insensitive) transforms to true (except for empty strings)
         let plan = LogicalPlanBuilder::from(table_scan.clone())
-            .filter(binary_expr(col("a"), Operator::RegexIMatch, lit(".*")))?
+            .filter(binary_expr(col("b"), Operator::RegexIMatch, lit(".*")))?
             .build()?;
         let expected = "Filter: Boolean(true)\
         \n  TableScan: test";

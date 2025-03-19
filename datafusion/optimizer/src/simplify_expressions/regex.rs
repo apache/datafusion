@@ -35,7 +35,7 @@ const ANY_CHAR_REGEX_PATTERN: &str = ".*";
 /// - full anchored regex patterns (e.g. `^foo$`) to `= 'foo'`
 /// - partial anchored regex patterns (e.g. `^foo`) to `LIKE 'foo%'`
 /// - combinations (alternatives) of the above, will be concatenated with `OR` or `AND`
-/// - `EQ .*` is always true
+/// - `EQ .*` to NotNull
 /// - `NE .*` means IS EMPTY
 ///
 /// Dev note: unit tests of this function are in `expr_simplifier.rs`, case `test_simplify_regex`.
@@ -58,8 +58,8 @@ pub fn simplify_regex_expr(
                     right: empty_lit,
                 })
             } else {
-                // always true
-                lit(true)
+                // not null
+                left.is_not_null()
             };
             return Ok(new_expr);
         }
