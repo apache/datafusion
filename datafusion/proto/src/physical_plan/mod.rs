@@ -38,7 +38,7 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
+use datafusion::physical_expr::{LexOrdering, PhysicalExprRef};
 use datafusion::physical_plan::aggregates::AggregateMode;
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
@@ -1079,8 +1079,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             &sink_schema,
                             extension_codec,
                         )
-                        .map(LexRequirement::from)
-                        .map(RequiredInputOrdering::Hard)
+                        .map(RequiredInputOrdering::from)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
@@ -1109,8 +1108,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             &sink_schema,
                             extension_codec,
                         )
-                        .map(LexRequirement::from)
-                        .map(RequiredInputOrdering::Hard)
+                        .map(RequiredInputOrdering::from)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
@@ -1146,8 +1144,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 &sink_schema,
                                 extension_codec,
                             )
-                            .map(LexRequirement::from)
-                            .map(RequiredInputOrdering::Hard)
+                            .map(RequiredInputOrdering::from)
                         })
                         .transpose()?;
                     Ok(Arc::new(DataSinkExec::new(

@@ -248,7 +248,7 @@ impl ExecutionPlan for OutputRequirementExec {
                 OutputRequirementExec::new(
                     input,
                     (!updated_sort_reqs.is_empty())
-                        .then_some(RequiredInputOrdering::Hard(updated_sort_reqs)),
+                        .then_some(RequiredInputOrdering::Hard(vec![updated_sort_reqs])),
                     dist_req,
                 )
             })

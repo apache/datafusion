@@ -1058,13 +1058,13 @@ impl TableProvider for ListingTable {
                 );
             };
             // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
-            Some(RequiredInputOrdering::Hard(LexRequirement::new(
+            Some(RequiredInputOrdering::Hard(vec![LexRequirement::new(
                 ordering
                     .into_iter()
                     .cloned()
                     .map(PhysicalSortRequirement::from)
                     .collect::<Vec<_>>(),
-            )))
+            )]))
         } else {
             None
         };

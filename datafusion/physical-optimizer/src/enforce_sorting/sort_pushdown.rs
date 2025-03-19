@@ -106,8 +106,7 @@ fn pushdown_sorts_helper(
         let current_plan_reqs = plan
             .output_ordering()
             .cloned()
-            .map(LexRequirement::from)
-            .map(RequiredInputOrdering::Hard)
+            .map(RequiredInputOrdering::from)
             .unwrap_or_default();
         let parent_is_stricter = plan.equivalence_properties().requirements_compatible(
             parent_reqs.lex_requirement(),
@@ -217,9 +216,9 @@ fn pushdown_requirement_to_children(
         {
             RequirementsCompatibility::Satisfy => {
                 let req = (!request_child.is_empty()).then(|| {
-                    RequiredInputOrdering::Hard(LexRequirement::new(
+                    RequiredInputOrdering::Hard(vec![LexRequirement::new(
                         request_child.to_vec(),
-                    ))
+                    )])
                 });
                 Ok(Some(vec![req]))
             }
@@ -282,7 +281,9 @@ fn pushdown_requirement_to_children(
             .requirements_compatible(parent_required.lex_requirement(), &output_req)
         {
             let req = (!parent_required.is_empty()).then(|| {
-                RequiredInputOrdering::Hard(LexRequirement::new(parent_required.to_vec()))
+                RequiredInputOrdering::Hard(vec![LexRequirement::new(
+                    parent_required.to_vec(),
+                )])
             });
             Ok(Some(vec![req]))
         } else {
@@ -355,7 +356,9 @@ fn pushdown_requirement_to_children(
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
             // than SortPreservingMergeExec output ordering.
             let req = (!parent_required.is_empty()).then(|| {
-                RequiredInputOrdering::Hard(LexRequirement::new(parent_required.to_vec()))
+                RequiredInputOrdering::Hard(vec![LexRequirement::new(
+                    parent_required.to_vec(),
+                )])
             });
             Ok(Some(vec![req]))
         }
@@ -414,7 +417,9 @@ fn determine_children_requirement(
         // Parent requirements are more specific, adjust child's requirements
         // and push down the new requirements:
         let adjusted = (!parent_required.lex_requirement().is_empty()).then(|| {
-            RequiredInputOrdering::Hard(LexRequirement::new(parent_required.to_vec()))
+            RequiredInputOrdering::Hard(vec![LexRequirement::new(
+                parent_required.to_vec(),
+            )])
         });
         RequirementsCompatibility::Compatible(adjusted)
     } else {

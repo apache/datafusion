@@ -1053,33 +1053,34 @@ pub enum CardinalityEffect {
     GreaterEqual,
 }
 
-/// Represents the plan's input ordering requirement
+/// Represents the plan's input ordering requirements,
+/// the elements of the vectors' represent alternative requirements
 #[derive(Debug, Clone, PartialEq)]
 pub enum RequiredInputOrdering {
-    /// The operator can not work without this ordering
-    Hard(LexRequirement),
-    /// The operator can benefit from the ordering if provided
-    /// but if not provided it can also work
-    Soft(LexRequirement),
+    /// The operator is not able to work without one of these requirements
+    Hard(Vec<LexRequirement>),
+    /// The operator can benefit from the ordering alternatives if provided
+    /// but if not provided it can also work.
+    Soft(Vec<LexRequirement>),
 }
 
 impl Default for RequiredInputOrdering {
     fn default() -> Self {
-        RequiredInputOrdering::Hard(LexRequirement::default())
+        RequiredInputOrdering::Hard(vec![LexRequirement::default()])
     }
 }
 
 impl From<LexOrdering> for RequiredInputOrdering {
     fn from(ordering: LexOrdering) -> Self {
-        RequiredInputOrdering::Hard(LexRequirement::from(ordering))
+        RequiredInputOrdering::Hard(vec![LexRequirement::from(ordering)])
     }
 }
 
 impl RequiredInputOrdering {
     pub fn lex_requirement(&self) -> &LexRequirement {
         match self {
-            RequiredInputOrdering::Hard(lex) => lex,
-            RequiredInputOrdering::Soft(lex) => lex,
+            RequiredInputOrdering::Hard(lex) => &lex[0],
+            RequiredInputOrdering::Soft(lex) => &lex[0],
         }
     }
 
@@ -1097,10 +1098,10 @@ impl RequiredInputOrdering {
     ) -> Self {
         match self {
             RequiredInputOrdering::Hard(_) => {
-                RequiredInputOrdering::Hard(LexRequirement::new(requirement))
+                RequiredInputOrdering::Hard(vec![LexRequirement::new(requirement)])
             }
             RequiredInputOrdering::Soft(_) => {
-                RequiredInputOrdering::Soft(LexRequirement::new(requirement))
+                RequiredInputOrdering::Soft(vec![LexRequirement::new(requirement)])
             }
         }
     }

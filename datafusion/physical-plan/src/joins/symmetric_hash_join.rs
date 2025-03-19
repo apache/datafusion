@@ -426,14 +426,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         vec![
             self.left_sort_exprs
                 .as_ref()
-                .cloned()
-                .map(LexRequirement::from)
-                .map(RequiredInputOrdering::Hard),
+                .map(|e| RequiredInputOrdering::from(e.clone())),
             self.right_sort_exprs
                 .as_ref()
-                .cloned()
-                .map(LexRequirement::from)
-                .map(RequiredInputOrdering::Hard),
+                .map(|e| RequiredInputOrdering::from(e.clone())),
         ]
     }
 

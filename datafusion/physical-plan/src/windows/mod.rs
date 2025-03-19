@@ -301,9 +301,9 @@ pub(crate) fn calc_requirements<
     }
 
     if is_soft_requirements {
-        (!sort_reqs.is_empty()).then_some(RequiredInputOrdering::Soft(sort_reqs))
+        (!sort_reqs.is_empty()).then_some(RequiredInputOrdering::Soft(vec![sort_reqs]))
     } else {
-        (!sort_reqs.is_empty()).then_some(RequiredInputOrdering::Hard(sort_reqs))
+        (!sort_reqs.is_empty()).then_some(RequiredInputOrdering::Hard(vec![sort_reqs]))
     }
 }
 
@@ -779,9 +779,9 @@ mod tests {
                 }
                 let expected_result = if let Some(expected) = expected {
                     if is_soft {
-                        Some(RequiredInputOrdering::Soft(expected))
+                        Some(RequiredInputOrdering::Soft(vec![expected]))
                     } else {
-                        Some(RequiredInputOrdering::Hard(expected))
+                        Some(RequiredInputOrdering::Hard(vec![expected]))
                     }
                 } else {
                     None

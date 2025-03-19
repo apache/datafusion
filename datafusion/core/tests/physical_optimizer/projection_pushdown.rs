@@ -642,20 +642,22 @@ fn test_output_req_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
     let sort_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
         csv.clone(),
-        Some(RequiredInputOrdering::Hard(LexRequirement::new(vec![
-            PhysicalSortRequirement {
-                expr: Arc::new(Column::new("b", 1)),
-                options: Some(SortOptions::default()),
-            },
-            PhysicalSortRequirement {
-                expr: Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("c", 2)),
-                    Operator::Plus,
-                    Arc::new(Column::new("a", 0)),
-                )),
-                options: Some(SortOptions::default()),
-            },
-        ]))),
+        Some(RequiredInputOrdering::Hard(vec![LexRequirement::new(
+            vec![
+                PhysicalSortRequirement {
+                    expr: Arc::new(Column::new("b", 1)),
+                    options: Some(SortOptions::default()),
+                },
+                PhysicalSortRequirement {
+                    expr: Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("c", 2)),
+                        Operator::Plus,
+                        Arc::new(Column::new("a", 0)),
+                    )),
+                    options: Some(SortOptions::default()),
+                },
+            ],
+        )])),
         Distribution::HashPartitioned(vec![
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
@@ -688,7 +690,7 @@ fn test_output_req_after_projection() -> Result<()> {
         ];
 
     assert_eq!(get_plan_string(&after_optimize), expected);
-    let expected_reqs = RequiredInputOrdering::Hard(LexRequirement::new(vec![
+    let expected_reqs = RequiredInputOrdering::Hard(vec![LexRequirement::new(vec![
         PhysicalSortRequirement {
             expr: Arc::new(Column::new("b", 2)),
             options: Some(SortOptions::default()),
@@ -701,7 +703,7 @@ fn test_output_req_after_projection() -> Result<()> {
             )),
             options: Some(SortOptions::default()),
         },
-    ]));
+    ])]);
     assert_eq!(
         after_optimize
             .as_any()
