@@ -16,9 +16,10 @@
 // under the License.
 
 use core::fmt;
+use std::ops::ControlFlow;
 
-use sqlparser::ast;
 use sqlparser::ast::helpers::attached_token::AttachedToken;
+use sqlparser::ast::{self, visit_expressions_mut};
 
 #[derive(Clone)]
 pub struct QueryBuilder {
@@ -176,6 +177,37 @@ impl SelectBuilder {
         self.lateral_views = value;
         self
     }
+
+    /// Replaces the selection with a new value.
+    ///
+    /// This function is used to replace a specific expression within the selection.
+    /// Unlike the `selection` method which combines existing and new selections with AND,
+    /// this method searches for and replaces occurrences of a specific expression.
+    ///
+    /// This method is primarily used to modify LEFT MARK JOIN expressions.
+    /// When processing a LEFT MARK JOIN, we need to replace the placeholder expression
+    /// with the actual join condition in the selection clause.
+    ///
+    /// # Arguments
+    ///
+    /// * `existing_expr` - The expression to replace
+    /// * `value` - The new expression to set as the selection
+    pub fn replace_mark(
+        &mut self,
+        existing_expr: &ast::Expr,
+        value: &ast::Expr,
+    ) -> &mut Self {
+        if let Some(selection) = &mut self.selection {
+            visit_expressions_mut(selection, |expr| {
+                if expr == existing_expr {
+                    *expr = value.clone();
+                }
+                ControlFlow::<()>::Continue(())
+            });
+        }
+        self
+    }
+
     pub fn selection(&mut self, value: Option<ast::Expr>) -> &mut Self {
         // With filter pushdown optimization, the LogicalPlan can have filters defined as part of `TableScan` and `Filter` nodes.
         // To avoid overwriting one of the filters, we combine the existing filter with the additional filter.

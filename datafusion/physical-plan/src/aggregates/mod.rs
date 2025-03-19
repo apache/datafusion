@@ -830,6 +830,7 @@ impl DisplayAs for AggregateExec {
                         })
                         .collect()
                 };
+                // TODO: Implement `fmt_sql` for `AggregateFunctionExpr`.
                 let a: Vec<String> = self
                     .aggr_expr
                     .iter()

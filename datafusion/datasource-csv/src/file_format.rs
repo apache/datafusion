@@ -666,10 +666,8 @@ impl DisplayAs for CsvSink {
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
-                if !self.config.file_groups.is_empty() {
-                    FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
-                }
-                Ok(())
+                writeln!(f, "format: csv")?;
+                write!(f, "file={}", &self.config.original_url)
             }
         }
     }

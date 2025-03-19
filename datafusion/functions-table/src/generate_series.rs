@@ -114,7 +114,8 @@ impl LazyBatchGenerator for GenerateSeriesState {
             return Ok(None);
         }
 
-        let batch = RecordBatch::try_new(self.schema.clone(), vec![Arc::new(array)])?;
+        let batch =
+            RecordBatch::try_new(Arc::clone(&self.schema), vec![Arc::new(array)])?;
 
         Ok(Some(batch))
     }
@@ -127,7 +128,7 @@ impl TableProvider for GenerateSeriesTable {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 
     fn table_type(&self) -> TableType {
@@ -146,7 +147,7 @@ impl TableProvider for GenerateSeriesTable {
         let state = match self.args {
             // if args have null, then return 0 row
             GenSeriesArgs::ContainsNull { include_end, name } => GenerateSeriesState {
-                schema: self.schema.clone(),
+                schema: self.schema(),
                 start: 0,
                 end: 0,
                 step: 1,
@@ -162,7 +163,7 @@ impl TableProvider for GenerateSeriesTable {
                 include_end,
                 name,
             } => GenerateSeriesState {
-                schema: self.schema.clone(),
+                schema: self.schema(),
                 start,
                 end,
                 step,
@@ -174,7 +175,7 @@ impl TableProvider for GenerateSeriesTable {
         };
 
         Ok(Arc::new(LazyMemoryExec::try_new(
-            self.schema.clone(),
+            self.schema(),
             vec![Arc::new(RwLock::new(state))],
         )?))
     }
