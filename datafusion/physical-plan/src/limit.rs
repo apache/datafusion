@@ -209,7 +209,7 @@ impl ExecutionPlan for GlobalLimitExec {
         _node_id: usize,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let mut new_plan =
-            GlobalLimitExec::new(self.input.clone(), self.skip, self.fetch);
+            GlobalLimitExec::new(Arc::clone(self.input()), self.skip, self.fetch);
         let new_props = new_plan.cache.clone().with_node_id(_node_id);
         new_plan.cache = new_props;
         Ok(Some(Arc::new(new_plan)))

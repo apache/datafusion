@@ -464,8 +464,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         _node_id: usize,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let mut new_plan = SymmetricHashJoinExec::try_new(
-            self.left.clone(),
-            self.right.clone(),
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
             self.on.clone(),
             self.filter.clone(),
             self.join_type(),

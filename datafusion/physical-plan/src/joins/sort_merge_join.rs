@@ -513,8 +513,8 @@ impl ExecutionPlan for SortMergeJoinExec {
         _node_id: usize,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let mut new_plan = SortMergeJoinExec::try_new(
-            self.left.clone(),
-            self.right.clone(),
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
             self.on.clone(),
             self.filter.clone(),
             self.join_type(),

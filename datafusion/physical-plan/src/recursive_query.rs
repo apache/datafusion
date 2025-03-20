@@ -214,8 +214,8 @@ impl ExecutionPlan for RecursiveQueryExec {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let mut new_plan = RecursiveQueryExec::try_new(
             self.name.clone(),
-            self.static_term.clone(),
-            self.recursive_term.clone(),
+            Arc::clone(&self.static_term),
+            Arc::clone(&self.recursive_term),
             self.is_distinct,
         )?;
         let new_props = new_plan.cache.clone().with_node_id(_node_id);

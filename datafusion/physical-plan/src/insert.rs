@@ -253,8 +253,8 @@ impl ExecutionPlan for DataSinkExec {
         _node_id: usize,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let mut new_plan = DataSinkExec::new(
-            self.input.clone(),
-            self.sink.clone(),
+            Arc::clone(self.input()),
+            Arc::clone(&self.sink),
             self.sort_order.clone(),
         );
         let new_props = new_plan.cache.clone().with_node_id(_node_id);

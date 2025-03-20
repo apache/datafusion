@@ -34,9 +34,17 @@ impl NodeIdAnnotator {
         &mut self,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        let plan_with_id = plan.clone().with_node_id(self.next_id)?.unwrap_or(plan);
+        let plan_with_id = Arc::clone(&plan)
+            .with_node_id(self.next_id)?
+            .unwrap_or(plan);
         self.next_id += 1;
         Ok(plan_with_id)
+    }
+}
+
+impl Default for NodeIdAnnotator {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -50,7 +58,7 @@ pub fn annotate_node_id_for_execution_plan(
             annotate_node_id_for_execution_plan(child, annotator)?;
         new_children.push(new_child);
     }
-    let new_plan = plan.clone().with_new_children(new_children)?;
+    let new_plan = Arc::clone(plan).with_new_children(new_children)?;
     let new_plan_with_id = annotator.annotate_execution_plan_with_node_id(new_plan)?;
     Ok(new_plan_with_id)
 }

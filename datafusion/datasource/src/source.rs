@@ -185,6 +185,16 @@ impl ExecutionPlan for DataSourceExec {
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         self.data_source.try_swapping_with_projection(projection)
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = DataSourceExec::new(self.data_source.clone());
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 impl DataSourceExec {

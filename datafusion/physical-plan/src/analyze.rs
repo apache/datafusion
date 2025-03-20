@@ -214,8 +214,8 @@ impl ExecutionPlan for AnalyzeExec {
         let mut new_plan = AnalyzeExec::new(
             self.verbose,
             self.show_statistics,
-            self.input.clone(),
-            self.schema.clone(),
+            Arc::clone(self.input()),
+            Arc::clone(&self.schema),
         );
         let new_props = new_plan.cache.clone().with_node_id(_node_id);
         new_plan.cache = new_props;

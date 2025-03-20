@@ -959,7 +959,7 @@ fn add_spm_on_top(
                         .output_ordering()
                         .unwrap_or(&LexOrdering::default())
                         .clone(),
-                    input.plan.clone(),
+                    Arc::clone(&input.plan),
                 )
                 .with_fetch(fetch.take()),
             ) as _
@@ -1052,7 +1052,7 @@ fn replace_order_preserving_variants(
     if is_sort_preserving_merge(&context.plan) {
         // Keep the fetch value of the SortPreservingMerge operator, maybe it will be used later.
         let fetch = context.plan.fetch();
-        let child_plan = context.children[0].plan.clone();
+        let child_plan = Arc::clone(&context.children[0].plan);
         context.plan = Arc::new(CoalescePartitionsExec::new(child_plan));
         return Ok((context, fetch));
     } else if let Some(repartition) =
@@ -1386,7 +1386,7 @@ pub fn ensure_distribution(
     };
 
     let mut optimized_distribution_ctx =
-        DistributionContext::new(Arc::clone(&plan), data.clone(), children);
+        DistributionContext::new(Arc::clone(&plan), data, children);
 
     // If `fetch` was not consumed, it means that there was `SortPreservingMergeExec` with fetch before
     // It was removed by `remove_dist_changing_operators`

@@ -202,10 +202,10 @@ impl ExecutionPlan for UnnestExec {
         _node_id: usize,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let mut new_plan = UnnestExec::new(
-            self.input.clone(),
+            Arc::clone(self.input()),
             self.list_column_indices.clone(),
             self.struct_column_indices.clone(),
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             self.options.clone(),
         );
         let new_props = new_plan.cache.clone().with_node_id(_node_id);

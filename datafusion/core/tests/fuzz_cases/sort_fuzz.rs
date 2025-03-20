@@ -224,7 +224,7 @@ impl SortTest {
     /// Sort the input using SortExec and ensure the results are
     /// correct according to `Vec::sort` both with and without spilling
     async fn run(&self) -> (Vec<Vec<RecordBatch>>, Vec<RecordBatch>) {
-        let input = self.input.clone();
+        let input = Arc::clone(self.input());
         let first_batch = input
             .iter()
             .flat_map(|p| p.iter())

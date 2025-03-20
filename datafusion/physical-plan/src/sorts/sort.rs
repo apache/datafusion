@@ -1146,7 +1146,7 @@ impl ExecutionPlan for SortExec {
         _node_id: usize,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let new_plan = SortExec {
-            input: self.input.clone(),
+            input: Arc::clone(self.input()),
             expr: self.expr.clone(),
             fetch: self.fetch,
             metrics_set: self.metrics_set.clone(),
