@@ -1753,6 +1753,7 @@ fn merge_does_not_need_sort() -> Result<()> {
     ];
     let test_config = TestConfig::default();
     test_config.run(expected, exec.clone(), &DISTRIB_DISTRIB_SORT)?;
+
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     //
     // In this case preserving ordering through order preserving operators is not desirable
@@ -2138,6 +2139,7 @@ fn repartition_does_not_destroy_sort() -> Result<()> {
         sort_key,
     );
 
+    // TestConfig: Prefer existing sort.
     let test_config = TestConfig::default().with_prefer_existing_sort();
 
     // during repartitioning ordering is preserved
@@ -3215,11 +3217,16 @@ fn no_need_for_sort_after_filter() -> Result<()> {
 fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
     let schema = schema();
     let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
+        expr: col("c", &schema).unwrap(),
+        options: SortOptions::default(),
+    }]);
+    let input = parquet_exec_multiple_sorted(vec![sort_key]);
+
+    let sort_req = LexOrdering::new(vec![PhysicalSortExpr {
         expr: col("a", &schema).unwrap(),
         options: SortOptions::default(),
     }]);
-    let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
-    let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
+    let physical_plan = sort_preserving_merge_exec(sort_req, filter_exec(input));
 
     let test_config = TestConfig::default();
 
@@ -3232,13 +3239,15 @@ fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
         "        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
     test_config.run(expected, physical_plan.clone(), &DISTRIB_DISTRIB_SORT)?;
+
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     let expected_first_sort_enforcement = &[
         "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
         "  CoalescePartitionsExec",
-        "    FilterExec: c@2 = 0",
-        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-        "        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
+        "    SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
+        "      FilterExec: c@2 = 0",
+        "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+        "          DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
     test_config.run(
         expected_first_sort_enforcement,
@@ -3301,6 +3310,7 @@ fn do_not_put_sort_when_input_is_invalid() -> Result<()> {
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
+    config.optimizer.prefer_existing_sort = false;
     let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
     assert_plan_txt!(expected, dist_plan);
 
@@ -3337,6 +3347,7 @@ fn put_sort_when_input_is_valid() -> Result<()> {
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
+    config.optimizer.prefer_existing_sort = false;
     let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
     assert_plan_txt!(expected, dist_plan);
 

@@ -155,7 +155,7 @@ macro_rules! assert_optimized {
                         plan_with_pipeline_fixer,
                         false,
                         true,
-                        &config
+                        &config,
                     )
                 })
                 .data()
@@ -1278,7 +1278,7 @@ macro_rules! assert_optimized {
                         plan_with_pipeline_fixer,
                         false,
                         true,
-                        &config
+                        &config,
                     )
                 })
                 .data()

@@ -912,8 +912,8 @@ fn add_hash_on_top(
         // following conditions is true:
         // - Preserving ordering is not helpful in terms of satisfying ordering
         //   requirements.
-        // - Usage of order preserving variants is not desirable
-        // (determined by flag `config.optimizer.prefer_existing_sort`)
+        // - Usage of order preserving variants is not desirable (per the flag
+        //   `config.optimizer.prefer_existing_sort`).
         let partitioning = dist.create_partitioning(n_target);
         let repartition =
             RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
