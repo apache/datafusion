@@ -5895,15 +5895,11 @@ SELECT FIRST_VALUE(column1) FROM t;
 ----
 NULL
 
-query I
+query error DataFusion error: Error during planning: RESPECT NULLS and IGNORE NULLS are not supported for aggregate functions
 SELECT FIRST_VALUE(column1) RESPECT NULLS FROM t;
-----
-NULL
 
-query I
+query error DataFusion error: Error during planning: RESPECT NULLS and IGNORE NULLS are not supported for aggregate functions
 SELECT FIRST_VALUE(column1) IGNORE NULLS FROM t;
-----
-3
 
 statement ok
 DROP TABLE t;
@@ -5925,15 +5921,11 @@ SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
 ----
 NULL
 
-query I
+query error DataFusion error: Error during planning: RESPECT NULLS and IGNORE NULLS are not supported for aggregate functions
 SELECT FIRST_VALUE(column1 ORDER BY column2) RESPECT NULLS FROM t;
-----
-NULL
 
-query I
+query error DataFusion error: Error during planning: RESPECT NULLS and IGNORE NULLS are not supported for aggregate functions
 SELECT FIRST_VALUE(column1 ORDER BY column2) IGNORE NULLS FROM t;
-----
-4
 
 statement ok
 DROP TABLE t;
@@ -5947,15 +5939,11 @@ SELECT LAST_VALUE(column1) FROM t;
 ----
 NULL
 
-query I
+query error DataFusion error: Error during planning: RESPECT NULLS and IGNORE NULLS are not supported for aggregate functions
 SELECT LAST_VALUE(column1) RESPECT NULLS FROM t;
-----
-NULL
 
-query I
+query error DataFusion error: Error during planning: RESPECT NULLS and IGNORE NULLS are not supported for aggregate functions
 SELECT LAST_VALUE(column1) IGNORE NULLS FROM t;
-----
-4
 
 statement ok
 DROP TABLE t;
@@ -5977,15 +5965,11 @@ SELECT LAST_VALUE(column1 ORDER BY column2 DESC) FROM t;
 ----
 NULL
 
-query I
+query error DataFusion error: Error during planning: RESPECT NULLS and IGNORE NULLS are not supported for aggregate functions
 SELECT LAST_VALUE(column1 ORDER BY column2 DESC) RESPECT NULLS FROM t;
-----
-NULL
 
-query I
+query error DataFusion error: Error during planning: RESPECT NULLS and IGNORE NULLS are not supported for aggregate functions
 SELECT LAST_VALUE(column1 ORDER BY column2 DESC) IGNORE NULLS FROM t;
-----
-3
 
 statement ok
 DROP TABLE t;
