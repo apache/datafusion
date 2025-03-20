@@ -914,6 +914,19 @@ impl Unparser<'_> {
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
             BinaryOperator::AtArrow => Ok(Operator::AtArrow),
             BinaryOperator::ArrowAt => Ok(Operator::ArrowAt),
+            BinaryOperator::Arrow => Ok(Operator::Arrow),
+            BinaryOperator::LongArrow => Ok(Operator::LongArrow),
+            BinaryOperator::HashArrow => Ok(Operator::HashArrow),
+            BinaryOperator::HashLongArrow => Ok(Operator::HashLongArrow),
+            BinaryOperator::AtAt => Ok(Operator::AtAt),
+            BinaryOperator::DuckIntegerDivide | BinaryOperator::MyIntegerDivide => {
+                Ok(Operator::IntegerDivide)
+            }
+            BinaryOperator::HashMinus => Ok(Operator::HashMinus),
+            BinaryOperator::AtQuestion => Ok(Operator::AtQuestion),
+            BinaryOperator::Question => Ok(Operator::Question),
+            BinaryOperator::QuestionAnd => Ok(Operator::QuestionAnd),
+            BinaryOperator::QuestionPipe => Ok(Operator::QuestionPipe),
             _ => not_impl_err!("unsupported operation: {op:?}"),
         }
     }
@@ -951,6 +964,17 @@ impl Unparser<'_> {
             Operator::StringConcat => Ok(BinaryOperator::StringConcat),
             Operator::AtArrow => Ok(BinaryOperator::AtArrow),
             Operator::ArrowAt => Ok(BinaryOperator::ArrowAt),
+            Operator::Arrow => Ok(BinaryOperator::Arrow),
+            Operator::LongArrow => Ok(BinaryOperator::LongArrow),
+            Operator::HashArrow => Ok(BinaryOperator::HashArrow),
+            Operator::HashLongArrow => Ok(BinaryOperator::HashLongArrow),
+            Operator::AtAt => Ok(BinaryOperator::AtAt),
+            Operator::IntegerDivide => Ok(BinaryOperator::DuckIntegerDivide),
+            Operator::HashMinus => Ok(BinaryOperator::HashMinus),
+            Operator::AtQuestion => Ok(BinaryOperator::AtQuestion),
+            Operator::Question => Ok(BinaryOperator::Question),
+            Operator::QuestionAnd => Ok(BinaryOperator::QuestionAnd),
+            Operator::QuestionPipe => Ok(BinaryOperator::QuestionPipe),
         }
     }
 

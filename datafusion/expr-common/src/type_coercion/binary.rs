@@ -181,17 +181,17 @@ impl<'a> BinaryTypeCoercer<'a> {
                 )
             })
         }
-        AtArrow | ArrowAt => {
-            // ArrowAt and AtArrow check for whether one array is contained in another.
+        AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt | HashMinus |
+        AtQuestion | Question | QuestionAnd | QuestionPipe |IntegerDivide=> {
+            // These operators check for whether one array is contained in another or other JSON operations.
             // The result type is boolean. Signature::comparison defines this signature.
-            // Operation has nothing to do with comparison
             array_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
-                    "Cannot infer common array type for arrow operation {} {} {}", self.lhs, self.op, self.rhs
+                    "Cannot infer common array type for operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
-        Plus | Minus | Multiply | Divide | Modulo =>  {
+        Plus | Minus | Multiply | Divide | Modulo  =>  {
             let get_result = |lhs, rhs| {
                 use arrow::compute::kernels::numeric::*;
                 let l = new_empty_array(lhs);

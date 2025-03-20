@@ -86,6 +86,28 @@ pub enum Operator {
     AtArrow,
     /// Arrow at, like `<@`
     ArrowAt,
+    /// Arrow, like `->`
+    Arrow,
+    /// Long arrow, like `->>`
+    LongArrow,
+    /// Hash arrow, like `#>`
+    HashArrow,
+    /// Hash long arrow, like `#>>`
+    HashLongArrow,
+    /// At at, like `@@`
+    AtAt,
+    /// Integer division operator, like `DIV` from MySQL or `//` from DuckDB
+    IntegerDivide,
+    /// Hash Minis, like `#-`
+    HashMinus,
+    /// At question, like `@?`
+    AtQuestion,
+    /// Question, like `?`
+    Question,
+    /// Question and, like `?&`
+    QuestionAnd,
+    /// Question pipe, like `?|`
+    QuestionPipe,
 }
 
 impl Operator {
@@ -123,7 +145,18 @@ impl Operator {
             | Operator::BitwiseShiftLeft
             | Operator::StringConcat
             | Operator::AtArrow
-            | Operator::ArrowAt => None,
+            | Operator::ArrowAt
+            | Operator::Arrow
+            | Operator::LongArrow
+            | Operator::HashArrow
+            | Operator::HashLongArrow
+            | Operator::AtAt
+            | Operator::IntegerDivide
+            | Operator::HashMinus
+            | Operator::AtQuestion
+            | Operator::Question
+            | Operator::QuestionAnd
+            | Operator::QuestionPipe => None,
         }
     }
 
@@ -216,7 +249,18 @@ impl Operator {
             | Operator::BitwiseXor
             | Operator::BitwiseShiftRight
             | Operator::BitwiseShiftLeft
-            | Operator::StringConcat => None,
+            | Operator::StringConcat
+            | Operator::Arrow
+            | Operator::LongArrow
+            | Operator::HashArrow
+            | Operator::HashLongArrow
+            | Operator::AtAt
+            | Operator::IntegerDivide
+            | Operator::HashMinus
+            | Operator::AtQuestion
+            | Operator::Question
+            | Operator::QuestionAnd
+            | Operator::QuestionPipe => None,
         }
     }
 
@@ -245,7 +289,18 @@ impl Operator {
             | Operator::BitwiseXor
             | Operator::StringConcat
             | Operator::AtArrow
-            | Operator::ArrowAt => 30,
+            | Operator::ArrowAt
+            | Operator::Arrow
+            | Operator::LongArrow
+            | Operator::HashArrow
+            | Operator::HashLongArrow
+            | Operator::AtAt
+            | Operator::IntegerDivide
+            | Operator::HashMinus
+            | Operator::AtQuestion
+            | Operator::Question
+            | Operator::QuestionAnd
+            | Operator::QuestionPipe => 30,
             Operator::Plus | Operator::Minus => 40,
             Operator::Multiply | Operator::Divide | Operator::Modulo => 45,
         }
@@ -286,6 +341,17 @@ impl fmt::Display for Operator {
             Operator::StringConcat => "||",
             Operator::AtArrow => "@>",
             Operator::ArrowAt => "<@",
+            Operator::Arrow => "->",
+            Operator::LongArrow => "->>",
+            Operator::HashArrow => "#>",
+            Operator::HashLongArrow => "#>>",
+            Operator::AtAt => "@@",
+            Operator::IntegerDivide => "DIV",
+            Operator::HashMinus => "#-",
+            Operator::AtQuestion => "@?",
+            Operator::Question => "?",
+            Operator::QuestionAnd => "?&",
+            Operator::QuestionPipe => "?|",
         };
         write!(f, "{display}")
     }
