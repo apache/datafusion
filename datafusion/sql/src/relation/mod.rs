@@ -145,8 +145,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if unnest_exprs.is_empty() {
                     return plan_err!("UNNEST must have at least one argument");
                 }
-                let logical_plan = self.try_process_unnest(input, unnest_exprs)?;
-                (logical_plan, alias)
+
+                let (plan, select_exprs) =
+                    self.try_process_unnest(input, unnest_exprs)?;
+                let plan =
+                    self.try_final_projection_with_order_by(plan, vec![], select_exprs)?;
+
+                (plan, alias)
             }
             TableFactor::UNNEST { .. } => {
                 return not_impl_err!(

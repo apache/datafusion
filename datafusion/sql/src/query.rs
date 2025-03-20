@@ -124,7 +124,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // Order by for DISTINCT ON is handled already
             return Ok(plan);
         } else {
-            LogicalPlanBuilder::from(plan).sort(order_by)?.build()
+            UserDefinedLogicalBuilder::new(self.context_provider, plan)
+                .sort(order_by, None)?
+                .build()
         }
     }
 

@@ -17,15 +17,19 @@
 
 //! This module provides a user-defined builder for creating LogicalPlans
 
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 use crate::{
-    expr::Alias, type_coercion::TypeCoerceResult, Expr, ExprSchemable, SortExpr
+    expr::Alias,
+    expr_rewriter::rewrite_sort_cols_by_aggs,
+    type_coercion::TypeCoerceResult,
+    utils::{compare_sort_expr, group_window_expr_by_sort_keys},
+    Expr, ExprSchemable, SortExpr,
 };
 
 use super::{
-    LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderConfig, LogicalPlanBuilderOptions,
-    Projection, Union,
+    Distinct, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderConfig,
+    LogicalPlanBuilderOptions, Projection, Union,
 };
 
 use arrow::datatypes::Field;
@@ -36,6 +40,7 @@ use datafusion_common::{
 };
 use datafusion_expr_common::type_coercion::binary::comparison_coercion;
 
+use indexmap::IndexSet;
 use itertools::izip;
 
 #[derive(Clone, Debug)]
@@ -66,6 +71,11 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
     pub fn project(self, expr: Vec<Expr>) -> Result<Self> {
         let expr = self.try_coerce_projection(expr)?;
         let plan = LogicalPlanBuilder::from(self.plan).project(expr)?.build()?;
+        Ok(Self::new(self.config, plan))
+    }
+
+    pub fn distinct(self) -> Result<Self> {
+        let plan = LogicalPlan::Distinct(Distinct::All(Arc::new(self.plan)));
         Ok(Self::new(self.config, plan))
     }
 
@@ -210,6 +220,59 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
         Ok(Self::new(self.config, plan))
     }
 
+    // Similar to `sort_with_limit` in `LogicalPlanBuilder` + coercion
+    pub fn sort(self, sorts: Vec<SortExpr>, fetch: Option<usize>) -> Result<Self> {
+        // println!("sorts: {:?}", sorts);
+        let sorts = self.try_coerce_order_by_expr(sorts)?;
+        // println!("sorts after coercion: {:?}", sorts);
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .sort_with_limit(sorts, fetch)?
+            .build()?;
+        Ok(Self::new(self.config, plan))
+    }
+
+    pub fn window(self, window_exprs: Vec<Expr>) -> Result<Self> {
+        let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
+        // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
+        // we compare the sort key themselves and if one window's sort keys are a prefix of another
+        // put the window with more sort keys first. so more deeply sorted plans gets nested further down as children.
+        // The sort_by() implementation here is a stable sort.
+        // Note that by this rule if there's an empty over, it'll be at the top level
+        groups.sort_by(|(key_a, _), (key_b, _)| {
+            for ((first, _), (second, _)) in key_a.iter().zip(key_b.iter()) {
+                let key_ordering = compare_sort_expr(first, second, self.plan.schema());
+                match key_ordering {
+                    Ordering::Less => {
+                        return Ordering::Less;
+                    }
+                    Ordering::Greater => {
+                        return Ordering::Greater;
+                    }
+                    Ordering::Equal => {}
+                }
+            }
+            key_b.len().cmp(&key_a.len())
+        });
+
+        let mut result = self;
+        for (_, window_exprs) in groups {
+            result = result.window_inner(window_exprs)?;
+        }
+        Ok(result)
+    }
+
+    fn window_inner(self, window_exprs: Vec<Expr>) -> Result<Self> {
+        let window_exprs = self.try_coerce_window_exprs(window_exprs)?;
+
+        // Partition and sorting is done at physical level, see the EnforceDistribution
+        // and EnforceSorting rules.
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .window(window_exprs)?
+            .build()?;
+
+        Ok(Self::new(self.config, plan))
+    }
+
     ///
     /// Coercion level - LogicalPlan
     ///
@@ -249,6 +312,12 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
     }
 
     fn try_coerce_distinct_on_expr(&self, expr: Vec<Expr>) -> Result<Vec<Expr>> {
+        expr.into_iter()
+            .map(|e| self.try_coerce_binary_expr(e, self.plan.schema()))
+            .collect()
+    }
+
+    fn try_coerce_window_exprs(&self, expr: Vec<Expr>) -> Result<Vec<Expr>> {
         expr.into_iter()
             .map(|e| self.try_coerce_binary_expr(e, self.plan.schema()))
             .collect()
@@ -463,7 +532,6 @@ fn coerce_exprs_for_schema(
                 } else {
                     Ok(new_expr)
                 }
-
             } else {
                 Ok(expr)
             }

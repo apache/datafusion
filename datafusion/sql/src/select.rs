@@ -40,7 +40,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
-    LogicalPlanBuilderOptions, Partitioning,
+    LogicalPlanBuilderOptions, Partitioning, SortExpr,
 };
 
 use indexmap::IndexMap;
@@ -233,7 +233,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let plan = if window_func_exprs.is_empty() {
             plan
         } else {
-            let plan = LogicalPlanBuilder::window_plan(plan, window_func_exprs.clone())?;
+            let plan = UserDefinedLogicalBuilder::new(self.context_provider, plan)
+                .window(window_func_exprs.clone())?
+                .build()?;
+
+            // let plan = LogicalPlanBuilder::window_plan(plan, window_func_exprs.clone())?;
 
             // Re-write the projection
             select_exprs_post_aggr = select_exprs_post_aggr
@@ -244,15 +248,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        // Try processing unnest expression or do the final projection
-        let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
+        // Try processing unnest expression
+        let (plan, select_exprs) =
+            self.try_process_unnest(plan, select_exprs_post_aggr)?;
 
         // Process distinct clause
         let plan = match select.distinct {
-            None => Ok(plan),
-            Some(Distinct::Distinct) => {
-                LogicalPlanBuilder::from(plan).distinct()?.build()
+            None => {
+                // println!("orderbys: {:?}", order_by_rex);
+                // println!("select_exprs: {:?}", select_exprs);
+                // println!("plan: {}", plan.display_indent());
+                // self.try_final_projection(plan, select_exprs)
+                self.try_final_projection_with_order_by(plan, order_by_rex, select_exprs)
             }
+            Some(Distinct::Distinct) => self
+                .try_final_projection_with_order_by_with_distinct(
+                    plan,
+                    order_by_rex,
+                    select_exprs,
+                ),
             Some(Distinct::On(on_expr)) => {
                 if !aggr_exprs.is_empty()
                     || !group_by_exprs.is_empty()
@@ -268,7 +282,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let order_by_rex = std::mem::take(&mut order_by_rex);
+                // let order_by_rex = std::mem::take(&mut order_by_rex);
                 // In case of `DISTINCT ON` we must capture the sort expressions since during the plan
                 // optimization we're effectively doing a `first_value` aggregation according to them.
                 UserDefinedLogicalBuilder::new(self.context_provider, base_plan)
@@ -297,7 +311,145 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        self.order_by(plan, order_by_rex)
+        // let order_by_plan = if order_by_rex.is_empty() {
+        //     base_plan.clone()
+        // } else {
+        //     UserDefinedLogicalBuilder::new(self.context_provider, base_plan.clone()).sort(std::mem::take(&mut order_by_rex), None)?.build()?
+        // };
+
+        // println!("order_by_plan: {}", order_by_plan.display_indent());
+
+        // println!("final plan: {}", plan.display_indent());
+        Ok(plan)
+    }
+
+    pub(super) fn try_final_projection_with_order_by(
+        &self,
+        plan: LogicalPlan,
+        order_by_rex: Vec<SortExpr>,
+        select_exprs: Vec<Expr>,
+    ) -> Result<LogicalPlan> {
+        if order_by_rex.is_empty() {
+            UserDefinedLogicalBuilder::new(self.context_provider, plan)
+                .project(select_exprs)?
+                .build()
+        } else {
+            // TODO:
+            // if sort columns are subset of select exprs, we project first then sort
+            // otherwise, we project with the sort columns then sort then project
+
+            // println!("select_exprs: {:?}", select_exprs);
+            // println!("order_by_rex: {:?}", order_by_rex);
+
+            let projected_plan =
+                UserDefinedLogicalBuilder::new(self.context_provider, plan.clone())
+                    .project(select_exprs.clone())?
+                    .build()?;
+
+            match UserDefinedLogicalBuilder::new(
+                self.context_provider,
+                projected_plan.clone(),
+            )
+            .sort(order_by_rex.clone(), None)
+            {
+                Ok(plan_builder) => plan_builder.build(),
+                // maybe union the plan and projected_plan
+                _ => match UserDefinedLogicalBuilder::new(
+                    self.context_provider,
+                    plan.clone(),
+                )
+                .sort(order_by_rex.clone(), None)
+                {
+                    Ok(plan_builder) => plan_builder.project(select_exprs)?.build(),
+                    _ => {
+                        let mut combined_select_exprs: HashSet<Expr> =
+                            select_exprs.into_iter().collect();
+                        plan.schema().iter().map(Expr::from).for_each(|e| {
+                            combined_select_exprs.insert(e);
+                        });
+                        let combined_select_exprs =
+                            combined_select_exprs.into_iter().collect();
+
+                        UserDefinedLogicalBuilder::new(self.context_provider, plan)
+                            .project(combined_select_exprs)?
+                            .sort(order_by_rex, None)?
+                            .build()
+                    }
+                },
+            }
+        }
+    }
+
+    pub(super) fn try_final_projection_with_order_by_with_distinct(
+        &self,
+        plan: LogicalPlan,
+        order_by_rex: Vec<SortExpr>,
+        select_exprs: Vec<Expr>,
+    ) -> Result<LogicalPlan> {
+        if order_by_rex.is_empty() {
+            UserDefinedLogicalBuilder::new(self.context_provider, plan)
+                .project(select_exprs)?
+                .distinct()?
+                .build()
+        } else {
+            // TODO:
+            // if sort columns are subset of select exprs, we project first then sort
+            // otherwise, we project with the sort columns then sort then project
+
+            // println!("select_exprs: {:?}", select_exprs);
+            // println!("order_by_rex: {:?}", order_by_rex);
+
+            let projected_plan =
+                UserDefinedLogicalBuilder::new(self.context_provider, plan.clone())
+                    .project(select_exprs.clone())?
+                    .distinct()?
+                    .build()?;
+
+            match UserDefinedLogicalBuilder::new(
+                self.context_provider,
+                projected_plan.clone(),
+            )
+            .distinct()?
+            .sort(order_by_rex.clone(), None)
+            {
+                Ok(plan_builder) => plan_builder.build(),
+                // maybe union the plan and projected_plan
+                _ => match UserDefinedLogicalBuilder::new(
+                    self.context_provider,
+                    plan.clone(),
+                )
+                .distinct()?
+                .sort(order_by_rex.clone(), None)
+                {
+                    Ok(plan_builder) => plan_builder.project(select_exprs)?.build(),
+                    _ => {
+                        let mut combined_select_exprs: HashSet<Expr> =
+                            select_exprs.into_iter().collect();
+                        plan.schema().iter().map(Expr::from).for_each(|e| {
+                            combined_select_exprs.insert(e);
+                        });
+                        let combined_select_exprs =
+                            combined_select_exprs.into_iter().collect();
+
+                        UserDefinedLogicalBuilder::new(self.context_provider, plan)
+                            .project(combined_select_exprs)?
+                            .distinct()?
+                            .sort(order_by_rex, None)?
+                            .build()
+                    }
+                },
+            }
+        }
+    }
+
+    pub(super) fn try_final_projection(
+        &self,
+        plan: LogicalPlan,
+        select_exprs: Vec<Expr>,
+    ) -> Result<LogicalPlan> {
+        UserDefinedLogicalBuilder::new(self.context_provider, plan)
+            .project(select_exprs)?
+            .build()
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
@@ -305,7 +457,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         input: LogicalPlan,
         select_exprs: Vec<Expr>,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<(LogicalPlan, Vec<Expr>)> {
         // Try process group by unnest
         let input = self.try_process_aggregate_unnest(input)?;
 
@@ -337,9 +489,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             if unnest_columns.is_empty() {
                 // The original expr does not contain any unnest
                 if i == 0 {
-                    return LogicalPlanBuilder::from(intermediate_plan)
-                        .project(intermediate_select_exprs)?
-                        .build();
+                    return Ok((intermediate_plan, intermediate_select_exprs));
                 }
                 break;
             } else {
@@ -371,9 +521,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        LogicalPlanBuilder::from(intermediate_plan)
-            .project(intermediate_select_exprs)?
-            .build()
+        Ok((intermediate_plan, intermediate_select_exprs))
     }
 
     fn try_process_aggregate_unnest(&self, input: LogicalPlan) -> Result<LogicalPlan> {

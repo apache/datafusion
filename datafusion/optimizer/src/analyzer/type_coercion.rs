@@ -46,9 +46,7 @@ use datafusion_expr::type_coercion::functions::{
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{
-    is_datetime, is_utf8_or_large_utf8,
-};
+use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
@@ -140,27 +138,29 @@ fn analyze_internal(
 
     let name_preserver = NamePreserver::new(&plan);
     // apply coercion rewrite all expressions in the plan individually
-    let r = plan.map_expressions(|expr| {
-        let original_name = name_preserver.save(&expr);
-        let sr = expr.rewrite(&mut expr_rewrite)
-            .map(|transformed| transformed.update_data(|e| original_name.restore(e)));
+    let r = plan
+        .map_expressions(|expr| {
+            let original_name = name_preserver.save(&expr);
+            let sr = expr
+                .rewrite(&mut expr_rewrite)
+                .map(|transformed| transformed.update_data(|e| original_name.restore(e)));
 
-        // println!("sr: {:?}", sr);
-        sr
-    })?
-    // some plans need extra coercion after their expressions are coerced
-    .map_data(|plan| {
-        let st = expr_rewrite.coerce_plan(plan);
-        // println!("st: {:?}", st);
-        st
-    })?
-    // recompute the schema after the expressions have been rewritten as the types may have changed
-    .map_data(|plan| {
-        // println!("plan: {}", plan.display_indent());
-        let sz = plan.recompute_schema();
-        // println!("sz: {:?}", sz);
-        sz
-    });
+            // println!("sr: {:?}", sr);
+            sr
+        })?
+        // some plans need extra coercion after their expressions are coerced
+        .map_data(|plan| {
+            let st = expr_rewrite.coerce_plan(plan);
+            // println!("st: {:?}", st);
+            st
+        })?
+        // recompute the schema after the expressions have been rewritten as the types may have changed
+        .map_data(|plan| {
+            // println!("plan: {}", plan.display_indent());
+            let sz = plan.recompute_schema();
+            // println!("sz: {:?}", sz);
+            sz
+        });
 
     // println!("r: {:?}", r);
 
@@ -319,7 +319,8 @@ impl<'a> TypeCoercionRewriter<'a> {
 
         if left_type != left_type_old {
             return internal_err!(
-                "Missing coercion for left: {left_type_old:?} -> {left_type:?}"
+                "Missing coercion for left: {left_type_old:?} -> {left_type:?}, left: {:?}",
+                left
             );
         }
         if right_type != right_type_old {
