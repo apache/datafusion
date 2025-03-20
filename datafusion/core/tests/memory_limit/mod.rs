@@ -160,7 +160,7 @@ async fn cross_join() {
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: CrossJoinExec",
         ])
-        .with_memory_limit(1_0000)
+        .with_memory_limit(1_000)
         .run()
         .await
 }
