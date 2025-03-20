@@ -17,6 +17,7 @@
 
 use crate::datasource::listing::ListingTableUrl;
 use datafusion_common::DataFusionError;
+use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use futures::StreamExt;
@@ -25,7 +26,6 @@ use object_store::path::Path;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
-use tokio::task::JoinSet;
 
 /// Executes a query and writes the results to a partitioned Parquet file.
 pub async fn plan_to_parquet(
