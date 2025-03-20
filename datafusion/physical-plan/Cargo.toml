@@ -58,12 +58,12 @@ futures = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
+insta = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
 tokio = { workspace = true }
-insta = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_futures"] }
