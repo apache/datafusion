@@ -191,14 +191,8 @@ mod tests {
         ]);
 
         let adapter = DefaultSchemaAdapterFactory::from_schema(Arc::new(table_schema));
-        let (mapper, indices) = adapter.map_schema(&file_schema).unwrap();
-        assert_eq!(indices, vec![0]);
-
-        let file_batch = record_batch!(("b", Float64, vec![1.0, 2.0])).unwrap();
-
-        // Mapping fails because it tries to fill in a non-nullable column with nulls
-        let err = mapper.map_batch(file_batch).unwrap_err().to_string();
-        assert!(err.contains("Invalid argument error: Column 'a' is declared as non-nullable but contains null values"), "{err}");
+        let err = adapter.map_schema(&file_schema).unwrap_err().to_string();
+        assert!(err.contains("Error during planning: Column a is missing from the file schema, cannot be generated, and is non-nullable"));
     }
 
     #[derive(Debug)]
