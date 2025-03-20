@@ -65,13 +65,9 @@ Schema and DFSchema are both exist in datafusion because `Schema` provides a lig
 
 ### How to convert between Schema and DFSchema
 
-From Schema to DFSchema: Use `DFSchema::try_from_qualified_schema` with a table name and original schema. See example below:
+From Schema to DFSchema: Use `DFSchema::try_from_qualified_schema` with a table name and original schema, for detailed code example please see [creating-qualified-schemas](https://docs.rs/datafusion/latest/datafusion/common/struct.DFSchema.html#creating-qualified-schemas).
 
-> let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
-
-From DFSchema to Schema: Since the `Into` trait has been implemented for DFSchema to convert it into an Arrow Schema, you can simply use this trait to revert:
-
-> let schema = Schema::from(df_schema);`
+From DFSchema to Schema: Since the `Into` trait has been implemented for DFSchema to convert it into an Arrow Schema, for detailed code example please see [converting-back-to-arrow-schema](https://docs.rs/datafusion/latest/datafusion/common/struct.DFSchema.html#converting-back-to-arrow-schema).
 
 ## Creating and Evaluating `Expr`s
 
