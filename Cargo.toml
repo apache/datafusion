@@ -70,23 +70,23 @@ version = "42.2.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade", features = [
+arrow = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade-1", features = [
     "prettyprint",
 ] }
-arrow-array = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade", default-features = false, features = [
+arrow-array = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade-1", default-features = false, features = [
     "chrono-tz",
 ] }
-arrow-buffer = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade", default-features = false }
-arrow-flight = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade", features = [
+arrow-buffer = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade-1", default-features = false }
+arrow-flight = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade-1", features = [
     "flight-sql-experimental",
 ] }
 
-arrow-ipc = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade", default-features = false, features = [
+arrow-ipc = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade-1", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade", default-features = false }
-arrow-schema = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade", default-features = false }
-arrow-string = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade", default-features = false }
+arrow-ord = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade-1", default-features = false }
+arrow-schema = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade-1", default-features = false }
+arrow-string = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade-1", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
@@ -127,7 +127,7 @@ log = "^0.4"
 num_cpus = "1.13.0"
 object_store = { version = "0.11.0", default-features = false }
 parking_lot = "0.12"
-parquet = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade", default-features = false, features = [
+parquet = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.1-tonic-downgrade-1", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
