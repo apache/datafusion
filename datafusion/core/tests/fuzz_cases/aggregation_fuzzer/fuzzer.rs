@@ -21,8 +21,8 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_common_runtime::JoinSet;
 use rand::{thread_rng, Rng};
-use tokio::task::JoinSet;
 
 use crate::fuzz_cases::aggregation_fuzzer::{
     check_equality_of_batches,
