@@ -119,7 +119,7 @@ async fn join_by_key_multiple_partitions() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[0]",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -156,11 +156,11 @@ async fn join_by_expression() {
 #[tokio::test]
 async fn cross_join() {
     TestCase::new()
-        .with_query("select t1.* from t t1 CROSS JOIN t t2")
+        .with_query("select t1.*, t2.* from t t1 CROSS JOIN t t2")
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: CrossJoinExec",
         ])
-        .with_memory_limit(1_000)
+        .with_memory_limit(1_0000)
         .run()
         .await
 }
@@ -752,7 +752,7 @@ impl Scenario {
                 // Disabling physical optimizer rules to avoid sorts /
                 // repartitions (since RepartitionExec / SortExec also
                 // has a memory budget which we'll likely hit first)
-                Some(vec![])
+                Some(vec![Arc::new(JoinSelection::new())])
             }
             Self::AccessLogStreaming => {
                 // Disable all physical optimizer rules except the
