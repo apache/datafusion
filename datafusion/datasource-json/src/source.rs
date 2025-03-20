@@ -25,6 +25,7 @@ use std::task::Poll;
 use crate::file_format::JsonDecoder;
 
 use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
@@ -51,7 +52,6 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
-use tokio::task::JoinSet;
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
