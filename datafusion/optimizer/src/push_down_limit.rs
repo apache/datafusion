@@ -242,10 +242,19 @@ fn transformed_limit(
 fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
     use JoinType::*;
 
-    let (left_limit, right_limit) = match join.join_type {
-        Left => (Some(limit), None),
-        Right => (None, Some(limit)),
-        _ => (None, None),
+    // Cross join is the special case of inner join where there is no join condition. see [LogicalPlanBuilder::cross_join]
+    fn is_cross_join(join: &Join) -> bool {
+        join.join_type == Inner && join.on.is_empty() && join.filter.is_none()
+    }
+
+    let (left_limit, right_limit) = if is_cross_join(&join) {
+        (Some(limit), Some(limit))
+    } else {
+        match join.join_type {
+            Left => (Some(limit), None),
+            Right => (None, Some(limit)),
+            _ => (None, None),
+        }
     };
 
     if left_limit.is_none() && right_limit.is_none() {
