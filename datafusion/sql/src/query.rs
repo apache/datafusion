@@ -22,8 +22,9 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::stack::StackGuard;
 use datafusion_common::{not_impl_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
+    CreateMemoryTable, DdlStatement, Distinct, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Offset as SQLOffset, OrderBy, OrderByExpr, OrderByKind, Query,
@@ -157,7 +158,7 @@ fn to_order_by_exprs(order_by: Option<OrderBy>) -> Result<Vec<OrderByExpr>> {
 /// Returns the order by expressions from the query with the select expressions.
 pub(crate) fn to_order_by_exprs_with_select(
     order_by: Option<OrderBy>,
-    _select_exprs: Option<Vec<Expr>>, // TODO: ORDER BY ALL
+    _select_exprs: Option<Vec<SelectExpr>>, // TODO: ORDER BY ALL
 ) -> Result<Vec<OrderByExpr>> {
     let Some(OrderBy { kind, interpolate }) = order_by else {
         // If no order by, return an empty array.

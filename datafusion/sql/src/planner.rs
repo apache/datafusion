@@ -177,16 +177,17 @@ impl IdentNormalizer {
     }
 }
 
-/// Struct to store the states used by the Planner. The Planner will leverage the states to resolve
-/// CTEs, Views, subqueries and PREPARE statements. The states include
+/// Struct to store the states used by the Planner. The Planner will leverage the states
+/// to resolve CTEs, Views, subqueries and PREPARE statements. The states include
 /// Common Table Expression (CTE) provided with WITH clause and
 /// Parameter Data Types provided with PREPARE statement and the query schema of the
 /// outer query plan.
 ///
 /// # Cloning
 ///
-/// Only the `ctes` are truly cloned when the `PlannerContext` is cloned. This helps resolve
-/// scoping issues of CTEs. By using cloning, a subquery can inherit CTEs from the outer query
+/// Only the `ctes` are truly cloned when the `PlannerContext` is cloned.
+/// This helps resolve scoping issues of CTEs.
+/// By using cloning, a subquery can inherit CTEs from the outer query
 /// and can also define its own private CTEs without affecting the outer query.
 ///
 #[derive(Debug, Clone)]
@@ -329,7 +330,8 @@ impl PlannerContext {
 /// by subsequent passes.
 ///
 /// Key interfaces are:
-/// * [`Self::sql_statement_to_plan`]: Convert a statement (e.g. `SELECT ...`) into a [`LogicalPlan`]
+/// * [`Self::sql_statement_to_plan`]: Convert a statement
+///     (e.g. `SELECT ...`) into a [`LogicalPlan`]
 /// * [`Self::sql_to_expr`]: Convert an expression (e.g. `1 + 2`) into an [`Expr`]
 pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
@@ -442,7 +444,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Ok(plan)
         } else if idents.len() != plan.schema().fields().len() {
             plan_err!(
-                "Source table contains {} columns but only {} names given as column alias",
+                "Source table contains {} columns but only {} \
+                names given as column alias",
                 plan.schema().fields().len(),
                 idents.len()
             )
@@ -556,16 +559,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Boolean | SQLDataType::Bool => Ok(DataType::Boolean),
             SQLDataType::TinyInt(_) => Ok(DataType::Int8),
             SQLDataType::SmallInt(_) | SQLDataType::Int2(_) => Ok(DataType::Int16),
-            SQLDataType::Int(_) | SQLDataType::Integer(_) | SQLDataType::Int4(_) => Ok(DataType::Int32),
+            SQLDataType::Int(_) | SQLDataType::Integer(_) | SQLDataType::Int4(_) => {
+                Ok(DataType::Int32)
+            }
             SQLDataType::BigInt(_) | SQLDataType::Int8(_) => Ok(DataType::Int64),
             SQLDataType::TinyIntUnsigned(_) => Ok(DataType::UInt8),
-            SQLDataType::SmallIntUnsigned(_) | SQLDataType::Int2Unsigned(_) => Ok(DataType::UInt16),
-            SQLDataType::IntUnsigned(_) | SQLDataType::IntegerUnsigned(_) | SQLDataType::Int4Unsigned(_) => {
-                        Ok(DataType::UInt32)
-                    }
+            SQLDataType::SmallIntUnsigned(_) | SQLDataType::Int2Unsigned(_) => {
+                Ok(DataType::UInt16)
+            }
+            SQLDataType::IntUnsigned(_)
+            | SQLDataType::IntegerUnsigned(_)
+            | SQLDataType::Int4Unsigned(_) => Ok(DataType::UInt32),
             SQLDataType::Varchar(length) => {
                 match (length, self.options.support_varchar_with_length) {
-                    (Some(_), false) => plan_err!("does not support Varchar with length, please set `support_varchar_with_length` to be true"),
+                    (Some(_), false) => plan_err!("does not support Varchar with length, \
+                    please set `support_varchar_with_length` to be true"),
                     _ => {
                         if self.options.map_varchar_to_utf8view {
                             Ok(DataType::Utf8View)
@@ -575,83 +583,90 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
             }
-            SQLDataType::BigIntUnsigned(_) | SQLDataType::Int8Unsigned(_) => Ok(DataType::UInt64),
+            SQLDataType::BigIntUnsigned(_) | SQLDataType::Int8Unsigned(_) => {
+                Ok(DataType::UInt64)
+            }
             SQLDataType::Float(_) => Ok(DataType::Float32),
             SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
-            SQLDataType::Double(ExactNumberInfo::None) | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
-            SQLDataType::Double(ExactNumberInfo::Precision(_)|ExactNumberInfo::PrecisionAndScale(_, _)) => {
-                        not_impl_err!("Unsupported SQL type (precision/scale not supported) {sql_type}")
-                    }
-            SQLDataType::Char(_)
-                    | SQLDataType::Text
-                    | SQLDataType::String(_) => Ok(DataType::Utf8),
+            SQLDataType::Double(ExactNumberInfo::None)
+            | SQLDataType::DoublePrecision
+            | SQLDataType::Float8 => Ok(DataType::Float64),
+            SQLDataType::Double(
+                ExactNumberInfo::Precision(_) | ExactNumberInfo::PrecisionAndScale(_, _),
+            ) => {
+                not_impl_err!(
+                    "Unsupported SQL type (precision/scale not supported) {sql_type}"
+                )
+            }
+            SQLDataType::Char(_) | SQLDataType::Text | SQLDataType::String(_) => {
+                Ok(DataType::Utf8)
+            }
             SQLDataType::Timestamp(precision, tz_info)
-                    if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) => {
-                        let tz = if matches!(tz_info, TimezoneInfo::Tz)
-                            || matches!(tz_info, TimezoneInfo::WithTimeZone)
-                        {
-                            // Timestamp With Time Zone
-                            // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
-                            // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
-                            self.context_provider.options().execution.time_zone.clone()
-                        } else {
-                            // Timestamp Without Time zone
-                            None
-                        };
-                        let precision = match precision {
-                            Some(0) => TimeUnit::Second,
-                            Some(3) => TimeUnit::Millisecond,
-                            Some(6) => TimeUnit::Microsecond,
-                            None | Some(9) => TimeUnit::Nanosecond,
-                            _ => unreachable!(),
-                        };
-                        Ok(DataType::Timestamp(precision, tz.map(Into::into)))
-                    }
+                if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
+            {
+                let tz = if matches!(tz_info, TimezoneInfo::Tz)
+                    || matches!(tz_info, TimezoneInfo::WithTimeZone)
+                {
+                    // Timestamp With Time Zone
+                    // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
+                    // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
+                    self.context_provider.options().execution.time_zone.clone()
+                } else {
+                    // Timestamp Without Time zone
+                    None
+                };
+                let precision = match precision {
+                    Some(0) => TimeUnit::Second,
+                    Some(3) => TimeUnit::Millisecond,
+                    Some(6) => TimeUnit::Microsecond,
+                    None | Some(9) => TimeUnit::Nanosecond,
+                    _ => unreachable!(),
+                };
+                Ok(DataType::Timestamp(precision, tz.map(Into::into)))
+            }
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time(None, tz_info) => {
-                        if matches!(tz_info, TimezoneInfo::None)
-                            || matches!(tz_info, TimezoneInfo::WithoutTimeZone)
-                        {
-                            Ok(DataType::Time64(TimeUnit::Nanosecond))
-                        } else {
-                            // We don't support TIMETZ and TIME WITH TIME ZONE for now
-                            not_impl_err!(
-                                "Unsupported SQL type {sql_type:?}"
-                            )
-                        }
-                    }
+                if matches!(tz_info, TimezoneInfo::None)
+                    || matches!(tz_info, TimezoneInfo::WithoutTimeZone)
+                {
+                    Ok(DataType::Time64(TimeUnit::Nanosecond))
+                } else {
+                    // We don't support TIMETZ and TIME WITH TIME ZONE for now
+                    not_impl_err!("Unsupported SQL type {sql_type:?}")
+                }
+            }
             SQLDataType::Numeric(exact_number_info)
-                    | SQLDataType::Decimal(exact_number_info) => {
-                        let (precision, scale) = match *exact_number_info {
-                            ExactNumberInfo::None => (None, None),
-                            ExactNumberInfo::Precision(precision) => (Some(precision), None),
-                            ExactNumberInfo::PrecisionAndScale(precision, scale) => {
-                                (Some(precision), Some(scale))
-                            }
-                        };
-                        make_decimal_type(precision, scale)
+            | SQLDataType::Decimal(exact_number_info) => {
+                let (precision, scale) = match *exact_number_info {
+                    ExactNumberInfo::None => (None, None),
+                    ExactNumberInfo::Precision(precision) => (Some(precision), None),
+                    ExactNumberInfo::PrecisionAndScale(precision, scale) => {
+                        (Some(precision), Some(scale))
                     }
+                };
+                make_decimal_type(precision, scale)
+            }
             SQLDataType::Bytea => Ok(DataType::Binary),
             SQLDataType::Interval => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
             SQLDataType::Struct(fields, _) => {
-                        let fields = fields
-                            .iter()
-                            .enumerate()
-                            .map(|(idx, field)| {
-                                let data_type = self.convert_data_type(&field.field_type)?;
-                                let field_name = match &field.field_name{
-                                    Some(ident) => ident.clone(),
-                                    None => Ident::new(format!("c{idx}"))
-                                };
-                                Ok(Arc::new(Field::new(
-                                    self.ident_normalizer.normalize(field_name),
-                                    data_type,
-                                    true,
-                                )))
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        Ok(DataType::Struct(Fields::from(fields)))
-                    }
+                let fields = fields
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, field)| {
+                        let data_type = self.convert_data_type(&field.field_type)?;
+                        let field_name = match &field.field_name {
+                            Some(ident) => ident.clone(),
+                            None => Ident::new(format!("c{idx}")),
+                        };
+                        Ok(Arc::new(Field::new(
+                            self.ident_normalizer.normalize(field_name),
+                            data_type,
+                            true,
+                        )))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(DataType::Struct(Fields::from(fields)))
+            }
             SQLDataType::Nvarchar(_)
             | SQLDataType::JSON
             | SQLDataType::Uuid
@@ -843,7 +858,7 @@ pub(crate) fn idents_to_table_reference(
 pub fn object_name_to_qualifier(
     sql_table_name: &ObjectName,
     enable_normalization: bool,
-) -> String {
+) -> Result<String> {
     let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
     let normalizer = IdentNormalizer::new(enable_normalization);
     sql_table_name
@@ -852,12 +867,22 @@ pub fn object_name_to_qualifier(
         .rev()
         .zip(columns)
         .map(|(object_name_part, column_name)| {
-            format!(
-                r#"{} = '{}'"#,
-                column_name,
-                normalizer.normalize(object_name_part.as_ident().unwrap().clone())
-            )
+            object_name_part
+                .as_ident()
+                .map(|ident| {
+                    format!(
+                        r#"{} = '{}'"#,
+                        column_name,
+                        normalizer.normalize(ident.clone())
+                    )
+                })
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "Expected identifier, but found: {:?}",
+                        object_name_part
+                    ))
+                })
         })
-        .collect::<Vec<_>>()
-        .join(" AND ")
+        .collect::<Result<Vec<_>>>()
+        .map(|parts| parts.join(" AND "))
 }

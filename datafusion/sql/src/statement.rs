@@ -2087,7 +2087,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let where_clause = object_name_to_qualifier(
             &sql_table_name,
             self.options.enable_ident_normalization,
-        );
+        )?;
 
         if !self.has_table("information_schema", "columns") {
             return plan_err!(
@@ -2212,7 +2212,7 @@ ON p.function_name = r.routine_name
         let where_clause = object_name_to_qualifier(
             &sql_table_name,
             self.options.enable_ident_normalization,
-        );
+        )?;
 
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(sql_table_name)?;

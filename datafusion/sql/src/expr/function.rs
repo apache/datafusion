@@ -222,7 +222,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // (e.g. "foo.bar") for function names yet
             name.to_string()
         } else {
-            crate::utils::normalize_ident(name.0[0].as_ident().unwrap().clone())
+            match name.0[0].as_ident() {
+                Some(ident) => crate::utils::normalize_ident(ident.clone()),
+                None => {
+                    return plan_err!(
+                        "Expected an identifier in function name, but found {:?}",
+                        name.0[0]
+                    )
+                }
+            }
         };
 
         if name.eq("make_map") {

@@ -136,7 +136,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             )
                         } else {
                             let id = object_names.swap_remove(0);
-                            Ok(self.ident_normalizer.normalize(id.as_ident().unwrap().clone()))
+                            id.as_ident()
+                                .ok_or_else(|| {
+                                    datafusion_common::DataFusionError::Plan(
+                                        "Expected identifier in USING clause".to_string(),
+                                    )
+                                })
+                                .map(|ident| self.ident_normalizer.normalize(ident.clone()))
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;

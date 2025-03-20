@@ -668,7 +668,7 @@ impl Unparser<'_> {
                             ));
                         }
                         exists_select.projection(vec![ast::SelectItem::UnnamedExpr(
-                            ast::Expr::Value(ast::Value::Number("1".to_string(), false)),
+                            ast::Expr::value(ast::Value::Number("1".to_string(), false)),
                         )]);
                         query_builder.body(Box::new(SetExpr::Select(Box::new(
                             exists_select.build()?,

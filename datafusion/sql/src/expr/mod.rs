@@ -1129,9 +1129,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                 }
                 AccessExpr::Dot(expr) => match expr {
-                    SQLExpr::Value(
-                        Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-                    ) => Ok(Some(GetFieldAccess::NamedStructField {
+                    SQLExpr::Value(ValueWithSpan {
+                        value: Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+                        span    : _
+                    }) => Ok(Some(GetFieldAccess::NamedStructField {
                         name: ScalarValue::from(s),
                     })),
                     _ => {
