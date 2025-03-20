@@ -287,9 +287,9 @@ fn replace_with_partial_sort(
     let sort_req = LexRequirement::from(sort_plan.expr().clone());
 
     let mut common_prefix_length = 0;
-    while child_eq_properties.ordering_satisfy_requirement(&LexRequirement {
-        inner: sort_req[0..common_prefix_length + 1].to_vec(),
-    }) {
+    while child_eq_properties.ordering_satisfy_requirement(&LexRequirement::new(
+        sort_req[0..common_prefix_length + 1].to_vec(),
+    )) {
         common_prefix_length += 1;
     }
     if common_prefix_length > 0 {

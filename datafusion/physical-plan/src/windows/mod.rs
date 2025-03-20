@@ -588,18 +588,20 @@ pub fn get_window_mode(
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
-    let mut partition_by_reqs: LexRequirement = LexRequirement::new(vec![]);
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
     vec![].extend(indices.iter().map(|&idx| PhysicalSortRequirement {
         expr: Arc::clone(&partitionby_exprs[idx]),
         options: None,
     }));
-    partition_by_reqs
-        .inner
-        .extend(indices.iter().map(|&idx| PhysicalSortRequirement {
-            expr: Arc::clone(&partitionby_exprs[idx]),
-            options: None,
-        }));
+    let partition_by_reqs = LexRequirement::new(
+        indices
+            .iter()
+            .map(|&idx| PhysicalSortRequirement {
+                expr: Arc::clone(&partitionby_exprs[idx]),
+                options: None,
+            })
+            .collect(),
+    );
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
@@ -609,7 +611,7 @@ pub fn get_window_mode(
         [(false, order_by_reqs), (true, reverse_order_by_reqs)]
     {
         let req = LexRequirement::new(
-            [partition_by_reqs.inner.clone(), order_by_reqs.inner].concat(),
+            [partition_by_reqs.to_vec(), order_by_reqs.to_vec()].concat(),
         )
         .collapse();
         if partition_by_eqs.ordering_satisfy_requirement(&req) {

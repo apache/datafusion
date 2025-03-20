@@ -576,7 +576,7 @@ pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
 /// represents a lexicographical ordering requirement.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct LexRequirement {
-    pub inner: Vec<PhysicalSortRequirement>,
+    inner: Vec<PhysicalSortRequirement>,
 }
 
 impl LexRequirement {
@@ -588,12 +588,20 @@ impl LexRequirement {
         self.inner.is_empty()
     }
 
+    pub fn to_vec(&self) -> Vec<PhysicalSortRequirement> {
+        self.inner.clone()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &PhysicalSortRequirement> {
         self.inner.iter()
     }
 
     pub fn push(&mut self, physical_sort_requirement: PhysicalSortRequirement) {
         self.inner.push(physical_sort_requirement)
+    }
+
+    pub fn extend(&mut self, requirements: Vec<PhysicalSortRequirement>) {
+        self.inner.extend(requirements)
     }
 
     /// Create a new [`LexRequirement`] from a [`LexOrdering`]
