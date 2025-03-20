@@ -28,15 +28,15 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Column, Result};
+use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
-    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
-    find_aggregate_exprs, find_window_exprs,
+    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
@@ -93,17 +93,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             planner_context,
         )?;
 
-        // TOOD: remove this after Expr::Wildcard is removed
-        #[allow(deprecated)]
-        for expr in &select_exprs {
-            debug_assert!(!matches!(expr, Expr::Wildcard { .. }));
-        }
-
         let order_by =
             to_order_by_exprs_with_select(query_order_by, Some(select_exprs.clone()))?;
 
         // Having and group by clause may reference aliases defined in select projection
-        let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
+        let projected_plan = self.project(base_plan.clone(), select_exprs)?;
+        let select_exprs = projected_plan.expressions();
 
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
@@ -588,12 +583,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         projection: Vec<SelectItem>,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<Expr>> {
+    ) -> Result<Vec<SelectExpr>> {
         let mut prepared_select_exprs = vec![];
         let mut error_builder = DataFusionErrorBuilder::new();
         for expr in projection {
             match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
-                Ok(expr) => prepared_select_exprs.extend(expr),
+                Ok(expr) => prepared_select_exprs.push(expr),
                 Err(err) => error_builder.add_error(err),
             }
         }
@@ -607,7 +602,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         plan: &LogicalPlan,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<Expr>> {
+    ) -> Result<SelectExpr> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
@@ -616,7 +611,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                Ok(vec![col])
+
+                Ok(SelectExpr::Expression(col))
             }
             SelectItem::ExprWithAlias { expr, alias } => {
                 let select_expr =
@@ -632,7 +628,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     Expr::Column(column) if column.name.eq(&name) => col,
                     _ => col.alias(name),
                 };
-                Ok(vec![expr])
+
+                Ok(SelectExpr::Expression(expr))
             }
             SelectItem::Wildcard(options) => {
                 Self::check_wildcard_options(&options)?;
@@ -646,16 +643,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     options,
                 )?;
 
-                let expanded =
-                    expand_wildcard(plan.schema(), plan, Some(&planned_options))?;
-
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                if let Some(replace) = planned_options.replace {
-                    replace_columns(expanded, &replace)
-                } else {
-                    Ok(expanded)
-                }
+                Ok(SelectExpr::Wildcard(planned_options))
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
@@ -677,18 +665,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     options,
                 )?;
 
-                let expanded = expand_qualified_wildcard(
-                    &qualifier,
-                    plan.schema(),
-                    Some(&planned_options),
-                )?;
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                if let Some(replace) = planned_options.replace {
-                    replace_columns(expanded, &replace)
-                } else {
-                    Ok(expanded)
-                }
+                Ok(SelectExpr::QualifiedWildcard(qualifier, planned_options))
             }
         }
     }
@@ -742,8 +719,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
-                .flatten()
-                .collect();
+                .filter_map(|expr| match expr {
+                    SelectExpr::Expression(expr) => Some(expr),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
             let planned_replace = PlannedReplaceSelectItem {
                 items: replace.items.into_iter().map(|i| *i).collect(),
                 planned_expressions: replace_expr,
@@ -755,8 +736,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Wrap a plan in a projection
-    fn project(&self, input: LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
-        self.validate_schema_satisfies_exprs(input.schema(), &expr)?;
+    fn project(&self, input: LogicalPlan, expr: Vec<SelectExpr>) -> Result<LogicalPlan> {
+        // convert to Expr for validate_schema_satisfies_exprs
+        let exprs = expr
+            .iter()
+            .filter_map(|e| match e {
+                SelectExpr::Expression(expr) => Some(expr.to_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        self.validate_schema_satisfies_exprs(input.schema(), &exprs)?;
+
         LogicalPlanBuilder::from(input).project(expr)?.build()
     }
 
@@ -928,27 +918,4 @@ fn match_window_definitions(
         }
     }
     Ok(())
-}
-
-/// If there is a REPLACE statement in the projected expression in the form of
-/// "REPLACE (some_column_within_an_expr AS some_column)", this function replaces
-/// that column with the given replace expression. Column name remains the same.
-/// Multiple REPLACEs are also possible with comma separations.
-fn replace_columns(
-    mut exprs: Vec<Expr>,
-    replace: &PlannedReplaceSelectItem,
-) -> Result<Vec<Expr>> {
-    for expr in exprs.iter_mut() {
-        if let Expr::Column(Column { name, .. }) = expr {
-            if let Some((_, new_expr)) = replace
-                .items()
-                .iter()
-                .zip(replace.expressions().iter())
-                .find(|(item, _)| item.column_name.value == *name)
-            {
-                *expr = new_expr.clone().alias(name.clone())
-            }
-        }
-    }
-    Ok(exprs)
 }

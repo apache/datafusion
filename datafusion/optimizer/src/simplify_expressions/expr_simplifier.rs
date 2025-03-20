@@ -4307,6 +4307,10 @@ mod tests {
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int16)
         }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("dummy - not implemented")
+        }
     }
 
     #[test]

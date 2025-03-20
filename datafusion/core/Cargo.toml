@@ -138,13 +138,13 @@ sqlparser = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.15", features = ["v4", "js"] }
+uuid = { version = "1.16", features = ["v4", "js"] }
 xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-criterion = { workspace = true, features = ["async_tokio"] }
+criterion = { workspace = true, features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
 dashmap = "6.1.0"
 datafusion-doc = { workspace = true }

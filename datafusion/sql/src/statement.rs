@@ -467,6 +467,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     .alias(field.name())
                                 })
                                 .collect::<Vec<_>>();
+
                             LogicalPlanBuilder::from(plan.clone())
                                 .project(project_exprs)?
                                 .build()?

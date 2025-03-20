@@ -73,7 +73,7 @@ use datafusion_expr::expr::{GroupingSet, Sort, WindowFunction};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
-    scalar_subquery, when, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
+    scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
     ScalarFunctionImplementation, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition,
 };
@@ -264,6 +264,16 @@ async fn select_expr() -> Result<()> {
     let sql_plan = create_plan("SELECT c1, c2, c11 FROM aggregate_test_100").await?;
 
     // the two plans should be identical
+    assert_same_plan(&plan, &sql_plan);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn select_all() -> Result<()> {
+    let t = test_table().await?;
+    let plan = t.select([wildcard()])?.logical_plan().clone();
+    let sql_plan = create_plan("SELECT * FROM aggregate_test_100").await?;
     assert_same_plan(&plan, &sql_plan);
 
     Ok(())
@@ -1571,14 +1581,18 @@ async fn with_column_join_same_columns() -> Result<()> {
 
     assert_snapshot!(
         df_with_column.logical_plan(),
-        @r###"
+        @r"
     Projection: t1.c1, t2.c1, Boolean(true) AS new_column
       Limit: skip=0, fetch=1
         Sort: t1.c1 ASC NULLS FIRST
           Inner Join: t1.c1 = t2.c1
-            TableScan: t1
-            TableScan: t2
-    "###
+            SubqueryAlias: t1
+              Projection: aggregate_test_100.c1
+                TableScan: aggregate_test_100
+            SubqueryAlias: t2
+              Projection: aggregate_test_100.c1
+                TableScan: aggregate_test_100
+    "
     );
 
     assert_snapshot!(
@@ -1738,14 +1752,18 @@ async fn with_column_renamed_join() -> Result<()> {
 
     assert_snapshot!(
         df_renamed.logical_plan(),
-        @r###"
+        @r"
     Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3
       Limit: skip=0, fetch=1
         Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST
           Inner Join: t1.c1 = t2.c1
-            TableScan: t1
-            TableScan: t2
-    "###
+            SubqueryAlias: t1
+              Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3
+                TableScan: aggregate_test_100
+            SubqueryAlias: t2
+              Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3
+                TableScan: aggregate_test_100
+    "
     );
 
     assert_snapshot!(
