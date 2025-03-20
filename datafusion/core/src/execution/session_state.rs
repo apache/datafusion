@@ -266,6 +266,10 @@ impl Session for SessionState {
     fn table_options_mut(&mut self) -> &mut TableOptions {
         self.table_options_mut()
     }
+
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        Arc::new(TaskContext::from(self))
+    }
 }
 
 impl SessionState {
@@ -776,9 +780,9 @@ impl SessionState {
     }
 
     /// Get a new TaskContext to run in this session
-    pub fn task_ctx(&self) -> Arc<TaskContext> {
-        Arc::new(TaskContext::from(self))
-    }
+    // pub fn task_ctx(&self) -> Arc<TaskContext> {
+    //     Arc::new(TaskContext::from(self))
+    // }
 
     /// Return catalog list
     pub fn catalog_list(&self) -> &Arc<dyn CatalogProviderList> {
