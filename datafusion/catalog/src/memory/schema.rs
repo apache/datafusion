@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`MemoryCatalogProvider`], [`MemoryCatalogProviderList`]: In-memory
-//! implementations of [`CatalogProviderList`] and [`CatalogProvider`].
+//! [`MemorySchemaProvider`]: In-memory implementations of [`SchemaProvider`].
 
 use crate::{SchemaProvider, TableProvider};
 use async_trait::async_trait;

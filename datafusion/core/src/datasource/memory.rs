@@ -266,6 +266,8 @@ impl TableProvider for MemTable {
     /// # Returns
     ///
     /// * A plan that returns the number of rows written.
+    ///
+    /// [`SessionState`]: crate::execution::context::SessionState
     async fn insert_into(
         &self,
         _state: &dyn Session,

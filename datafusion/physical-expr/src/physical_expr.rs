@@ -17,12 +17,12 @@
 
 use std::sync::Arc;
 
+use crate::create_physical_expr;
 use datafusion_common::{DFSchema, HashMap};
 use datafusion_expr::execution_props::ExecutionProps;
 pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 pub use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use itertools::izip;
-use crate::create_physical_expr;
 
 /// This function is similar to the `contains` method of `Vec`. It finds
 /// whether `expr` is among `physical_exprs`.

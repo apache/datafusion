@@ -1682,7 +1682,9 @@ pub fn create_aggregate_expr_and_maybe_filter(
     since = "47.0.0",
     note = "use datafusion::{create_physical_sort_expr, create_physical_sort_exprs}"
 )]
-pub use datafusion_physical_expr::{create_physical_sort_expr, create_physical_sort_exprs};
+pub use datafusion_physical_expr::{
+    create_physical_sort_expr, create_physical_sort_exprs,
+};
 
 impl DefaultPhysicalPlanner {
     /// Handles capturing the various plans for EXPLAIN queries

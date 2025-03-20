@@ -268,7 +268,7 @@ impl Session for SessionState {
     }
 
     fn task_ctx(&self) -> Arc<TaskContext> {
-        Arc::new(TaskContext::from(self))
+        self.task_ctx()
     }
 }
 
@@ -747,6 +747,10 @@ impl SessionState {
         &mut self.table_options
     }
 
+    /// Get a new TaskContext to run in this session
+    pub fn task_ctx(&self) -> Arc<TaskContext> {
+        Arc::new(TaskContext::from(self))
+    }
     /// Registers a [`ConfigExtension`] as a table option extension that can be
     /// referenced from SQL statements executed against this context.
     pub fn register_table_options_extension<T: ConfigExtension>(&mut self, extension: T) {
