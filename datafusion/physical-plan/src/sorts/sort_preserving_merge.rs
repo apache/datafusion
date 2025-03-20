@@ -242,7 +242,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
-        vec![Some(RequiredInputOrdering::from(self.expr.clone()))]
+        vec![RequiredInputOrdering::from(self.expr.clone())]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

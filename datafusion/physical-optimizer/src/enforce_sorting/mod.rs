@@ -59,7 +59,6 @@ use datafusion_common::Result;
 use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
@@ -407,7 +406,7 @@ pub fn parallelize_sorts(
     {
         // Take the initial sort expressions and requirements
         let (sort_exprs, fetch) = get_sort_exprs(&requirements.plan)?;
-        let sort_reqs = RequiredInputOrdering::from(sort_exprs.clone());
+        let sort_reqs = LexRequirement::from(sort_exprs.clone());
         let sort_exprs = sort_exprs.clone();
 
         // If there is a connection between a `CoalescePartitionsExec` and a
@@ -629,15 +628,13 @@ fn adjust_window_sort_removal(
     } else {
         // We were unable to change the window to accommodate the input, so we
         // will insert a sort.
-        let reqs = window_tree
-            .plan
-            .required_input_ordering()
-            .swap_remove(0)
-            .unwrap_or_default();
+        let reqs = window_tree.plan.required_input_ordering().swap_remove(0);
 
         // Satisfy the ordering requirement so that the window can run:
         let mut child_node = window_tree.children.swap_remove(0);
-        child_node = add_sort_above(child_node, reqs.lex_requirement().clone(), None);
+        if let Some(reqs) = reqs {
+            child_node = add_sort_above(child_node, reqs.lex_requirement().clone(), None);
+        }
         let child_plan = Arc::clone(&child_node.plan);
         window_tree.children.push(child_node);
 

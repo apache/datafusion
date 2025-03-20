@@ -1300,7 +1300,7 @@ pub fn ensure_distribution(
                         // Make sure to satisfy ordering requirement:
                         child = add_sort_above_with_check(
                             child,
-                            required_input_ordering.clone(),
+                            required_input_ordering.lex_requirement().clone(),
                             None,
                         );
                     }

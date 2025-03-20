@@ -38,7 +38,7 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion::physical_expr::{LexOrdering, PhysicalExprRef};
+use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion::physical_plan::aggregates::AggregateMode;
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
@@ -1079,13 +1079,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             &sink_schema,
                             extension_codec,
                         )
-                        .map(RequiredInputOrdering::from)
+                        .map(LexRequirement::from)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
                     input,
                     Arc::new(data_sink),
-                    sort_order,
+                    sort_order
+                        .and_then(|order| RequiredInputOrdering::new(vec![order], false)),
                 )))
             }
             PhysicalPlanType::CsvSink(sink) => {
@@ -1108,13 +1109,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             &sink_schema,
                             extension_codec,
                         )
-                        .map(RequiredInputOrdering::from)
+                        .map(LexRequirement::from)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
                     input,
                     Arc::new(data_sink),
-                    sort_order,
+                    sort_order
+                        .and_then(|order| RequiredInputOrdering::new(vec![order], false)),
                 )))
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
@@ -1144,13 +1146,15 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 &sink_schema,
                                 extension_codec,
                             )
-                            .map(RequiredInputOrdering::from)
+                            .map(LexRequirement::from)
                         })
                         .transpose()?;
                     Ok(Arc::new(DataSinkExec::new(
                         input,
                         Arc::new(data_sink),
-                        sort_order,
+                        sort_order.and_then(|order| {
+                            RequiredInputOrdering::new(vec![order], false)
+                        }),
                     )))
                 }
                 #[cfg(not(feature = "parquet"))]

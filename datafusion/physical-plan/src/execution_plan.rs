@@ -1083,19 +1083,10 @@ pub enum RequiredInputOrdering {
     Soft(Vec<LexRequirement>),
 }
 
-impl Default for RequiredInputOrdering {
-    fn default() -> Self {
-        RequiredInputOrdering::Hard(vec![LexRequirement::default()])
-    }
-}
-
-impl From<LexOrdering> for RequiredInputOrdering {
-    fn from(ordering: LexOrdering) -> Self {
-        RequiredInputOrdering::Hard(vec![LexRequirement::from(ordering)])
-    }
-}
-
 impl RequiredInputOrdering {
+    /// Creates a new RequiredInputOrdering instance,
+    /// empty requirements are not allowed inside this type,
+    /// if given [`None`] will be returned
     pub fn new(lex_requirements: Vec<LexRequirement>, is_soft: bool) -> Option<Self> {
         if lex_requirements.is_empty() || lex_requirements[0].is_empty() {
             return None;
@@ -1108,7 +1099,12 @@ impl RequiredInputOrdering {
         })
     }
 
+    pub fn from(ordering: LexOrdering) -> Option<Self> {
+        RequiredInputOrdering::new(vec![LexRequirement::from(ordering)], false)
+    }
+
     pub fn lex_requirement(&self) -> &LexRequirement {
+        // TODO This function is returning the first alternative temporarily, once alternatives handled correctly, this will be changed
         match self {
             RequiredInputOrdering::Hard(lex) => &lex[0],
             RequiredInputOrdering::Soft(lex) => &lex[0],

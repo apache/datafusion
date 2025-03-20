@@ -1643,4 +1643,61 @@ mod tests {
         assert!(is_constant_recurse(&constants, &expr));
         Ok(())
     }
+    #[test]
+    fn test_requirements_compatible() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_d = col("d", &schema)?;
+
+        let eq_properties = EquivalenceProperties::new(schema);
+        let default_lex = LexRequirement::default();
+        let lex_a = LexRequirement::new(vec![PhysicalSortRequirement {
+            expr: col_a.clone(),
+            options: None,
+        }]);
+        let lex_a_b = LexRequirement::new(vec![
+            PhysicalSortRequirement {
+                expr: col_a,
+                options: None,
+            },
+            PhysicalSortRequirement {
+                expr: col_b,
+                options: None,
+            },
+        ]);
+        let lex_d = LexRequirement::new(vec![PhysicalSortRequirement {
+            expr: col_d,
+            options: None,
+        }]);
+
+        let res = eq_properties.requirements_compatible(&default_lex, &default_lex);
+        assert_eq!(res, true);
+
+        let res = eq_properties.requirements_compatible(&lex_a, &default_lex);
+        assert_eq!(res, true);
+
+        let res = eq_properties.requirements_compatible(&default_lex, &lex_a);
+        assert_eq!(res, false);
+
+        let res = eq_properties.requirements_compatible(&lex_a, &lex_a);
+        assert_eq!(res, true);
+
+        let res = eq_properties.requirements_compatible(&lex_a, &lex_a_b);
+        assert_eq!(res, false);
+
+        let res = eq_properties.requirements_compatible(&lex_a_b, &lex_a);
+        assert_eq!(res, true);
+
+        let res = eq_properties.requirements_compatible(&lex_d, &lex_a);
+        assert_eq!(res, false);
+
+        Ok(())
+    }
 }

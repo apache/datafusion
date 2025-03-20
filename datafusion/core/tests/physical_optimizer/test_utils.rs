@@ -375,7 +375,7 @@ impl ExecutionPlan for RequirementsTestExec {
     fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
         let requirement =
             RequiredInputOrdering::from(self.required_input_ordering.clone());
-        vec![Some(requirement)]
+        vec![requirement]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

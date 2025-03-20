@@ -320,7 +320,7 @@ fn require_top_ordering_helper(
         let req_dist = sort_exec.required_input_distribution()[0].clone();
         let reqs = RequiredInputOrdering::from(req_ordering.clone());
         Ok((
-            Arc::new(OutputRequirementExec::new(plan, Some(reqs), req_dist)) as _,
+            Arc::new(OutputRequirementExec::new(plan, reqs, req_dist)) as _,
             true,
         ))
     } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
@@ -328,7 +328,7 @@ fn require_top_ordering_helper(
         Ok((
             Arc::new(OutputRequirementExec::new(
                 plan,
-                Some(reqs),
+                reqs,
                 Distribution::SinglePartition,
             )) as _,
             true,
