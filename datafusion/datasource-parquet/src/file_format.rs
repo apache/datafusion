@@ -24,6 +24,16 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
+use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
+use datafusion_datasource::write::{create_writer, get_writer_schema, SharedBuffer};
+
+use datafusion_datasource::file_format::{
+    FileFormat, FileFormatFactory, FilePushdownSupport,
+};
+use datafusion_datasource::write::demux::DemuxedStreamReceiver;
+
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::datatypes::{Fields, Schema, SchemaRef};
@@ -76,11 +86,13 @@ use parquet::arrow::arrow_writer::{
 };
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
+use parquet::basic::Type;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
+use parquet::schema::types::SchemaDescriptor;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
@@ -560,6 +572,56 @@ pub fn apply_file_schema_type_coercions(
 
             // If no transformation is needed, keep the original field
             Arc::clone(field)
+        })
+        .collect();
+
+    Some(Schema::new_with_metadata(
+        transformed_fields,
+        file_schema.metadata.clone(),
+    ))
+}
+
+/// Coerces the file schema if the table schema uses a view type.
+pub fn coerce_int96_to_resolution(
+    parquet_schema: &SchemaDescriptor,
+    file_schema: &Schema,
+    time_unit: &TimeUnit,
+) -> Option<Schema> {
+    let mut transform = false;
+    let parquet_fields: HashMap<_, _> = parquet_schema
+        .columns()
+        .iter()
+        .map(|f| {
+            let dt = f.physical_type();
+            if dt.eq(&Type::INT96) {
+                transform = true;
+            }
+            (f.name(), dt)
+        })
+        .collect();
+
+    if !transform {
+        return None;
+    }
+
+    let transformed_fields: Vec<Arc<Field>> = file_schema
+        .fields
+        .iter()
+        .map(|field| match parquet_fields.get(field.name().as_str()) {
+            Some(Type::INT96) => {
+                field_with_new_type(field, DataType::Timestamp(*time_unit, None))
+
+                // match field.data_type() {
+                //     DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+                //         field_with_new_type(field, DataType::Timestamp(*time_unit,None))
+                //     }
+                //     DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => {
+                //         field_with_new_type(field, DataType::Timestamp(*time_unit,Some(tz.clone())))
+                //     }
+                //     _ => unreachable!()
+                // }
+            }
+            _ => Arc::clone(field),
         })
         .collect();
 
