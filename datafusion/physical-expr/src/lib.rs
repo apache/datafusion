@@ -55,7 +55,7 @@ pub use equivalence::{
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
     create_ordering, physical_exprs_bag_equal, physical_exprs_contains,
-    physical_exprs_equal, PhysicalExprRef,
+    physical_exprs_equal, PhysicalExprRef,create_physical_sort_expr, create_physical_sort_exprs
 };
 
 pub use datafusion_physical_expr_common::physical_expr::PhysicalExpr;

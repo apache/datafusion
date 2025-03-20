@@ -17,10 +17,12 @@
 
 use std::sync::Arc;
 
-use datafusion_common::HashMap;
+use datafusion_common::{DFSchema, HashMap};
+use datafusion_expr::execution_props::ExecutionProps;
 pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 pub use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use itertools::izip;
+use crate::create_physical_expr;
 
 /// This function is similar to the `contains` method of `Vec`. It finds
 /// whether `expr` is among `physical_exprs`.
@@ -144,6 +146,38 @@ pub fn create_ordering(
         }
     }
     Ok(all_sort_orders)
+}
+
+/// Create a physical sort expression from a logical expression
+pub fn create_physical_sort_expr(
+    e: &SortExpr,
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<PhysicalSortExpr> {
+    let SortExpr {
+        expr,
+        asc,
+        nulls_first,
+    } = e;
+    Ok(PhysicalSortExpr {
+        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+        options: SortOptions {
+            descending: !asc,
+            nulls_first: *nulls_first,
+        },
+    })
+}
+
+/// Create vector of physical sort expression from a vector of logical expression
+pub fn create_physical_sort_exprs(
+    exprs: &[SortExpr],
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<LexOrdering> {
+    exprs
+        .iter()
+        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
+        .collect::<Result<LexOrdering>>()
 }
 
 #[cfg(test)]
