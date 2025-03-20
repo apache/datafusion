@@ -50,6 +50,33 @@ As another example, the SQL expression `a + b * c` would be represented as an `E
 
 As the writer of a library, you can use `Expr`s to represent computations that you want to perform. This guide will walk you through how to make your own scalar UDF as an `Expr` and how to rewrite `Expr`s to inline the simple UDF.
 
+## Arrow Schema and DataFusion DFSchema
+
+Schema and DFSchema are both exist in datafusion because `Schema` provides a lightweight structure for defining data, and `DFSchema` extends it with extra information. This makes the engine could handle both simple data definitions and complex query scenarios efficiently.
+
+### Difference between Schema and DFSchema
+
+- Schema: A fundamental component of Apache Arrow, `Schema` defines a dataset's structure, specifying column names and their data types.
+
+  > Please see [Struct Schema](https://docs.rs/arrow-schema/54.2.1/arrow_schema/struct.Schema.html) for a detailed document of Arrow Schema.
+
+- DFSchema: Extending `Schema`, `DFSchema` incorporates qualifiers such as table names, enabling it to carry additional context when required. This is particularly valuable for managing queries across multiple tables.
+  > Please see [Struct DFSchema](https://docs.rs/datafusion/latest/datafusion/common/struct.DFSchema.html) for a detailed document of DFSchema.
+
+### How to convert between Schema and DFSchema
+
+From Schema to DFSchema: Use `DFSchema::try_from_qualified_schema` with a table name and original schema. See example below:
+
+```
+let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
+```
+
+From DFSchema to Schema: Since the `Into` trait has been implemented for DFSchema to convert it into an Arrow Schema, you can simply use this trait to revert:
+
+```
+let schema = Schema::from(df_schema);
+```
+
 ## Creating and Evaluating `Expr`s
 
 Please see [expr_api.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs) for well commented code for creating, evaluating, simplifying, and analyzing `Expr`s.
