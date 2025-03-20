@@ -647,7 +647,7 @@ impl EquivalenceProperties {
                         req.expr.eq(&existing.expr)
                             && req
                                 .options
-                                .is_none_or(|req_opts| req_opts == existing.options)
+                                .map_or(true, |req_opts| req_opts == existing.options)
                     },
                 )
         })
