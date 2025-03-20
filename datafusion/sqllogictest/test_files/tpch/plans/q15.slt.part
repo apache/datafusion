@@ -55,7 +55,7 @@ logical_plan
 03)----Inner Join: revenue0.total_revenue = __scalar_sq_1.max(revenue0.total_revenue)
 04)------Projection: supplier.s_suppkey, supplier.s_name, supplier.s_address, supplier.s_phone, revenue0.total_revenue
 05)--------Inner Join: supplier.s_suppkey = revenue0.supplier_no
-06)----------TableScan: supplier projection=[s_suppkey, s_name, s_address, s_phone]
+06)----------TableScan: supplier projection=[s_suppkey, s_name, s_address, s_phone], partial_filters=[Boolean(true)]
 07)----------SubqueryAlias: revenue0
 08)------------Projection: lineitem.l_suppkey AS supplier_no, sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS total_revenue
 09)--------------Aggregate: groupBy=[[lineitem.l_suppkey]], aggr=[[sum(lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount)) AS sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
