@@ -377,22 +377,16 @@ impl Unparser<'_> {
                 };
                 if self.dialect.unnest_as_table_factor() && unnest_input_type.is_some() {
                     if let LogicalPlan::Unnest(unnest) = &p.input.as_ref() {
-                        if let LogicalPlan::Projection(projection) = unnest.input.as_ref()
+                        if let Some(unnest_relation) =
+                            self.try_unnest_to_table_factor_sql(unnest)?
                         {
-                            if matches!(
-                                projection.input.as_ref(),
-                                LogicalPlan::EmptyRelation(_) // It may be possible that UNNEST is used as a source for the query.
-                                                              // However, at this point, we don't yet know if it is just a single expression
-                                                              // from another source or if it's from UNNEST.
-                                                              //
-                                                              // Unnest(Projection(EmptyRelation)) denotes a case with `UNNEST([...])`,
-                                                              // which is normally safe to unnest as a table factor.
-                                                              // However, in the future, more comprehensive checks can be added here.
-                            ) {
-                                return self.unnest_to_table_factor_sql(
-                                    unnest, query, select, relation,
-                                );
-                            }
+                            relation.unnest(unnest_relation);
+                            return self.select_to_sql_recursively(
+                                p.input.as_ref(),
+                                query,
+                                select,
+                                relation,
+                            );
                         }
                     }
                 }
@@ -869,25 +863,34 @@ impl Unparser<'_> {
         None
     }
 
-    fn unnest_to_table_factor_sql(
+    fn try_unnest_to_table_factor_sql(
         &self,
         unnest: &Unnest,
-        query: &mut Option<QueryBuilder>,
-        select: &mut SelectBuilder,
-        relation: &mut RelationBuilder,
-    ) -> Result<()> {
+    ) -> Result<Option<UnnestRelationBuilder>> {
         let mut unnest_relation = UnnestRelationBuilder::default();
-        let LogicalPlan::Projection(p) = unnest.input.as_ref() else {
-            return internal_err!("Unnest input is not a Projection: {unnest:?}");
+        let LogicalPlan::Projection(projection) = unnest.input.as_ref() else {
+            return Ok(None);
         };
-        let exprs = p
+
+        if !matches!(projection.input.as_ref(), LogicalPlan::EmptyRelation(_)) {
+            // It may be possible that UNNEST is used as a source for the query.
+            // However, at this point, we don't yet know if it is just a single expression
+            // from another source or if it's from UNNEST.
+            //
+            // Unnest(Projection(EmptyRelation)) denotes a case with `UNNEST([...])`,
+            // which is normally safe to unnest as a table factor.
+            // However, in the future, more comprehensive checks can be added here.
+            return Ok(None);
+        };
+
+        let exprs = projection
             .expr
             .iter()
             .map(|e| self.expr_to_sql(e))
             .collect::<Result<Vec<_>>>()?;
         unnest_relation.array_exprs(exprs);
-        relation.unnest(unnest_relation);
-        self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
+
+        Ok(Some(unnest_relation))
     }
 
     fn is_scan_with_pushdown(scan: &TableScan) -> bool {
