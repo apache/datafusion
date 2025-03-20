@@ -20,10 +20,13 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use crate::opener::build_page_pruning_predicate;
+use crate::opener::build_pruning_predicate;
 use crate::opener::ParquetOpener;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
+use datafusion_datasource::file_expr_rewriter::FileExpressionRewriter;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
@@ -37,11 +40,11 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::metrics::MetricBuilder;
 use datafusion_physical_plan::DisplayFormatType;
 
 use itertools::Itertools;
-use log::debug;
 use object_store::ObjectStore;
 
 /// Execution plan for reading one or more Parquet files.
@@ -267,6 +270,8 @@ pub struct ParquetSource {
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     /// Optional user defined schema adapter
     pub(crate) schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    /// Optional user defined filter expression rewriter factory
+    pub(crate) filter_expression_rewriter: Option<Arc<dyn FileExpressionRewriter>>,
     /// Batch size configuration
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
@@ -317,24 +322,10 @@ impl ParquetSource {
         conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
 
-        match PruningPredicate::try_new(Arc::clone(&predicate), Arc::clone(&file_schema))
-        {
-            Ok(pruning_predicate) => {
-                if !pruning_predicate.always_true() {
-                    conf.pruning_predicate = Some(Arc::new(pruning_predicate));
-                }
-            }
-            Err(e) => {
-                debug!("Could not create pruning predicate for: {e}");
-                predicate_creation_errors.add(1);
-            }
-        };
-
-        let page_pruning_predicate = Arc::new(PagePruningAccessPlanFilter::new(
-            &predicate,
-            Arc::clone(&file_schema),
-        ));
-        conf.page_pruning_predicate = Some(page_pruning_predicate);
+        conf.page_pruning_predicate =
+            Some(build_page_pruning_predicate(&predicate, &file_schema));
+        conf.pruning_predicate =
+            build_pruning_predicate(predicate, &file_schema, &predicate_creation_errors);
 
         conf
     }
@@ -349,12 +340,16 @@ impl ParquetSource {
         self.predicate.as_ref()
     }
 
-    /// Optional reference to this parquet scan's pruning predicate
+    /// Optional reference to this parquet scan's pruning predicate.
+    /// Note that if filter pushdown is enabled and filter rewrites are applied this may be re-generated
+    /// at runtime using the schema of the particular file that is being pruned instead of the table-level file schema.
     pub fn pruning_predicate(&self) -> Option<&Arc<PruningPredicate>> {
         self.pruning_predicate.as_ref()
     }
 
-    /// Optional reference to this parquet scan's page pruning predicate
+    /// Optional reference to this parquet scan's page pruning predicate.
+    /// Note that if filter pushdown is enabled and filter rewrites are applied this may be re-generated
+    /// at runtime using the schema of the particular file that is being pruned instead of the table-level file schema.
     pub fn page_pruning_predicate(&self) -> Option<&Arc<PagePruningAccessPlanFilter>> {
         self.page_pruning_predicate.as_ref()
     }
@@ -392,6 +387,26 @@ impl ParquetSource {
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Self {
         self.schema_adapter_factory = Some(schema_adapter_factory);
+        self
+    }
+
+    /// Return the optional filter expression rewriter factory
+    pub fn filter_expression_rewriter_factory(
+        &self,
+    ) -> Option<&Arc<dyn FileExpressionRewriter>> {
+        self.filter_expression_rewriter.as_ref()
+    }
+
+    /// Set optional filter expression rewriter.
+    ///
+    /// [`FileExpressionRewriter`] allows specifying how filter
+    /// expressions should be rewritten based on table schema and file schema.
+    /// This enables more sophisticated filter pushdown to the file level that can vary on a per-file basis.
+    pub fn with_filter_expression_rewriter(
+        mut self,
+        rewriter: Arc<dyn FileExpressionRewriter>,
+    ) -> Self {
+        self.filter_expression_rewriter = Some(rewriter);
         self
     }
 
@@ -491,6 +506,7 @@ impl FileSource for ParquetSource {
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             page_pruning_predicate: self.page_pruning_predicate.clone(),
+            filter_expression_rewriter: self.filter_expression_rewriter.clone(),
             table_schema: Arc::clone(&base_config.file_schema),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
