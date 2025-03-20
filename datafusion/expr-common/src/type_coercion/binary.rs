@@ -30,8 +30,8 @@ use arrow::datatypes::{
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, Diagnostic, Result, Span,
-    Spans,
+    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Diagnostic,
+    Result, Span, Spans,
 };
 use itertools::Itertools;
 
@@ -181,13 +181,20 @@ impl<'a> BinaryTypeCoercer<'a> {
                 )
             })
         }
-        AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt | HashMinus |
-        AtQuestion | Question | QuestionAnd | QuestionPipe |IntegerDivide=> {
-            // These operators check for whether one array is contained in another or other JSON operations.
-            // The result type is boolean. Signature::comparison defines this signature.
-            array_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+        AtArrow | ArrowAt => {
+            // Array contains or search (similar to LIKE) operation
+            array_coercion(self.lhs, self.rhs)
+                .or_else(|| like_coercion(self.lhs, self.rhs)).map(Signature::comparison).ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Cannot infer common argument type for operation {} {} {}", self.lhs, self.op, self.rhs
+                    )
+                })
+        }
+        AtAt => {
+            // text search has similar signature to LIKE
+            like_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
-                    "Cannot infer common array type for operation {} {} {}", self.lhs, self.op, self.rhs
+                    "Cannot infer common argument type for AtAt operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
@@ -248,6 +255,10 @@ impl<'a> BinaryTypeCoercer<'a> {
                     "Cannot coerce arithmetic expression {} {} {} to valid types", self.lhs, self.op, self.rhs
                 )
             }
+        },
+        IntegerDivide | Arrow | LongArrow | HashArrow | HashLongArrow
+        | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe => {
+            not_impl_err!("Operator {} is not yet supported", self.op)
         }
     };
         result.map_err(|err| {

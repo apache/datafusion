@@ -33,7 +33,7 @@ use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
@@ -796,7 +796,10 @@ impl BinaryExpr {
             AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
             | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
             | IntegerDivide => {
-                unreachable!("These operators should be rewritten to functions")
+                not_impl_err!(
+                    "Binary operator '{:?}' is not supported in the physical expr",
+                    self.op
+                )
             }
         }
     }
