@@ -50,7 +50,7 @@ use arrow::array::{
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{exec_datafusion_err, internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -270,7 +270,7 @@ impl ExternalSorter {
         sort_in_place_threshold_bytes: usize,
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,
-    ) -> Self {
+    ) -> Result<Self> {
         let metrics = ExternalSorterMetrics::new(metrics, partition_id);
         let reservation = MemoryConsumer::new(format!("ExternalSorter[{partition_id}]"))
             .with_can_spill(true)
@@ -290,13 +290,13 @@ impl ExternalSorter {
                     .map_err(|e| e.context("Resolving sort expression data type"))?;
                 Ok(SortField::new_with_options(data_type, e.options))
             })
-            .collect::<Result<Vec<_>>>()
-            .expect("Valid sort fields");
+            .collect::<Result<Vec<_>>>()?;
 
-        let converter = RowConverter::new(sort_fields)
-            .expect("Should create valid RowConverter for sort expressions");
+        let converter = RowConverter::new(sort_fields).map_err(|e| {
+            exec_datafusion_err!("Failed to create RowConverter: {:?}", e)
+        })?;
 
-        Self {
+        Ok(Self {
             schema,
             in_mem_batches: vec![],
             in_mem_batches_sorted: false,
@@ -311,7 +311,7 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
-        }
+        })
     }
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
@@ -1193,7 +1193,7 @@ impl ExecutionPlan for SortExec {
                     execution_options.sort_in_place_threshold_bytes,
                     &self.metrics_set,
                     context.runtime_env(),
-                );
+                )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
