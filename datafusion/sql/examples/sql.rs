@@ -17,10 +17,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow_schema::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{plan_err, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::WindowUDF;
 use datafusion_expr::{
@@ -32,7 +32,6 @@ use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_sql::{
     planner::{ContextProvider, SqlToRel},
     sqlparser::{dialect::GenericDialect, parser::Parser},
-    TableReference,
 };
 
 fn main() {

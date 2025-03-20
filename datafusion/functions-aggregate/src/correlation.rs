@@ -23,7 +23,8 @@ use std::mem::size_of_val;
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_array, Array, AsArray, BooleanArray, Float64Array, UInt64Array,
+    downcast_array, Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder,
+    UInt64Array,
 };
 use arrow::compute::{and, filter, is_not_null, kernels::cast};
 use arrow::datatypes::{Float64Type, UInt64Type};
@@ -31,7 +32,6 @@ use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
 };
-use arrow_buffer::NullBufferBuilder;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_multiple;
 use log::debug;

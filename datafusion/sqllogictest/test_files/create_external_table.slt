@@ -33,23 +33,23 @@ statement error DataFusion error: SQL error: ParserError\("Missing LOCATION clau
 CREATE EXTERNAL TABLE t STORED AS CSV
 
 # Option value is missing
-statement error DataFusion error: SQL error: ParserError\("Expected: string or numeric value, found: \)"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: string or numeric value, found: \) at Line: 1, Column: 66"\)
 CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'
 
 # Missing `(` in WITH ORDER clause
-statement error DataFusion error: SQL error: ParserError\("Expected: \(, found: c1"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: \(, found: c1 at Line: 1, Column: 58"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER c1 LOCATION 'foo.csv'
 
 # Missing `)` in WITH ORDER clause
-statement error DataFusion error: SQL error: ParserError\("Expected: \), found: LOCATION"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: \), found: LOCATION at Line: 1, Column: 62"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 LOCATION 'foo.csv'
 
 # Missing `ROW` in WITH HEADER clause
-statement error DataFusion error: SQL error: ParserError\("Expected: ROW, found: LOCATION"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: ROW, found: LOCATION at Line: 1, Column: 51"\)
 CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'
 
 # Missing `BY` in PARTITIONED clause
-statement error DataFusion error: SQL error: ParserError\("Expected: BY, found: LOCATION"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: BY, found: LOCATION at Line: 1, Column: 51"\)
 CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'
 
 # Duplicate `STORED AS` clause
@@ -69,11 +69,11 @@ statement error DataFusion error: SQL error: ParserError\("OPTIONS specified mor
 CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('k1' 'v1', 'k2' 'v2') OPTIONS ('k3' 'v3') LOCATION 'foo.csv'
 
 # With typo error
-statement error DataFusion error: SQL error: ParserError\("Expected: HEADER, found: HEAD"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: HEADER, found: HEAD at Line: 1, Column: 52"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH HEAD ROW LOCATION 'foo.csv';
 
 # Missing `anything` in WITH clause
-statement error DataFusion error: SQL error: ParserError\("Expected: HEADER, found: LOCATION"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: HEADER, found: LOCATION at Line: 1, Column: 52"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH LOCATION 'foo.csv';
 
 # Unrecognized random clause
@@ -253,7 +253,7 @@ EXPLAIN SELECT id FROM t ORDER BY id ASC;
 logical_plan
 01)Sort: t.id ASC NULLS LAST
 02)--TableScan: t projection=[id]
-physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
 ## Test a DESC order and verify that output_ordering is ASC from the previous OBRDER BY
 query TT
@@ -264,7 +264,7 @@ logical_plan
 02)--TableScan: t projection=[id]
 physical_plan
 01)SortExec: expr=[id@0 DESC], preserve_partitioning=[false]
-02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
 statement ok
 DROP TABLE t;
@@ -278,7 +278,7 @@ query TT
 EXPLAIN SELECT id FROM t;
 ----
 logical_plan TableScan: t projection=[id]
-physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 DESC]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 DESC], file_type=parquet
 
 statement ok
 DROP TABLE t;

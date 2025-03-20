@@ -16,10 +16,9 @@
 // under the License.
 
 use clap::Parser;
-use datafusion_common::instant::Instant;
-use datafusion_common::utils::get_available_parallelism;
-use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_common_runtime::SpawnedTask;
+use datafusion::common::instant::Instant;
+use datafusion::common::utils::get_available_parallelism;
+use datafusion::common::{exec_err, DataFusionError, Result};
 use datafusion_sqllogictest::{
     df_value_validator, read_dir_recursive, setup_scratch_dir, value_normalizer,
     DataFusion, TestContext,
@@ -40,6 +39,7 @@ use sqllogictest::{
 use crate::postgres_container::{
     initialize_postgres_container, terminate_postgres_container,
 };
+use datafusion::common::runtime::SpawnedTask;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -330,7 +330,7 @@ async fn run_test_file_with_postgres(
     _mp: MultiProgress,
     _mp_style: ProgressStyle,
 ) -> Result<()> {
-    use datafusion_common::plan_err;
+    use datafusion::common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")
 }
 
@@ -446,7 +446,7 @@ async fn run_complete_file_with_postgres(
     _mp: MultiProgress,
     _mp_style: ProgressStyle,
 ) -> Result<()> {
-    use datafusion_common::plan_err;
+    use datafusion::common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")
 }
 

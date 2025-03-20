@@ -15,13 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
-use arrow_array::ArrayRef;
-use arrow_schema::Schema;
-use datafusion_common::Result;
+use arrow::array::ArrayRef;
+use arrow::compute::SortOptions;
+use arrow::datatypes::Schema;
+use arrow_ord::partition::partition;
+use datafusion_common::utils::{compare_rows, get_row_at_idx};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use std::cmp::Ordering;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -69,13 +72,9 @@ pub struct GroupOrderingPartial {
     /// For example if grouping by `id, state` and ordered by `state`
     /// this would be `[1]`.
     order_indices: Vec<usize>,
-
-    /// Converter for the sort key (used on the group columns
-    /// specified in `order_indexes`)
-    row_converter: RowConverter,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 enum State {
     /// The ordering was temporarily taken.  `Self::Taken` is left
     /// when state must be temporarily taken to satisfy the borrow
@@ -93,7 +92,7 @@ enum State {
         /// Smallest group index with the sort_key
         current_sort: usize,
         /// The sort key of group_index `current_sort`
-        sort_key: OwnedRow,
+        sort_key: Vec<ScalarValue>,
         /// index of the current group for which values are being
         /// generated
         current: usize,
@@ -103,47 +102,47 @@ enum State {
     Complete,
 }
 
+impl State {
+    fn size(&self) -> usize {
+        match self {
+            State::Taken => 0,
+            State::Start => 0,
+            State::InProgress { sort_key, .. } => sort_key
+                .iter()
+                .map(|scalar_value| scalar_value.size())
+                .sum(),
+            State::Complete => 0,
+        }
+    }
+}
+
 impl GroupOrderingPartial {
+    /// TODO: Remove unnecessary `input_schema` parameter.
     pub fn try_new(
-        input_schema: &Schema,
+        _input_schema: &Schema,
         order_indices: &[usize],
         ordering: &LexOrdering,
     ) -> Result<Self> {
         assert!(!order_indices.is_empty());
         assert!(order_indices.len() <= ordering.len());
 
-        // get only the section of ordering, that consist of group by expressions.
-        let fields = ordering[0..order_indices.len()]
-            .iter()
-            .map(|sort_expr| {
-                Ok(SortField::new_with_options(
-                    sort_expr.expr.data_type(input_schema)?,
-                    sort_expr.options,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
         Ok(Self {
             state: State::Start,
             order_indices: order_indices.to_vec(),
-            row_converter: RowConverter::new(fields)?,
         })
     }
 
-    /// Creates sort keys from the group values
+    /// Select sort keys from the group values
     ///
     /// For example, if group_values had `A, B, C` but the input was
     /// only sorted on `B` and `C` this should return rows for (`B`,
     /// `C`)
-    fn compute_sort_keys(&mut self, group_values: &[ArrayRef]) -> Result<Rows> {
+    fn compute_sort_keys(&mut self, group_values: &[ArrayRef]) -> Vec<ArrayRef> {
         // Take only the columns that are in the sort key
-        let sort_values: Vec<_> = self
-            .order_indices
+        self.order_indices
             .iter()
             .map(|&idx| Arc::clone(&group_values[idx]))
-            .collect();
-
-        Ok(self.row_converter.convert_columns(&sort_values)?)
+            .collect()
     }
 
     /// How many groups be emitted, or None if no data can be emitted
@@ -194,6 +193,23 @@ impl GroupOrderingPartial {
         };
     }
 
+    fn updated_sort_key(
+        current_sort: usize,
+        sort_key: Option<Vec<ScalarValue>>,
+        range_current_sort: usize,
+        range_sort_key: Vec<ScalarValue>,
+    ) -> Result<(usize, Vec<ScalarValue>)> {
+        if let Some(sort_key) = sort_key {
+            let sort_options = vec![SortOptions::new(false, false); sort_key.len()];
+            let ordering = compare_rows(&sort_key, &range_sort_key, &sort_options)?;
+            if ordering == Ordering::Equal {
+                return Ok((current_sort, sort_key));
+            }
+        }
+
+        Ok((range_current_sort, range_sort_key))
+    }
+
     /// Called when new groups are added in a batch. See documentation
     /// on [`super::GroupOrdering::new_groups`]
     pub fn new_groups(
@@ -207,37 +223,46 @@ impl GroupOrderingPartial {
 
         let max_group_index = total_num_groups - 1;
 
-        // compute the sort key values for each group
-        let sort_keys = self.compute_sort_keys(batch_group_values)?;
-
-        let old_state = std::mem::take(&mut self.state);
-        let (mut current_sort, mut sort_key) = match &old_state {
+        let (current_sort, sort_key) = match std::mem::take(&mut self.state) {
             State::Taken => unreachable!("State previously taken"),
-            State::Start => (0, sort_keys.row(0)),
+            State::Start => (0, None),
             State::InProgress {
                 current_sort,
                 sort_key,
                 ..
-            } => (*current_sort, sort_key.row()),
+            } => (current_sort, Some(sort_key)),
             State::Complete => {
                 panic!("Saw new group after the end of input");
             }
         };
 
-        // Find latest sort key
-        let iter = group_indices.iter().zip(sort_keys.iter());
-        for (&group_index, group_sort_key) in iter {
-            // Does this group have seen a new sort_key?
-            if sort_key != group_sort_key {
-                current_sort = group_index;
-                sort_key = group_sort_key;
-            }
-        }
+        // Select the sort key columns
+        let sort_keys = self.compute_sort_keys(batch_group_values);
+
+        // Check if the sort keys indicate a boundary inside the batch
+        let ranges = partition(&sort_keys)?.ranges();
+        let last_range = ranges.last().unwrap();
+
+        let range_current_sort = group_indices[last_range.start];
+        let range_sort_key = get_row_at_idx(&sort_keys, last_range.start)?;
+
+        let (current_sort, sort_key) = if last_range.start == 0 {
+            // There was no boundary in the batch. Compare with the previous sort_key (if present)
+            // to check if there was a boundary between the current batch and the previous one.
+            Self::updated_sort_key(
+                current_sort,
+                sort_key,
+                range_current_sort,
+                range_sort_key,
+            )?
+        } else {
+            (range_current_sort, range_sort_key)
+        };
 
         self.state = State::InProgress {
             current_sort,
-            sort_key: sort_key.owned(),
             current: max_group_index,
+            sort_key,
         };
 
         Ok(())
@@ -245,8 +270,104 @@ impl GroupOrderingPartial {
 
     /// Return the size of memory allocated by this structure
     pub(crate) fn size(&self) -> usize {
-        size_of::<Self>()
-            + self.order_indices.allocated_size()
-            + self.row_converter.size()
+        size_of::<Self>() + self.order_indices.allocated_size() + self.state.size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::Int32Array;
+    use arrow_schema::{DataType, Field};
+    use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+
+    use super::*;
+
+    #[test]
+    fn test_group_ordering_partial() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+
+        // Ordered on column a
+        let order_indices = vec![0];
+
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("a", &schema)?,
+            SortOptions::default(),
+        )]);
+
+        let mut group_ordering =
+            GroupOrderingPartial::try_new(&schema, &order_indices, &ordering)?;
+
+        let batch_group_values: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Int32Array::from(vec![2, 1, 3])),
+        ];
+
+        let group_indices = vec![0, 1, 2];
+        let total_num_groups = 3;
+
+        group_ordering.new_groups(
+            &batch_group_values,
+            &group_indices,
+            total_num_groups,
+        )?;
+
+        assert_eq!(
+            group_ordering.state,
+            State::InProgress {
+                current_sort: 2,
+                sort_key: vec![ScalarValue::Int32(Some(3))],
+                current: 2
+            }
+        );
+
+        // push without a boundary
+        let batch_group_values: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![3, 3, 3])),
+            Arc::new(Int32Array::from(vec![2, 1, 7])),
+        ];
+        let group_indices = vec![3, 4, 5];
+        let total_num_groups = 6;
+
+        group_ordering.new_groups(
+            &batch_group_values,
+            &group_indices,
+            total_num_groups,
+        )?;
+
+        assert_eq!(
+            group_ordering.state,
+            State::InProgress {
+                current_sort: 2,
+                sort_key: vec![ScalarValue::Int32(Some(3))],
+                current: 5
+            }
+        );
+
+        // push with only a boundary to previous batch
+        let batch_group_values: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![4, 4, 4])),
+            Arc::new(Int32Array::from(vec![1, 1, 1])),
+        ];
+        let group_indices = vec![6, 7, 8];
+        let total_num_groups = 9;
+
+        group_ordering.new_groups(
+            &batch_group_values,
+            &group_indices,
+            total_num_groups,
+        )?;
+        assert_eq!(
+            group_ordering.state,
+            State::InProgress {
+                current_sort: 6,
+                sort_key: vec![ScalarValue::Int32(Some(4))],
+                current: 8
+            }
+        );
+
+        Ok(())
     }
 }

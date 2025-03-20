@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{ListingOptions, PartitionedFile};
-use datafusion::datasource::physical_plan::ParquetExec;
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::metrics::MetricValue;
@@ -96,15 +97,26 @@ impl ExecutionPlanVisitor for ParquetExecVisitor {
     /// or `post_visit` (visit each node after its children/inputs)
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         // If needed match on a specific `ExecutionPlan` node type
-        let maybe_parquet_exec = plan.as_any().downcast_ref::<ParquetExec>();
-        if let Some(parquet_exec) = maybe_parquet_exec {
-            self.file_groups = Some(parquet_exec.base_config().file_groups.clone());
+        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+            let data_source = data_source_exec.data_source();
+            if let Some(file_config) =
+                data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
+                if file_config
+                    .file_source()
+                    .as_any()
+                    .downcast_ref::<ParquetSource>()
+                    .is_some()
+                {
+                    self.file_groups = Some(file_config.file_groups.clone());
 
-            let metrics = match parquet_exec.metrics() {
-                None => return Ok(true),
-                Some(metrics) => metrics,
-            };
-            self.bytes_scanned = metrics.sum_by_name("bytes_scanned");
+                    let metrics = match data_source_exec.metrics() {
+                        None => return Ok(true),
+                        Some(metrics) => metrics,
+                    };
+                    self.bytes_scanned = metrics.sum_by_name("bytes_scanned");
+                }
+            }
         }
         Ok(true)
     }

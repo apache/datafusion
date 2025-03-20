@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::Int64Array;
-use arrow_schema::{DataType, Field};
+//! Logical plans need to provide stable semantics, as downstream projects
+//! create them and depend on them. Test executable semantics of logical plans.
+
+use arrow::array::Int64Array;
+use arrow::datatypes::{DataType, Field};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion_common::{Column, DFSchema, Result, ScalarValue};
+use datafusion_common::{Column, DFSchema, Result, ScalarValue, Spans};
 use datafusion_execution::TaskContext;
-use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::logical_plan::{LogicalPlan, Values};
 use datafusion_expr::{Aggregate, AggregateUDF, Expr};
 use datafusion_functions_aggregate::count::Count;
@@ -29,9 +32,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
-
-///! Logical plans need to provide stable semantics, as downstream projects
-///! create them and depend on them. Test executable semantics of logical plans.
 
 #[tokio::test]
 async fn count_only_nulls() -> Result<()> {
@@ -51,6 +51,7 @@ async fn count_only_nulls() -> Result<()> {
     let input_col_ref = Expr::Column(Column {
         relation: None,
         name: "col".to_string(),
+        spans: Spans::new(),
     });
 
     // Aggregation: count(col) AS count
@@ -59,11 +60,13 @@ async fn count_only_nulls() -> Result<()> {
         vec![],
         vec![Expr::AggregateFunction(AggregateFunction {
             func: Arc::new(AggregateUDF::new_from_impl(Count::new())),
-            args: vec![input_col_ref],
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
+            params: AggregateFunctionParams {
+                args: vec![input_col_ref],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         })],
     )?);
 

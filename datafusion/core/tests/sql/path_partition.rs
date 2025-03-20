@@ -25,7 +25,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::ParquetExec;
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::{
     assert_batches_sorted_eq,
     datasource::{
@@ -41,12 +42,12 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
+use datafusion_expr::{col, lit, Expr, Operator};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
-use datafusion_expr::{col, lit, Expr, Operator};
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use futures::stream::{self, BoxStream};
 use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
@@ -84,8 +85,18 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
         Expr::gt(col("id"), lit(1)),
     ];
     let exec = table.scan(&ctx.state(), None, &filters, None).await?;
-    let parquet_exec = exec.as_any().downcast_ref::<ParquetExec>().unwrap();
-    let pred = parquet_exec.predicate().unwrap();
+    let data_source_exec = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source = data_source_exec.data_source();
+    let file_source = data_source
+        .as_any()
+        .downcast_ref::<FileScanConfig>()
+        .unwrap();
+    let parquet_config = file_source
+        .file_source()
+        .as_any()
+        .downcast_ref::<ParquetSource>()
+        .unwrap();
+    let pred = parquet_config.predicate().unwrap();
     // Only the last filter should be pushdown to TableScan
     let expected = Arc::new(BinaryExpr::new(
         Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),

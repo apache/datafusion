@@ -108,8 +108,7 @@ message Field {
   // for complex data types like structs, unions
   repeated Field children = 4;
   map<string, string> metadata = 5;
-  int64 dict_id = 6;
-  bool dict_ordered = 7;
+  bool dict_ordered = 6;
 }
 
 message Timestamp{
@@ -521,6 +520,10 @@ message ParquetOptions {
 
   oneof column_index_truncate_length_opt {
     uint64 column_index_truncate_length = 17;
+  }
+
+  oneof statistics_truncate_length_opt {
+    uint64 statistics_truncate_length = 31;
   }
 
   oneof encoding_opt {

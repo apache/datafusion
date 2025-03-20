@@ -157,10 +157,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
     expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
-                let col = Column {
-                    relation: None,
-                    name: c.name,
-                };
+                let col = Column::new_unqualified(c.name);
                 Transformed::yes(Expr::Column(col))
             } else {
                 Transformed::no(expr)
@@ -181,10 +178,7 @@ pub fn create_col_from_scalar_expr(
             Some::<TableReference>(subqry_alias.into()),
             name,
         )),
-        Expr::Column(Column { relation: _, name }) => Ok(Column::new(
-            Some::<TableReference>(subqry_alias.into()),
-            name,
-        )),
+        Expr::Column(col) => Ok(col.with_relation(subqry_alias.into())),
         _ => {
             let scalar_column = scalar_expr.schema_name().to_string();
             Ok(Column::new(
@@ -259,6 +253,7 @@ fn coerce_exprs_for_schema(
                     Expr::Alias(Alias { expr, name, .. }) => {
                         Ok(expr.cast_to(new_type, src_schema)?.alias(name))
                     }
+                    #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
                     _ => expr.cast_to(new_type, src_schema),
                 }
@@ -292,6 +287,7 @@ pub struct NamePreserver {
 
 /// If the qualified name of an expression is remembered, it will be preserved
 /// when rewriting the expression
+#[derive(Debug)]
 pub enum SavedName {
     /// Saved qualified name to be preserved
     Saved {

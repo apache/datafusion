@@ -19,14 +19,14 @@
 //! StringArray / LargeStringArray / BinaryArray / LargeBinaryArray.
 
 use ahash::RandomState;
-use arrow::array::cast::AsArray;
-use arrow::array::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use arrow::array::{
+    cast::AsArray,
+    types::{ByteArrayType, GenericBinaryType, GenericStringType},
     Array, ArrayRef, BufferBuilder, GenericBinaryArray, GenericStringArray,
-    OffsetSizeTrait,
+    NullBufferBuilder, OffsetSizeTrait,
 };
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
-use arrow_buffer::{NullBuffer, NullBufferBuilder, OffsetBuffer, ScalarBuffer};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::any::type_name;
@@ -384,7 +384,7 @@ where
 
             // value is "small"
             let payload = if value.len() <= SHORT_VALUE_LEN {
-                let inline = value.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
+                let inline = value.iter().fold(0usize, |acc, &x| (acc << 8) | x as usize);
 
                 // is value is already present in the set?
                 let entry = self.map.find_mut(hash, |header| {

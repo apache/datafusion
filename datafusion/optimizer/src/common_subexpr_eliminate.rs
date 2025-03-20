@@ -678,6 +678,8 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn is_ignored(&self, node: &Expr) -> bool {
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
         let is_normal_minus_aggregates = matches!(
             node,
             Expr::Literal(..)
@@ -1702,14 +1704,6 @@ mod test {
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Float64)
-        }
-
-        fn invoke_batch(
-            &self,
-            _args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
-            unimplemented!()
         }
     }
 }

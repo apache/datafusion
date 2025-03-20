@@ -17,10 +17,10 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, Alias, BinaryExpr, Cast, InList, InSubquery, Placeholder,
-    ScalarFunction, TryCast, Unnest, WindowFunction,
+    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
+    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    WindowFunctionParams,
 };
-use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
 };
@@ -32,6 +32,7 @@ use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
     Result, TableReference,
 };
+use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -153,7 +154,10 @@ impl ExprSchemable for Expr {
             Expr::WindowFunction(window_function) => self
                 .data_type_and_nullable_with_window_function(schema, window_function)
                 .map(|(return_type, _)| return_type),
-            Expr::AggregateFunction(AggregateFunction { func, args, .. }) => {
+            Expr::AggregateFunction(AggregateFunction {
+                func,
+                params: AggregateFunctionParams { args, .. },
+            }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
@@ -195,7 +199,12 @@ impl ExprSchemable for Expr {
                 ref left,
                 ref right,
                 ref op,
-            }) => get_result_type(&left.get_type(schema)?, op, &right.get_type(schema)?),
+            }) => BinaryTypeCoercer::new(
+                &left.get_type(schema)?,
+                op,
+                &right.get_type(schema)?,
+            )
+            .get_result_type(),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
                 if let Some(dtype) = data_type {
@@ -206,6 +215,7 @@ impl ExprSchemable for Expr {
                     Ok(DataType::Null)
                 }
             }
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => Ok(DataType::Null),
             Expr::GroupingSet(_) => {
                 // Grouping sets do not really have a type and do not appear in projections
@@ -320,6 +330,7 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => Ok(false),
             Expr::GroupingSet(_) => {
                 // Grouping sets do not really have the concept of nullable and do not appear
@@ -387,9 +398,12 @@ impl ExprSchemable for Expr {
                 ref right,
                 ref op,
             }) => {
-                let left = left.data_type_and_nullable(schema)?;
-                let right = right.data_type_and_nullable(schema)?;
-                Ok((get_result_type(&left.0, op, &right.0)?, left.1 || right.1))
+                let (lhs_type, lhs_nullable) = left.data_type_and_nullable(schema)?;
+                let (rhs_type, rhs_nullable) = right.data_type_and_nullable(schema)?;
+                let mut coercer = BinaryTypeCoercer::new(&lhs_type, op, &rhs_type);
+                coercer.set_lhs_spans(left.spans().cloned().unwrap_or_default());
+                coercer.set_rhs_spans(right.spans().cloned().unwrap_or_default());
+                Ok((coercer.get_result_type()?, lhs_nullable || rhs_nullable))
             }
             Expr::WindowFunction(window_function) => {
                 self.data_type_and_nullable_with_window_function(schema, window_function)
@@ -499,7 +513,11 @@ impl Expr {
         schema: &dyn ExprSchema,
         window_function: &WindowFunction,
     ) -> Result<(DataType, bool)> {
-        let WindowFunction { fun, args, .. } = window_function;
+        let WindowFunction {
+            fun,
+            params: WindowFunctionParams { args, .. },
+            ..
+        } = window_function;
 
         let data_types = args
             .iter()

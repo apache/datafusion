@@ -106,9 +106,7 @@ pub struct Field {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
-    #[prost(int64, tag = "6")]
-    pub dict_id: i64,
-    #[prost(bool, tag = "7")]
+    #[prost(bool, tag = "6")]
     pub dict_ordered: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -796,6 +794,10 @@ pub struct ParquetOptions {
     pub column_index_truncate_length_opt: ::core::option::Option<
         parquet_options::ColumnIndexTruncateLengthOpt,
     >,
+    #[prost(oneof = "parquet_options::StatisticsTruncateLengthOpt", tags = "31")]
+    pub statistics_truncate_length_opt: ::core::option::Option<
+        parquet_options::StatisticsTruncateLengthOpt,
+    >,
     #[prost(oneof = "parquet_options::EncodingOpt", tags = "19")]
     pub encoding_opt: ::core::option::Option<parquet_options::EncodingOpt>,
     #[prost(oneof = "parquet_options::BloomFilterFppOpt", tags = "21")]
@@ -834,6 +836,11 @@ pub mod parquet_options {
     pub enum ColumnIndexTruncateLengthOpt {
         #[prost(uint64, tag = "17")]
         ColumnIndexTruncateLength(u64),
+    }
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
+    pub enum StatisticsTruncateLengthOpt {
+        #[prost(uint64, tag = "31")]
+        StatisticsTruncateLength(u64),
     }
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum EncodingOpt {

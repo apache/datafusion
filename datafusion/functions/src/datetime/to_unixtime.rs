@@ -90,36 +90,39 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
         Ok(DataType::Int64)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        batch_size: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        if args.is_empty() {
+        let arg_args = &args.args;
+        if arg_args.is_empty() {
             return exec_err!("to_unixtime function requires 1 or more arguments, got 0");
         }
 
         // validate that any args after the first one are Utf8
-        if args.len() > 1 {
-            validate_data_types(args, "to_unixtime")?;
+        if arg_args.len() > 1 {
+            validate_data_types(arg_args, "to_unixtime")?;
         }
 
-        match args[0].data_type() {
+        match arg_args[0].data_type() {
             DataType::Int32 | DataType::Int64 | DataType::Null | DataType::Float64 => {
-                args[0].cast_to(&DataType::Int64, None)
+                arg_args[0].cast_to(&DataType::Int64, None)
             }
-            DataType::Date64 | DataType::Date32 | DataType::Timestamp(_, None) => args[0]
+            DataType::Date64 | DataType::Date32 => arg_args[0]
                 .cast_to(&DataType::Timestamp(TimeUnit::Second, None), None)?
                 .cast_to(&DataType::Int64, None),
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
+            DataType::Timestamp(_, tz) => arg_args[0]
+                .cast_to(&DataType::Timestamp(TimeUnit::Second, tz), None)?
+                .cast_to(&DataType::Int64, None),
             DataType::Utf8 => ToTimestampSecondsFunc::new()
-                .invoke_batch(args, batch_size)?
+                .invoke_with_args(args)?
                 .cast_to(&DataType::Int64, None),
             other => {
                 exec_err!("Unsupported data type {:?} for function to_unixtime", other)
             }
         }
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }

@@ -285,6 +285,8 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::TryCast(_)
         | Expr::InList { .. }
         | Expr::ScalarFunction(_) => Ok(TreeNodeRecursion::Continue),
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
         Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
         | Expr::Wildcard { .. }
@@ -1003,7 +1005,8 @@ impl OptimizerRule for PushDownFilter {
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
                 let extract_partition_keys = |func: &WindowFunction| {
-                    func.partition_by
+                    func.params
+                        .partition_by
                         .iter()
                         .map(|c| Column::from_qualified_name(c.schema_name().to_string()))
                         .collect::<HashSet<_>>()
@@ -1386,8 +1389,9 @@ mod tests {
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         col, in_list, in_subquery, lit, ColumnarValue, ExprFunctionExt, Extension,
-        LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
-        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition,
+        LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
+        WindowFunctionDefinition,
     };
 
     use crate::optimizer::Optimizer;
@@ -3615,11 +3619,7 @@ Projection: a, b
             Ok(DataType::Int32)
         }
 
-        fn invoke_batch(
-            &self,
-            _args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Scalar(ScalarValue::from(1)))
         }
     }

@@ -20,6 +20,7 @@ mod kernels;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
+use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
 
@@ -30,16 +31,20 @@ use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scala
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
-use arrow_schema::ArrowError;
+use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::type_coercion::binary::get_result_type;
+use datafusion_expr::statistics::Distribution::{Bernoulli, Gaussian};
+use datafusion_expr::statistics::{
+    combine_bernoullis, combine_gaussians, create_bernoulli_from_comparison,
+    new_generic_from_binary_op, Distribution,
+};
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 
-use crate::expressions::binary::kernels::concat_elements_utf8view;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -278,11 +283,12 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        get_result_type(
+        BinaryTypeCoercer::new(
             &self.left.data_type(input_schema)?,
             &self.op,
             &self.right.data_type(input_schema)?,
         )
+        .get_result_type()
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -483,6 +489,37 @@ impl PhysicalExpr for BinaryExpr {
                     .map(|(left, right)| vec![left, right]),
             )
         }
+    }
+
+    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
+        let (left, right) = (children[0], children[1]);
+
+        if self.op.is_numerical_operators() {
+            // We might be able to construct the output statistics more accurately,
+            // without falling back to an unknown distribution, if we are dealing
+            // with Gaussian distributions and numerical operations.
+            if let (Gaussian(left), Gaussian(right)) = (left, right) {
+                if let Some(result) = combine_gaussians(&self.op, left, right)? {
+                    return Ok(Gaussian(result));
+                }
+            }
+        } else if self.op.is_logic_operator() {
+            // If we are dealing with logical operators, we expect (and can only
+            // operate on) Bernoulli distributions.
+            return if let (Bernoulli(left), Bernoulli(right)) = (left, right) {
+                combine_bernoullis(&self.op, left, right).map(Bernoulli)
+            } else {
+                internal_err!(
+                    "Logical operators are only compatible with `Bernoulli` distributions"
+                )
+            };
+        } else if self.op.supports_propagation() {
+            // If we are handling comparison operators, we expect (and can only
+            // operate on) numeric distributions.
+            return create_bernoulli_from_comparison(&self.op, left, right);
+        }
+        // Fall back to an unknown distribution with only summary statistics:
+        new_generic_from_binary_op(&self.op, left, right)
     }
 
     /// For each operator, [`BinaryExpr`] has distinct rules.
@@ -731,8 +768,8 @@ pub fn similar_to(
 mod tests {
     use super::*;
     use crate::expressions::{col, lit, try_cast, Column, Literal};
+
     use datafusion_common::plan_datafusion_err;
-    use datafusion_expr::type_coercion::binary::get_input_types;
 
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
@@ -743,7 +780,8 @@ mod tests {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let left_type = left.data_type(schema)?;
         let right_type = right.data_type(schema)?;
-        let (lhs, rhs) = get_input_types(&left_type, &op, &right_type)?;
+        let (lhs, rhs) =
+            BinaryTypeCoercer::new(&left_type, &op, &right_type).get_input_types()?;
 
         let left_expr = try_cast(left, schema, lhs)?;
         let right_expr = try_cast(right, schema, rhs)?;
@@ -847,7 +885,7 @@ mod tests {
             ]);
             let a = $A_ARRAY::from($A_VEC);
             let b = $B_ARRAY::from($B_VEC);
-            let (lhs, rhs) = get_input_types(&$A_TYPE, &$OP, &$B_TYPE)?;
+            let (lhs, rhs) = BinaryTypeCoercer::new(&$A_TYPE, &$OP, &$B_TYPE).get_input_types()?;
 
             let left = try_cast(col("a", &schema)?, &schema, lhs)?;
             let right = try_cast(col("b", &schema)?, &schema, rhs)?;
@@ -4377,5 +4415,261 @@ mod tests {
             &expected,
         )
         .unwrap();
+    }
+
+    pub fn binary_expr(
+        left: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        right: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<BinaryExpr> {
+        Ok(binary_op(left, op, right, schema)?
+            .as_any()
+            .downcast_ref::<BinaryExpr>()
+            .unwrap()
+            .clone())
+    }
+
+    /// Test for Uniform-Uniform, Unknown-Uniform, Uniform-Unknown and Unknown-Unknown evaluation.
+    #[test]
+    fn test_evaluate_statistics_combination_of_range_holders() -> Result<()> {
+        let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = lit(ScalarValue::from(12.0));
+
+        let left_interval = Interval::make(Some(0.0), Some(12.0))?;
+        let right_interval = Interval::make(Some(12.0), Some(36.0))?;
+        let (left_mean, right_mean) = (ScalarValue::from(6.0), ScalarValue::from(24.0));
+        let (left_med, right_med) = (ScalarValue::from(6.0), ScalarValue::from(24.0));
+
+        for children in [
+            vec![
+                &Distribution::new_uniform(left_interval.clone())?,
+                &Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                &Distribution::new_generic(
+                    left_mean.clone(),
+                    left_med.clone(),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                &Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                &Distribution::new_uniform(right_interval.clone())?,
+                &Distribution::new_generic(
+                    right_mean.clone(),
+                    right_med.clone(),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+            vec![
+                &Distribution::new_generic(
+                    left_mean.clone(),
+                    left_med.clone(),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                &Distribution::new_generic(
+                    right_mean.clone(),
+                    right_med.clone(),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+        ] {
+            let ops = vec![
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Multiply,
+                Operator::Divide,
+            ];
+
+            for op in ops {
+                let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
+                assert_eq!(
+                    expr.evaluate_statistics(&children)?,
+                    new_generic_from_binary_op(&op, children[0], children[1])?
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_statistics_bernoulli() -> Result<()> {
+        let schema = &Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]);
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = Arc::new(Column::new("b", 1)) as _;
+        let eq = Arc::new(binary_expr(
+            Arc::clone(&a),
+            Operator::Eq,
+            Arc::clone(&b),
+            schema,
+        )?);
+        let neq = Arc::new(binary_expr(a, Operator::NotEq, b, schema)?);
+
+        let left_stat = &Distribution::new_uniform(Interval::make(Some(0), Some(7))?)?;
+        let right_stat = &Distribution::new_uniform(Interval::make(Some(4), Some(11))?)?;
+
+        // Intervals: [0, 7], [4, 11].
+        // The intersection is [4, 7], so the probability of equality is 4 / 64 = 1 / 16.
+        assert_eq!(
+            eq.evaluate_statistics(&[left_stat, right_stat])?,
+            Distribution::new_bernoulli(ScalarValue::from(1.0 / 16.0))?
+        );
+
+        // The probability of being distinct is 1 - 1 / 16 = 15 / 16.
+        assert_eq!(
+            neq.evaluate_statistics(&[left_stat, right_stat])?,
+            Distribution::new_bernoulli(ScalarValue::from(15.0 / 16.0))?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_statistics_combination_of_range_holders_arithmetic() -> Result<()> {
+        let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = lit(ScalarValue::from(12.0));
+
+        let left_interval = Interval::make(Some(0.0), Some(12.0))?;
+        let right_interval = Interval::make(Some(12.0), Some(36.0))?;
+
+        let parent = Distribution::new_uniform(Interval::make(Some(-432.), Some(432.))?)?;
+        let children = vec![
+            vec![
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                Distribution::new_generic(
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_generic(
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+            vec![
+                Distribution::new_generic(
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                Distribution::new_generic(
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+        ];
+
+        let ops = vec![
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Multiply,
+            Operator::Divide,
+        ];
+
+        for child_view in children {
+            let child_refs = child_view.iter().collect::<Vec<_>>();
+            for op in &ops {
+                let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
+                assert_eq!(
+                    expr.propagate_statistics(&parent, child_refs.as_slice())?,
+                    Some(child_view.clone())
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_statistics_combination_of_range_holders_comparison() -> Result<()> {
+        let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = lit(ScalarValue::from(12.0));
+
+        let left_interval = Interval::make(Some(0.0), Some(12.0))?;
+        let right_interval = Interval::make(Some(6.0), Some(18.0))?;
+
+        let one = ScalarValue::from(1.0);
+        let parent = Distribution::new_bernoulli(one)?;
+        let children = vec![
+            vec![
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                Distribution::new_generic(
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_generic(
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+            vec![
+                Distribution::new_generic(
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                Distribution::new_generic(
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+        ];
+
+        let ops = vec![
+            Operator::Eq,
+            Operator::Gt,
+            Operator::GtEq,
+            Operator::Lt,
+            Operator::LtEq,
+        ];
+
+        for child_view in children {
+            let child_refs = child_view.iter().collect::<Vec<_>>();
+            for op in &ops {
+                let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
+                assert!(expr
+                    .propagate_statistics(&parent, child_refs.as_slice())?
+                    .is_some());
+            }
+        }
+
+        Ok(())
     }
 }

@@ -89,6 +89,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
     let input = find_base_plan(input);
     for e in expr {
         match e {
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => {
                 if let Some(qualifier) = qualifier {
                     let expanded = expand_qualified_wildcard(
@@ -123,6 +124,8 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
             Expr::Column(Column {
                 ref relation,
                 ref name,
+                // TODO Should we use these spans?
+                spans: _,
             }) => {
                 if name.eq("*") {
                     if let Some(qualifier) = relation {

@@ -31,9 +31,11 @@ rust-version = { workspace = true }
 # Exclude proto files so crates.io consumers don't need protoc
 exclude = ["*.proto"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lib]
 name = "datafusion_proto"
-path = "src/lib.rs"
 
 [features]
 default = ["parquet"]
@@ -59,5 +61,5 @@ datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 doc-comment = { workspace = true }
-strum = { version = "0.26.1", features = ["derive"] }
+strum = { version = "0.27.1", features = ["derive"] }
 tokio = { workspace = true, features = ["rt-multi-thread"] }

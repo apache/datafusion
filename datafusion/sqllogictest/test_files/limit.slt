@@ -307,9 +307,10 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
-02)--Limit: skip=11, fetch=3
-03)----TableScan: t1 projection=[], fetch=14
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Limit: skip=11, fetch=3
+04)------TableScan: t1 projection=[], fetch=14
 physical_plan
 01)ProjectionExec: expr=[0 as count(*)]
 02)--PlaceholderRowExec
@@ -325,9 +326,10 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
-02)--Limit: skip=8, fetch=3
-03)----TableScan: t1 projection=[], fetch=11
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Limit: skip=8, fetch=3
+04)------TableScan: t1 projection=[], fetch=11
 physical_plan
 01)ProjectionExec: expr=[2 as count(*)]
 02)--PlaceholderRowExec
@@ -343,9 +345,10 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 OFFSET 8);
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
-02)--Limit: skip=8, fetch=None
-03)----TableScan: t1 projection=[]
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Limit: skip=8, fetch=None
+04)------TableScan: t1 projection=[]
 physical_plan
 01)ProjectionExec: expr=[2 as count(*)]
 02)--PlaceholderRowExec
@@ -360,21 +363,23 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
-02)--Projection: 
-03)----Limit: skip=6, fetch=3
-04)------Filter: t1.a > Int32(3)
-05)--------TableScan: t1 projection=[a]
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection: 
+04)------Limit: skip=6, fetch=3
+05)--------Filter: t1.a > Int32(3)
+06)----------TableScan: t1 projection=[a]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[count(*)]
-02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[count(*)]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------ProjectionExec: expr=[]
-06)----------GlobalLimitExec: skip=6, fetch=3
-07)------------CoalesceBatchesExec: target_batch_size=8192, fetch=9
-08)--------------FilterExec: a@0 > 3
-09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------ProjectionExec: expr=[]
+07)------------GlobalLimitExec: skip=6, fetch=3
+08)--------------CoalesceBatchesExec: target_batch_size=8192, fetch=9
+09)----------------FilterExec: a@0 > 3
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
 SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
@@ -404,7 +409,7 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
-06)----------MemoryExec: partitions=1
+06)----------DataSourceExec: partitions=1
 
 statement ok
 set datafusion.explain.show_sizes = true;
@@ -636,7 +641,7 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(ordered_table.a)]
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], file_type=csv, has_header=true
 
 # Applying offset & limit when multiple streams from union
 # the plan must still have a global limit to apply the offset
@@ -662,11 +667,11 @@ physical_plan
 04)------SortExec: TopK(fetch=14), expr=[c@0 DESC], preserve_partitioning=[true]
 05)--------ProjectionExec: expr=[CAST(c@0 AS Int64) as c]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 08)------SortExec: TopK(fetch=14), expr=[c@0 DESC], preserve_partitioning=[true]
 09)--------ProjectionExec: expr=[CAST(d@0 AS Int64) as c]
 10)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[d], has_header=true
+11)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[d], file_type=csv, has_header=true
 
 # Applying LIMIT & OFFSET to subquery.
 query III
@@ -739,10 +744,8 @@ physical_plan
 01)ProjectionExec: expr=[a@2 as a, b@3 as b, a@0 as a, b@1 as b]
 02)--GlobalLimitExec: skip=0, fetch=10
 03)----CrossJoinExec
-04)------GlobalLimitExec: skip=0, fetch=1
-05)--------MemoryExec: partitions=1, partition_sizes=[1]
-06)------GlobalLimitExec: skip=0, fetch=10
-07)--------MemoryExec: partitions=1, partition_sizes=[1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1], fetch=1
+05)------DataSourceExec: partitions=1, partition_sizes=[1], fetch=10
 
 
 query IIII
@@ -765,10 +768,111 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=2
 02)--CrossJoinExec
-03)----GlobalLimitExec: skip=0, fetch=2
-04)------MemoryExec: partitions=1, partition_sizes=[1]
-05)----GlobalLimitExec: skip=0, fetch=2
-06)------MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1], fetch=2
+04)----DataSourceExec: partitions=1, partition_sizes=[1], fetch=2
 
 statement ok
 drop table testSubQueryLimit;
+
+
+# Test push down limit with more than one partition
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+# Set up 3 partitions
+statement ok
+set datafusion.execution.target_partitions = 3;
+
+# automatically partition all files over 1 byte
+statement ok
+set datafusion.optimizer.repartition_file_min_size = 1;
+
+# Create a table as a data source
+statement ok
+CREATE TABLE src_table (
+    part_key INT,
+    value INT
+) AS VALUES(1, 0), (1, 1), (1, 100), (2, 0), (2, 2), (2, 2), (2, 100), (3, 4), (3, 5), (3, 6);
+
+
+# Setup 3 files, i.e., as many as there are partitions:
+
+# File 1:
+query I
+COPY (SELECT * FROM src_table where part_key = 1)
+TO 'test_files/scratch/parquet/test_limit_with_partitions/part-0.parquet'
+STORED AS PARQUET;
+----
+3
+
+# File 2:
+query I
+COPY (SELECT * FROM src_table where part_key = 2)
+TO 'test_files/scratch/parquet/test_limit_with_partitions/part-1.parquet'
+STORED AS PARQUET;
+----
+4
+
+# File 3:
+query I
+COPY (SELECT * FROM src_table where part_key = 3)
+TO 'test_files/scratch/parquet/test_limit_with_partitions/part-2.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE test_limit_with_partitions
+(
+  part_key INT,
+  value INT
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_limit_with_partitions/';
+
+query TT
+explain
+with selection as (
+    select *
+    from test_limit_with_partitions
+    limit 1
+)
+select 1 as foo
+from selection
+order by part_key
+limit 1000;
+----
+logical_plan
+01)Projection: foo
+02)--Sort: selection.part_key ASC NULLS LAST, fetch=1000
+03)----Projection: Int64(1) AS foo, selection.part_key
+04)------SubqueryAlias: selection
+05)--------Limit: skip=0, fetch=1
+06)----------TableScan: test_limit_with_partitions projection=[part_key], fetch=1
+physical_plan
+01)ProjectionExec: expr=[foo@0 as foo]
+02)--SortExec: TopK(fetch=1000), expr=[part_key@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[1 as foo, part_key@0 as part_key]
+04)------CoalescePartitionsExec: fetch=1
+05)--------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-0.parquet:0..794], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-1.parquet:0..794], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-2.parquet:0..794]]}, projection=[part_key], limit=1, file_type=parquet
+
+query I
+with selection as (
+    select *
+    from test_limit_with_partitions
+    limit 1
+)
+select 1 as foo
+from selection
+order by part_key
+limit 1000;
+----
+1
+
+# Tear down test_filter_with_limit table:
+statement ok
+DROP TABLE test_limit_with_partitions;
+
+# Tear down src_table table:
+statement ok
+DROP TABLE src_table;

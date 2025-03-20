@@ -15,22 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int32Array};
-use arrow::compute::SortOptions;
-use arrow::record_batch::RecordBatch;
-use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::Schema;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use datafusion_common::ScalarValue;
-use datafusion_physical_expr::expressions::Literal;
-use datafusion_physical_expr::PhysicalExprRef;
+use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 
-use itertools::Itertools;
-use rand::Rng;
-
+use arrow::array::{ArrayRef, Int32Array};
+use arrow::compute::SortOptions;
+use arrow::datatypes::Schema;
+use arrow::record_batch::RecordBatch;
+use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::JoinSide;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::expressions::BinaryExpr;
 use datafusion::physical_plan::collect;
@@ -39,10 +36,13 @@ use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
-use datafusion::physical_plan::memory::MemoryExec;
-
-use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::ScalarValue;
+use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::PhysicalExprRef;
+
+use itertools::Itertools;
+use rand::Rng;
 use test_utils::stagger_batch_with_seed;
 
 // Determines what Fuzz tests needs to run
@@ -425,13 +425,15 @@ impl JoinFuzzTestCase {
         column_indices
     }
 
-    fn left_right(&self) -> (Arc<MemoryExec>, Arc<MemoryExec>) {
+    fn left_right(&self) -> (Arc<DataSourceExec>, Arc<DataSourceExec>) {
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
         let left =
-            Arc::new(MemoryExec::try_new(&[self.input1.clone()], schema1, None).unwrap());
+            MemorySourceConfig::try_new_exec(&[self.input1.clone()], schema1, None)
+                .unwrap();
         let right =
-            Arc::new(MemoryExec::try_new(&[self.input2.clone()], schema2, None).unwrap());
+            MemorySourceConfig::try_new_exec(&[self.input2.clone()], schema2, None)
+                .unwrap();
         (left, right)
     }
 

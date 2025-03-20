@@ -17,23 +17,33 @@
 
 //! Column
 
-use arrow_schema::{Field, FieldRef};
-
-use crate::error::_schema_err;
+use crate::error::{_schema_err, add_possible_columns_to_diag};
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use crate::{DFSchema, Result, SchemaError, TableReference};
+use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
+use arrow::datatypes::{Field, FieldRef};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
 
 /// A named reference to a qualified field in a schema.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     /// relation/table reference.
     pub relation: Option<TableReference>,
     /// field/column name.
     pub name: String,
+    /// Original source code location, if known
+    pub spans: Spans,
+}
+
+impl fmt::Debug for Column {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Column")
+            .field("relation", &self.relation)
+            .field("name", &self.name)
+            .finish()
+    }
 }
 
 impl Column {
@@ -50,6 +60,7 @@ impl Column {
         Self {
             relation: relation.map(|r| r.into()),
             name: name.into(),
+            spans: Spans::new(),
         }
     }
 
@@ -58,6 +69,7 @@ impl Column {
         Self {
             relation: None,
             name: name.into(),
+            spans: Spans::new(),
         }
     }
 
@@ -68,10 +80,15 @@ impl Column {
         Self {
             relation: None,
             name: name.into(),
+            spans: Spans::new(),
         }
     }
 
-    fn from_idents(idents: &mut Vec<String>) -> Option<Self> {
+    /// Create a Column from multiple normalized identifiers
+    ///
+    /// For example, `foo.bar` would be represented as a two element vector
+    /// `["foo", "bar"]`
+    fn from_idents(mut idents: Vec<String>) -> Option<Self> {
         let (relation, name) = match idents.len() {
             1 => (None, idents.remove(0)),
             2 => (
@@ -99,7 +116,11 @@ impl Column {
             // identifiers will be treated as an unqualified column name
             _ => return None,
         };
-        Some(Self { relation, name })
+        Some(Self {
+            relation,
+            name,
+            spans: Spans::new(),
+        })
     }
 
     /// Deserialize a fully qualified name string into a column
@@ -109,10 +130,11 @@ impl Column {
     /// where `"foo.BAR"` would be parsed to a reference to column named `foo.BAR`
     pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, false)).unwrap_or(
+        Self::from_idents(parse_identifiers_normalized(&flat_name, false)).unwrap_or(
             Self {
                 relation: None,
                 name: flat_name,
+                spans: Spans::new(),
             },
         )
     }
@@ -120,10 +142,11 @@ impl Column {
     /// Deserialize a fully qualified name string into a column preserving column text case
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, true)).unwrap_or(
+        Self::from_idents(parse_identifiers_normalized(&flat_name, true)).unwrap_or(
             Self {
                 relation: None,
                 name: flat_name,
+                spans: Spans::new(),
             },
         )
     }
@@ -239,7 +262,23 @@ impl Column {
 
                     // If not due to USING columns then due to ambiguous column name
                     return _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column::new_unqualified(self.name),
+                        field: Column::new_unqualified(&self.name),
+                    })
+                    .map_err(|err| {
+                        let mut diagnostic = Diagnostic::new_error(
+                            format!("column '{}' is ambiguous", &self.name),
+                            self.spans().first(),
+                        );
+                        // TODO If [`DFSchema`] had spans, we could show the
+                        // user which columns are candidates, or which table
+                        // they come from. For now, let's list the table names
+                        // only.
+                        add_possible_columns_to_diag(
+                            &mut diagnostic,
+                            &Column::new_unqualified(&self.name),
+                            &columns,
+                        );
+                        err.with_diagnostic(diagnostic)
                     });
                 }
             }
@@ -253,6 +292,33 @@ impl Column {
                 .flat_map(|s| s.columns())
                 .collect(),
         })
+    }
+
+    /// Returns a reference to the set of locations in the SQL query where this
+    /// column appears, if known.
+    pub fn spans(&self) -> &Spans {
+        &self.spans
+    }
+
+    /// Returns a mutable reference to the set of locations in the SQL query
+    /// where this column appears, if known.
+    pub fn spans_mut(&mut self) -> &mut Spans {
+        &mut self.spans
+    }
+
+    /// Replaces the set of locations in the SQL query where this column
+    /// appears, if known.
+    pub fn with_spans(mut self, spans: Spans) -> Self {
+        self.spans = spans;
+        self
+    }
+
+    /// Qualifies the column with the given table reference.
+    pub fn with_relation(&self, relation: TableReference) -> Self {
+        Self {
+            relation: Some(relation),
+            ..self.clone()
+        }
     }
 }
 
@@ -307,8 +373,7 @@ impl fmt::Display for Column {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::DataType;
-    use arrow_schema::SchemaBuilder;
+    use arrow::datatypes::{DataType, SchemaBuilder};
     use std::sync::Arc;
 
     fn create_qualified_schema(qualifier: &str, names: Vec<&str>) -> Result<DFSchema> {

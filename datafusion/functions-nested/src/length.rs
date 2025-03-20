@@ -18,11 +18,13 @@
 //! [`ScalarUDFImpl`] definitions for array_length function.
 
 use crate::utils::make_scalar_function;
-use arrow_array::{
+use arrow::array::{
     Array, ArrayRef, Int64Array, LargeListArray, ListArray, OffsetSizeTrait, UInt64Array,
 };
-use arrow_schema::DataType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List, UInt64};
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, LargeList, List, UInt64},
+};
 use datafusion_common::cast::{as_generic_list_array, as_int64_array};
 use datafusion_common::{exec_err, internal_datafusion_err, plan_err, Result};
 use datafusion_expr::{
@@ -101,12 +103,11 @@ impl ScalarUDFImpl for ArrayLength {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_length_inner)(args)
+        make_scalar_function(array_length_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {

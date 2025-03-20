@@ -3107,9 +3107,6 @@ impl serde::Serialize for Field {
         if !self.metadata.is_empty() {
             len += 1;
         }
-        if self.dict_id != 0 {
-            len += 1;
-        }
         if self.dict_ordered {
             len += 1;
         }
@@ -3128,11 +3125,6 @@ impl serde::Serialize for Field {
         }
         if !self.metadata.is_empty() {
             struct_ser.serialize_field("metadata", &self.metadata)?;
-        }
-        if self.dict_id != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("dictId", ToString::to_string(&self.dict_id).as_str())?;
         }
         if self.dict_ordered {
             struct_ser.serialize_field("dictOrdered", &self.dict_ordered)?;
@@ -3153,8 +3145,6 @@ impl<'de> serde::Deserialize<'de> for Field {
             "nullable",
             "children",
             "metadata",
-            "dict_id",
-            "dictId",
             "dict_ordered",
             "dictOrdered",
         ];
@@ -3166,7 +3156,6 @@ impl<'de> serde::Deserialize<'de> for Field {
             Nullable,
             Children,
             Metadata,
-            DictId,
             DictOrdered,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3194,7 +3183,6 @@ impl<'de> serde::Deserialize<'de> for Field {
                             "nullable" => Ok(GeneratedField::Nullable),
                             "children" => Ok(GeneratedField::Children),
                             "metadata" => Ok(GeneratedField::Metadata),
-                            "dictId" | "dict_id" => Ok(GeneratedField::DictId),
                             "dictOrdered" | "dict_ordered" => Ok(GeneratedField::DictOrdered),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -3220,7 +3208,6 @@ impl<'de> serde::Deserialize<'de> for Field {
                 let mut nullable__ = None;
                 let mut children__ = None;
                 let mut metadata__ = None;
-                let mut dict_id__ = None;
                 let mut dict_ordered__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -3256,14 +3243,6 @@ impl<'de> serde::Deserialize<'de> for Field {
                                 map_.next_value::<std::collections::HashMap<_, _>>()?
                             );
                         }
-                        GeneratedField::DictId => {
-                            if dict_id__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("dictId"));
-                            }
-                            dict_id__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
                         GeneratedField::DictOrdered => {
                             if dict_ordered__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("dictOrdered"));
@@ -3278,7 +3257,6 @@ impl<'de> serde::Deserialize<'de> for Field {
                     nullable: nullable__.unwrap_or_default(),
                     children: children__.unwrap_or_default(),
                     metadata: metadata__.unwrap_or_default(),
-                    dict_id: dict_id__.unwrap_or_default(),
                     dict_ordered: dict_ordered__.unwrap_or_default(),
                 })
             }
@@ -4991,6 +4969,9 @@ impl serde::Serialize for ParquetOptions {
         if self.column_index_truncate_length_opt.is_some() {
             len += 1;
         }
+        if self.statistics_truncate_length_opt.is_some() {
+            len += 1;
+        }
         if self.encoding_opt.is_some() {
             len += 1;
         }
@@ -5123,6 +5104,15 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if let Some(v) = self.statistics_truncate_length_opt.as_ref() {
+            match v {
+                parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("statisticsTruncateLength", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
         if let Some(v) = self.encoding_opt.as_ref() {
             match v {
                 parquet_options::EncodingOpt::Encoding(v) => {
@@ -5206,6 +5196,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxStatisticsSize",
             "column_index_truncate_length",
             "columnIndexTruncateLength",
+            "statistics_truncate_length",
+            "statisticsTruncateLength",
             "encoding",
             "bloom_filter_fpp",
             "bloomFilterFpp",
@@ -5241,6 +5233,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             StatisticsEnabled,
             MaxStatisticsSize,
             ColumnIndexTruncateLength,
+            StatisticsTruncateLength,
             Encoding,
             BloomFilterFpp,
             BloomFilterNdv,
@@ -5291,6 +5284,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "statisticsEnabled" | "statistics_enabled" => Ok(GeneratedField::StatisticsEnabled),
                             "maxStatisticsSize" | "max_statistics_size" => Ok(GeneratedField::MaxStatisticsSize),
                             "columnIndexTruncateLength" | "column_index_truncate_length" => Ok(GeneratedField::ColumnIndexTruncateLength),
+                            "statisticsTruncateLength" | "statistics_truncate_length" => Ok(GeneratedField::StatisticsTruncateLength),
                             "encoding" => Ok(GeneratedField::Encoding),
                             "bloomFilterFpp" | "bloom_filter_fpp" => Ok(GeneratedField::BloomFilterFpp),
                             "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
@@ -5339,6 +5333,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut statistics_enabled_opt__ = None;
                 let mut max_statistics_size_opt__ = None;
                 let mut column_index_truncate_length_opt__ = None;
+                let mut statistics_truncate_length_opt__ = None;
                 let mut encoding_opt__ = None;
                 let mut bloom_filter_fpp_opt__ = None;
                 let mut bloom_filter_ndv_opt__ = None;
@@ -5514,6 +5509,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             column_index_truncate_length_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(x.0));
                         }
+                        GeneratedField::StatisticsTruncateLength => {
+                            if statistics_truncate_length_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("statisticsTruncateLength"));
+                            }
+                            statistics_truncate_length_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(x.0));
+                        }
                         GeneratedField::Encoding => {
                             if encoding_opt__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("encoding"));
@@ -5561,6 +5562,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     statistics_enabled_opt: statistics_enabled_opt__,
                     max_statistics_size_opt: max_statistics_size_opt__,
                     column_index_truncate_length_opt: column_index_truncate_length_opt__,
+                    statistics_truncate_length_opt: statistics_truncate_length_opt__,
                     encoding_opt: encoding_opt__,
                     bloom_filter_fpp_opt: bloom_filter_fpp_opt__,
                     bloom_filter_ndv_opt: bloom_filter_ndv_opt__,

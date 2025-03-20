@@ -1013,7 +1013,7 @@ mod tests {
     use crate::common::collect;
     use crate::test;
 
-    use arrow_schema::DataType;
+    use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
 
     use datafusion_expr::Operator;

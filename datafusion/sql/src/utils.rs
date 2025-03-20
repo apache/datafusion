@@ -19,18 +19,20 @@
 
 use std::vec;
 
-use arrow_schema::{
+use arrow::datatypes::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, HashMap,
-    Result, ScalarValue,
+    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, Diagnostic,
+    HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
-use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
+use datafusion_expr::expr::{
+    Alias, GroupingSet, Unnest, WindowFunction, WindowFunctionParams,
+};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
     col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
@@ -90,12 +92,35 @@ pub(crate) fn rebase_expr(
         .data()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckColumnsSatisfyExprsPurpose {
+    ProjectionMustReferenceAggregate,
+    HavingMustReferenceAggregate,
+}
+
+impl CheckColumnsSatisfyExprsPurpose {
+    fn message_prefix(&self) -> &'static str {
+        match self {
+            CheckColumnsSatisfyExprsPurpose::ProjectionMustReferenceAggregate => {
+                "Projection references non-aggregate values"
+            }
+            CheckColumnsSatisfyExprsPurpose::HavingMustReferenceAggregate => {
+                "HAVING clause references non-aggregate values"
+            }
+        }
+    }
+
+    fn diagnostic_message(&self, expr: &Expr) -> String {
+        format!("'{expr}' must appear in GROUP BY clause because it's not an aggregate expression")
+    }
+}
+
 /// Determines if the set of `Expr`'s are a valid projection on the input
 /// `Expr::Column`'s.
 pub(crate) fn check_columns_satisfy_exprs(
     columns: &[Expr],
     exprs: &[Expr],
-    message_prefix: &str,
+    purpose: CheckColumnsSatisfyExprsPurpose,
 ) -> Result<()> {
     columns.iter().try_for_each(|c| match c {
         Expr::Column(_) => Ok(()),
@@ -106,22 +131,22 @@ pub(crate) fn check_columns_satisfy_exprs(
         match e {
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                 for e in exprs {
-                    check_column_satisfies_expr(columns, e, message_prefix)?;
+                    check_column_satisfies_expr(columns, e, purpose)?;
                 }
             }
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
                 for e in exprs {
-                    check_column_satisfies_expr(columns, e, message_prefix)?;
+                    check_column_satisfies_expr(columns, e, purpose)?;
                 }
             }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 for exprs in lists_of_exprs {
                     for e in exprs {
-                        check_column_satisfies_expr(columns, e, message_prefix)?;
+                        check_column_satisfies_expr(columns, e, purpose)?;
                     }
                 }
             }
-            _ => check_column_satisfies_expr(columns, e, message_prefix)?,
+            _ => check_column_satisfies_expr(columns, e, purpose)?,
         }
     }
     Ok(())
@@ -130,15 +155,23 @@ pub(crate) fn check_columns_satisfy_exprs(
 fn check_column_satisfies_expr(
     columns: &[Expr],
     expr: &Expr,
-    message_prefix: &str,
+    purpose: CheckColumnsSatisfyExprsPurpose,
 ) -> Result<()> {
     if !columns.contains(expr) {
         return plan_err!(
             "{}: Expression {} could not be resolved from available columns: {}",
-            message_prefix,
+            purpose.message_prefix(),
             expr,
             expr_vec_fmt!(columns)
-        );
+        )
+        .map_err(|err| {
+            let diagnostic = Diagnostic::new_error(
+                purpose.diagnostic_message(expr),
+                expr.spans().and_then(|spans| spans.first()),
+            )
+            .with_help(format!("add '{expr}' to GROUP BY clause"), None);
+            err.with_diagnostic(diagnostic)
+        });
     }
     Ok(())
 }
@@ -209,11 +242,15 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
     let all_partition_keys = window_exprs
         .iter()
         .map(|expr| match expr {
-            Expr::WindowFunction(WindowFunction { partition_by, .. }) => Ok(partition_by),
+            Expr::WindowFunction(WindowFunction {
+                params: WindowFunctionParams { partition_by, .. },
+                ..
+            }) => Ok(partition_by),
             Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
-                Expr::WindowFunction(WindowFunction { partition_by, .. }) => {
-                    Ok(partition_by)
-                }
+                Expr::WindowFunction(WindowFunction {
+                    params: WindowFunctionParams { partition_by, .. },
+                    ..
+                }) => Ok(partition_by),
                 expr => exec_err!("Impossibly got non-window expr {expr:?}"),
             },
             expr => exec_err!("Impossibly got non-window expr {expr:?}"),
@@ -595,6 +632,8 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
     } = original_expr.clone().rewrite(&mut rewriter)?;
 
     if !transformed {
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
         if matches!(&transformed_expr, Expr::Column(_))
             || matches!(&transformed_expr, Expr::Wildcard { .. })
         {
@@ -619,8 +658,7 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
 mod tests {
     use std::{ops::Add, sync::Arc};
 
-    use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
-    use arrow_schema::Fields;
+    use arrow::datatypes::{DataType as ArrowDataType, Field, Fields, Schema};
     use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{
         col, lit, unnest, ColumnUnnestList, EmptyRelation, LogicalPlan,

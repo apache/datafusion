@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
@@ -59,28 +64,29 @@
 pub mod macros;
 
 pub mod approx_distinct;
+pub mod approx_median;
+pub mod approx_percentile_cont;
+pub mod approx_percentile_cont_with_weight;
 pub mod array_agg;
+pub mod average;
+pub mod bit_and_or_xor;
+pub mod bool_and_or;
 pub mod correlation;
 pub mod count;
 pub mod covariance;
 pub mod first_last;
+pub mod grouping;
 pub mod hyperloglog;
 pub mod median;
 pub mod min_max;
+pub mod nth_value;
 pub mod regr;
 pub mod stddev;
+pub mod string_agg;
 pub mod sum;
 pub mod variance;
 
-pub mod approx_median;
-pub mod approx_percentile_cont;
-pub mod approx_percentile_cont_with_weight;
-pub mod average;
-pub mod bit_and_or_xor;
-pub mod bool_and_or;
-pub mod grouping;
-pub mod nth_value;
-pub mod string_agg;
+pub mod planner;
 
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;

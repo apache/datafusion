@@ -981,14 +981,14 @@ fn add_spm_on_top(
 /// ```text
 /// "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
 /// "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-/// "    ParquetExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC]",
+/// "    DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
 ///
 /// Since `RepartitionExec`s change the distribution, this function removes
 /// them and returns following plan:
 ///
 /// ```text
-/// "ParquetExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC]",
+/// "DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
 fn remove_dist_changing_operators(
     mut distribution_context: DistributionContext,
@@ -1023,7 +1023,7 @@ fn remove_dist_changing_operators(
 /// "SortPreservingMergeExec: \[a@0 ASC]"
 /// "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10, preserve_order=true",
 /// "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true",
-/// "      ParquetExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC]",
+/// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
 ///
 /// This function converts plan above to the following:
@@ -1032,7 +1032,7 @@ fn remove_dist_changing_operators(
 /// "CoalescePartitionsExec"
 /// "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
 /// "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-/// "      ParquetExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC]",
+/// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
 fn replace_order_preserving_variants(
     mut context: DistributionContext,
@@ -1217,7 +1217,7 @@ pub fn ensure_distribution(
         if let Some(updated_window) = get_best_fitting_window(
             exec.window_expr(),
             exec.input(),
-            &exec.partition_keys,
+            &exec.partition_keys(),
         )? {
             plan = updated_window;
         }
@@ -1225,7 +1225,7 @@ pub fn ensure_distribution(
         if let Some(updated_window) = get_best_fitting_window(
             exec.window_expr(),
             exec.input(),
-            &exec.partition_keys,
+            &exec.partition_keys(),
         )? {
             plan = updated_window;
         }

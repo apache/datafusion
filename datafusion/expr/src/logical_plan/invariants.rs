@@ -28,6 +28,9 @@ use crate::{
     Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window,
 };
 
+use super::Extension;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum InvariantLevel {
     /// Invariants that are always true in DataFusion `LogicalPlan`s
     /// such as the number of expected children and no duplicated output fields
@@ -41,17 +44,54 @@ pub enum InvariantLevel {
     Executable,
 }
 
-pub fn assert_always_invariants(plan: &LogicalPlan) -> Result<()> {
+/// Apply the [`InvariantLevel::Always`] check at the current plan node only.
+///
+/// This does not recurs to any child nodes.
+pub fn assert_always_invariants_at_current_node(plan: &LogicalPlan) -> Result<()> {
     // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#relation-name-tuples-in-logical-fields-and-logical-columns-are-unique>
     assert_unique_field_names(plan)?;
 
     Ok(())
 }
 
+/// Visit the plan nodes, and confirm the [`InvariantLevel::Executable`]
+/// as well as the less stringent [`InvariantLevel::Always`] checks.
 pub fn assert_executable_invariants(plan: &LogicalPlan) -> Result<()> {
-    assert_always_invariants(plan)?;
+    // Always invariants
+    assert_always_invariants_at_current_node(plan)?;
+    assert_valid_extension_nodes(plan, InvariantLevel::Always)?;
+
+    // Executable invariants
+    assert_valid_extension_nodes(plan, InvariantLevel::Executable)?;
     assert_valid_semantic_plan(plan)?;
     Ok(())
+}
+
+/// Asserts that the query plan, and subplan, extension nodes have valid invariants.
+///
+/// Refer to [`UserDefinedLogicalNode::check_invariants`](super::UserDefinedLogicalNode)
+/// for more details of user-provided extension node invariants.
+fn assert_valid_extension_nodes(plan: &LogicalPlan, check: InvariantLevel) -> Result<()> {
+    plan.apply_with_subqueries(|plan: &LogicalPlan| {
+        if let LogicalPlan::Extension(Extension { node }) = plan {
+            node.check_invariants(check, plan)?;
+        }
+        plan.apply_expressions(|expr| {
+            // recursively look for subqueries
+            expr.apply(|expr| {
+                match expr {
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
+                    | Expr::ScalarSubquery(subquery) => {
+                        assert_valid_extension_nodes(&subquery.subquery, check)?;
+                    }
+                    _ => {}
+                };
+                Ok(TreeNodeRecursion::Continue)
+            })
+        })
+    })
+    .map(|_| ())
 }
 
 /// Returns an error if plan, and subplans, do not have unique fields.
@@ -87,7 +127,7 @@ pub fn assert_expected_schema(schema: &DFSchemaRef, plan: &LogicalPlan) -> Resul
 
 /// Asserts that the subqueries are structured properly with valid node placement.
 ///
-/// Refer to [`check_subquery_expr`] for more details.
+/// Refer to [`check_subquery_expr`] for more details of the internal invariants.
 fn assert_subqueries_are_valid(plan: &LogicalPlan) -> Result<()> {
     plan.apply_with_subqueries(|plan: &LogicalPlan| {
         plan.apply_expressions(|expr| {
@@ -209,31 +249,26 @@ pub fn check_subquery_expr(
 
 // Recursively check the unsupported outer references in the sub query plan.
 fn check_correlations_in_subquery(inner_plan: &LogicalPlan) -> Result<()> {
-    check_inner_plan(inner_plan, true)
+    check_inner_plan(inner_plan)
 }
 
 // Recursively check the unsupported outer references in the sub query plan.
 #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
-fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Result<()> {
-    if !can_contain_outer_ref && inner_plan.contains_outer_reference() {
-        return plan_err!("Accessing outer reference columns is not allowed in the plan");
-    }
+fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
     // We want to support as many operators as possible inside the correlated subquery
     match inner_plan {
         LogicalPlan::Aggregate(_) => {
             inner_plan.apply_children(|plan| {
-                check_inner_plan(plan, can_contain_outer_ref)?;
+                check_inner_plan(plan)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
         }
-        LogicalPlan::Filter(Filter { input, .. }) => {
-            check_inner_plan(input, can_contain_outer_ref)
-        }
+        LogicalPlan::Filter(Filter { input, .. }) => check_inner_plan(input),
         LogicalPlan::Window(window) => {
             check_mixed_out_refer_in_window(window)?;
             inner_plan.apply_children(|plan| {
-                check_inner_plan(plan, can_contain_outer_ref)?;
+                check_inner_plan(plan)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
@@ -250,7 +285,7 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
         | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Unnest(_) => {
             inner_plan.apply_children(|plan| {
-                check_inner_plan(plan, can_contain_outer_ref)?;
+                check_inner_plan(plan)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
@@ -263,7 +298,7 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
         }) => match join_type {
             JoinType::Inner => {
                 inner_plan.apply_children(|plan| {
-                    check_inner_plan(plan, can_contain_outer_ref)?;
+                    check_inner_plan(plan)?;
                     Ok(TreeNodeRecursion::Continue)
                 })?;
                 Ok(())
@@ -272,23 +307,34 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
             | JoinType::LeftSemi
             | JoinType::LeftAnti
             | JoinType::LeftMark => {
-                check_inner_plan(left, can_contain_outer_ref)?;
-                check_inner_plan(right, false)
+                check_inner_plan(left)?;
+                check_no_outer_references(right)
             }
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
-                check_inner_plan(left, false)?;
-                check_inner_plan(right, can_contain_outer_ref)
+                check_no_outer_references(left)?;
+                check_inner_plan(right)
             }
             JoinType::Full => {
                 inner_plan.apply_children(|plan| {
-                    check_inner_plan(plan, false)?;
+                    check_no_outer_references(plan)?;
                     Ok(TreeNodeRecursion::Continue)
                 })?;
                 Ok(())
             }
         },
         LogicalPlan::Extension(_) => Ok(()),
-        _ => plan_err!("Unsupported operator in the subquery plan."),
+        plan => check_no_outer_references(plan),
+    }
+}
+
+fn check_no_outer_references(inner_plan: &LogicalPlan) -> Result<()> {
+    if inner_plan.contains_outer_reference() {
+        plan_err!(
+            "Accessing outer reference columns is not allowed in the plan: {}",
+            inner_plan.display()
+        )
+    } else {
+        Ok(())
     }
 }
 
@@ -430,6 +476,6 @@ mod test {
             }),
         });
 
-        check_inner_plan(&plan, true).unwrap();
+        check_inner_plan(&plan).unwrap();
     }
 }

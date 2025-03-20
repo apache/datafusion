@@ -23,17 +23,16 @@ use crate::joins::utils::{JoinFilter, JoinOn};
 use crate::joins::{
     HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
-use crate::memory::MemoryExec;
 use crate::repartition::RepartitionExec;
+use crate::test::TestMemoryExec;
 use crate::{common, ExecutionPlan, ExecutionPlanProperties, Partitioning};
 
-use arrow::util::pretty::pretty_format_batches;
-use arrow_array::{
-    ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
-    TimestampMillisecondArray,
+use arrow::array::{
+    types::IntervalDayTime, ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray,
+    RecordBatch, TimestampMillisecondArray,
 };
-use arrow_buffer::IntervalDayTime;
-use arrow_schema::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema};
+use arrow::util::pretty::pretty_format_batches;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{JoinType, Operator};
@@ -530,12 +529,15 @@ pub fn create_memory_table(
     right_sorted: Vec<LexOrdering>,
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
     let left_schema = left_partition[0].schema();
-    let left = MemoryExec::try_new(&[left_partition], left_schema, None)?
+    let left = TestMemoryExec::try_new(&[left_partition], left_schema, None)?
         .try_with_sort_information(left_sorted)?;
     let right_schema = right_partition[0].schema();
-    let right = MemoryExec::try_new(&[right_partition], right_schema, None)?
+    let right = TestMemoryExec::try_new(&[right_partition], right_schema, None)?
         .try_with_sort_information(right_sorted)?;
-    Ok((Arc::new(left), Arc::new(right)))
+    Ok((
+        Arc::new(TestMemoryExec::update_cache(Arc::new(left))),
+        Arc::new(TestMemoryExec::update_cache(Arc::new(right))),
+    ))
 }
 
 /// Filter expr for a + b > c + 10 AND a + b < c + 100

@@ -22,7 +22,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction};
+use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
@@ -282,6 +282,8 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
             Expr::Unnest(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Alias(_)
@@ -588,7 +590,7 @@ pub fn group_window_expr_by_sort_keys(
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
     window_expr.into_iter().try_for_each(|expr| match &expr {
-        Expr::WindowFunction( WindowFunction{ partition_by, order_by, .. }) => {
+        Expr::WindowFunction( WindowFunction{ params: WindowFunctionParams { partition_by, order_by, ..}, .. }) => {
             let sort_key = generate_sort_key(partition_by, order_by)?;
             if let Some((_, values)) = result.iter_mut().find(
                 |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
@@ -709,6 +711,7 @@ pub fn exprlist_to_fields<'a>(
     let result = exprs
         .into_iter()
         .map(|e| match e {
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => match qualifier {
                 None => {
                     let mut excluded = exclude_using_columns(plan)?;
@@ -801,6 +804,7 @@ pub fn exprlist_len(
     exprs
         .iter()
         .map(|e| match e {
+            #[expect(deprecated)]
             Expr::Wildcard {
                 qualifier: None,
                 options,
@@ -818,6 +822,7 @@ pub fn exprlist_len(
                         .len(),
                 )
             }
+            #[expect(deprecated)]
             Expr::Wildcard {
                 qualifier: Some(qualifier),
                 options,
@@ -832,7 +837,7 @@ pub fn exprlist_len(
                             .enumerate()
                             .filter_map(|(idx, field)| {
                                 let (maybe_table_ref, _) = schema.qualified_field(idx);
-                                if maybe_table_ref.map_or(true, |q| q == qualifier) {
+                                if maybe_table_ref.is_none_or(|q| q == qualifier) {
                                     Some((maybe_table_ref.cloned(), Arc::clone(field)))
                                 } else {
                                     None

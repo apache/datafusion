@@ -22,8 +22,10 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
+    CheckColumnsSatisfyExprsPurpose,
 };
 
+use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
@@ -36,7 +38,8 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
-    GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    GroupingSet, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
+    Partitioning,
 };
 
 use indexmap::IndexMap;
@@ -369,7 +372,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let agg_expr = agg.aggr_expr.clone();
                 let (new_input, new_group_by_exprs) =
                     self.try_process_group_by_unnest(agg)?;
+                let options = LogicalPlanBuilderOptions::new()
+                    .with_add_implicit_group_by_exprs(true);
                 LogicalPlanBuilder::from(new_input)
+                    .with_options(options)
                     .aggregate(new_group_by_exprs, agg_expr)?
                     .build()
             }
@@ -573,10 +579,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         empty_from: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Expr>> {
-        projection
-            .into_iter()
-            .map(|expr| self.sql_select_to_rex(expr, plan, empty_from, planner_context))
-            .collect::<Result<Vec<Expr>>>()
+        let mut prepared_select_exprs = vec![];
+        let mut error_builder = DataFusionErrorBuilder::new();
+        for expr in projection {
+            match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
+                Ok(expr) => prepared_select_exprs.push(expr),
+                Err(err) => error_builder.add_error(err),
+            }
+        }
+        error_builder.error_or(prepared_select_exprs)
     }
 
     /// Generate a relational expression from a select SQL expression
@@ -737,7 +748,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         aggr_exprs: &[Expr],
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
         // create the aggregate plan
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
         let plan = LogicalPlanBuilder::from(input.clone())
+            .with_options(options)
             .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
             .build()?;
         let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {
@@ -796,7 +810,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         check_columns_satisfy_exprs(
             &column_exprs_post_aggr,
             &select_exprs_post_aggr,
-            "Projection references non-aggregate values",
+            CheckColumnsSatisfyExprsPurpose::ProjectionMustReferenceAggregate,
         )?;
 
         // Rewrite the HAVING expression to use the columns produced by the
@@ -808,7 +822,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
                 std::slice::from_ref(&having_expr_post_aggr),
-                "HAVING clause references non-aggregate values",
+                CheckColumnsSatisfyExprsPurpose::HavingMustReferenceAggregate,
             )?;
 
             Some(having_expr_post_aggr)

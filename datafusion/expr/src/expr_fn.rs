@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction, WindowFunctionParams,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -27,7 +27,7 @@ use crate::function::{
 };
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator,
+    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
     ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
@@ -121,6 +121,7 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
 /// assert_eq!(p.to_string(), "*")
 /// ```
 pub fn wildcard() -> Expr {
+    #[expect(deprecated)]
     Expr::Wildcard {
         qualifier: None,
         options: Box::new(WildcardOptions::default()),
@@ -129,6 +130,7 @@ pub fn wildcard() -> Expr {
 
 /// Create an '*' [`Expr::Wildcard`] expression with the wildcard options
 pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
+    #[expect(deprecated)]
     Expr::Wildcard {
         qualifier: None,
         options: Box::new(options),
@@ -146,6 +148,7 @@ pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
 /// assert_eq!(p.to_string(), "t.*")
 /// ```
 pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> Expr {
+    #[expect(deprecated)]
     Expr::Wildcard {
         qualifier: Some(qualifier.into()),
         options: Box::new(WildcardOptions::default()),
@@ -157,6 +160,7 @@ pub fn qualified_wildcard_with_options(
     qualifier: impl Into<TableReference>,
     options: WildcardOptions,
 ) -> Expr {
+    #[expect(deprecated)]
     Expr::Wildcard {
         qualifier: Some(qualifier.into()),
         options: Box::new(options),
@@ -477,12 +481,8 @@ impl ScalarUDFImpl for SimpleScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        (self.fun)(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        (self.fun)(&args.args)
     }
 }
 
@@ -830,20 +830,28 @@ impl ExprFuncBuilder {
 
         let fun_expr = match fun {
             ExprFuncKind::Aggregate(mut udaf) => {
-                udaf.order_by = order_by;
-                udaf.filter = filter.map(Box::new);
-                udaf.distinct = distinct;
-                udaf.null_treatment = null_treatment;
+                udaf.params.order_by = order_by;
+                udaf.params.filter = filter.map(Box::new);
+                udaf.params.distinct = distinct;
+                udaf.params.null_treatment = null_treatment;
                 Expr::AggregateFunction(udaf)
             }
-            ExprFuncKind::Window(mut udwf) => {
+            ExprFuncKind::Window(WindowFunction {
+                fun,
+                params: WindowFunctionParams { args, .. },
+            }) => {
                 let has_order_by = order_by.as_ref().map(|o| !o.is_empty());
-                udwf.order_by = order_by.unwrap_or_default();
-                udwf.partition_by = partition_by.unwrap_or_default();
-                udwf.window_frame =
-                    window_frame.unwrap_or(WindowFrame::new(has_order_by));
-                udwf.null_treatment = null_treatment;
-                Expr::WindowFunction(udwf)
+                Expr::WindowFunction(WindowFunction {
+                    fun,
+                    params: WindowFunctionParams {
+                        args,
+                        partition_by: partition_by.unwrap_or_default(),
+                        order_by: order_by.unwrap_or_default(),
+                        window_frame: window_frame
+                            .unwrap_or(WindowFrame::new(has_order_by)),
+                        null_treatment,
+                    },
+                })
             }
         };
 

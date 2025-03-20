@@ -21,7 +21,7 @@
 use std::fmt;
 use std::fmt::Formatter;
 
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
 use datafusion_expr::display_schema;
@@ -44,7 +44,7 @@ pub enum DisplayFormatType {
 /// # Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::{Field, Schema, DataType};
+/// # use arrow::datatypes::{Field, Schema, DataType};
 /// # use datafusion_expr::Operator;
 /// # use datafusion_physical_expr::expressions::{binary, col, lit};
 /// # use datafusion_physical_plan::{displayable, ExecutionPlan};
@@ -141,7 +141,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     ///   CoalesceBatchesExec: target_batch_size=8192
     ///     FilterExec: a < 5
     ///       RepartitionExec: partitioning=RoundRobinBatch(16)
-    ///         CsvExec: source=...",
+    ///         DataSourceExec: source=...",
     /// ```
     pub fn indent(&self, verbose: bool) -> impl fmt::Display + 'a {
         let format_type = if verbose {

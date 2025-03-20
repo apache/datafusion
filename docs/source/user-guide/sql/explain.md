@@ -32,8 +32,9 @@ EXPLAIN [ANALYZE] [VERBOSE] statement
 Shows the execution plan of a statement.
 If you need more detailed output, use `EXPLAIN VERBOSE`.
 
-```
+```sql
 EXPLAIN SELECT SUM(x) FROM table GROUP BY b;
+
 +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type     | plan                                                                                                                                                           |
 +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -46,7 +47,7 @@ EXPLAIN SELECT SUM(x) FROM table GROUP BY b;
 |               |       RepartitionExec: partitioning=Hash([Column { name: "b", index: 0 }], 16)                                                                                 |
 |               |         AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[SUM(table.x)]                                                                                         |
 |               |           RepartitionExec: partitioning=RoundRobinBatch(16)                                                                                                    |
-|               |             CsvExec: file_groups={1 group: [[/tmp/table.csv]]}, projection=[x, b], has_header=false                                            |
+|               |             DataSourceExec: file_groups={1 group: [[/tmp/table.csv]]}, projection=[x, b], has_header=false                                            |
 |               |                                                                                                                                                                |
 +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------+
 ```
@@ -56,8 +57,9 @@ EXPLAIN SELECT SUM(x) FROM table GROUP BY b;
 Shows the execution plan and metrics of a statement.
 If you need more information output, use `EXPLAIN ANALYZE VERBOSE`.
 
-```
+```sql
 EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
+
 +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type         | plan                                                                                                                                                      |
 +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -68,6 +70,6 @@ EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
 |                   |         RepartitionExec: partitioning=Hash([Column { name: "b", index: 0 }], 16), metrics=[sendTime=839560, fetchTime=122528525, repartitionTime=5327877] |
 |                   |           HashAggregateExec: mode=Partial, gby=[b@1 as b], aggr=[SUM(x)], metrics=[outputRows=2]                                                          |
 |                   |             RepartitionExec: partitioning=RoundRobinBatch(16), metrics=[fetchTime=5660489, repartitionTime=0, sendTime=8012]                              |
-|                   |               CsvExec: file_groups={1 group: [[/tmp/table.csv]]}, has_header=false, metrics=[]                                                        |
+|                   |               DataSourceExec: file_groups={1 group: [[/tmp/table.csv]]}, has_header=false, metrics=[]                                                        |
 +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------+
 ```

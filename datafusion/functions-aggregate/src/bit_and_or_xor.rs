@@ -25,10 +25,9 @@ use std::mem::{size_of, size_of_val};
 use ahash::RandomState;
 use arrow::array::{downcast_integer, Array, ArrayRef, AsArray};
 use arrow::datatypes::{
-    ArrowNativeType, ArrowNumericType, DataType, Int16Type, Int32Type, Int64Type,
+    ArrowNativeType, ArrowNumericType, DataType, Field, Int16Type, Int32Type, Int64Type,
     Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use arrow_schema::Field;
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
@@ -43,7 +42,7 @@ use datafusion_expr::{
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use std::ops::{BitAndAssign, BitOrAssign, BitXorAssign};
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 /// This macro helps create group accumulators based on bitwise operations typically used internally
 /// and might not be necessary for users to call directly.
@@ -135,46 +134,46 @@ macro_rules! make_bitwise_udaf_expr_and_func {
     };
 }
 
-static BIT_AND_DOC: OnceLock<Documentation> = OnceLock::new();
+static BIT_AND_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_GENERAL,
+        "Computes the bitwise AND of all non-null input values.",
+        "bit_and(expression)",
+    )
+    .with_standard_argument("expression", Some("Integer"))
+    .build()
+});
 
 fn get_bit_and_doc() -> &'static Documentation {
-    BIT_AND_DOC.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-            "Computes the bitwise AND of all non-null input values.",
-            "bit_and(expression)",
-        )
-        .with_standard_argument("expression", Some("Integer"))
-        .build()
-    })
+    &BIT_AND_DOC
 }
 
-static BIT_OR_DOC: OnceLock<Documentation> = OnceLock::new();
+static BIT_OR_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_GENERAL,
+        "Computes the bitwise OR of all non-null input values.",
+        "bit_or(expression)",
+    )
+    .with_standard_argument("expression", Some("Integer"))
+    .build()
+});
 
 fn get_bit_or_doc() -> &'static Documentation {
-    BIT_OR_DOC.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-            "Computes the bitwise OR of all non-null input values.",
-            "bit_or(expression)",
-        )
-        .with_standard_argument("expression", Some("Integer"))
-        .build()
-    })
+    &BIT_OR_DOC
 }
 
-static BIT_XOR_DOC: OnceLock<Documentation> = OnceLock::new();
+static BIT_XOR_DOC: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_GENERAL,
+        "Computes the bitwise exclusive OR of all non-null input values.",
+        "bit_xor(expression)",
+    )
+    .with_standard_argument("expression", Some("Integer"))
+    .build()
+});
 
 fn get_bit_xor_doc() -> &'static Documentation {
-    BIT_XOR_DOC.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-            "Computes the bitwise exclusive OR of all non-null input values.",
-            "bit_xor(expression)",
-        )
-        .with_standard_argument("expression", Some("Integer"))
-        .build()
-    })
+    &BIT_XOR_DOC
 }
 
 make_bitwise_udaf_expr_and_func!(

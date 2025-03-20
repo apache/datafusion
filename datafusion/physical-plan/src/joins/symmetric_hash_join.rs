@@ -63,9 +63,8 @@ use arrow::array::{
     UInt64Array,
 };
 use arrow::compute::concat_batches;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_buffer::ArrowNativeType;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
 use datafusion_common::{internal_err, plan_err, HashSet, JoinSide, JoinType, Result};
@@ -1731,7 +1730,7 @@ pub enum SHJStreamState {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Mutex;
+    use std::sync::{LazyLock, Mutex};
 
     use super::*;
     use crate::joins::test_utils::{
@@ -1749,7 +1748,6 @@ mod tests {
     use datafusion_physical_expr::expressions::{binary, col, lit, Column};
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
-    use once_cell::sync::Lazy;
     use rstest::*;
 
     const TABLE_SIZE: i32 = 30;
@@ -1758,8 +1756,8 @@ mod tests {
     type TableValue = (Vec<RecordBatch>, Vec<RecordBatch>); // (left, right)
 
     // Cache for storing tables
-    static TABLE_CACHE: Lazy<Mutex<HashMap<TableKey, TableValue>>> =
-        Lazy::new(|| Mutex::new(HashMap::new()));
+    static TABLE_CACHE: LazyLock<Mutex<HashMap<TableKey, TableValue>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
 
     fn get_or_create_table(
         cardinality: (i32, i32),

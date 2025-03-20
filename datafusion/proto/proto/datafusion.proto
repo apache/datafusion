@@ -278,7 +278,7 @@ message DmlNode{
   Type dml_type = 1;
   LogicalPlanNode input = 2;
   TableReference table_name = 3;
-  datafusion_common.DfSchema schema = 4;
+  LogicalPlanNode target = 5;
 }
 
 message UnnestNode {
@@ -1005,6 +1005,8 @@ message ParquetScanExecNode {
   reserved 2;
 
   PhysicalExprNode predicate = 3;
+
+  datafusion_common.TableParquetOptions parquet_options = 4;
 }
 
 message CsvScanExecNode {

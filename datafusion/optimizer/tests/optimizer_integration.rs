@@ -22,12 +22,15 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{assert_contains, plan_err, Result};
+use datafusion_common::{assert_contains, plan_err, Result, TableReference};
+use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_functions_aggregate::planner::AggregateFunctionPlanner;
+use datafusion_functions_window::planner::WindowFunctionPlanner;
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
@@ -36,7 +39,6 @@ use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
-use datafusion_sql::TableReference;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -266,8 +268,8 @@ fn join_keys_in_subquery_alias_1() {
 fn push_down_filter_groupby_expr_contains_alias() {
     let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
     let plan = test_sql(sql).unwrap();
-    let expected = "Projection: test.col_int32 + test.col_uint32 AS c, count(*)\
-    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(Int64(1)) AS count(*)]]\
+    let expected = "Projection: test.col_int32 + test.col_uint32 AS c, count(Int64(1)) AS count(*)\
+    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(Int64(1))]]\
     \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
     \n      TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan}"));
@@ -310,10 +312,9 @@ fn eliminate_redundant_null_check_on_count() {
         GROUP BY col_int32
         HAVING c IS NOT NULL";
     let plan = test_sql(sql).unwrap();
-    let expected = "\
-        Projection: test.col_int32, count(*) AS c\
-        \n  Aggregate: groupBy=[[test.col_int32]], aggr=[[count(Int64(1)) AS count(*)]]\
-        \n    TableScan: test projection=[col_int32]";
+    let expected = "Projection: test.col_int32, count(Int64(1)) AS count(*) AS c\
+    \n  Aggregate: groupBy=[[test.col_int32]], aggr=[[count(Int64(1))]]\
+    \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan}"));
 }
 
@@ -423,7 +424,12 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let context_provider = MyContextProvider::default()
         .with_udaf(sum_udaf())
         .with_udaf(count_udaf())
-        .with_udaf(avg_udaf());
+        .with_udaf(avg_udaf())
+        .with_expr_planners(vec![
+            Arc::new(AggregateFunctionPlanner),
+            Arc::new(WindowFunctionPlanner),
+        ]);
+
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
 
@@ -441,12 +447,18 @@ fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 struct MyContextProvider {
     options: ConfigOptions,
     udafs: HashMap<String, Arc<AggregateUDF>>,
+    expr_planners: Vec<Arc<dyn ExprPlanner>>,
 }
 
 impl MyContextProvider {
     fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
         // TODO: change to to_string() if all the function name is converted to lowercase
         self.udafs.insert(udaf.name().to_lowercase(), udaf);
+        self
+    }
+
+    fn with_expr_planners(mut self, expr_planners: Vec<Arc<dyn ExprPlanner>>) -> Self {
+        self.expr_planners = expr_planners;
         self
     }
 }
@@ -516,6 +528,10 @@ impl ContextProvider for MyContextProvider {
 
     fn udwf_names(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.expr_planners
     }
 }
 

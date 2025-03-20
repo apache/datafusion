@@ -17,14 +17,20 @@
 
 //! SQL planning extensions like [`NestedFunctionPlanner`] and [`FieldAccessPlanner`]
 
+use arrow::datatypes::DataType;
+use datafusion_common::ExprSchema;
 use datafusion_common::{plan_err, utils::list_ndims, DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
+use datafusion_expr::AggregateUDF;
 use datafusion_expr::{
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
     sqlparser, Expr, ExprSchemable, GetFieldAccess,
 };
+use datafusion_functions::core::get_field as get_field_inner;
 use datafusion_functions::expr_fn::get_field;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
+use std::sync::Arc;
 
 use crate::map::map_udf;
 use crate::{
@@ -137,7 +143,7 @@ impl ExprPlanner for FieldAccessPlanner {
     fn plan_field_access(
         &self,
         expr: RawFieldAccessExpr,
-        _schema: &DFSchema,
+        schema: &DFSchema,
     ) -> Result<PlannerResult<RawFieldAccessExpr>> {
         let RawFieldAccessExpr { expr, field_access } = expr;
 
@@ -150,19 +156,34 @@ impl ExprPlanner for FieldAccessPlanner {
             GetFieldAccess::ListIndex { key: index } => {
                 match expr {
                     // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
-                    Expr::AggregateFunction(agg_func) if is_array_agg(&agg_func) => {
-                        Ok(PlannerResult::Planned(Expr::AggregateFunction(
-                            datafusion_expr::expr::AggregateFunction::new_udf(
-                                nth_value_udaf(),
-                                agg_func
-                                    .args
-                                    .into_iter()
-                                    .chain(std::iter::once(*index))
-                                    .collect(),
-                                agg_func.distinct,
-                                agg_func.filter,
-                                agg_func.order_by,
-                                agg_func.null_treatment,
+                    Expr::AggregateFunction(AggregateFunction {
+                        func,
+                        params:
+                            AggregateFunctionParams {
+                                args,
+                                distinct,
+                                filter,
+                                order_by,
+                                null_treatment,
+                            },
+                    }) if is_array_agg(&func) => Ok(PlannerResult::Planned(
+                        Expr::AggregateFunction(AggregateFunction::new_udf(
+                            nth_value_udaf(),
+                            args.into_iter().chain(std::iter::once(*index)).collect(),
+                            distinct,
+                            filter,
+                            order_by,
+                            null_treatment,
+                        )),
+                    )),
+                    // special case for map access with
+                    Expr::Column(ref c)
+                        if matches!(schema.data_type(c)?, DataType::Map(_, _)) =>
+                    {
+                        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+                            ScalarFunction::new_udf(
+                                get_field_inner(),
+                                vec![expr, *index],
                             ),
                         )))
                     }
@@ -184,6 +205,6 @@ impl ExprPlanner for FieldAccessPlanner {
     }
 }
 
-fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
-    agg_func.func.name() == "array_agg"
+fn is_array_agg(func: &Arc<AggregateUDF>) -> bool {
+    func.name() == "array_agg"
 }

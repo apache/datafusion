@@ -584,7 +584,7 @@ DROP TABLE data_index_bloom_encoding_stats;
 # String coercion
 ########
 
-statement error DataFusion error: SQL error: ParserError\("Expected: a data type name, found: ,"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: a data type name, found: , at Line: 1, Column: 30"\)
 CREATE TABLE t(vendor_id_utf8, vendor_id_dict)
 AS VALUES
 (arrow_cast('124', 'Utf8'), arrow_cast('124', 'Dictionary(Int16, Utf8)')),
@@ -675,13 +675,13 @@ physical_plan
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------FilterExec: l_quantity@1 >= Some(100),15,2 AND l_quantity@1 <= Some(1100),15,2 OR l_quantity@1 >= Some(1000),15,2 AND l_quantity@1 <= Some(2000),15,2 OR l_quantity@1 >= Some(2000),15,2 AND l_quantity@1 <= Some(3000),15,2
 07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_quantity], has_header=true
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_quantity], file_type=csv, has_header=true
 09)----CoalesceBatchesExec: target_batch_size=8192
 10)------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
 11)--------CoalesceBatchesExec: target_batch_size=8192
 12)----------FilterExec: (p_brand@1 = Brand#12 AND p_size@2 <= 5 OR p_brand@1 = Brand#23 AND p_size@2 <= 10 OR p_brand@1 = Brand#34 AND p_size@2 <= 15) AND p_size@2 >= 1
 13)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-14)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand, p_size], has_header=true
+14)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand, p_size], file_type=csv, has_header=true
 
 ########
 # TPCH Q19 - Pull predicates to inner join (simplified)
@@ -767,16 +767,16 @@ physical_plan
 06)----------CoalesceBatchesExec: target_batch_size=8192
 07)------------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=4
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_extendedprice, l_discount], has_header=true
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_extendedprice, l_discount], file_type=csv, has_header=true
 10)----------CoalesceBatchesExec: target_batch_size=8192
 11)------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
 12)--------------CoalesceBatchesExec: target_batch_size=8192
 13)----------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23, projection=[p_partkey@0]
 14)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-15)--------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], has_header=true
+15)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], file_type=csv, has_header=true
 16)------CoalesceBatchesExec: target_batch_size=8192
 17)--------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=1
-18)----------MemoryExec: partitions=1, partition_sizes=[1]
+18)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Inlist simplification
 
@@ -793,7 +793,7 @@ query TT
 explain select x from t where x NOT IN (1,2,3,4) OR x NOT IN (5,6,7,8);
 ----
 logical_plan TableScan: t projection=[x]
-physical_plan MemoryExec: partitions=1, partition_sizes=[1]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select x from t where x IN (1,2,3,4,5) AND x NOT IN (1,2,3,4);
@@ -804,7 +804,7 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: x@0 = 5
-03)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select x from t where x NOT IN (1,2,3,4,5) AND x IN (1,2,3);

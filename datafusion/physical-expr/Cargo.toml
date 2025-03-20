@@ -28,19 +28,18 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
 [lib]
 name = "datafusion_physical_expr"
-path = "src/lib.rs"
 
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
-arrow-array = { workspace = true }
-arrow-buffer = { workspace = true }
-arrow-schema = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
@@ -56,7 +55,7 @@ petgraph = "0.7.1"
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
-criterion = "0.5"
+criterion = { workspace = true }
 datafusion-functions = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }

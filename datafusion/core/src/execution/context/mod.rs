@@ -49,9 +49,8 @@ use crate::{
     variable::{VarProvider, VarType},
 };
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::Schema;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -1817,8 +1816,9 @@ mod tests {
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
-    use arrow_schema::{DataType, TimeUnit};
+    use arrow::datatypes::{DataType, TimeUnit};
     use std::env;
+    use std::error::Error;
     use std::path::PathBuf;
 
     use datafusion_common_runtime::SpawnedTask;
@@ -2043,10 +2043,16 @@ mod tests {
             Err(DataFusionError::Plan(_))
         ));
 
-        assert!(matches!(
-            ctx.sql("select * from datafusion.public.test").await,
-            Err(DataFusionError::Plan(_))
-        ));
+        let err = ctx
+            .sql("select * from datafusion.public.test")
+            .await
+            .unwrap_err();
+        let err = err
+            .source()
+            .and_then(|err| err.downcast_ref::<DataFusionError>())
+            .unwrap();
+
+        assert!(matches!(err, &DataFusionError::Plan(_)));
 
         Ok(())
     }
