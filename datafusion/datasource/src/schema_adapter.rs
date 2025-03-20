@@ -471,7 +471,7 @@ impl SchemaMapper for SchemaMapping {
             // and for each one...
             .map(|(field, source)| -> datafusion_common::Result<_> {
                 let column = match source {
-                    FieldSource::Table(file_idx) => batch_cols[*file_idx].clone(),
+                    FieldSource::Table(file_idx) => Arc::clone(&batch_cols[*file_idx]),
                     FieldSource::Generated(generator) => {
                         generator.generate(batch.clone())?
                     }
