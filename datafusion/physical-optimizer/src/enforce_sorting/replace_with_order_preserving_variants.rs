@@ -29,12 +29,13 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::execution_plan::{EmissionType, RequiredInputOrdering};
+use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
+use datafusion_common::config::ConfigOptions;
 use itertools::izip;
 
 /// For a given `plan`, this object carries the information one needs from its
@@ -209,6 +210,10 @@ fn plan_with_order_breaking_variants(
 /// If this replacement is helpful for removing a `SortExec`, it updates the plan.
 /// Otherwise, it leaves the plan unchanged.
 ///
+/// NOTE: This optimizer sub-rule will only produce sort-preserving `RepartitionExec`s
+/// if the query is bounded or if the config option `prefer_existing_sort` is
+/// set to `true`.
+///
 /// The algorithm flow is simply like this:
 /// 1. Visit nodes of the physical plan bottom-up and look for `SortExec` nodes.
 ///    During the traversal, keep track of operators that maintain ordering (or
@@ -237,17 +242,16 @@ pub fn replace_with_order_preserving_variants(
     // `SortExec` from the plan. If this flag is `false`, this replacement
     // should only be made to fix the pipeline (streaming).
     is_spm_better: bool,
+    config: &ConfigOptions,
 ) -> Result<Transformed<OrderPreservationContext>> {
     update_order_preservation_ctx_children_data(&mut requirements);
     if !(is_sort(&requirements.plan) && requirements.children[0].data) {
         return Ok(Transformed::no(requirements));
     }
-    let requirement = requirements.plan.required_input_ordering()[0].clone();
 
     // For unbounded cases, we replace with the order-preserving variant in any
     // case, as doing so helps fix the pipeline. Also replace if config allows.
-    let use_order_preserving_variant = (requirement.is_some()
-        && matches!(requirement.unwrap(), RequiredInputOrdering::Hard(_)))
+    let use_order_preserving_variant = config.optimizer.prefer_existing_sort
         || (requirements.plan.boundedness().is_unbounded()
             && requirements.plan.pipeline_behavior() == EmissionType::Final);
 

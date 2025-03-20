@@ -1096,6 +1096,18 @@ impl From<LexOrdering> for RequiredInputOrdering {
 }
 
 impl RequiredInputOrdering {
+    pub fn new(lex_requirements: Vec<LexRequirement>, is_soft: bool) -> Option<Self> {
+        if lex_requirements.is_empty() || lex_requirements[0].is_empty() {
+            return None;
+        }
+
+        Some(if is_soft {
+            RequiredInputOrdering::Soft(lex_requirements)
+        } else {
+            RequiredInputOrdering::Hard(lex_requirements)
+        })
+    }
+
     pub fn lex_requirement(&self) -> &LexRequirement {
         match self {
             RequiredInputOrdering::Hard(lex) => &lex[0],
@@ -1114,21 +1126,11 @@ impl RequiredInputOrdering {
     pub fn with_updated_requirements(
         &self,
         requirement: Vec<PhysicalSortRequirement>,
-    ) -> Self {
-        match self {
-            RequiredInputOrdering::Hard(_) => {
-                RequiredInputOrdering::Hard(vec![LexRequirement::new(requirement)])
-            }
-            RequiredInputOrdering::Soft(_) => {
-                RequiredInputOrdering::Soft(vec![LexRequirement::new(requirement)])
-            }
-        }
-    }
-
-    pub fn push(&self, requirement: PhysicalSortRequirement) -> Self {
-        let mut requirements = self.lex_requirement().clone();
-        requirements.push(requirement);
-        self.with_updated_requirements(requirements.to_vec())
+    ) -> Option<Self> {
+        RequiredInputOrdering::new(
+            vec![LexRequirement::new(requirement)],
+            matches!(self, RequiredInputOrdering::Soft(_)),
+        )
     }
 }
 

@@ -356,10 +356,10 @@ impl TableProvider for StreamTable {
                 let schema = self.0.source.schema();
                 let orders = create_ordering(schema, std::slice::from_ref(x))?;
                 let ordering = orders.into_iter().next().unwrap();
-                Some(RequiredInputOrdering::Hard(vec![ordering
-                    .into_iter()
-                    .map(Into::into)
-                    .collect()]))
+                RequiredInputOrdering::new(
+                    vec![ordering.into_iter().map(Into::into).collect()],
+                    false,
+                )
             }
             None => None,
         };

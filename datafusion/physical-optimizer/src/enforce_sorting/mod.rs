@@ -239,6 +239,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
                     plan_with_pipeline_fixer,
                     false,
                     true,
+                    config,
                 )
             })
             .data()?;
@@ -311,21 +312,20 @@ fn replace_with_partial_sort(
 /// The [`CoalescePartitionsExec`] + [`SortExec`] cascades
 /// combine the partitions first, and then sort:
 /// ```text
-///   ┌ ─ ─ ─ ─ ─ ┐   ┌────────┐   ┌ ─ ─ ─ ─ ─ ┐
-///    ┌─┬─┬─┐        │        │    ┌─┬─┬─┐
-///   ││B│A│D│... │──▶│  Sort  │──▶││A│B│D│... │──┐
-///    └─┴─┴─┘        │        │    └─┴─┴─┘       │
-///   └ ─ ─ ─ ─ ─ ┘   └────────┘   └ ─ ─ ─ ─ ─ ┘  │  ┌─────────────────────┐    ┌ ─ ─ ─ ─ ─ ─ ─ ┐
-///    Partition 1                  Partition 1   │  │                     │     ┌─┬─┬─┬─┬─┐
-///                                               ├──▶ SortPreservingMerge ├───▶││A│B│C│D│E│... │
-///                                               │  │                     │     └─┴─┴─┴─┴─┘
-///                                               │  │                     │     └─┴─┴─┴─┴─┘
-///   ┌ ─ ─ ─ ─ ─ ┐   ┌────────┐   ┌ ─ ─ ─ ─ ─ ┐  │  └─────────────────────┘    └ ─ ─ ─ ─ ─ ─ ─ ┘
-///    ┌─┬─┐          │        │    ┌─┬─┐         │                               Partition
-///   ││E│C│ ...  │──▶│  Sort  ├──▶││C│E│ ...  │──┘
-///    └─┴─┘          │        │    └─┴─┘
-///   └ ─ ─ ─ ─ ─ ┘   └────────┘   └ ─ ─ ─ ─ ─ ┘
-///    Partition 2                  Partition 2
+///   ┌ ─ ─ ─ ─ ─ ┐
+///    ┌─┬─┬─┐
+///   ││B│A│D│... ├──┐
+///    └─┴─┴─┘       │
+///   └ ─ ─ ─ ─ ─ ┘  │  ┌────────────────────────┐   ┌ ─ ─ ─ ─ ─ ─ ┐   ┌────────┐    ┌ ─ ─ ─ ─ ─ ─ ─ ┐
+///    Partition 1   │  │        Coalesce        │    ┌─┬─┬─┬─┬─┐      │        │     ┌─┬─┬─┬─┬─┐
+///                  ├──▶(no ordering guarantees)│──▶││B│E│A│D│C│...───▶  Sort  ├───▶││A│B│C│D│E│... │
+///                  │  │                        │    └─┴─┴─┴─┴─┘      │        │     └─┴─┴─┴─┴─┘
+///   ┌ ─ ─ ─ ─ ─ ┐  │  └────────────────────────┘   └ ─ ─ ─ ─ ─ ─ ┘   └────────┘    └ ─ ─ ─ ─ ─ ─ ─ ┘
+///    ┌─┬─┐         │                                 Partition                       Partition
+///   ││E│C│ ...  ├──┘
+///    └─┴─┘
+///   └ ─ ─ ─ ─ ─ ┘
+///    Partition 2
 /// ```
 ///
 ///
