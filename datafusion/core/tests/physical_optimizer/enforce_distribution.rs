@@ -3236,7 +3236,7 @@ fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
         "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
         "    FilterExec: c@2 = 0",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-        "        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
+        "        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
     test_config.run(expected, physical_plan.clone(), &DISTRIB_DISTRIB_SORT)?;
 
