@@ -82,31 +82,63 @@ pub enum Operator {
     BitwiseShiftLeft,
     /// String concat
     StringConcat,
-    /// At arrow, like `@>`
+    /// At arrow, like `@>`.
+    ///
+    /// Currently only supported to be used with lists:
+    /// ```sql
+    /// select [1,3] <@ [1,2,3]
+    /// ```
     AtArrow,
-    /// Arrow at, like `<@`
+    /// Arrow at, like `<@`.
+    ///
+    /// Currently only supported to be used with lists:
+    /// ```sql
+    /// select [1,2,3] @> [1,3]
+    /// ```
     ArrowAt,
-    /// Arrow, like `->`
+    /// Arrow, like `->`.
+    ///
+    /// Not implemented in DataFusion yet.
     Arrow,
     /// Long arrow, like `->>`
+    ///
+    /// Not implemented in DataFusion yet.
     LongArrow,
     /// Hash arrow, like `#>`
+    ///
+    /// Not implemented in DataFusion yet.
     HashArrow,
     /// Hash long arrow, like `#>>`
+    ///
+    /// Not implemented in DataFusion yet.
     HashLongArrow,
     /// At at, like `@@`
+    ///
+    /// Not implemented in DataFusion yet.
     AtAt,
     /// Integer division operator, like `DIV` from MySQL or `//` from DuckDB
+    ///
+    /// Not implemented in DataFusion yet.
     IntegerDivide,
     /// Hash Minis, like `#-`
+    ///
+    /// Not implemented in DataFusion yet.
     HashMinus,
     /// At question, like `@?`
+    ///
+    /// Not implemented in DataFusion yet.
     AtQuestion,
     /// Question, like `?`
+    ///
+    /// Not implemented in DataFusion yet.
     Question,
     /// Question and, like `?&`
+    ///
+    /// Not implemented in DataFusion yet.
     QuestionAnd,
     /// Question pipe, like `?|`
+    ///
+    /// Not implemented in DataFusion yet.
     QuestionPipe,
 }
 
