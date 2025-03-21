@@ -5,6 +5,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::NestedStructSchemaAdapter;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
@@ -234,6 +235,10 @@ async fn test_datafusion_schema_evolution_with_compaction(
     .await?;
 
     let paths_str = vec![path1.to_string(), path2.to_string()];
+
+    // Create a schema adapter to handle the nested struct evolution
+    let adapter = NestedStructSchemaAdapter::new();
+
     let config = ListingTableConfig::new_with_multi_paths(
         paths_str
             .into_iter()
@@ -241,6 +246,7 @@ async fn test_datafusion_schema_evolution_with_compaction(
             .collect::<Result<Vec<_>, _>>()?,
     )
     .with_schema(schema2.as_ref().clone().into())
+    .with_schema_adapter(adapter)
     .infer(&ctx.state())
     .await?;
 
