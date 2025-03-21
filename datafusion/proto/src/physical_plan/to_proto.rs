@@ -530,6 +530,7 @@ pub fn serialize_file_scan_config(
             })
             .collect::<Vec<_>>(),
         constraints: Some(conf.constraints.clone().into()),
+        batch_size: conf.batch_size.map(|s| s as u64),
     })
 }
 
