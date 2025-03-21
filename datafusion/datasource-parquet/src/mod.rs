@@ -41,6 +41,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::config::{ConfigOptions, TableParquetOptions};
 use datafusion_common::Result;
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::file_expr_rewriter::FileExpressionRewriter;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::source::DataSourceExec;
@@ -538,12 +539,27 @@ impl ExecutionPlan for ParquetExec {
     }
 }
 
+/// Decide if we should enable the page index based on the provided parameters.
+/// If disabled we avoid loading the page index which may save significant IO downloading the data and CPU decoding it.
+/// If enabled we load the page index, even if we may end up not using it.
 fn should_enable_page_index(
     enable_page_index: bool,
+    predicate: &Option<Arc<dyn PhysicalExpr>>,
     page_pruning_predicate: &Option<Arc<PagePruningAccessPlanFilter>>,
+    file_filter_expr_rewriter: &Option<Arc<dyn FileExpressionRewriter>>,
 ) -> bool {
-    enable_page_index
-        && page_pruning_predicate.is_some()
+    // If the user explicly disabled page indexes don't load them even if we could use them.
+    if !enable_page_index {
+        return false;
+    }
+    // Now we try to decide if we can use the page index or if it would be pointless to load it.
+    if predicate.is_some() && file_filter_expr_rewriter.is_some() {
+        // If we have a predicate and a filter rewriter we need to load the page index in case the filter rewriter
+        // rewrites the predicate to one that can be pushed down to the page index, even if the original predicate can't.
+        return true;
+    }
+    // Only load the page index if we have a pruning predicate that can be pushed down to the page index.
+    page_pruning_predicate.is_some()
         && page_pruning_predicate
             .as_ref()
             .map(|p| p.filter_number() > 0)
