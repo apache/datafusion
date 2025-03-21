@@ -523,6 +523,23 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#arrow-schema-and-datafusion-dfschema">
+   Arrow Schema and DataFusion DFSchema
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#difference-between-schema-and-dfschema">
+     Difference between Schema and DFSchema
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#how-to-convert-between-schema-and-dfschema">
+     How to convert between Schema and DFSchema
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#creating-and-evaluating-exprs">
    Creating and Evaluating
    <code class="docutils literal notranslate">
@@ -659,6 +676,30 @@
 </pre></div>
 </div>
 <p>As the writer of a library, you can use <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to represent computations that you want to perform. This guide will walk you through how to make your own scalar UDF as an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and how to rewrite <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to inline the simple UDF.</p>
+<section id="arrow-schema-and-datafusion-dfschema">
+<h2>Arrow Schema and DataFusion DFSchema<a class="headerlink" href="#arrow-schema-and-datafusion-dfschema" title="Link to this heading">¶</a></h2>
+<p>Apache Arrow <code class="docutils literal notranslate"><span class="pre">Schema</span></code> provides a lightweight structure for defining data, and Apache Datafusion<code class="docutils literal notranslate"><span class="pre">DFSchema</span></code> extends it with extra information such as column qualifiers and functional dependencies. Column qualifiers are multi part path to the table e.g table, schema, catalog. Functional Dependency is the relationship between attributes(characteristics) of a table related to each other.</p>
+<section id="difference-between-schema-and-dfschema">
+<h3>Difference between Schema and DFSchema<a class="headerlink" href="#difference-between-schema-and-dfschema" title="Link to this heading">¶</a></h3>
+<ul>
+<li><p>Schema: A fundamental component of Apache Arrow, <code class="docutils literal notranslate"><span class="pre">Schema</span></code> defines a dataset’s structure, specifying column names and their data types.</p>
+<blockquote>
+<div><p>Please see <a class="reference external" href="https://docs.rs/arrow-schema/54.2.1/arrow_schema/struct.Schema.html">Struct Schema</a> for a detailed document of Arrow Schema.</p>
+</div></blockquote>
+</li>
+<li><p>DFSchema: Extending <code class="docutils literal notranslate"><span class="pre">Schema</span></code>, <code class="docutils literal notranslate"><span class="pre">DFSchema</span></code> incorporates qualifiers such as table names, enabling it to carry additional context when required. This is particularly valuable for managing queries across multiple tables.</p>
+<blockquote>
+<div><p>Please see <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/struct.DFSchema.html">Struct DFSchema</a> for a detailed document of DFSchema.</p>
+</div></blockquote>
+</li>
+</ul>
+</section>
+<section id="how-to-convert-between-schema-and-dfschema">
+<h3>How to convert between Schema and DFSchema<a class="headerlink" href="#how-to-convert-between-schema-and-dfschema" title="Link to this heading">¶</a></h3>
+<p>From Schema to DFSchema: Use <code class="docutils literal notranslate"><span class="pre">DFSchema::try_from_qualified_schema</span></code> with a table name and original schema, for detailed code example please see <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/struct.DFSchema.html#creating-qualified-schemas">creating-qualified-schemas</a>.</p>
+<p>From DFSchema to Schema: Since the <code class="docutils literal notranslate"><span class="pre">Into</span></code> trait has been implemented for DFSchema to convert it into an Arrow Schema, for detailed code example please see <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/struct.DFSchema.html#converting-back-to-arrow-schema">converting-back-to-arrow-schema</a>.</p>
+</section>
+</section>
 <section id="creating-and-evaluating-exprs">
 <h2>Creating and Evaluating <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s<a class="headerlink" href="#creating-and-evaluating-exprs" title="Link to this heading">¶</a></h2>
 <p>Please see <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs">expr_api.rs</a> for well commented code for creating, evaluating, simplifying, and analyzing <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s.</p>
