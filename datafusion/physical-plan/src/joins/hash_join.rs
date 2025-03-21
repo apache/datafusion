@@ -929,6 +929,14 @@ impl ExecutionPlan for HashJoinExec {
     }
 }
 
+fn coalesce_partitions_if_needed(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    if plan.output_partitioning().partition_count() == 1 {
+        plan
+    } else {
+        Arc::new(CoalescePartitionsExec::new(plan))
+    }
+}
+
 /// Reads the left (build) side of the input, buffering it in memory, to build a
 /// hash table (`LeftJoinData`)
 #[allow(clippy::too_many_arguments)]
@@ -947,10 +955,9 @@ async fn collect_left_input(
 
     let (left_input, left_input_partition) = if let Some(partition) = partition {
         (left, partition)
-    } else if left.output_partitioning().partition_count() != 1 {
-        (Arc::new(CoalescePartitionsExec::new(left)) as _, 0)
     } else {
-        (left, 0)
+        let left_input = coalesce_partitions_if_needed(left);
+        (left_input, 0)
     };
 
     // Depending on partition argument load single partition or whole left side in memory
