@@ -1079,5 +1079,9 @@ mod tests {
         fn table_options_mut(&mut self) -> &mut TableOptions {
             unimplemented!()
         }
+
+        fn task_ctx(&self) -> Arc<datafusion_execution::TaskContext> {
+            unimplemented!()
+        }
     }
 }
