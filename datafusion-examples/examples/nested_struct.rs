@@ -9,67 +9,19 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::prelude::*;
+use std::error::Error;
 use std::fs;
 use std::sync::Arc;
-
 // Remove the tokio::test attribute to make this a regular async function
-async fn test_datafusion_schema_evolution_with_compaction(
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dyn Error>>
+{
     println!("==> Starting test function");
     let ctx = SessionContext::new();
 
     println!("==> Creating schema1 (simple additionalInfo structure)");
-    let schema1 = Arc::new(Schema::new(vec![
-        Field::new("component", DataType::Utf8, true),
-        Field::new("message", DataType::Utf8, true),
-        Field::new("stack", DataType::Utf8, true),
-        Field::new("timestamp", DataType::Utf8, true),
-        Field::new(
-            "timestamp_utc",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            true,
-        ),
-        Field::new(
-            "additionalInfo",
-            DataType::Struct(
-                vec![
-                    Field::new("location", DataType::Utf8, true),
-                    Field::new(
-                        "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        true,
-                    ),
-                ]
-                .into(),
-            ),
-            true,
-        ),
-    ]));
+    let schema1 = create_schema1();
 
-    let batch1 = RecordBatch::try_new(
-        schema1.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![Some("component1")])),
-            Arc::new(StringArray::from(vec![Some("message1")])),
-            Arc::new(StringArray::from(vec![Some("stack_trace")])),
-            Arc::new(StringArray::from(vec![Some("2025-02-18T00:00:00Z")])),
-            Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
-            Arc::new(StructArray::from(vec![
-                (
-                    Arc::new(Field::new("location", DataType::Utf8, true)),
-                    Arc::new(StringArray::from(vec![Some("USA")])) as Arc<dyn Array>,
-                ),
-                (
-                    Arc::new(Field::new(
-                        "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        true,
-                    )),
-                    Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
-                ),
-            ])),
-        ],
-    )?;
+    let batch1 = create_batch1(schema1)?;
 
     let path1 = "test_data1.parquet";
     let _ = fs::remove_file(path1);
@@ -87,143 +39,9 @@ async fn test_datafusion_schema_evolution_with_compaction(
     println!("==> Successfully wrote first parquet file");
     println!("==> Creating schema2 (extended additionalInfo with nested reason field)");
 
-    let schema2 = Arc::new(Schema::new(vec![
-        Field::new("component", DataType::Utf8, true),
-        Field::new("message", DataType::Utf8, true),
-        Field::new("stack", DataType::Utf8, true),
-        Field::new("timestamp", DataType::Utf8, true),
-        Field::new(
-            "timestamp_utc",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            true,
-        ),
-        Field::new(
-            "additionalInfo",
-            DataType::Struct(
-                vec![
-                    Field::new("location", DataType::Utf8, true),
-                    Field::new(
-                        "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        true,
-                    ),
-                    Field::new(
-                        "reason",
-                        DataType::Struct(
-                            vec![
-                                Field::new("_level", DataType::Float64, true),
-                                Field::new(
-                                    "details",
-                                    DataType::Struct(
-                                        vec![
-                                            Field::new("rurl", DataType::Utf8, true),
-                                            Field::new("s", DataType::Float64, true),
-                                            Field::new("t", DataType::Utf8, true),
-                                        ]
-                                        .into(),
-                                    ),
-                                    true,
-                                ),
-                            ]
-                            .into(),
-                        ),
-                        true,
-                    ),
-                ]
-                .into(),
-            ),
-            true,
-        ),
-    ]));
+    let schema2 = create_schema2();
 
-    let batch2 = RecordBatch::try_new(
-        schema2.clone(),
-        vec![
-            Arc::new(StringArray::from(vec![Some("component1")])),
-            Arc::new(StringArray::from(vec![Some("message1")])),
-            Arc::new(StringArray::from(vec![Some("stack_trace")])),
-            Arc::new(StringArray::from(vec![Some("2025-02-18T00:00:00Z")])),
-            Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
-            Arc::new(StructArray::from(vec![
-                (
-                    Arc::new(Field::new("location", DataType::Utf8, true)),
-                    Arc::new(StringArray::from(vec![Some("USA")])) as Arc<dyn Array>,
-                ),
-                (
-                    Arc::new(Field::new(
-                        "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        true,
-                    )),
-                    Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
-                ),
-                (
-                    Arc::new(Field::new(
-                        "reason",
-                        DataType::Struct(
-                            vec![
-                                Field::new("_level", DataType::Float64, true),
-                                Field::new(
-                                    "details",
-                                    DataType::Struct(
-                                        vec![
-                                            Field::new("rurl", DataType::Utf8, true),
-                                            Field::new("s", DataType::Float64, true),
-                                            Field::new("t", DataType::Utf8, true),
-                                        ]
-                                        .into(),
-                                    ),
-                                    true,
-                                ),
-                            ]
-                            .into(),
-                        ),
-                        true,
-                    )),
-                    Arc::new(StructArray::from(vec![
-                        (
-                            Arc::new(Field::new("_level", DataType::Float64, true)),
-                            Arc::new(Float64Array::from(vec![Some(1.5)]))
-                                as Arc<dyn Array>,
-                        ),
-                        (
-                            Arc::new(Field::new(
-                                "details",
-                                DataType::Struct(
-                                    vec![
-                                        Field::new("rurl", DataType::Utf8, true),
-                                        Field::new("s", DataType::Float64, true),
-                                        Field::new("t", DataType::Utf8, true),
-                                    ]
-                                    .into(),
-                                ),
-                                true,
-                            )),
-                            Arc::new(StructArray::from(vec![
-                                (
-                                    Arc::new(Field::new("rurl", DataType::Utf8, true)),
-                                    Arc::new(StringArray::from(vec![Some(
-                                        "https://example.com",
-                                    )]))
-                                        as Arc<dyn Array>,
-                                ),
-                                (
-                                    Arc::new(Field::new("s", DataType::Float64, true)),
-                                    Arc::new(Float64Array::from(vec![Some(3.14)]))
-                                        as Arc<dyn Array>,
-                                ),
-                                (
-                                    Arc::new(Field::new("t", DataType::Utf8, true)),
-                                    Arc::new(StringArray::from(vec![Some("data")]))
-                                        as Arc<dyn Array>,
-                                ),
-                            ])),
-                        ),
-                    ])),
-                ),
-            ])),
-        ],
-    )?;
+    let batch2 = create_batch2(&schema2)?;
 
     let path2 = "test_data2.parquet";
     let _ = fs::remove_file(path2);
@@ -332,7 +150,209 @@ async fn test_datafusion_schema_evolution_with_compaction(
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn create_schema2() -> Arc<Schema> {
+    let schema2 = Arc::new(Schema::new(vec![
+        Field::new("component", DataType::Utf8, true),
+        Field::new("message", DataType::Utf8, true),
+        Field::new("stack", DataType::Utf8, true),
+        Field::new("timestamp", DataType::Utf8, true),
+        Field::new(
+            "timestamp_utc",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        ),
+        Field::new(
+            "additionalInfo",
+            DataType::Struct(
+                vec![
+                    Field::new("location", DataType::Utf8, true),
+                    Field::new(
+                        "timestamp_utc",
+                        DataType::Timestamp(TimeUnit::Millisecond, None),
+                        true,
+                    ),
+                    Field::new(
+                        "reason",
+                        DataType::Struct(
+                            vec![
+                                Field::new("_level", DataType::Float64, true),
+                                Field::new(
+                                    "details",
+                                    DataType::Struct(
+                                        vec![
+                                            Field::new("rurl", DataType::Utf8, true),
+                                            Field::new("s", DataType::Float64, true),
+                                            Field::new("t", DataType::Utf8, true),
+                                        ]
+                                        .into(),
+                                    ),
+                                    true,
+                                ),
+                            ]
+                            .into(),
+                        ),
+                        true,
+                    ),
+                ]
+                .into(),
+            ),
+            true,
+        ),
+    ]));
+    schema2
+}
+
+fn create_batch1(schema1: Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
+    let batch1 = RecordBatch::try_new(
+        schema1.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![Some("component1")])),
+            Arc::new(StringArray::from(vec![Some("message1")])),
+            Arc::new(StringArray::from(vec![Some("stack_trace")])),
+            Arc::new(StringArray::from(vec![Some("2025-02-18T00:00:00Z")])),
+            Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
+            Arc::new(StructArray::from(vec![
+                (
+                    Arc::new(Field::new("location", DataType::Utf8, true)),
+                    Arc::new(StringArray::from(vec![Some("USA")])) as Arc<dyn Array>,
+                ),
+                (
+                    Arc::new(Field::new(
+                        "timestamp_utc",
+                        DataType::Timestamp(TimeUnit::Millisecond, None),
+                        true,
+                    )),
+                    Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
+                ),
+            ])),
+        ],
+    )?;
+    Ok(batch1)
+}
+
+fn create_schema1() -> Arc<Schema> {
+    let schema1 = Arc::new(Schema::new(vec![
+        Field::new("component", DataType::Utf8, true),
+        Field::new("message", DataType::Utf8, true),
+        Field::new("stack", DataType::Utf8, true),
+        Field::new("timestamp", DataType::Utf8, true),
+        Field::new(
+            "timestamp_utc",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            true,
+        ),
+        Field::new(
+            "additionalInfo",
+            DataType::Struct(
+                vec![
+                    Field::new("location", DataType::Utf8, true),
+                    Field::new(
+                        "timestamp_utc",
+                        DataType::Timestamp(TimeUnit::Millisecond, None),
+                        true,
+                    ),
+                ]
+                .into(),
+            ),
+            true,
+        ),
+    ]));
+    schema1
+}
+
+fn create_batch2(schema2: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
+    let batch2 = RecordBatch::try_new(
+        schema2.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![Some("component1")])),
+            Arc::new(StringArray::from(vec![Some("message1")])),
+            Arc::new(StringArray::from(vec![Some("stack_trace")])),
+            Arc::new(StringArray::from(vec![Some("2025-02-18T00:00:00Z")])),
+            Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
+            Arc::new(StructArray::from(vec![
+                (
+                    Arc::new(Field::new("location", DataType::Utf8, true)),
+                    Arc::new(StringArray::from(vec![Some("USA")])) as Arc<dyn Array>,
+                ),
+                (
+                    Arc::new(Field::new(
+                        "timestamp_utc",
+                        DataType::Timestamp(TimeUnit::Millisecond, None),
+                        true,
+                    )),
+                    Arc::new(TimestampMillisecondArray::from(vec![Some(1640995200000)])),
+                ),
+                (
+                    Arc::new(Field::new(
+                        "reason",
+                        DataType::Struct(
+                            vec![
+                                Field::new("_level", DataType::Float64, true),
+                                Field::new(
+                                    "details",
+                                    DataType::Struct(
+                                        vec![
+                                            Field::new("rurl", DataType::Utf8, true),
+                                            Field::new("s", DataType::Float64, true),
+                                            Field::new("t", DataType::Utf8, true),
+                                        ]
+                                        .into(),
+                                    ),
+                                    true,
+                                ),
+                            ]
+                            .into(),
+                        ),
+                        true,
+                    )),
+                    Arc::new(StructArray::from(vec![
+                        (
+                            Arc::new(Field::new("_level", DataType::Float64, true)),
+                            Arc::new(Float64Array::from(vec![Some(1.5)]))
+                                as Arc<dyn Array>,
+                        ),
+                        (
+                            Arc::new(Field::new(
+                                "details",
+                                DataType::Struct(
+                                    vec![
+                                        Field::new("rurl", DataType::Utf8, true),
+                                        Field::new("s", DataType::Float64, true),
+                                        Field::new("t", DataType::Utf8, true),
+                                    ]
+                                    .into(),
+                                ),
+                                true,
+                            )),
+                            Arc::new(StructArray::from(vec![
+                                (
+                                    Arc::new(Field::new("rurl", DataType::Utf8, true)),
+                                    Arc::new(StringArray::from(vec![Some(
+                                        "https://example.com",
+                                    )]))
+                                        as Arc<dyn Array>,
+                                ),
+                                (
+                                    Arc::new(Field::new("s", DataType::Float64, true)),
+                                    Arc::new(Float64Array::from(vec![Some(3.14)]))
+                                        as Arc<dyn Array>,
+                                ),
+                                (
+                                    Arc::new(Field::new("t", DataType::Utf8, true)),
+                                    Arc::new(StringArray::from(vec![Some("data")]))
+                                        as Arc<dyn Array>,
+                                ),
+                            ])),
+                        ),
+                    ])),
+                ),
+            ])),
+        ],
+    )?;
+    Ok(batch2)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
     // Create a Tokio runtime for running our async function
     let rt = tokio::runtime::Runtime::new()?;
 
