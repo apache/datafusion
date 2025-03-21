@@ -524,13 +524,14 @@ where
                 continue;
             }
 
-            if !result.contains_key(&group_idx)
-                || comparator
-                    .compare(*result.get(&group_idx).unwrap(), idx_in_val)
-                    .is_gt()
-            {
-                result.insert(group_idx, idx_in_val);
-            }
+            result
+                .entry(group_idx)
+                .and_modify(|x| {
+                    if comparator.compare(*x, idx_in_val).is_gt() {
+                        *x = idx_in_val;
+                    }
+                })
+                .or_insert(idx_in_val);
         }
 
         Ok(result)
