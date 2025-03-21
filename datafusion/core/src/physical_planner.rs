@@ -2152,7 +2152,8 @@ mod tests {
     use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
-    use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
+    use datafusion_expr::user_defined_builder::UserDefinedLogicalBuilder;
+    use datafusion_expr::{col, lit, LogicalPlanBuilder, LogicalPlanBuilderConfig, LogicalPlanBuilderOptions, UserDefinedLogicalNodeCore};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -2180,6 +2181,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_all_operators() -> Result<()> {
+        let csv_scan = test_csv_scan().await?;
+        let session_state = make_session_state();
+
+        let logical_plan = UserDefinedLogicalBuilder::new(&session_state, csv_scan)
+            .filter(col("c7").lt(lit(5_u8)))?
+            .project(vec![col("c1"), col("c2")])?
+            .aggregate(LogicalPlanBuilderOptions::new(), vec![col("c1")], vec![sum(col("c2"))])?
+            .sort(vec![col("c1").sort(true, true)], None)?
+            .limit(3, Some(10))?
+            .build()?;
+            
+
         let logical_plan = test_csv_scan()
             .await?
             // filter clause needs the type coercion rule applied
@@ -2845,14 +2858,12 @@ mod tests {
         Ok(LogicalPlanBuilder::from(logical_plan))
     }
 
-    async fn test_csv_scan() -> Result<LogicalPlanBuilder> {
+    async fn test_csv_scan() -> Result<LogicalPlan> {
         let ctx = SessionContext::new();
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{testdata}/csv/aggregate_test_100.csv");
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        Ok(LogicalPlanBuilder::from(
-            ctx.read_csv(path, options).await?.into_optimized_plan()?,
-        ))
+        ctx.read_csv(path, options).await?.into_optimized_plan()
     }
 
     #[tokio::test]

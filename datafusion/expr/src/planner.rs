@@ -28,9 +28,8 @@ use datafusion_common::{
 use sqlparser::ast::{self, NullTreatment};
 
 use crate::{
-    type_coercion::TypeCoercion, AggregateUDF, Expr, GetFieldAccess,
-    LogicalPlanBuilderConfig, ScalarUDF, SortExpr, TableSource, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    AggregateUDF, Expr, GetFieldAccess, LogicalPlanBuilderConfig, ScalarUDF, SortExpr,
+    TableSource, WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 
 /// Provides the `SQL` query planner meta-data about tables and

@@ -58,5 +58,7 @@ pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
 use crate::type_coercion::TypeCoercion;
 
 pub trait LogicalPlanBuilderConfig {
-    fn get_type_coercions(&self) -> &[Arc<dyn TypeCoercion>];
+    fn get_type_coercions(&self) -> &[Arc<dyn TypeCoercion>] {
+        &[]
+    }
 }

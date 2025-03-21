@@ -19,7 +19,6 @@ use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
-use datafusion_expr::type_coercion::TypeCoerceResult;
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, DataType as SQLDataType,
     DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry,
@@ -27,8 +26,8 @@ use sqlparser::ast::{
 };
 
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, Column,
-    DFSchema, Result, ScalarValue,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, DFSchema,
+    Result, ScalarValue,
 };
 
 use datafusion_expr::expr::ScalarFunction;

@@ -22,7 +22,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::WindowUDF;
+use datafusion_expr::{LogicalPlanBuilderConfig, WindowUDF};
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
 };
@@ -126,6 +126,7 @@ fn create_table_source(fields: Vec<Field>) -> Arc<dyn TableSource> {
     )))
 }
 
+impl LogicalPlanBuilderConfig for MyContextProvider {}
 impl ContextProvider for MyContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         match self.tables.get(name.table()) {

@@ -20,16 +20,11 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use crate::{
-    expr::Alias,
-    expr_rewriter::{normalize_col, normalize_sorts, rewrite_sort_cols_by_aggs},
-    type_coercion::TypeCoerceResult,
-    utils::{compare_sort_expr, group_window_expr_by_sort_keys},
-    Expr, ExprSchemable, SortExpr,
+    expr::Alias, expr_rewriter::{normalize_col, normalize_sorts, rewrite_sort_cols_by_aggs}, lit, type_coercion::TypeCoerceResult, utils::{compare_sort_expr, group_window_expr_by_sort_keys}, Expr, ExprSchemable, SortExpr
 };
 
 use super::{
-    builder::project, Distinct, LogicalPlan, LogicalPlanBuilder,
-    LogicalPlanBuilderConfig, LogicalPlanBuilderOptions, Projection, Sort, Union,
+    builder::project, Distinct, Limit, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderConfig, LogicalPlanBuilderOptions, Projection, Sort, Union
 };
 
 use arrow::datatypes::Field;
@@ -149,41 +144,6 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
                 fields_count
             );
         }
-
-        // let union_fields = (0..base_plan_field_count)
-        //     .map(|i| {
-        //         let base_field = self.plan.schema().field(i);
-        //         let union_fields = inputs.iter().map(|p| p.schema().field(i)).collect::<Vec<_>>();
-        //         if union_fields.iter().any(|f| f.data_type() != base_field.data_type()) {
-        //             return plan_err!(
-        //                 "UNION queries have different data types for column {}: \
-        //                 base plan has data type {:?} whereas union plans has data types {:?}",
-        //                 i,
-        //                 base_field.data_type(),
-        //                 union_fields.iter().map(|f| f.data_type()).collect::<Vec<_>>()
-        //             )
-        //         }
-
-        //         let union_nullabilities = union_fields.iter().map(|f| f.is_nullable()).collect::<Vec<_>>();
-        //         if union_nullabilities.iter().any(|&nullable| nullable != base_field.is_nullable()) {
-        //             return plan_err!(
-        //                 "UNION queries have different nullabilities for column {}: \
-        //                 base plan has nullable {:?} whereas union plans has nullabilities {:?}",
-        //                 i,
-        //                 base_field.is_nullable(),
-        //                 union_nullabilities
-        //             )
-        //         }
-
-        //         let union_field_meta = union_fields.iter().map(|f| f.metadata().clone()).collect::<Vec<_>>();
-        //         let mut metadata = base_field.metadata().clone();
-        //         for field_meta in union_field_meta {
-        //             metadata.extend(field_meta);
-        //         }
-
-        //         Ok(base_field.clone().with_metadata(metadata))
-        //     })
-        //     .collect::<Result<Vec<_>>>()?;
 
         // self.plan + inputs
         let plan_ref = std::iter::once(&self.plan)
@@ -326,6 +286,34 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
             .window(window_exprs)?
             .build()?;
 
+        Ok(Self::new(self.config, plan))
+    }
+    
+    /// Limit the number of rows returned
+    ///
+    /// `skip` - Number of rows to skip before fetch any row.
+    ///
+    /// `fetch` - Maximum number of rows to fetch, after skipping `skip` rows,
+    ///          if specified.
+    pub fn limit(self, skip: usize, fetch: Option<usize>) -> Result<Self> {
+        let skip_expr = if skip == 0 {
+            None
+        } else {
+            Some(lit(skip as i64))
+        };
+        let fetch_expr = fetch.map(|f| lit(f as i64));
+        self.limit_by_expr(skip_expr, fetch_expr)
+    }
+
+    /// Limit the number of rows returned
+    ///
+    /// Similar to `limit` but uses expressions for `skip` and `fetch`
+    pub fn limit_by_expr(self, skip: Option<Expr>, fetch: Option<Expr>) -> Result<Self> {
+        let plan = LogicalPlan::Limit(Limit {
+            skip: skip.map(Box::new),
+            fetch: fetch.map(Box::new),
+            input: self.plan.into(),
+        });
         Ok(Self::new(self.config, plan))
     }
 

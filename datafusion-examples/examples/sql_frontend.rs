@@ -20,8 +20,8 @@ use datafusion::common::{plan_err, TableReference};
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
 use datafusion::logical_expr::{
-    AggregateUDF, Expr, LogicalPlan, ScalarUDF, TableProviderFilterPushDown, TableSource,
-    WindowUDF,
+    AggregateUDF, Expr, LogicalPlan, LogicalPlanBuilderConfig, ScalarUDF,
+    TableProviderFilterPushDown, TableSource, WindowUDF,
 };
 use datafusion::optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule,
@@ -135,6 +135,7 @@ struct MyContextProvider {
     options: ConfigOptions,
 }
 
+impl LogicalPlanBuilderConfig for MyContextProvider {}
 impl ContextProvider for MyContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         if name.table() == "person" {

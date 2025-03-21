@@ -30,8 +30,7 @@ use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{plan_err, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
-    col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator,
-    ScalarUDF, TableSource, WindowUDF,
+    col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilderConfig, Operator, ScalarUDF, TableSource, WindowUDF
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_optimizer::analyzer::Analyzer;
@@ -159,6 +158,7 @@ impl MyContextProvider {
     }
 }
 
+impl LogicalPlanBuilderConfig for MyContextProvider {}
 impl ContextProvider for MyContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let table_name = name.table();

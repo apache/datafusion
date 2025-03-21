@@ -26,7 +26,10 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{plan_err, DFSchema, GetExt, Result, TableReference};
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, TypePlanner};
-use datafusion_expr::{AggregateUDF, Expr, ScalarUDF, TableSource, WindowUDF};
+use datafusion_expr::type_coercion::TypeCoercion;
+use datafusion_expr::{
+    AggregateUDF, Expr, LogicalPlanBuilderConfig, ScalarUDF, TableSource, WindowUDF,
+};
 use datafusion_functions_nested::expr_fn::make_array;
 use datafusion_sql::planner::ContextProvider;
 
@@ -100,6 +103,7 @@ pub(crate) struct MockContextProvider {
     pub(crate) state: MockSessionState,
 }
 
+impl LogicalPlanBuilderConfig for MockContextProvider {}
 impl ContextProvider for MockContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let schema = match name.table() {
