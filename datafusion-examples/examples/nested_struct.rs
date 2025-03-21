@@ -8,6 +8,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::datasource::nested_schema_adapter::NestedStructSchemaAdapterFactory;
 use datafusion::prelude::*;
 use std::error::Error;
 use std::fs;
@@ -20,13 +21,23 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
 
     println!("==> Creating schema1 (simple additionalInfo structure)");
     let schema1 = create_schema1();
+    let schema2 = create_schema2();
 
-    let batch1 = create_batch1(schema1)?;
+    let batch1 = create_batch1(&schema1)?;
+    let adapter = NestedStructSchemaAdapterFactory::create_appropriate_adapter(
+        schema2.clone(),
+        schema2.clone(),
+    );
+
+    let (mapping, _) = adapter
+        .map_schema(&schema1.clone())
+        .expect("map schema failed");
+    let mapped_batch = mapping.map_batch(batch1)?;
 
     let path1 = "test_data1.parquet";
     let _ = fs::remove_file(path1);
 
-    let df1 = ctx.read_batch(batch1)?;
+    let df1 = ctx.read_batch(mapped_batch)?;
     println!("==> Writing first parquet file to {}", path1);
     df1.write_parquet(
         path1,
@@ -38,8 +49,6 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     .await?;
     println!("==> Successfully wrote first parquet file");
     println!("==> Creating schema2 (extended additionalInfo with nested reason field)");
-
-    let schema2 = create_schema2();
 
     let batch2 = create_batch2(&schema2)?;
 
@@ -202,7 +211,7 @@ fn create_schema2() -> Arc<Schema> {
     schema2
 }
 
-fn create_batch1(schema1: Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
+fn create_batch1(schema1: &Arc<Schema>) -> Result<RecordBatch, Box<dyn Error>> {
     let batch1 = RecordBatch::try_new(
         schema1.clone(),
         vec![
