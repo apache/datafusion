@@ -200,7 +200,7 @@ fn update_coalesce_ctx_children(
 /// 2. [`parallelize_sorts`] (Optional, depends on the `repartition_sorts` configuration)
 ///     Responsible to identify and remove unnecessary partition unifier operators
 ///     such as [`SortPreservingMergeExec`], [`CoalescePartitionsExec`] follows [`SortExec`]s does possible simplifications.
-/// 3. [`replace_with_order_preserving_variants`] Replaces with alternative operators, for example can merge
+/// 3. [`replace_with_order_preserving_variants()`] Replaces with alternative operators, for example can merge
 ///     a [`SortExec`] and a [`CoalescePartitionsExec`] into one [`SortPreservingMergeExec`]
 ///     or a [`SortExec`] + [`RepartitionExec`] combination into an order preserving [`RepartitionExec`]
 /// 4. [`sort_pushdown`] Works top-down. Responsible to push down sort operators as deep as possible in the plan.

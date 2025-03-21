@@ -1359,17 +1359,15 @@ mod tests {
         let col_a = col("a", &schema)?;
 
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        assert_eq!(
+        assert!(
             eq_properties.ordering_satisfy_requirement(&LexRequirement::default()),
-            true
         );
 
         eq_properties.add_new_ordering(LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
         ]));
-        assert_eq!(
+        assert!(
             eq_properties.ordering_satisfy_requirement(&LexRequirement::default()),
-            true
         );
 
         Ok(())
@@ -1389,7 +1387,7 @@ mod tests {
         let eq_properties = EquivalenceProperties::new(schema);
         let default_lex = LexRequirement::default();
         let lex_a = LexRequirement::new(vec![PhysicalSortRequirement {
-            expr: col_a.clone(),
+            expr: Arc::clone(&col_a),
             options: None,
         }]);
         let lex_a_b = LexRequirement::new(vec![
@@ -1408,25 +1406,25 @@ mod tests {
         }]);
 
         let res = eq_properties.requirements_compatible(&default_lex, &default_lex);
-        assert_eq!(res, true);
+        assert!(res);
 
         let res = eq_properties.requirements_compatible(&lex_a, &default_lex);
-        assert_eq!(res, true);
+        assert!(res);
 
         let res = eq_properties.requirements_compatible(&default_lex, &lex_a);
-        assert_eq!(res, false);
+        assert!(!res);
 
         let res = eq_properties.requirements_compatible(&lex_a, &lex_a);
-        assert_eq!(res, true);
+        assert!(res);
 
         let res = eq_properties.requirements_compatible(&lex_a, &lex_a_b);
-        assert_eq!(res, false);
+        assert!(!res);
 
         let res = eq_properties.requirements_compatible(&lex_a_b, &lex_a);
-        assert_eq!(res, true);
+        assert!(res);
 
         let res = eq_properties.requirements_compatible(&lex_c, &lex_a);
-        assert_eq!(res, false);
+        assert!(!res);
 
         Ok(())
     }
