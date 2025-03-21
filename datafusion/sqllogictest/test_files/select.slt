@@ -519,8 +519,12 @@ select '1' from foo order by column1;
 1
 
 # foo distinct order by
-statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions foo\.column1 must appear in select list
+query T
 select distinct '1' from foo order by column1;
+----
+1
+1
+1
 
 # distincts for float nan
 query BBBBBBBBBBBBBBBBB
