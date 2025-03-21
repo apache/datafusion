@@ -1006,7 +1006,7 @@ fn mathematics_numerical_coercion(
 }
 
 /// A common set of numerical coercions that are applied for mathematical and binary ops
-/// to lhs_type` and `rhs_type`. 
+/// to `lhs_type` and `rhs_type`.
 fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
