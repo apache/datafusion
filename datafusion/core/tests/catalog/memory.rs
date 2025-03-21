@@ -24,7 +24,8 @@ use datafusion::datasource::listing::{
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::memory::*;
 use datafusion_catalog::{SchemaProvider, TableProvider};
-use datafusion_common::assert_batches_eq;
+use datafusion_common::test_util::batches_to_string;
+use insta::assert_snapshot;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -152,19 +153,18 @@ async fn test_schema_register_listing_table() {
 
     let actual = df.collect().await.unwrap();
 
-    let expected = [
-        "+----+----------+",
-        "| id | bool_col |",
-        "+----+----------+",
-        "| 4  | true     |",
-        "| 5  | false    |",
-        "| 6  | true     |",
-        "| 7  | false    |",
-        "| 2  | true     |",
-        "| 3  | false    |",
-        "| 0  | true     |",
-        "| 1  | false    |",
-        "+----+----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    assert_snapshot!(batches_to_string(&actual), @r"
+    +----+----------+
+    | id | bool_col |
+    +----+----------+
+    | 4  | true     |
+    | 5  | false    |
+    | 6  | true     |
+    | 7  | false    |
+    | 2  | true     |
+    | 3  | false    |
+    | 0  | true     |
+    | 1  | false    |
+    +----+----------+
+    ");
 }

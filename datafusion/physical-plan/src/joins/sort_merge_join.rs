@@ -59,7 +59,7 @@ use arrow::compute::{
 };
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-use arrow::ipc::reader::FileReader;
+use arrow::ipc::reader::StreamReader;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, HashSet, JoinSide,
     JoinType, Result,
@@ -70,6 +70,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use futures::{Stream, StreamExt};
@@ -368,6 +369,21 @@ impl DisplayAs for SortMergeJoinExec {
                         f.expression()
                     ))
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                let on = self
+                    .on
+                    .iter()
+                    .map(|(c1, c2)| {
+                        format!("({} = {})", fmt_sql(c1.as_ref()), fmt_sql(c2.as_ref()))
+                    })
+                    .collect::<Vec<String>>()
+                    .join(", ");
+
+                if self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)?;
+                }
+                writeln!(f, "on={}", on)
             }
         }
     }
@@ -1394,7 +1410,7 @@ impl SortMergeJoinStream {
 
                 if let Some(batch) = buffered_batch.batch {
                     spill_record_batches(
-                        vec![batch],
+                        &[batch],
                         spill_file.path().into(),
                         Arc::clone(&self.buffered_schema),
                     )?;
@@ -2270,7 +2286,7 @@ fn fetch_right_columns_from_batch_by_idxs(
                 Vec::with_capacity(buffered_indices.len());
 
             let file = BufReader::new(File::open(spill_file.path())?);
-            let reader = FileReader::try_new(file, None)?;
+            let reader = StreamReader::try_new(file, None)?;
 
             for batch in reader {
                 batch?.columns().iter().for_each(|column| {

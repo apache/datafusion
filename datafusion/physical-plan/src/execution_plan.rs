@@ -27,7 +27,7 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, udf, Distribution, Partitioning, PhysicalExpr,
+    expressions, Distribution, Partitioning, PhysicalExpr,
 };
 
 use std::any::Any;
@@ -46,12 +46,12 @@ use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::stream::{StreamExt, TryStreamExt};
-use tokio::task::JoinSet;
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -260,13 +260,32 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// used.
     /// Thus, [`spawn`] is disallowed, and instead use [`SpawnedTask`].
     ///
+    /// To enable timely cancellation, the [`Stream`] that is returned must not
+    /// block the CPU indefinitely and must yield back to the tokio runtime regularly.
+    /// In a typical [`ExecutionPlan`], this automatically happens unless there are
+    /// special circumstances; e.g. when the computational complexity of processing a
+    /// batch is superlinear. See this [general guideline][async-guideline] for more context
+    /// on this point, which explains why one should avoid spending a long time without
+    /// reaching an `await`/yield point in asynchronous runtimes.
+    /// This can be achieved by manually returning [`Poll::Pending`] and setting up wakers
+    /// appropriately, or the use of [`tokio::task::yield_now()`] when appropriate.
+    /// In special cases that warrant manual yielding, determination for "regularly" may be
+    /// made using a timer (being careful with the overhead-heavy system call needed to
+    /// take the time), or by counting rows or batches.
+    ///
+    /// The [cancellation benchmark] tracks some cases of how quickly queries can
+    /// be cancelled.
+    ///
     /// For more details see [`SpawnedTask`], [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`]
     /// for structures to help ensure all background tasks are cancelled.
     ///
     /// [`spawn`]: tokio::task::spawn
-    /// [`JoinSet`]: tokio::task::JoinSet
+    /// [cancellation benchmark]: https://github.com/apache/datafusion/blob/main/benchmarks/README.md#cancellation
+    /// [`JoinSet`]: datafusion_common_runtime::JoinSet
     /// [`SpawnedTask`]: datafusion_common_runtime::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
+    /// [`Poll::Pending`]: std::task::Poll::Pending
+    /// [async-guideline]: https://ryhl.io/blog/async-what-is-blocking/
     ///
     /// # Implementation Examples
     ///

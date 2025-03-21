@@ -38,6 +38,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
+use datafusion_common_runtime::JoinSet;
 pub use datafusion_datasource::memory::MemorySourceConfig;
 pub use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
@@ -49,7 +50,6 @@ use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
-use tokio::task::JoinSet;
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
@@ -314,6 +314,10 @@ impl DisplayAs for MemSink {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let partition_count = self.batches.len();
                 write!(f, "MemoryTable (partitions={partition_count})")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

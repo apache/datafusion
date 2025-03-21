@@ -75,7 +75,9 @@ struct JoinLeftData {
     probe_threads_counter: AtomicUsize,
     /// Memory reservation for tracking batch and bitmap
     /// Cleared on `JoinLeftData` drop
-    _reservation: MemoryReservation,
+    /// reservation is cleared on Drop
+    #[expect(dead_code)]
+    reservation: MemoryReservation,
 }
 
 impl JoinLeftData {
@@ -83,13 +85,13 @@ impl JoinLeftData {
         batch: RecordBatch,
         bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
-        _reservation: MemoryReservation,
+        reservation: MemoryReservation,
     ) -> Self {
         Self {
             batch,
             bitmap,
             probe_threads_counter,
-            _reservation,
+            reservation,
         }
     }
 
@@ -423,6 +425,13 @@ impl DisplayAs for NestedLoopJoinExec {
                     "NestedLoopJoinExec: join_type={:?}{}{}",
                     self.join_type, display_filter, display_projections
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                if *self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)
+                } else {
+                    Ok(())
+                }
             }
         }
     }

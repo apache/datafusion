@@ -660,7 +660,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: contains(test.column1_utf8view, Utf8View("foo")) AS c1, contains(test.column1_utf8view, test.column2_utf8view) AS c2, contains(test.column1_utf8view, CAST(test.column2_large_utf8 AS Utf8View)) AS c3, contains(CAST(test.column1_utf8 AS Utf8View), test.column2_utf8view) AS c4, contains(test.column1_utf8, test.column2_utf8) AS c5, contains(CAST(test.column1_utf8 AS LargeUtf8), test.column2_large_utf8) AS c6, contains(CAST(test.column1_large_utf8 AS Utf8View), test.column1_utf8view) AS c7, contains(test.column1_large_utf8, CAST(test.column2_utf8 AS LargeUtf8)) AS c8, contains(test.column1_large_utf8, test.column2_large_utf8) AS c9
+01)Projection: contains(test.column1_utf8view, Utf8("foo")) AS c1, contains(test.column1_utf8view, test.column2_utf8view) AS c2, contains(test.column1_utf8view, test.column2_large_utf8) AS c3, contains(test.column1_utf8, test.column2_utf8view) AS c4, contains(test.column1_utf8, test.column2_utf8) AS c5, contains(test.column1_utf8, test.column2_large_utf8) AS c6, contains(test.column1_large_utf8, test.column1_utf8view) AS c7, contains(test.column1_large_utf8, test.column2_utf8) AS c8, contains(test.column1_large_utf8, test.column2_large_utf8) AS c9
 02)--TableScan: test projection=[column1_utf8, column2_utf8, column1_large_utf8, column2_large_utf8, column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for ENDS_WITH
@@ -671,7 +671,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: ends_with(test.column1_utf8view, Utf8View("foo")) AS c1, ends_with(test.column2_utf8view, test.column2_utf8view) AS c2
+01)Projection: ends_with(test.column1_utf8view, Utf8("foo")) AS c1, ends_with(test.column2_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for LEVENSHTEIN
@@ -682,7 +682,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: levenshtein(test.column1_utf8view, Utf8View("foo")) AS c1, levenshtein(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: levenshtein(test.column1_utf8view, Utf8("foo")) AS c1, levenshtein(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for LOWER
@@ -784,7 +784,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: regexp_like(test.column1_utf8view, Utf8View("^https?://(?:www\.)?([^/]+)/.*$")) AS k
+01)Projection: regexp_like(test.column1_utf8view, Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REGEXP_MATCH
@@ -825,7 +825,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: replace(test.column1_utf8view, Utf8View("foo"), Utf8View("bar")) AS c1, replace(test.column1_utf8view, test.column2_utf8view, Utf8View("bar")) AS c2
+01)Projection: replace(test.column1_utf8view, Utf8("foo"), Utf8("bar")) AS c1, replace(test.column1_utf8view, test.column2_utf8view, Utf8("bar")) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for REVERSE
@@ -906,7 +906,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: strpos(test.column1_utf8view, Utf8View("f")) AS c, strpos(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: strpos(test.column1_utf8view, Utf8("f")) AS c, strpos(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for SUBSTR
@@ -1078,7 +1078,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: string_to_array(test.column1_utf8view, Utf8View(",")) AS c
+01)Projection: string_to_array(test.column1_utf8view, Utf8(",")) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no unexpected casts for array_to_string
@@ -1100,7 +1100,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) LIKE Utf8("%an%") AS c1
+01)Projection: test.column1_utf8view ~ Utf8View("an") AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 # `~*` operator (regex match case-insensitive)
@@ -1110,7 +1110,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) ~* Utf8("^a.{3}e") AS c1
+01)Projection: test.column1_utf8view ~* Utf8View("^a.{3}e") AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 # `!~~` operator (not like match)
@@ -1120,7 +1120,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) !~~ Utf8("xia_g%g") AS c1
+01)Projection: test.column1_utf8view !~~ Utf8View("xia_g%g") AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 # `!~~*` operator (not like match case-insensitive)
@@ -1130,7 +1130,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) !~~* Utf8("xia_g%g") AS c1
+01)Projection: test.column1_utf8view !~~* Utf8View("xia_g%g") AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 # coercions between stringview and date types

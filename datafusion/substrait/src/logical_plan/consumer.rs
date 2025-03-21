@@ -24,7 +24,8 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::common::{
     not_impl_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, TableReference,
+    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, Spans,
+    TableReference,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort, WindowFunctionParams};
@@ -68,8 +69,8 @@ use datafusion::logical_expr::{
 };
 use datafusion::prelude::{lit, JoinType};
 use datafusion::{
-    arrow, error::Result, logical_expr::utils::split_conjunction, prelude::Column,
-    scalar::ScalarValue,
+    arrow, error::Result, logical_expr::utils::split_conjunction,
+    logical_expr::utils::split_conjunction_owned, prelude::Column, scalar::ScalarValue,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -104,10 +105,11 @@ use substrait::proto::{
     rel::RelType,
     rel_common,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, AggregateRel, ConsistentPartitionWindowRel, CrossRel, ExchangeRel,
-    Expression, ExtendedExpression, ExtensionLeafRel, ExtensionMultiRel,
-    ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument, JoinRel, NamedStruct,
-    Plan, ProjectRel, ReadRel, Rel, RelCommon, SetRel, SortField, SortRel, Type,
+    AggregateFunction, AggregateRel, ConsistentPartitionWindowRel, CrossRel,
+    DynamicParameter, ExchangeRel, Expression, ExtendedExpression, ExtensionLeafRel,
+    ExtensionMultiRel, ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument,
+    JoinRel, NamedStruct, Plan, ProjectRel, ReadRel, Rel, RelCommon, SetRel, SortField,
+    SortRel, Type,
 };
 
 #[async_trait]
@@ -390,6 +392,14 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 
     async fn consume_enum(&self, _expr: &Enum, _input_schema: &DFSchema) -> Result<Expr> {
         not_impl_err!("Enum expression not supported")
+    }
+
+    async fn consume_dynamic_parameter(
+        &self,
+        _expr: &DynamicParameter,
+        _input_schema: &DFSchema,
+    ) -> Result<Expr> {
+        not_impl_err!("Dynamic Parameter expression not supported")
     }
 
     // User-Defined Functionality
@@ -766,7 +776,7 @@ pub async fn from_substrait_plan_with_consumer(
                             return Ok(plan);
                         }
                         let renamed_schema = make_renamed_schema(plan.schema(), &root.names)?;
-                        if renamed_schema.equivalent_names_and_types(plan.schema()) {
+                        if renamed_schema.has_equivalent_names_and_types(plan.schema()).is_ok() {
                             // Nothing to do if the schema is already equivalent
                             return Ok(plan);
                         }
@@ -1049,8 +1059,8 @@ pub async fn from_project_rel(
     p: &ProjectRel,
 ) -> Result<LogicalPlan> {
     if let Some(input) = p.input.as_ref() {
-        let mut input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
-        let original_schema = input.schema().clone();
+        let input = consumer.consume_rel(input).await?;
+        let original_schema = Arc::clone(input.schema());
 
         // Ensure that all expressions have a unique display name, so that
         // validate_unique_names does not fail when constructing the project.
@@ -1065,6 +1075,10 @@ pub async fn from_project_rel(
         // leaving only explicit expressions.
 
         let mut explicit_exprs: Vec<Expr> = vec![];
+        // For WindowFunctions, we need to wrap them in a Window relation. If there are duplicates,
+        // we can do the window'ing only once, then the project will duplicate the result.
+        // Order here doesn't matter since LPB::window_plan sorts the expressions.
+        let mut window_exprs: HashSet<Expr> = HashSet::new();
         for expr in &p.expressions {
             let e = consumer
                 .consume_expression(expr, input.clone().schema())
@@ -1074,10 +1088,16 @@ pub async fn from_project_rel(
                 // Adding the same expression here and in the project below
                 // works because the project's builder uses columnize_expr(..)
                 // to transform it into a column reference
-                input = input.window(vec![e.clone()])?
+                window_exprs.insert(e.clone());
             }
             explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
+
+        let input = if !window_exprs.is_empty() {
+            LogicalPlanBuilder::window_plan(input, window_exprs)?
+        } else {
+            input
+        };
 
         let mut final_exprs: Vec<Expr> = vec![];
         for index in 0..original_schema.fields().len() {
@@ -1085,7 +1105,7 @@ pub async fn from_project_rel(
             final_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
         final_exprs.append(&mut explicit_exprs);
-        input.project(final_exprs)?.build()
+        project(input, final_exprs)
     } else {
         not_impl_err!("Projection without an input is not supported")
     }
@@ -1327,8 +1347,16 @@ pub async fn from_read_rel(
         table_ref: TableReference,
         schema: DFSchema,
         projection: &Option<MaskExpression>,
+        filter: &Option<Box<Expression>>,
     ) -> Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
+
+        let filters = if let Some(f) = filter {
+            let filter_expr = consumer.consume_expression(f, &schema).await?;
+            split_conjunction_owned(filter_expr)
+        } else {
+            vec![]
+        };
 
         let plan = {
             let provider = match consumer.resolve_table_ref(&table_ref).await? {
@@ -1336,10 +1364,11 @@ pub async fn from_read_rel(
                 _ => return plan_err!("No table named '{table_ref}'"),
             };
 
-            LogicalPlanBuilder::scan(
+            LogicalPlanBuilder::scan_with_filters(
                 table_ref,
                 provider_as_source(Arc::clone(&provider)),
                 None,
+                filters,
             )?
             .build()?
         };
@@ -1382,6 +1411,7 @@ pub async fn from_read_rel(
                 table_reference,
                 substrait_schema,
                 &read.projection,
+                &read.filter,
             )
             .await
         }
@@ -1464,6 +1494,7 @@ pub async fn from_read_rel(
                 table_reference,
                 substrait_schema,
                 &read.projection,
+                &read.filter,
             )
             .await
         }
@@ -1605,7 +1636,7 @@ fn apply_emit_kind(
                             .get(field as usize)
                             .ok_or_else(|| substrait_datafusion_err!(
                                   "Emit output field {} cannot be resolved in input schema {}",
-                                  field, proj.input.schema().clone()
+                                  field, proj.input.schema()
                                 ))?;
                         exprs.push(name_tracker.get_uniquely_named_expr(expr.clone())?);
                     }
@@ -1988,6 +2019,9 @@ pub async fn from_substrait_rex(
             }
             RexType::Nested(expr) => consumer.consume_nested(expr, input_schema).await,
             RexType::Enum(expr) => consumer.consume_enum(expr, input_schema).await,
+            RexType::DynamicParameter(expr) => {
+                consumer.consume_dynamic_parameter(expr, input_schema).await
+            }
         },
         None => substrait_err!("Expression must set rex_type: {:?}", expression),
     }
@@ -2257,6 +2291,7 @@ pub async fn from_subquery(
                             subquery: Subquery {
                                 subquery: Arc::new(haystack_expr),
                                 outer_ref_columns: outer_refs,
+                                spans: Spans::new(),
                             },
                             negated: false,
                         }))
@@ -2275,6 +2310,7 @@ pub async fn from_subquery(
                 Ok(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(plan),
                     outer_ref_columns,
+                    spans: Spans::new(),
                 }))
             }
             SubqueryType::SetPredicate(predicate) => {
@@ -2290,6 +2326,7 @@ pub async fn from_subquery(
                             Subquery {
                                 subquery: Arc::new(plan),
                                 outer_ref_columns,
+                                spans: Spans::new(),
                             },
                             false,
                         )))

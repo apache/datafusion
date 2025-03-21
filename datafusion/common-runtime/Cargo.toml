@@ -38,6 +38,7 @@ workspace = true
 name = "datafusion_common_runtime"
 
 [dependencies]
+futures = { workspace = true }
 log = { workspace = true }
 tokio = { workspace = true }
 

@@ -195,13 +195,13 @@ metadata (number of cores, DataFusion version, etc.).
 $ git checkout main
 # generate an output script in /tmp/output_main
 $ mkdir -p /tmp/output_main
-$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_main
+$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_main/tpch.json
 # generate an output script in /tmp/output_branch
 $ mkdir -p /tmp/output_branch
 $ git checkout my_branch
-$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch
+$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch/tpch.json
 # compare the results:
-./compare.py /tmp/output_main/tpch-summary--1679330119.json  /tmp/output_branch/tpch-summary--1679328405.json
+./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
 ```
 
 This will produce output like:
@@ -329,7 +329,38 @@ Your benchmark should create and use an instance of `BenchmarkRun` defined in `b
 
 # Benchmarks
 
-The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience
+The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience.
+
+## Cancellation
+
+Test performance of cancelling queries.
+
+Queries in DataFusion should stop executing "quickly" after they are
+cancelled (the output stream is dropped).
+
+The queries are executed on a synthetic dataset generated during
+the benchmark execution that is an anonymized version of a
+real-world data set.
+
+The query is an anonymized version of a real-world query, and the
+test starts the query then cancels it and reports how long it takes
+for the runtime to fully exit.
+
+Example output:
+
+```
+Using 7 files found on disk
+Starting to load data into in-memory object store
+Done loading data into in-memory object store
+in main, sleeping
+Starting spawned
+Creating logical plan...
+Creating physical plan...
+Executing physical plan...
+Getting results...
+cancelling thread
+done dropping runtime in 83.531417ms
+```
 
 ## ClickBench
 
@@ -513,5 +544,49 @@ For example, to run query 1 with the small data generated above:
 cargo run --release --bin dfbench -- h2o --path ./benchmarks/data/h2o/G1_1e7_1e7_100_0.csv  --query 1
 ```
 
+## h2o benchmarks for join
+
+### Generate data for h2o benchmarks
+There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`. The data is generated in the `data` directory.
+
+1. Generate small data (4 table files, the largest is 1e7 rows)
+```bash
+./bench.sh data h2o_small_join
+```
+
+
+2. Generate medium data (4 table files, the largest is 1e8 rows)
+```bash
+./bench.sh data h2o_medium_join
+```
+
+3. Generate large data (4 table files, the largest is 1e9 rows)
+```bash
+./bench.sh data h2o_big_join
+```
+
+### Run h2o benchmarks
+There are three options for running h2o benchmarks: `small`, `medium`, and `big`.
+1. Run small data benchmark
+```bash
+./bench.sh run h2o_small_join
+```
+
+2. Run medium data benchmark
+```bash
+./bench.sh run h2o_medium_join
+```
+
+3. Run large data benchmark
+```bash
+./bench.sh run h2o_big_join
+```
+
+4. Run a specific query with a specific join data paths, the data paths are including 4 table files.
+
+For example, to run query 1 with the small data generated above:
+```bash
+cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/join.sql --query 1
+```
 [1]: http://www.tpc.org/tpch/
 [2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page

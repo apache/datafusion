@@ -29,9 +29,11 @@ use datafusion_common::Result;
 use datafusion_common::{JoinSide, JoinType, ScalarValue};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_expr::{Operator, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_physical_expr::expressions::{
-    binary, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
+    binary, cast, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
 };
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::{
@@ -57,6 +59,7 @@ use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
+use datafusion_expr_common::columnar_value::ColumnarValue;
 use itertools::Itertools;
 
 /// Mocked UDF
@@ -88,6 +91,10 @@ impl ScalarUDFImpl for DummyUDF {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Int32)
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("dummy - not implemented")
     }
 }
 
@@ -1378,6 +1385,100 @@ fn test_union_after_projection() -> Result<()> {
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
             "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
         ];
+    assert_eq!(get_plan_string(&after_optimize), expected);
+
+    Ok(())
+}
+
+/// Returns a DataSourceExec that scans a file with (int_col, string_col)
+/// and has a partitioning column partition_col (Utf8)
+fn partitioned_data_source() -> Arc<DataSourceExec> {
+    let file_schema = Arc::new(Schema::new(vec![
+        Field::new("int_col", DataType::Int32, true),
+        Field::new("string_col", DataType::Utf8, true),
+    ]));
+
+    FileScanConfig::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        file_schema.clone(),
+        Arc::new(CsvSource::default()),
+    )
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .with_table_partition_cols(vec![Field::new("partition_col", DataType::Utf8, true)])
+    .with_projection(Some(vec![0, 1, 2]))
+    .build()
+}
+
+#[test]
+fn test_partition_col_projection_pushdown() -> Result<()> {
+    let source = partitioned_data_source();
+    let partitioned_schema = source.schema();
+
+    let projection = Arc::new(ProjectionExec::try_new(
+        vec![
+            (
+                col("string_col", partitioned_schema.as_ref())?,
+                "string_col".to_string(),
+            ),
+            (
+                col("partition_col", partitioned_schema.as_ref())?,
+                "partition_col".to_string(),
+            ),
+            (
+                col("int_col", partitioned_schema.as_ref())?,
+                "int_col".to_string(),
+            ),
+        ],
+        source,
+    )?);
+
+    let after_optimize =
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+
+    let expected = [
+        "ProjectionExec: expr=[string_col@1 as string_col, partition_col@2 as partition_col, int_col@0 as int_col]",
+        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[int_col, string_col, partition_col], file_type=csv, has_header=false"
+    ];
+    assert_eq!(get_plan_string(&after_optimize), expected);
+
+    Ok(())
+}
+
+#[test]
+fn test_partition_col_projection_pushdown_expr() -> Result<()> {
+    let source = partitioned_data_source();
+    let partitioned_schema = source.schema();
+
+    let projection = Arc::new(ProjectionExec::try_new(
+        vec![
+            (
+                col("string_col", partitioned_schema.as_ref())?,
+                "string_col".to_string(),
+            ),
+            (
+                // CAST(partition_col, Utf8View)
+                cast(
+                    col("partition_col", partitioned_schema.as_ref())?,
+                    partitioned_schema.as_ref(),
+                    DataType::Utf8View,
+                )?,
+                "partition_col".to_string(),
+            ),
+            (
+                col("int_col", partitioned_schema.as_ref())?,
+                "int_col".to_string(),
+            ),
+        ],
+        source,
+    )?);
+
+    let after_optimize =
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+
+    let expected = [
+        "ProjectionExec: expr=[string_col@1 as string_col, CAST(partition_col@2 AS Utf8View) as partition_col, int_col@0 as int_col]",
+        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[int_col, string_col, partition_col], file_type=csv, has_header=false"
+    ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
     Ok(())

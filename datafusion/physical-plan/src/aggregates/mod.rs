@@ -48,6 +48,7 @@ use datafusion_physical_expr::{
     PhysicalSortRequirement,
 };
 
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use itertools::Itertools;
 
 pub(crate) mod group_values;
@@ -57,41 +58,60 @@ mod row_hash;
 mod topk;
 mod topk_stream;
 
-/// Hash aggregate modes
+/// Aggregation modes
 ///
 /// See [`Accumulator::state`] for background information on multi-phase
 /// aggregation and how these modes are used.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {
+    /// One of multiple layers of aggregation, any input partitioning
+    ///
     /// Partial aggregate that can be applied in parallel across input
     /// partitions.
     ///
     /// This is the first phase of a multi-phase aggregation.
     Partial,
+    /// *Final* of multiple layers of aggregation, in exactly one partition
+    ///
     /// Final aggregate that produces a single partition of output by combining
     /// the output of multiple partial aggregates.
     ///
     /// This is the second phase of a multi-phase aggregation.
+    ///
+    /// This mode requires that the input is a single partition
+    ///
+    /// Note: Adjacent `Partial` and `Final` mode aggregation is equivalent to a `Single`
+    /// mode aggregation node. The `Final` mode is required since this is used in an
+    /// intermediate step. The [`CombinePartialFinalAggregate`] physical optimizer rule
+    /// will replace this combination with `Single` mode for more efficient execution.
+    ///
+    /// [`CombinePartialFinalAggregate`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/combine_partial_final_agg/struct.CombinePartialFinalAggregate.html
     Final,
+    /// *Final* of multiple layers of aggregation, input is *Partitioned*
+    ///
     /// Final aggregate that works on pre-partitioned data.
     ///
-    /// This requires the invariant that all rows with a particular
-    /// grouping key are in the same partitions, such as is the case
-    /// with Hash repartitioning on the group keys. If a group key is
-    /// duplicated, duplicate groups would be produced
+    /// This mode requires that all rows with a particular grouping key are in
+    /// the same partitions, such as is the case with Hash repartitioning on the
+    /// group keys. If a group key is duplicated, duplicate groups would be
+    /// produced
     FinalPartitioned,
+    /// *Single* layer of Aggregation, input is exactly one partition
+    ///
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
     ///
     /// This mode requires that the input is a single partition (like Final)
     Single,
-    /// Applies the entire logical aggregation operation in a single operator,
-    /// as opposed to Partial / Final modes which apply the logical aggregation using
-    /// two operators.
+    /// *Single* layer of Aggregation, input is *Partitioned*
     ///
-    /// This mode requires that the input is partitioned by group key (like
-    /// FinalPartitioned)
+    /// Applies the entire logical aggregation operation in a single operator,
+    /// as opposed to Partial / Final modes which apply the logical aggregation
+    /// using two operators.
+    ///
+    /// This mode requires that the input has more than one partition, and is
+    /// partitioned by group key (like FinalPartitioned).
     SinglePartitioned,
 }
 
@@ -725,19 +745,22 @@ impl DisplayAs for AggregateExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let format_expr_with_alias =
+                    |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
+                        let e = e.to_string();
+                        if &e != alias {
+                            format!("{e} as {alias}")
+                        } else {
+                            e
+                        }
+                    };
+
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
                 let g: Vec<String> = if self.group_by.is_single() {
                     self.group_by
                         .expr
                         .iter()
-                        .map(|(e, alias)| {
-                            let e = e.to_string();
-                            if &e != alias {
-                                format!("{e} as {alias}")
-                            } else {
-                                e
-                            }
-                        })
+                        .map(format_expr_with_alias)
                         .collect()
                 } else {
                     self.group_by
@@ -749,21 +772,11 @@ impl DisplayAs for AggregateExec {
                                 .enumerate()
                                 .map(|(idx, is_null)| {
                                     if *is_null {
-                                        let (e, alias) = &self.group_by.null_expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
+                                        format_expr_with_alias(
+                                            &self.group_by.null_expr[idx],
+                                        )
                                     } else {
-                                        let (e, alias) = &self.group_by.expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
+                                        format_expr_with_alias(&self.group_by.expr[idx])
                                     }
                                 })
                                 .collect::<Vec<String>>()
@@ -787,6 +800,59 @@ impl DisplayAs for AggregateExec {
 
                 if self.input_order_mode != InputOrderMode::Linear {
                     write!(f, ", ordering_mode={:?}", self.input_order_mode)?;
+                }
+            }
+            DisplayFormatType::TreeRender => {
+                let format_expr_with_alias =
+                    |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
+                        let expr_sql = fmt_sql(e.as_ref()).to_string();
+                        if &expr_sql != alias {
+                            format!("{expr_sql} as {alias}")
+                        } else {
+                            expr_sql
+                        }
+                    };
+
+                let g: Vec<String> = if self.group_by.is_single() {
+                    self.group_by
+                        .expr
+                        .iter()
+                        .map(format_expr_with_alias)
+                        .collect()
+                } else {
+                    self.group_by
+                        .groups
+                        .iter()
+                        .map(|group| {
+                            let terms = group
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, is_null)| {
+                                    if *is_null {
+                                        format_expr_with_alias(
+                                            &self.group_by.null_expr[idx],
+                                        )
+                                    } else {
+                                        format_expr_with_alias(&self.group_by.expr[idx])
+                                    }
+                                })
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            format!("({terms})")
+                        })
+                        .collect()
+                };
+                let a: Vec<String> = self
+                    .aggr_expr
+                    .iter()
+                    .map(|agg| agg.human_display().to_string())
+                    .collect();
+                writeln!(f, "mode={:?}", self.mode)?;
+                if !g.is_empty() {
+                    writeln!(f, "group_by={}", g.join(", "))?;
+                }
+                if !a.is_empty() {
+                    writeln!(f, "aggr={}", a.join(", "))?;
                 }
             }
         }
@@ -1796,6 +1862,10 @@ mod tests {
             match t {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "TestYieldingExec")
+                }
+                DisplayFormatType::TreeRender => {
+                    // TODO: collect info
+                    write!(f, "")
                 }
             }
         }

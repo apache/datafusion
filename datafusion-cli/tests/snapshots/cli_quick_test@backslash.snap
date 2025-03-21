@@ -1,0 +1,17 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "--file"
+    - tests/sql/backslash.sql
+    - "--format"
+    - json
+    - "-q"
+---
+success: true
+exit_code: 0
+----- stdout -----
+[{"Utf8(\"\\\")":"\\","Utf8(\"\\\\\")":"\\\\","Utf8(\"\\\\\\\\\\\")":"\\\\\\\\\\","Utf8(\"dsdsds\\\\\\\\\")":"dsdsds\\\\\\\\","Utf8(\"\\t\")":"\\t","Utf8(\"\\0\")":"\\0","Utf8(\"\\n\")":"\\n"}]
+
+----- stderr -----

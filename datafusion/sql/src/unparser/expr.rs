@@ -94,6 +94,7 @@ impl Unparser<'_> {
         Ok(root_expr)
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn expr_to_sql_inner(&self, expr: &Expr) -> Result<ast::Expr> {
         match expr {
             Expr::InList(InList {
@@ -429,6 +430,7 @@ impl Unparser<'_> {
                 })
             }
             // TODO: unparsing wildcard addition options
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, .. } => {
                 let attached_token = AttachedToken::empty();
                 if let Some(qualifier) = qualifier {
@@ -673,7 +675,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
+    pub fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
         if let Some(table_ref) = &col.relation {
             let mut id = if self.dialect.full_qualified_col() {
                 table_ref.to_vec()
@@ -729,6 +731,7 @@ impl Unparser<'_> {
     ) -> Result<Vec<ast::FunctionArg>> {
         args.iter()
             .map(|e| {
+                #[expect(deprecated)]
                 if matches!(
                     e,
                     Expr::Wildcard {
@@ -946,8 +949,8 @@ impl Unparser<'_> {
             Operator::BitwiseShiftRight => Ok(BinaryOperator::PGBitwiseShiftRight),
             Operator::BitwiseShiftLeft => Ok(BinaryOperator::PGBitwiseShiftLeft),
             Operator::StringConcat => Ok(BinaryOperator::StringConcat),
-            Operator::AtArrow => not_impl_err!("unsupported operation: {op:?}"),
-            Operator::ArrowAt => not_impl_err!("unsupported operation: {op:?}"),
+            Operator::AtArrow => Ok(BinaryOperator::AtArrow),
+            Operator::ArrowAt => Ok(BinaryOperator::ArrowAt),
         }
     }
 
@@ -1659,8 +1662,8 @@ mod tests {
     use datafusion_expr::{
         case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
-        table_scan, try_cast, when, wildcard, ScalarUDF, ScalarUDFImpl, Signature,
-        Volatility, WindowFrame, WindowFunctionDefinition,
+        table_scan, try_cast, when, ColumnarValue, ScalarFunctionArgs, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
     use datafusion_functions::expr_fn::{get_field, named_struct};
@@ -1709,12 +1712,17 @@ mod tests {
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int32)
         }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("dummy - not implemented")
+        }
     }
     // See sql::tests for E2E tests.
 
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
         let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        #[expect(deprecated)]
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
             .project(vec![Expr::Wildcard {
                 qualifier: None,
@@ -1910,16 +1918,24 @@ mod tests {
             ),
             (sum(col("a")), r#"sum(a)"#),
             (
+                #[expect(deprecated)]
                 count_udaf()
-                    .call(vec![wildcard()])
+                    .call(vec![Expr::Wildcard {
+                        qualifier: None,
+                        options: Box::new(WildcardOptions::default()),
+                    }])
                     .distinct()
                     .build()
                     .unwrap(),
                 "count(DISTINCT *)",
             ),
             (
+                #[expect(deprecated)]
                 count_udaf()
-                    .call(vec![wildcard()])
+                    .call(vec![Expr::Wildcard {
+                        qualifier: None,
+                        options: Box::new(WildcardOptions::default()),
+                    }])
                     .filter(lit(true))
                     .build()
                     .unwrap(),
@@ -1939,10 +1955,14 @@ mod tests {
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
             ),
             (
+                #[expect(deprecated)]
                 Expr::WindowFunction(WindowFunction {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     params: WindowFunctionParams {
-                        args: vec![wildcard()],
+                        args: vec![Expr::Wildcard {
+                            qualifier: None,
+                            options: Box::new(WildcardOptions::default()),
+                        }],
                         partition_by: vec![],
                         order_by: vec![Sort::new(col("a"), false, true)],
                         window_frame: WindowFrame::new_bounds(
@@ -2109,6 +2129,22 @@ mod tests {
                     )]),
                 ))),
                 "[1, 2, 3]",
+            ),
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col("a")),
+                    op: Operator::ArrowAt,
+                    right: Box::new(col("b")),
+                }),
+                "(a <@ b)",
+            ),
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col("a")),
+                    op: Operator::AtArrow,
+                    right: Box::new(col("b")),
+                }),
+                "(a @> b)",
             ),
         ];
 
