@@ -54,7 +54,6 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
     DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
 };
-use datafusion_expr::type_coercion::TypeCoerceResult;
 use datafusion_expr::user_defined_builder::UserDefinedLogicalBuilder;
 use datafusion_expr::{
     case,

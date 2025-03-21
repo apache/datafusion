@@ -24,6 +24,7 @@ use datafusion_common::{
     not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
 };
 use datafusion_expr::builder::subquery_alias;
+use datafusion_expr::user_defined_builder::UserDefinedLogicalBuilder;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
@@ -148,8 +149,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 let (plan, select_exprs) =
                     self.try_process_unnest(input, unnest_exprs)?;
-                let plan =
-                    self.try_final_projection_with_order_by(plan, vec![], select_exprs)?;
+
+                let plan = UserDefinedLogicalBuilder::new(self.context_provider, plan)
+                        .project(select_exprs)?
+                        .build()?;
 
                 (plan, alias)
             }

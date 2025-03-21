@@ -826,6 +826,7 @@ impl SessionState {
         &self.serializer_registry
     }
 
+    /// Return the type coercion rules
     pub fn type_coercions(&self) -> &Vec<Arc<dyn TypeCoercion>> {
         &self.type_coercions
     }
