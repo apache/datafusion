@@ -1517,6 +1517,8 @@ pub struct FileScanExecConf {
     pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
     #[prost(message, optional, tag = "11")]
     pub constraints: ::core::option::Option<super::datafusion_common::Constraints>,
+    #[prost(uint64, optional, tag = "12")]
+    pub batch_size: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
