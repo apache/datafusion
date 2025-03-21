@@ -1693,7 +1693,6 @@ mod tests {
         );
         }
 
-        //assert_batches_sorted_eq!(&expected, &result);
 
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
