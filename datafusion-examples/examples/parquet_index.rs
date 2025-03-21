@@ -27,7 +27,9 @@ use datafusion::common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{
+    FileScanConfigBuilder, ParquetSource,
+};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{
@@ -244,9 +246,10 @@ impl TableProvider for IndexTableProvider {
         let source =
             Arc::new(ParquetSource::default().with_predicate(self.schema(), predicate));
         let mut file_scan_config =
-            FileScanConfig::new(object_store_url, self.schema(), source)
+            FileScanConfigBuilder::new(object_store_url, self.schema(), source)
                 .with_projection(projection.cloned())
-                .with_limit(limit);
+                .with_limit(limit)
+                .build();
 
         // Transform to the format needed to pass to DataSourceExec
         // Create one file group per file (default to scanning them all in parallel)

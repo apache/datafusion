@@ -49,6 +49,7 @@ mod tests {
     use arrow::array::Array;
     use arrow::datatypes::SchemaRef;
     use arrow::datatypes::{Field, SchemaBuilder};
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
@@ -329,7 +330,7 @@ mod tests {
     async fn nd_json_exec_file_mixed_order_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        use datafusion_datasource::file_scan_config::FileScanConfig;
+        
         use futures::StreamExt;
 
         let session_ctx = SessionContext::new();
@@ -340,10 +341,11 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_projection(Some(vec![3, 0, 2]))
-            .with_file_compression_type(file_compression_type.to_owned());
+            .with_file_compression_type(file_compression_type.to_owned())
+            .build();
         let exec = conf.build();
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 3);

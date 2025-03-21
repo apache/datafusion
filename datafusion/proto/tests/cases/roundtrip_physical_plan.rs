@@ -47,8 +47,9 @@ use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-    FileSinkConfig, FileSource, ParquetSource,
+    FileScanConfigBuilder, FileSinkConfig, FileSource, ParquetSource,
 };
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
@@ -741,21 +742,24 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         ParquetSource::new(options).with_predicate(Arc::clone(&file_schema), predicate),
     );
 
-    let scan_config =
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, file_source)
-            .with_file_groups(vec![vec![PartitionedFile::new(
-                "/path/to/file.parquet".to_string(),
-                1024,
-            )]])
-            .with_statistics(Statistics {
-                num_rows: Precision::Inexact(100),
-                total_byte_size: Precision::Inexact(1024),
-                column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
-                    vec![Field::new("col", DataType::Utf8, false)],
-                ))),
-            });
+    let scan_config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        file_schema,
+        file_source,
+    )
+    .with_file_groups(vec![vec![PartitionedFile::new(
+        "/path/to/file.parquet".to_string(),
+        1024,
+    )]])
+    .with_statistics(Statistics {
+        num_rows: Precision::Inexact(100),
+        total_byte_size: Precision::Inexact(1024),
+        column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+            Field::new("col", DataType::Utf8, false),
+        ]))),
+    }).build();
 
-    roundtrip_test(scan_config.build())
+    roundtrip_test(Arc::new(DataSourceExec::new(Arc::new(scan_config))))
 }
 
 #[tokio::test]
@@ -795,19 +799,23 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             .with_predicate(Arc::clone(&file_schema), custom_predicate_expr),
     );
 
-    let scan_config =
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, file_source)
-            .with_file_groups(vec![vec![PartitionedFile::new(
-                "/path/to/file.parquet".to_string(),
-                1024,
-            )]])
-            .with_statistics(Statistics {
-                num_rows: Precision::Inexact(100),
-                total_byte_size: Precision::Inexact(1024),
-                column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
-                    vec![Field::new("col", DataType::Utf8, false)],
-                ))),
-            });
+    let scan_config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        file_schema,
+        file_source,
+    )
+    .with_file_groups(vec![vec![PartitionedFile::new(
+        "/path/to/file.parquet".to_string(),
+        1024,
+    )]])
+    .with_statistics(Statistics {
+        num_rows: Precision::Inexact(100),
+        total_byte_size: Precision::Inexact(1024),
+        column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+            Field::new("col", DataType::Utf8, false),
+        ]))),
+    })
+    .build();
 
     #[derive(Debug, Clone, Eq)]
     struct CustomPredicateExpr {
@@ -1604,7 +1612,7 @@ async fn roundtrip_projection_source() -> Result<()> {
     let statistics = Statistics::new_unknown(&schema);
 
     let file_source = ParquetSource::default().with_statistics(statistics.clone());
-    let scan_config = FileScanConfig::new(
+    let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         schema.clone(),
         file_source,
@@ -1614,7 +1622,8 @@ async fn roundtrip_projection_source() -> Result<()> {
         1024,
     )]])
     .with_statistics(statistics)
-    .with_projection(Some(vec![0, 1, 2]));
+    .with_projection(Some(vec![0, 1, 2]))
+    .build();
 
     let filter = Arc::new(
         FilterExec::try_new(
