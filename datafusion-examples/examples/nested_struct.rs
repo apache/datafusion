@@ -8,7 +8,6 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
-use datafusion::datasource::nested_schema_adapter::NestedStructSchemaAdapterFactory;
 use datafusion::prelude::*;
 use std::fs;
 use std::sync::Arc;
@@ -241,51 +240,45 @@ async fn test_datafusion_schema_evolution_with_compaction(
     .await?;
     println!("==> Successfully wrote second parquet file");
 
-    // Let's manually read both parquet files and apply the schema adapter
-    println!("==> Reading the first parquet file and applying schema adapter");
-    let parquet_exec1 = ctx
-        .read_parquet(path1, ParquetReadOptions::default())
-        .await?;
-    let batch1 = parquet_exec1.collect().await?[0].clone();
-
-    println!("==> First file schema: {:?}", batch1.schema());
-
-    println!("==> Reading the second parquet file");
-    let parquet_exec2 = ctx
-        .read_parquet(path2, ParquetReadOptions::default())
-        .await?;
-    let batch2 = parquet_exec2.collect().await?[0].clone();
-
-    println!("==> Second file schema: {:?}", batch2.schema());
-
-    // Create combined batches with schema adapter
-    println!("==> Creating schema adapter");
-    let adapter = NestedStructSchemaAdapterFactory::create_appropriate_adapter(
-        schema2.clone(),
-        schema2.clone(),
+    let paths_str = vec![path1.to_string(), path2.to_string()];
+    println!("==> Creating ListingTableConfig for paths: {:?}", paths_str);
+    println!("==> Using schema2 for files with different schemas");
+    println!(
+        "==> Schema difference: additionalInfo in schema1 doesn't have 'reason' field"
     );
 
-    // Apply schema adapter to the first batch to make it compatible with schema2
-    println!("==> Applying schema adapter to first batch");
-    let (mapping, _) = adapter
-        .map_schema(&batch1.schema(), &schema2)
-        .expect("map schema failed");
-    let mapped_batch1 = mapping.map_batch(&batch1).unwrap();
+    let config = ListingTableConfig::new_with_multi_paths(
+        paths_str
+            .into_iter()
+            .map(|p| ListingTableUrl::parse(&p))
+            .collect::<Result<Vec<_>, _>>()?,
+    )
+    .with_schema(schema2.as_ref().clone().into());
 
-    // Second batch already has schema2, so no adaptation needed
-    let mapped_batch2 = batch2;
+    println!("==> About to infer config");
+    println!(
+        "==> This is where schema adaptation happens between different file schemas"
+    );
+    let config = config.infer(&ctx.state()).await?;
+    println!("==> Successfully inferred config");
 
-    // Create a table with the adapted batches
-    println!("==> Creating new dataframe with adapted batches");
-    let combined_df = ctx
-        .read_batch(mapped_batch1)?
-        .union_distinct(ctx.read_batch(mapped_batch2)?)?;
+    let config = ListingTableConfig {
+        options: Some(ListingOptions {
+            file_sort_order: vec![vec![col("timestamp_utc").sort(true, true)]],
+            ..config.options.unwrap_or_else(|| {
+                ListingOptions::new(Arc::new(ParquetFormat::default()))
+            })
+        }),
+        ..config
+    };
 
-    println!("==> Combined schema: {:?}", combined_df.schema());
+    println!("==> About to create ListingTable");
+    let listing_table = ListingTable::try_new(config)?;
+    println!("==> Successfully created ListingTable");
 
-    // Write the combined data to a new table for querying
-    let combined_table_name = "events";
-    ctx.register_table(combined_table_name, combined_df)?;
+    println!("==> Registering table 'events'");
+    ctx.register_table("events", Arc::new(listing_table))?;
+    println!("==> Successfully registered table");
 
     println!("==> Executing SQL query");
     let df = ctx
@@ -313,13 +306,6 @@ async fn test_datafusion_schema_evolution_with_compaction(
     .await?;
 
     let new_ctx = SessionContext::new();
-
-    // Also apply the adapter for the compacted file
-    println!("==> Creating config for compacted file with schema adapter");
-    let adapter = NestedStructSchemaAdapterFactory::create_appropriate_adapter(
-        schema2.clone(),
-        schema2.clone(),
-    );
     let config = ListingTableConfig::new_with_multi_paths(vec![ListingTableUrl::parse(
         compacted_path,
     )?])
