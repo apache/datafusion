@@ -27,8 +27,10 @@ use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_expr::expr::InList;
+use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -119,6 +121,43 @@ impl ScalarUDFImpl for ArrayHas {
 
     fn return_type(&self, _: &[DataType]) -> Result<DataType> {
         Ok(DataType::Boolean)
+    }
+
+    fn simplify(
+        &self,
+        mut args: Vec<Expr>,
+        _info: &dyn datafusion_expr::simplify::SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        let [haystack, _needle] = take_function_args(self.name(), &args)?;
+
+        // if the haystack is a constant list, we can use an inlist expression which is more
+        // efficient because the haystack is not varying per-row
+        if let Expr::Literal(ScalarValue::List(array)) = haystack {
+            assert_eq!(array.len(), 1); // guarantee of ScalarValue
+            if let Ok(scalar_values) =
+                ScalarValue::convert_array_to_scalar_vec(array.as_ref())
+            {
+                assert_eq!(scalar_values.len(), 1);
+                let list = scalar_values
+                    .into_iter()
+                    .flatten()
+                    .map(Expr::Literal)
+                    .collect();
+
+                // ok to pop here, we will not use args again
+                let needle = args.pop().unwrap();
+                return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
+                    expr: Box::new(needle),
+                    list,
+                    negated: false,
+                })));
+            }
+        }
+
+        // TODO: support LargeList / FixedSizeList?
+        // (not supported by `convert_array_to_scalar_vec`)
+
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn invoke_with_args(
@@ -533,5 +572,62 @@ fn general_array_has_all_and_any_kernel(
                 .iter()
                 .any(|haystack_row| haystack_row == needle_row)
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::create_array;
+    use datafusion_common::utils::SingleRowListArrayBuilder;
+    use datafusion_expr::{
+        col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult, Expr,
+        ScalarUDFImpl,
+    };
+
+    use super::ArrayHas;
+
+    #[test]
+    fn test_simplify_array_has_to_in_list() {
+        let haystack = lit(SingleRowListArrayBuilder::new(create_array!(
+            Int32,
+            [1, 2, 3]
+        ))
+        .build_list_scalar());
+        let needle = col("c");
+
+        let props = ExecutionProps::new();
+        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+
+        let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
+            ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
+        else {
+            panic!("Expected simplified expression");
+        };
+
+        assert_eq!(
+            in_list,
+            datafusion_expr::expr::InList {
+                expr: Box::new(needle),
+                list: vec![lit(1), lit(2), lit(3)],
+                negated: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_array_has_complex_list_not_simplified() {
+        let haystack = col("c1");
+        let needle = col("c2");
+
+        let props = ExecutionProps::new();
+        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+
+        let Ok(ExprSimplifyResult::Original(args)) =
+            ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
+        else {
+            panic!("Expected simplified expression");
+        };
+
+        assert_eq!(args, vec![col("c1"), col("c2")],);
     }
 }
