@@ -21,9 +21,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_session::SessionStore;
 use datafusion_catalog::UrlTableFactory;
 use datafusion_common::plan_datafusion_err;
+use datafusion_session::SessionStore;
 
 use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
 use crate::datasource::TableProvider;

@@ -49,6 +49,7 @@ use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
     FileSinkConfig, FileSource, ParquetSource,
 };
+use datafusion::datasource::sink::DataSinkExec;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
@@ -68,7 +69,6 @@ use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::datasource::sink::DataSinkExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
 };

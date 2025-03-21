@@ -26,13 +26,13 @@ use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, SendableRecordBatchStream,
 };
 use crate::physical_planner::create_physical_sort_exprs;
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;

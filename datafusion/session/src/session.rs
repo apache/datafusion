@@ -64,7 +64,7 @@ use std::sync::{Arc, Weak};
 /// ```
 ///
 /// [`SessionState`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html
-/// [`TableProvider`]: crate::TableProvider
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 #[async_trait]
 pub trait Session: Send + Sync {
     /// Return the session ID

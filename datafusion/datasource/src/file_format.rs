@@ -46,7 +46,7 @@ pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
 /// from the [`TableProvider`]. This helps code re-utilization across
 /// providers that support the same file formats.
 ///
-/// [`TableProvider`]: datafusion_catalog::TableProvider
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 #[async_trait]
 pub trait FileFormat: Send + Sync + fmt::Debug {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be

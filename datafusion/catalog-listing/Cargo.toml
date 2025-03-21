@@ -36,12 +36,12 @@ async-trait = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-datasource = { workspace = true }
-datafusion-session = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-session = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }

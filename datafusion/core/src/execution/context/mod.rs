@@ -75,7 +75,6 @@ use chrono::{DateTime, Utc};
 use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
-use datafusion_session::SessionStore;
 use datafusion_common::config::ConfigOptions;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
@@ -83,6 +82,7 @@ pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
+use datafusion_session::SessionStore;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
