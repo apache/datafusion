@@ -544,7 +544,7 @@ mod test {
         let expr = col("int64_list").is_not_null();
         let expr = logical2physical(&expr, &table_schema);
 
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
+        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory::default());
         let table_schema = Arc::new(table_schema.clone());
 
         let candidate = FilterCandidateBuilder::new(
@@ -583,7 +583,7 @@ mod test {
             ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
         ));
         let expr = logical2physical(&expr, &table_schema);
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
+        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory::default());
         let table_schema = Arc::new(table_schema.clone());
         let candidate = FilterCandidateBuilder::new(
             expr,
@@ -623,7 +623,7 @@ mod test {
             ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("UTC"))),
         ));
         let expr = logical2physical(&expr, &table_schema);
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
+        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory::default());
         let candidate = FilterCandidateBuilder::new(
             expr,
             file_schema,
