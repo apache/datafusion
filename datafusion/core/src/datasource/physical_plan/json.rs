@@ -330,7 +330,6 @@ mod tests {
     async fn nd_json_exec_file_mixed_order_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        
         use futures::StreamExt;
 
         let session_ctx = SessionContext::new();

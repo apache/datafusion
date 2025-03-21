@@ -41,9 +41,7 @@ pub(crate) mod test_util {
     use datafusion_catalog::Session;
     use datafusion_common::Result;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-    use datafusion_datasource::{
-        file_format::FileFormat, PartitionedFile,
-    };
+    use datafusion_datasource::{file_format::FileFormat, PartitionedFile};
     use datafusion_execution::object_store::ObjectStoreUrl;
 
     use crate::test::object_store::local_unpartitioned_file;
