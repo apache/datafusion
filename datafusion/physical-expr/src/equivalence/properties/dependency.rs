@@ -1359,16 +1359,12 @@ mod tests {
         let col_a = col("a", &schema)?;
 
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        assert!(
-            eq_properties.ordering_satisfy_requirement(&LexRequirement::default()),
-        );
+        assert!(eq_properties.ordering_satisfy_requirement(&LexRequirement::default()),);
 
         eq_properties.add_new_ordering(LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
         ]));
-        assert!(
-            eq_properties.ordering_satisfy_requirement(&LexRequirement::default()),
-        );
+        assert!(eq_properties.ordering_satisfy_requirement(&LexRequirement::default()),);
 
         Ok(())
     }
