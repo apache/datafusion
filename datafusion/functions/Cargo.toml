@@ -69,7 +69,7 @@ arrow = { workspace = true }
 arrow-buffer = { workspace = true }
 base64 = { version = "0.22", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
-blake3 = { version = "1.6", optional = true }
+blake3 = { version = "1.7", optional = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
