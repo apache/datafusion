@@ -449,6 +449,7 @@ mod tests {
     use crate::simplify_expressions::ExprSimplifier;
     use arrow::compute::{cast_with_options, CastOptions};
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{DFSchema, DFSchemaRef};
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
@@ -760,7 +761,8 @@ mod tests {
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
         let props = ExecutionProps::new();
         let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&props).with_schema(Arc::clone(schema)),
+            SimplifyContext::new(&props, ConfigOptions::default_singleton_arc())
+                .with_schema(Arc::clone(schema)),
         );
 
         simplifier.simplify(expr).unwrap()

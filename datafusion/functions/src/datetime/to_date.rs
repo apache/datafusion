@@ -165,6 +165,7 @@ mod tests {
     use arrow::array::{Array, Date32Array, GenericStringArray, StringViewArray};
     use arrow::datatypes::DataType;
     use arrow::{compute::kernels::cast_utils::Parser, datatypes::Date32Type};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
@@ -212,6 +213,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(sv)],
                 number_rows: 1,
                 return_type: &DataType::Date32,
+                config_options: ConfigOptions::default_singleton(),
             };
             let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -238,6 +240,7 @@ mod tests {
                 args: vec![ColumnarValue::Array(Arc::new(date_array))],
                 number_rows: batch_len,
                 return_type: &DataType::Date32,
+                config_options: ConfigOptions::default_singleton(),
             };
             let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -335,6 +338,7 @@ mod tests {
                 ],
                 number_rows: 1,
                 return_type: &DataType::Date32,
+                config_options: ConfigOptions::default_singleton(),
             };
             let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -365,6 +369,7 @@ mod tests {
                 ],
                 number_rows: batch_len,
                 return_type: &DataType::Date32,
+                config_options: ConfigOptions::default_singleton(),
             };
             let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -406,6 +411,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Date32,
+            config_options: ConfigOptions::default_singleton(),
         };
         let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -435,6 +441,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(formatted_date_scalar)],
                 number_rows: 1,
                 return_type: &DataType::Date32,
+                config_options: ConfigOptions::default_singleton(),
             };
             let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -457,6 +464,7 @@ mod tests {
             args: vec![ColumnarValue::Scalar(date_scalar)],
             number_rows: 1,
             return_type: &DataType::Date32,
+            config_options: ConfigOptions::default_singleton(),
         };
         let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -482,6 +490,7 @@ mod tests {
             args: vec![ColumnarValue::Scalar(date_scalar)],
             number_rows: 1,
             return_type: &DataType::Date32,
+            config_options: ConfigOptions::default_singleton(),
         };
         let to_date_result = ToDateFunc::new().invoke_with_args(args);
 

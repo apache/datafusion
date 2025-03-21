@@ -31,7 +31,6 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, ToDFSchema};
-use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
 
@@ -71,8 +70,11 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> DataSourceExec 
     };
 
     let df_schema = schema.clone().to_dfschema().unwrap();
-    let execution_props = ExecutionProps::new();
-    let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
+    let execution_props = state.execution_props();
+    let config_options = Arc::new(state.config_options().clone());
+    let predicate =
+        create_physical_expr(&filter, &df_schema, execution_props, &config_options)
+            .unwrap();
 
     let source = Arc::new(
         ParquetSource::default()

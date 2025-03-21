@@ -22,12 +22,12 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Int32Array};
 use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rand::rngs::ThreadRng;
-use rand::Rng;
-
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::make_date;
+use rand::rngs::ThreadRng;
+use rand::Rng;
 
 fn years(rng: &mut ThreadRng) -> Int32Array {
     let mut years = vec![];
@@ -63,6 +63,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let years = ColumnarValue::Array(years_array);
         let months = ColumnarValue::Array(Arc::new(months(&mut rng)) as ArrayRef);
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
+        let config_options = ConfigOptions::default_singleton();
 
         b.iter(|| {
             black_box(
@@ -71,6 +72,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![years.clone(), months.clone(), days.clone()],
                         number_rows: batch_len,
                         return_type: &DataType::Date32,
+                        config_options,
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -84,6 +86,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let batch_len = months_arr.len();
         let months = ColumnarValue::Array(months_arr);
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
+        let config_options = ConfigOptions::default_singleton();
 
         b.iter(|| {
             black_box(
@@ -92,6 +95,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![year.clone(), months.clone(), days.clone()],
                         number_rows: batch_len,
                         return_type: &DataType::Date32,
+                        config_options,
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -105,6 +109,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let day_arr = Arc::new(days(&mut rng));
         let batch_len = day_arr.len();
         let days = ColumnarValue::Array(day_arr);
+        let config_options = ConfigOptions::default_singleton();
 
         b.iter(|| {
             black_box(
@@ -113,6 +118,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![year.clone(), month.clone(), days.clone()],
                         number_rows: batch_len,
                         return_type: &DataType::Date32,
+                        config_options,
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -123,6 +129,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
         let month = ColumnarValue::Scalar(ScalarValue::Int32(Some(11)));
         let day = ColumnarValue::Scalar(ScalarValue::Int32(Some(26)));
+        let config_options = ConfigOptions::default_singleton();
 
         b.iter(|| {
             black_box(
@@ -131,6 +138,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![year.clone(), month.clone(), day.clone()],
                         number_rows: 1,
                         return_type: &DataType::Date32,
+                        config_options,
                     })
                     .expect("make_date should work on valid values"),
             )

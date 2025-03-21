@@ -1844,6 +1844,7 @@ mod tests {
     use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::planner::TypePlanner;
     use sqlparser::ast;
     use tempfile::TempDir;
@@ -2301,6 +2302,7 @@ mod tests {
             _expr: &Expr,
             _input_dfschema: &DFSchema,
             _session_state: &SessionState,
+            _config_options: &Arc<ConfigOptions>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
         }

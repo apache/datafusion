@@ -19,11 +19,13 @@ extern crate criterion;
 
 use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions::math::random::RandomFunc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let random_func = RandomFunc::new();
+    let config_options = ConfigOptions::default_singleton_arc();
 
     // Benchmark to evaluate 1M rows in batch size 8192
     let iterations = 1_000_000 / 8192; // Calculate how many iterations are needed to reach approximately 1M rows
@@ -36,6 +38,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: vec![],
                             number_rows: 8192,
                             return_type: &DataType::Float64,
+                            config_options,
                         })
                         .unwrap(),
                 );
@@ -54,6 +57,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: vec![],
                             number_rows: 128,
                             return_type: &DataType::Float64,
+                            config_options,
                         })
                         .unwrap(),
                 );

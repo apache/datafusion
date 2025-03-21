@@ -24,7 +24,7 @@ use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, TimeUnit};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_timestamp;
 
@@ -114,6 +114,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let arr_data = data();
         let batch_len = arr_data.len();
         let string_array = ColumnarValue::Array(Arc::new(arr_data) as ArrayRef);
+        let config_options = ConfigOptions::default_singleton_arc();
 
         b.iter(|| {
             black_box(
@@ -122,6 +123,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![string_array.clone()],
                         number_rows: batch_len,
                         return_type,
+                        config_options,
                     })
                     .expect("to_timestamp should work on valid values"),
             )
@@ -132,6 +134,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let data = cast(&data(), &DataType::LargeUtf8).unwrap();
         let batch_len = data.len();
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
+        let config_options = ConfigOptions::default_singleton_arc();
 
         b.iter(|| {
             black_box(
@@ -140,6 +143,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![string_array.clone()],
                         number_rows: batch_len,
                         return_type,
+                        config_options,
                     })
                     .expect("to_timestamp should work on valid values"),
             )
@@ -150,6 +154,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let data = cast(&data(), &DataType::Utf8View).unwrap();
         let batch_len = data.len();
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
+        let config_options = ConfigOptions::default_singleton_arc();
 
         b.iter(|| {
             black_box(
@@ -158,6 +163,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![string_array.clone()],
                         number_rows: batch_len,
                         return_type,
+                        config_options,
                     })
                     .expect("to_timestamp should work on valid values"),
             )
@@ -174,6 +180,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Array(Arc::new(format2) as ArrayRef),
             ColumnarValue::Array(Arc::new(format3) as ArrayRef),
         ];
+        let config_options = ConfigOptions::default_singleton_arc();
+
         b.iter(|| {
             black_box(
                 to_timestamp()
@@ -181,6 +189,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         number_rows: batch_len,
                         return_type,
+                        config_options,
                     })
                     .expect("to_timestamp should work on valid values"),
             )
@@ -205,6 +214,8 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Arc::new(cast(&format3, &DataType::LargeUtf8).unwrap()) as ArrayRef
             ),
         ];
+        let config_options = ConfigOptions::default_singleton_arc();
+
         b.iter(|| {
             black_box(
                 to_timestamp()
@@ -212,6 +223,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         number_rows: batch_len,
                         return_type,
+                        config_options,
                     })
                     .expect("to_timestamp should work on valid values"),
             )
@@ -237,6 +249,8 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Arc::new(cast(&format3, &DataType::Utf8View).unwrap()) as ArrayRef
             ),
         ];
+        let config_options = ConfigOptions::default_singleton_arc();
+
         b.iter(|| {
             black_box(
                 to_timestamp()
@@ -244,6 +258,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         number_rows: batch_len,
                         return_type,
+                        config_options,
                     })
                     .expect("to_timestamp should work on valid values"),
             )
