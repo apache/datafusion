@@ -21,11 +21,9 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use crate::stack::StackGuard;
 use datafusion_common::{internal_err, not_impl_err, Constraints, DFSchema, Result};
-use datafusion_expr::expr::Sort;
 use datafusion_expr::user_defined_builder::UserDefinedLogicalBuilder;
 use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Distinct, DistinctOn, LogicalPlan,
-    LogicalPlanBuilder,
+    CreateMemoryTable, DdlStatement, Distinct, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Offset as SQLOffset, OrderBy, OrderByExpr, Query, SelectInto,
@@ -78,7 +76,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     true,
                     None,
                 )?;
-                let plan = self.order_by(plan, order_by_rex)?;
+
+                let plan = if let LogicalPlan::Distinct(Distinct::On(_)) = plan {
+                    return internal_err!("ORDER BY cannot be used with DISTINCT ON as DISTINCT ON already handles the ordering of results");
+                } else {
+                    UserDefinedLogicalBuilder::new(self.context_provider, plan)
+                        .sort(order_by_rex, None)?
+                        .build()?
+                };
+
                 self.limit(plan, query.offset, query.limit, planner_context)
             }
         }
@@ -108,26 +114,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         LogicalPlanBuilder::from(input)
             .limit_by_expr(skip, fetch)?
             .build()
-    }
-
-    /// Wrap the logical in a sort
-    pub(super) fn order_by(
-        &self,
-        plan: LogicalPlan,
-        order_by: Vec<Sort>,
-    ) -> Result<LogicalPlan> {
-        if order_by.is_empty() {
-            return Ok(plan);
-        }
-
-        if let LogicalPlan::Distinct(Distinct::On(_)) = plan {
-            // Order by for DISTINCT ON is handled already
-            return Ok(plan);
-        } else {
-            UserDefinedLogicalBuilder::new(self.context_provider, plan)
-                .sort(order_by, None)?
-                .build()
-        }
     }
 
     /// Wrap the logical plan in a `SelectInto`

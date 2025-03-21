@@ -222,6 +222,10 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
 
     // Similar to `sort_with_limit` in `LogicalPlanBuilder` + coercion
     pub fn sort(self, sorts: Vec<SortExpr>, fetch: Option<usize>) -> Result<Self> {
+        if sorts.is_empty() {
+            return Ok(self);
+        }
+
         let sorts = rewrite_sort_cols_by_aggs(sorts, &self.plan)?;
         let schema = self.plan.schema();
         // Collect sort columns that are missing in the input plan's schema

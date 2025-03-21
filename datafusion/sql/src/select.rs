@@ -280,14 +280,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                 )?;
 
-                // Add sort if needed
-                if !order_by_rex.is_empty() {
-                    UserDefinedLogicalBuilder::new(self.context_provider, plan)
-                        .sort(order_by_rex, None)?
-                        .build()
-                } else {
-                    Ok(plan)
-                }
+                UserDefinedLogicalBuilder::new(self.context_provider, plan)
+                    .sort(order_by_rex, None)?
+                    .build()
             }
 
             Some(Distinct::On(on_expr)) => {
