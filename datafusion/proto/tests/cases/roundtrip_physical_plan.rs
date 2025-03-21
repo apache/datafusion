@@ -757,7 +757,8 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
             Field::new("col", DataType::Utf8, false),
         ]))),
-    }).build();
+    })
+    .build();
 
     roundtrip_test(Arc::new(DataSourceExec::new(Arc::new(scan_config))))
 }

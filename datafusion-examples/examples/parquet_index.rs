@@ -27,9 +27,7 @@ use datafusion::common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{
-    FileScanConfigBuilder, ParquetSource,
-};
+use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{

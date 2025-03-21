@@ -30,8 +30,7 @@ use datafusion::common::{
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
-    FileMeta, FileScanConfigBuilder, ParquetFileReaderFactory,
-    ParquetSource,
+    FileMeta, FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
 };
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
