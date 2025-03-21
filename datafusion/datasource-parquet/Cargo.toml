@@ -52,7 +52,7 @@ object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true }
 rand = { workspace = true }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }

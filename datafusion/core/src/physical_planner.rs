@@ -19,7 +19,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -78,8 +77,9 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, Extension, FetchType, Filter, JoinType, RecursiveQuery,
-    SkipType, SortExpr, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    Analyze, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
+    Filter, JoinType, RecursiveQuery, SkipType, SortExpr, StringifiedPlan, WindowFrame,
+    WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
@@ -88,7 +88,6 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
-use datafusion_physical_plan::DisplayFormatType;
 
 use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
@@ -177,16 +176,17 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match self.handle_explain(logical_plan, session_state).await? {
-            Some(plan) => Ok(plan),
-            None => {
-                let plan = self
-                    .create_initial_plan(logical_plan, session_state)
-                    .await?;
-
-                self.optimize_physical_plan(plan, session_state, |_, _| {})
-            }
+        if let Some(plan) = self
+            .handle_explain_or_analyze(logical_plan, session_state)
+            .await?
+        {
+            return Ok(plan);
         }
+        let plan = self
+            .create_initial_plan(logical_plan, session_state)
+            .await?;
+
+        self.optimize_physical_plan(plan, session_state, |_, _| {})
     }
 
     /// Create a physical expression from a logical expression
@@ -500,6 +500,7 @@ impl DefaultPhysicalPlanner {
                 partition_by,
                 options: source_option_tuples,
             }) => {
+                let original_url = output_url.clone();
                 let input_exec = children.one()?;
                 let parsed_url = ListingTableUrl::parse(output_url)?;
                 let object_store_url = parsed_url.object_store();
@@ -529,6 +530,7 @@ impl DefaultPhysicalPlanner {
 
                 // Set file sink related options
                 let config = FileSinkConfig {
+                    original_url,
                     object_store_url,
                     table_paths: vec![parsed_url],
                     file_groups: vec![],
@@ -1586,6 +1588,7 @@ type AggregateExprWithOptionalArgs = (
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
+    human_displan: String,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
@@ -1640,6 +1643,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         .order_by(ordering_reqs)
                         .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
+                        .human_display(human_displan)
                         .with_ignore_nulls(ignore_nulls)
                         .with_distinct(*distinct)
                         .build()
@@ -1662,15 +1666,22 @@ pub fn create_aggregate_expr_and_maybe_filter(
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
-    let (name, e) = match e {
-        Expr::Alias(Alias { expr, name, .. }) => (Some(name.clone()), expr.as_ref()),
-        Expr::AggregateFunction(_) => (Some(e.schema_name().to_string()), e),
-        _ => (None, e),
+    let (name, human_display, e) = match e {
+        Expr::Alias(Alias { expr, name, .. }) => {
+            (Some(name.clone()), String::default(), expr.as_ref())
+        }
+        Expr::AggregateFunction(_) => (
+            Some(e.schema_name().to_string()),
+            e.human_display().to_string(),
+            e,
+        ),
+        _ => (None, String::default(), e),
     };
 
     create_aggregate_expr_with_name_and_maybe_filter(
         e,
         name,
+        human_display,
         logical_input_schema,
         physical_input_schema,
         execution_props,
@@ -1715,164 +1726,213 @@ impl DefaultPhysicalPlanner {
     /// Returns
     /// Some(plan) if optimized, and None if logical_plan was not an
     /// explain (and thus needs to be optimized as normal)
-    async fn handle_explain(
+    async fn handle_explain_or_analyze(
         &self,
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if let LogicalPlan::Explain(e) = logical_plan {
-            use PlanType::*;
-            let mut stringified_plans = vec![];
+        let execution_plan = match logical_plan {
+            LogicalPlan::Explain(e) => self.handle_explain(e, session_state).await?,
+            LogicalPlan::Analyze(a) => self.handle_analyze(a, session_state).await?,
+            _ => return Ok(None),
+        };
+        Ok(Some(execution_plan))
+    }
 
-            let config = &session_state.config_options().explain;
-            let explain_format = DisplayFormatType::from_str(&config.format)?;
+    /// Planner for `LogicalPlan::Explain`
+    async fn handle_explain(
+        &self,
+        e: &Explain,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use PlanType::*;
+        let mut stringified_plans = vec![];
 
-            if !config.physical_plan_only {
-                stringified_plans.clone_from(&e.stringified_plans);
-                if e.logical_optimization_succeeded {
-                    stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
-                }
-            }
+        let config = &session_state.config_options().explain;
+        let explain_format = &e.explain_format;
 
-            if !config.logical_plan_only && e.logical_optimization_succeeded {
-                match self
+        match explain_format {
+            ExplainFormat::Indent => { /* fall through */ }
+            ExplainFormat::Tree => {
+                // Tree render does not try to explain errors,
+                let physical_plan = self
                     .create_initial_plan(e.plan.as_ref(), session_state)
-                    .await
-                {
-                    Ok(input) => {
-                        // Include statistics / schema if enabled
-                        stringified_plans.push(
-                            displayable(input.as_ref())
-                                .set_show_statistics(config.show_statistics)
-                                .set_show_schema(config.show_schema)
-                                .to_stringified(
-                                    e.verbose,
-                                    InitialPhysicalPlan,
-                                    explain_format,
-                                ),
-                        );
+                    .await?;
 
-                        // Show statistics + schema in verbose output even if not
-                        // explicitly requested
-                        if e.verbose {
-                            if !config.show_statistics {
-                                stringified_plans.push(
-                                    displayable(input.as_ref())
-                                        .set_show_statistics(true)
-                                        .to_stringified(
-                                            e.verbose,
-                                            InitialPhysicalPlanWithStats,
-                                            explain_format,
-                                        ),
-                                );
-                            }
-                            if !config.show_schema {
-                                stringified_plans.push(
-                                    displayable(input.as_ref())
-                                        .set_show_schema(true)
-                                        .to_stringified(
-                                            e.verbose,
-                                            InitialPhysicalPlanWithSchema,
-                                            explain_format,
-                                        ),
-                                );
-                            }
-                        }
+                let optimized_plan = self.optimize_physical_plan(
+                    physical_plan,
+                    session_state,
+                    |_plan, _optimizer| {},
+                )?;
 
-                        let optimized_plan = self.optimize_physical_plan(
-                            input,
-                            session_state,
-                            |plan, optimizer| {
-                                let optimizer_name = optimizer.name().to_string();
-                                let plan_type = OptimizedPhysicalPlan { optimizer_name };
-                                stringified_plans.push(
-                                    displayable(plan)
-                                        .set_show_statistics(config.show_statistics)
-                                        .set_show_schema(config.show_schema)
-                                        .to_stringified(
-                                            e.verbose,
-                                            plan_type,
-                                            explain_format,
-                                        ),
-                                );
-                            },
-                        );
-                        match optimized_plan {
-                            Ok(input) => {
-                                // This plan will includes statistics if show_statistics is on
-                                stringified_plans.push(
-                                    displayable(input.as_ref())
-                                        .set_show_statistics(config.show_statistics)
-                                        .set_show_schema(config.show_schema)
-                                        .to_stringified(
-                                            e.verbose,
-                                            FinalPhysicalPlan,
-                                            explain_format,
-                                        ),
-                                );
-
-                                // Show statistics + schema in verbose output even if not
-                                // explicitly requested
-                                if e.verbose {
-                                    if !config.show_statistics {
-                                        stringified_plans.push(
-                                            displayable(input.as_ref())
-                                                .set_show_statistics(true)
-                                                .to_stringified(
-                                                    e.verbose,
-                                                    FinalPhysicalPlanWithStats,
-                                                    explain_format,
-                                                ),
-                                        );
-                                    }
-                                    if !config.show_schema {
-                                        stringified_plans.push(
-                                            displayable(input.as_ref())
-                                                .set_show_schema(true)
-                                                .to_stringified(
-                                                    e.verbose,
-                                                    FinalPhysicalPlanWithSchema,
-                                                    explain_format,
-                                                ),
-                                        );
-                                    }
-                                }
-                            }
-                            Err(DataFusionError::Context(optimizer_name, e)) => {
-                                let plan_type = OptimizedPhysicalPlan { optimizer_name };
-                                stringified_plans
-                                    .push(StringifiedPlan::new(plan_type, e.to_string()))
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    Err(err) => {
-                        stringified_plans.push(StringifiedPlan::new(
-                            PhysicalPlanError,
-                            err.strip_backtrace(),
-                        ));
-                    }
-                }
+                stringified_plans.push(StringifiedPlan::new(
+                    FinalPhysicalPlan,
+                    displayable(optimized_plan.as_ref())
+                        .tree_render()
+                        .to_string(),
+                ));
             }
+            ExplainFormat::PostgresJSON => {
+                stringified_plans.push(StringifiedPlan::new(
+                    FinalLogicalPlan,
+                    e.plan.display_pg_json().to_string(),
+                ));
+            }
+            ExplainFormat::Graphviz => {
+                stringified_plans.push(StringifiedPlan::new(
+                    FinalLogicalPlan,
+                    e.plan.display_graphviz().to_string(),
+                ));
+            }
+        };
 
-            Ok(Some(Arc::new(ExplainExec::new(
-                SchemaRef::new(e.schema.as_ref().to_owned().into()),
+        if !stringified_plans.is_empty() {
+            return Ok(Arc::new(ExplainExec::new(
+                Arc::clone(e.schema.inner()),
                 stringified_plans,
                 e.verbose,
-            ))))
-        } else if let LogicalPlan::Analyze(a) = logical_plan {
-            let input = self.create_physical_plan(&a.input, session_state).await?;
-            let schema = SchemaRef::new((*a.schema).clone().into());
-            let show_statistics = session_state.config_options().explain.show_statistics;
-            Ok(Some(Arc::new(AnalyzeExec::new(
-                a.verbose,
-                show_statistics,
-                input,
-                schema,
-            ))))
-        } else {
-            Ok(None)
+            )));
         }
+
+        // The indent mode is quite sophisticated, and handles quite a few
+        // different cases / options for displaying the plan.
+        if !config.physical_plan_only {
+            stringified_plans.clone_from(&e.stringified_plans);
+            if e.logical_optimization_succeeded {
+                stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
+            }
+        }
+
+        if !config.logical_plan_only && e.logical_optimization_succeeded {
+            match self
+                .create_initial_plan(e.plan.as_ref(), session_state)
+                .await
+            {
+                Ok(input) => {
+                    // Include statistics / schema if enabled
+                    stringified_plans.push(StringifiedPlan::new(
+                        InitialPhysicalPlan,
+                        displayable(input.as_ref())
+                            .set_show_statistics(config.show_statistics)
+                            .set_show_schema(config.show_schema)
+                            .indent(e.verbose)
+                            .to_string(),
+                    ));
+
+                    // Show statistics + schema in verbose output even if not
+                    // explicitly requested
+                    if e.verbose {
+                        if !config.show_statistics {
+                            stringified_plans.push(StringifiedPlan::new(
+                                InitialPhysicalPlanWithStats,
+                                displayable(input.as_ref())
+                                    .set_show_statistics(true)
+                                    .indent(e.verbose)
+                                    .to_string(),
+                            ));
+                        }
+                        if !config.show_schema {
+                            stringified_plans.push(StringifiedPlan::new(
+                                InitialPhysicalPlanWithSchema,
+                                displayable(input.as_ref())
+                                    .set_show_schema(true)
+                                    .indent(e.verbose)
+                                    .to_string(),
+                            ));
+                        }
+                    }
+
+                    let optimized_plan = self.optimize_physical_plan(
+                        input,
+                        session_state,
+                        |plan, optimizer| {
+                            let optimizer_name = optimizer.name().to_string();
+                            let plan_type = OptimizedPhysicalPlan { optimizer_name };
+                            stringified_plans.push(StringifiedPlan::new(
+                                plan_type,
+                                displayable(plan)
+                                    .set_show_statistics(config.show_statistics)
+                                    .set_show_schema(config.show_schema)
+                                    .indent(e.verbose)
+                                    .to_string(),
+                            ));
+                        },
+                    );
+                    match optimized_plan {
+                        Ok(input) => {
+                            // This plan will includes statistics if show_statistics is on
+                            stringified_plans.push(StringifiedPlan::new(
+                                FinalPhysicalPlan,
+                                displayable(input.as_ref())
+                                    .set_show_statistics(config.show_statistics)
+                                    .set_show_schema(config.show_schema)
+                                    .indent(e.verbose)
+                                    .to_string(),
+                            ));
+
+                            // Show statistics + schema in verbose output even if not
+                            // explicitly requested
+                            if e.verbose {
+                                if !config.show_statistics {
+                                    stringified_plans.push(StringifiedPlan::new(
+                                        FinalPhysicalPlanWithStats,
+                                        displayable(input.as_ref())
+                                            .set_show_statistics(true)
+                                            .indent(e.verbose)
+                                            .to_string(),
+                                    ));
+                                }
+                                if !config.show_schema {
+                                    stringified_plans.push(StringifiedPlan::new(
+                                        FinalPhysicalPlanWithSchema,
+                                        // This will include schema if show_schema is on
+                                        // and will be set to true if verbose is on
+                                        displayable(input.as_ref())
+                                            .set_show_schema(true)
+                                            .indent(e.verbose)
+                                            .to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                        Err(DataFusionError::Context(optimizer_name, e)) => {
+                            let plan_type = OptimizedPhysicalPlan { optimizer_name };
+                            stringified_plans
+                                .push(StringifiedPlan::new(plan_type, e.to_string()))
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                Err(err) => {
+                    stringified_plans.push(StringifiedPlan::new(
+                        PhysicalPlanError,
+                        err.strip_backtrace(),
+                    ));
+                }
+            }
+        }
+
+        Ok(Arc::new(ExplainExec::new(
+            Arc::clone(e.schema.inner()),
+            stringified_plans,
+            e.verbose,
+        )))
+    }
+
+    async fn handle_analyze(
+        &self,
+        a: &Analyze,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input = self.create_physical_plan(&a.input, session_state).await?;
+        let schema = SchemaRef::new((*a.schema).clone().into());
+        let show_statistics = session_state.config_options().explain.show_statistics;
+        Ok(Arc::new(AnalyzeExec::new(
+            a.verbose,
+            show_statistics,
+            input,
+            schema,
+        )))
     }
 
     /// Optimize a physical plan by applying each physical optimizer,

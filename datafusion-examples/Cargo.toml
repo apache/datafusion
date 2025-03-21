@@ -73,8 +73,10 @@ tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = "0.12.1"
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3" }
 url = { workspace = true }
-uuid = "1.15"
+uuid = "1.16"
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.29.0", features = ["fs"] }

@@ -23,7 +23,7 @@ use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     builder::PrimitiveBuilder, cast::AsArray, downcast_primitive, Array, ArrayRef,
-    ArrowPrimitiveType, PrimitiveArray, StringArray,
+    ArrowPrimitiveType, LargeStringArray, PrimitiveArray, StringArray, StringViewArray,
 };
 use arrow::datatypes::{i256, DataType};
 use datafusion_common::DataFusionError;
@@ -88,6 +88,7 @@ pub struct StringHashTable {
     owned: ArrayRef,
     map: TopKHashTable<Option<String>>,
     rnd: RandomState,
+    data_type: DataType,
 }
 
 // An implementation of ArrowHashTable for any `ArrowPrimitiveType` key
@@ -101,13 +102,20 @@ where
 }
 
 impl StringHashTable {
-    pub fn new(limit: usize) -> Self {
+    pub fn new(limit: usize, data_type: DataType) -> Self {
         let vals: Vec<&str> = Vec::new();
-        let owned = Arc::new(StringArray::from(vals));
+        let owned: ArrayRef = match data_type {
+            DataType::Utf8 => Arc::new(StringArray::from(vals)),
+            DataType::Utf8View => Arc::new(StringViewArray::from(vals)),
+            DataType::LargeUtf8 => Arc::new(LargeStringArray::from(vals)),
+            _ => panic!("Unsupported data type"),
+        };
+
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
             rnd: RandomState::default(),
+            data_type,
         }
     }
 }
@@ -131,7 +139,12 @@ impl ArrowHashTable for StringHashTable {
 
     unsafe fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
         let ids = self.map.take_all(indexes);
-        Arc::new(StringArray::from(ids))
+        match self.data_type {
+            DataType::Utf8 => Arc::new(StringArray::from(ids)),
+            DataType::LargeUtf8 => Arc::new(LargeStringArray::from(ids)),
+            DataType::Utf8View => Arc::new(StringViewArray::from(ids)),
+            _ => unreachable!(),
+        }
     }
 
     unsafe fn find_or_insert(
@@ -140,15 +153,44 @@ impl ArrowHashTable for StringHashTable {
         replace_idx: usize,
         mapper: &mut Vec<(usize, usize)>,
     ) -> (usize, bool) {
-        let ids = self
-            .owned
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("StringArray required");
-        let id = if ids.is_null(row_idx) {
-            None
-        } else {
-            Some(ids.value(row_idx))
+        let id = match self.data_type {
+            DataType::Utf8 => {
+                let ids = self
+                    .owned
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .expect("Expected StringArray for DataType::Utf8");
+                if ids.is_null(row_idx) {
+                    None
+                } else {
+                    Some(ids.value(row_idx))
+                }
+            }
+            DataType::LargeUtf8 => {
+                let ids = self
+                    .owned
+                    .as_any()
+                    .downcast_ref::<LargeStringArray>()
+                    .expect("Expected LargeStringArray for DataType::LargeUtf8");
+                if ids.is_null(row_idx) {
+                    None
+                } else {
+                    Some(ids.value(row_idx))
+                }
+            }
+            DataType::Utf8View => {
+                let ids = self
+                    .owned
+                    .as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .expect("Expected StringViewArray for DataType::Utf8View");
+                if ids.is_null(row_idx) {
+                    None
+                } else {
+                    Some(ids.value(row_idx))
+                }
+            }
+            _ => panic!("Unsupported data type"),
         };
 
         let hash = self.rnd.hash_one(id);
@@ -377,7 +419,9 @@ pub fn new_hash_table(
 
     downcast_primitive! {
         kt => (downcast_helper, kt),
-        DataType::Utf8 => return Ok(Box::new(StringHashTable::new(limit))),
+        DataType::Utf8 => return Ok(Box::new(StringHashTable::new(limit, DataType::Utf8))),
+        DataType::LargeUtf8 => return Ok(Box::new(StringHashTable::new(limit, DataType::LargeUtf8))),
+        DataType::Utf8View => return Ok(Box::new(StringHashTable::new(limit, DataType::Utf8View))),
         _ => {}
     }
 

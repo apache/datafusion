@@ -17,9 +17,6 @@
 
 use std::path::Path;
 
-type Error = Box<dyn std::error::Error>;
-type Result<T, E = Error> = std::result::Result<T, E>;
-
 fn main() -> Result<(), String> {
     let proto_dir = Path::new("proto");
     let proto_path = Path::new("proto/datafusion_common.proto");

@@ -48,6 +48,7 @@ use datafusion_physical_expr::{
     PhysicalSortRequirement,
 };
 
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use itertools::Itertools;
 
 pub(crate) mod group_values;
@@ -744,19 +745,22 @@ impl DisplayAs for AggregateExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let format_expr_with_alias =
+                    |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
+                        let e = e.to_string();
+                        if &e != alias {
+                            format!("{e} as {alias}")
+                        } else {
+                            e
+                        }
+                    };
+
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
                 let g: Vec<String> = if self.group_by.is_single() {
                     self.group_by
                         .expr
                         .iter()
-                        .map(|(e, alias)| {
-                            let e = e.to_string();
-                            if &e != alias {
-                                format!("{e} as {alias}")
-                            } else {
-                                e
-                            }
-                        })
+                        .map(format_expr_with_alias)
                         .collect()
                 } else {
                     self.group_by
@@ -768,21 +772,11 @@ impl DisplayAs for AggregateExec {
                                 .enumerate()
                                 .map(|(idx, is_null)| {
                                     if *is_null {
-                                        let (e, alias) = &self.group_by.null_expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
+                                        format_expr_with_alias(
+                                            &self.group_by.null_expr[idx],
+                                        )
                                     } else {
-                                        let (e, alias) = &self.group_by.expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
+                                        format_expr_with_alias(&self.group_by.expr[idx])
                                     }
                                 })
                                 .collect::<Vec<String>>()
@@ -809,8 +803,57 @@ impl DisplayAs for AggregateExec {
                 }
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")?;
+                let format_expr_with_alias =
+                    |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
+                        let expr_sql = fmt_sql(e.as_ref()).to_string();
+                        if &expr_sql != alias {
+                            format!("{expr_sql} as {alias}")
+                        } else {
+                            expr_sql
+                        }
+                    };
+
+                let g: Vec<String> = if self.group_by.is_single() {
+                    self.group_by
+                        .expr
+                        .iter()
+                        .map(format_expr_with_alias)
+                        .collect()
+                } else {
+                    self.group_by
+                        .groups
+                        .iter()
+                        .map(|group| {
+                            let terms = group
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, is_null)| {
+                                    if *is_null {
+                                        format_expr_with_alias(
+                                            &self.group_by.null_expr[idx],
+                                        )
+                                    } else {
+                                        format_expr_with_alias(&self.group_by.expr[idx])
+                                    }
+                                })
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            format!("({terms})")
+                        })
+                        .collect()
+                };
+                let a: Vec<String> = self
+                    .aggr_expr
+                    .iter()
+                    .map(|agg| agg.human_display().to_string())
+                    .collect();
+                writeln!(f, "mode={:?}", self.mode)?;
+                if !g.is_empty() {
+                    writeln!(f, "group_by={}", g.join(", "))?;
+                }
+                if !a.is_empty() {
+                    writeln!(f, "aggr={}", a.join(", "))?;
+                }
             }
         }
         Ok(())

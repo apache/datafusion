@@ -26,6 +26,7 @@ use arrow::array::{
 };
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::test_util::batches_to_string;
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
@@ -57,14 +58,15 @@ async fn csv_query_custom_udf_with_cast() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c11)) FROM aggregate_test_100";
     let actual = plan_and_collect(&ctx, sql).await.unwrap();
-    let expected = [
-        "+------------------------------------------+",
-        "| avg(custom_sqrt(aggregate_test_100.c11)) |",
-        "+------------------------------------------+",
-        "| 0.6584408483418835                       |",
-        "+------------------------------------------+",
-    ];
-    assert_batches_eq!(&expected, &actual);
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    +------------------------------------------+
+    | avg(custom_sqrt(aggregate_test_100.c11)) |
+    +------------------------------------------+
+    | 0.6584408483418835                       |
+    +------------------------------------------+
+    "###);
+
     Ok(())
 }
 
@@ -75,14 +77,15 @@ async fn csv_query_avg_sqrt() -> Result<()> {
     // Note it is a different column (c12) than above (c11)
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
     let actual = plan_and_collect(&ctx, sql).await.unwrap();
-    let expected = [
-        "+------------------------------------------+",
-        "| avg(custom_sqrt(aggregate_test_100.c12)) |",
-        "+------------------------------------------+",
-        "| 0.6706002946036459                       |",
-        "+------------------------------------------+",
-    ];
-    assert_batches_eq!(&expected, &actual);
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    +------------------------------------------+
+    | avg(custom_sqrt(aggregate_test_100.c12)) |
+    +------------------------------------------+
+    | 0.6706002946036459                       |
+    +------------------------------------------+
+    "###);
+
     Ok(())
 }
 
@@ -146,17 +149,16 @@ async fn scalar_udf() -> Result<()> {
 
     let result = DataFrame::new(ctx.state(), plan).collect().await?;
 
-    let expected = [
-        "+-----+-----+-----------------+",
-        "| a   | b   | my_add(t.a,t.b) |",
-        "+-----+-----+-----------------+",
-        "| 1   | 2   | 3               |",
-        "| 10  | 12  | 22              |",
-        "| 10  | 12  | 22              |",
-        "| 100 | 120 | 220             |",
-        "+-----+-----+-----------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +-----+-----+-----------------+
+    | a   | b   | my_add(t.a,t.b) |
+    +-----+-----+-----------------+
+    | 1   | 2   | 3               |
+    | 10  | 12  | 22              |
+    | 10  | 12  | 22              |
+    | 100 | 120 | 220             |
+    +-----+-----+-----------------+
+    "###);
 
     let batch = &result[0];
     let a = as_int32_array(batch.column(0))?;
@@ -272,34 +274,32 @@ async fn scalar_udf_zero_params() -> Result<()> {
     ctx.register_udf(ScalarUDF::from(get_100_udf));
 
     let result = plan_and_collect(&ctx, "select get_100() a from t").await?;
-    let expected = [
-        "+-----+", //
-        "| a   |", //
-        "+-----+", //
-        "| 100 |", //
-        "| 100 |", //
-        "| 100 |", //
-        "| 100 |", //
-        "+-----+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +-----+
+    | a   |
+    +-----+
+    | 100 |
+    | 100 |
+    | 100 |
+    | 100 |
+    +-----+
+    "###);
 
     let result = plan_and_collect(&ctx, "select get_100() a").await?;
-    let expected = [
-        "+-----+", //
-        "| a   |", //
-        "+-----+", //
-        "| 100 |", //
-        "+-----+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +-----+
+    | a   |
+    +-----+
+    | 100 |
+    +-----+
+    "###);
 
     let result = plan_and_collect(&ctx, "select get_100() from t where a=999").await?;
-    let expected = [
-        "++", //
-        "++",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    ++
+    ++
+    "###);
+
     Ok(())
 }
 
@@ -325,14 +325,14 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
 
     // Make sure that the UDF is used instead of the built-in function
     let result = plan_and_collect(&ctx, "select abs(a) a from t").await?;
-    let expected = [
-        "+---+", //
-        "| a |", //
-        "+---+", //
-        "| 1 |", //
-        "+---+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +---+
+    | a |
+    +---+
+    | 1 |
+    +---+
+    "###);
+
     Ok(())
 }
 
@@ -427,14 +427,13 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     // Can call it if you put quotes
     let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
 
-    let expected = [
-        "+--------------+",
-        "| MY_FUNC(t.i) |",
-        "+--------------+",
-        "| 1            |",
-        "+--------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +--------------+
+    | MY_FUNC(t.i) |
+    +--------------+
+    | 1            |
+    +--------------+
+    "###);
 
     Ok(())
 }
@@ -464,18 +463,23 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     ctx.register_udf(udf);
 
-    let expected = [
-        "+------------+",
-        "| dummy(t.i) |",
-        "+------------+",
-        "| 1          |",
-        "+------------+",
-    ];
     let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
-    assert_batches_eq!(expected, &result);
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    +------------+
+    | dummy(t.i) |
+    +------------+
+    | 1          |
+    +------------+
+    "###);
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
-    assert_batches_eq!(expected, &alias_result);
+    insta::assert_snapshot!(batches_to_string(&alias_result), @r###"
+    +------------+
+    | dummy(t.i) |
+    +------------+
+    | 1          |
+    +------------+
+    "###);
 
     Ok(())
 }
@@ -679,6 +683,10 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(DataType::Int64)
     }
 
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("dummy - not implemented")
+    }
+
     // Demonstrate simplifying a UDF
     fn simplify(
         &self,
@@ -795,7 +803,7 @@ impl ScalarUDFImpl for TakeUDF {
         &self.signature
     }
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        not_impl_err!("Not called because the return_type_from_exprs is implemented")
+        not_impl_err!("Not called because the return_type_from_args is implemented")
     }
 
     /// This function returns the type of the first or second argument based on
@@ -944,6 +952,10 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("dummy - not implemented")
     }
 
     fn simplify(

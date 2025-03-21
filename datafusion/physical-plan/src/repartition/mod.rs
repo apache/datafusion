@@ -507,8 +507,16 @@ impl DisplayAs for RepartitionExec {
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
+                writeln!(
+                    f,
+                    "output_partition_count={}",
+                    self.input.output_partitioning().partition_count()
+                )?;
+                if self.preserve_order {
+                    writeln!(f, "preserve_order={}", self.preserve_order)?;
+                }
+                Ok(())
             }
         }
     }
@@ -1071,9 +1079,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::{arrow_datafusion_err, assert_batches_sorted_eq, exec_err};
+    use datafusion_common_runtime::JoinSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
-    use tokio::task::JoinSet;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {

@@ -19,13 +19,12 @@
 //! [`crate::displayable`] for examples of how to format
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 use std::fmt::Formatter;
-use std::{fmt, str::FromStr};
 
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
-use datafusion_common::DataFusionError;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
@@ -34,12 +33,12 @@ use crate::render_tree::RenderTree;
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DisplayFormatType {
     /// Default, compact format. Example: `FilterExec: c12 < 10.0`
     ///
     /// This format is designed to provide a detailed textual description
-    /// of all rele
+    /// of all parts of the plan.
     Default,
     /// Verbose, showing all available details.
     ///
@@ -52,14 +51,18 @@ pub enum DisplayFormatType {
     /// information for understanding a plan. It should NOT contain the same level
     /// of detail information as the  [`Self::Default`] format.
     ///
-    /// In this mode, each line contains a key=value pair.
-    /// Everything before the first `=` is treated as the key, and everything after the
-    /// first `=` is treated as the value.
+    /// In this mode, each line has one of two formats:
+    ///
+    /// 1. A string without a `=`, which is printed in its own line
+    ///
+    /// 2. A string with a `=` that is treated as a `key=value pair`. Everything
+    ///    before the first `=` is treated as the key, and everything after the
+    ///    first `=` is treated as the value.
     ///
     /// For example, if the output of `TreeRender` is this:
     /// ```text
+    /// Parquet
     /// partition_sizes=[1]
-    /// partitions=1
     /// ```
     ///
     /// It is rendered in the center of a box in the following way:
@@ -69,25 +72,10 @@ pub enum DisplayFormatType {
     /// │       DataSourceExec      │
     /// │    --------------------   │
     /// │    partition_sizes: [1]   │
-    /// │       partitions: 1       │
+    /// │          Parquet          │
     /// └───────────────────────────┘
     ///  ```
     TreeRender,
-}
-
-impl FromStr for DisplayFormatType {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "indent" => Ok(Self::Default),
-            "tree" => Ok(Self::TreeRender),
-            _ => Err(DataFusionError::Configuration(format!(
-                "Invalid explain format: {}",
-                s
-            ))),
-        }
-    }
 }
 
 /// Wraps an `ExecutionPlan` with various methods for formatting
@@ -276,6 +264,9 @@ impl<'a> DisplayableExecutionPlan<'a> {
         }
     }
 
+    /// Formats the plan using a ASCII art like tree
+    ///
+    /// See [`DisplayFormatType::TreeRender`] for more details.
     pub fn tree_render(&self) -> impl fmt::Display + 'a {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
@@ -322,7 +313,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
         }
     }
 
-    /// format as a `StringifiedPlan`
+    #[deprecated(since = "47.0.0", note = "indent() or tree_render() instead")]
     pub fn to_stringified(
         &self,
         verbose: bool,
@@ -857,22 +848,24 @@ impl TreeRenderVisitor<'_, '_> {
         let sorted_extra_info: BTreeMap<_, _> = extra_info.iter().collect();
         for (key, value) in sorted_extra_info {
             let mut str = Self::remove_padding(value);
-            if str.is_empty() {
-                continue;
-            }
             let mut is_inlined = false;
             let available_width = Self::NODE_RENDER_WIDTH - 7;
             let total_size = key.len() + str.len() + 2;
             let is_multiline = str.contains('\n');
-            if !is_multiline && total_size < available_width {
+
+            if str.is_empty() {
+                str = key.to_string();
+            } else if !is_multiline && total_size < available_width {
                 str = format!("{}: {}", key, str);
                 is_inlined = true;
             } else {
                 str = format!("{}:\n{}", key, str);
             }
+
             if is_inlined && was_inlined {
                 requires_padding = false;
             }
+
             if requires_padding {
                 result.push(String::new());
             }

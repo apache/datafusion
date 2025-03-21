@@ -99,7 +99,7 @@ jobs:
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1
-        run: cargo test --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,extended_tests
+        run: cargo test --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,extended_tests,recursive_protection
       - name: Verify Working Directory Clean
         run: git diff --exit-code
       - name: Cleanup
@@ -142,7 +142,7 @@ jobs:
           rust-version: stable
       - name: Run sqllogictest
         run: |
-          cargo test --profile release-nonlto --test sqllogictests -- --include-sqlite
+          cargo test --features backtrace --profile release-nonlto --test sqllogictests -- --include-sqlite
           cargo clean
 
   # If the workflow was triggered by the PR comment we need to manually update check status to display in UI

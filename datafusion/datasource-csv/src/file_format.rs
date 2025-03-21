@@ -666,8 +666,8 @@ impl DisplayAs for CsvSink {
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                writeln!(f, "format: csv")?;
+                write!(f, "file={}", &self.config.original_url)
             }
         }
     }
