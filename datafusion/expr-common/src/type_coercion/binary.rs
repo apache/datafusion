@@ -827,7 +827,6 @@ pub fn binary_numeric_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
     if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
         return None;
     };
@@ -841,32 +840,7 @@ pub fn binary_numeric_coercion(
         return Some(t);
     }
 
-    // These are ordered from most informative to least informative so
-    // that the coercion does not lose information via truncation
-    match (lhs_type, rhs_type) {
-        (Float64, _) | (_, Float64) => Some(Float64),
-        (_, Float32) | (Float32, _) => Some(Float32),
-        // The following match arms encode the following logic: Given the two
-        // integral types, we choose the narrowest possible integral type that
-        // accommodates all values of both types. Note that to avoid information
-        // loss when combining UInt64 with signed integers we use Decimal128(20, 0).
-        (UInt64, Int64 | Int32 | Int16 | Int8)
-        | (Int64 | Int32 | Int16 | Int8, UInt64) => Some(Decimal128(20, 0)),
-        (UInt64, _) | (_, UInt64) => Some(UInt64),
-        (Int64, _)
-        | (_, Int64)
-        | (UInt32, Int32 | Int16 | Int8)
-        | (Int32 | Int16 | Int8, UInt32) => Some(Int64),
-        (UInt32, _) | (_, UInt32) => Some(UInt32),
-        (Int32, _) | (_, Int32) | (UInt16, Int16 | Int8) | (Int16 | Int8, UInt16) => {
-            Some(Int32)
-        }
-        (UInt16, _) | (_, UInt16) => Some(UInt16),
-        (Int16, _) | (_, Int16) | (Int8, UInt8) | (UInt8, Int8) => Some(Int16),
-        (Int8, _) | (_, Int8) => Some(Int8),
-        (UInt8, _) | (_, UInt8) => Some(UInt8),
-        _ => None,
-    }
+    numerical_coercion(lhs_type, rhs_type)
 }
 
 /// Decimal coercion rules.
@@ -1027,6 +1001,16 @@ fn mathematics_numerical_coercion(
         (_, Dictionary(_, value_type)) => {
             mathematics_numerical_coercion(lhs_type, value_type)
         }
+        _ => numerical_coercion(lhs_type, rhs_type),
+    }
+}
+
+/// A common set of numerical coercions that are applied for mathematical and binary ops
+/// to lhs_type` and `rhs_type`. 
+fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    match (lhs_type, rhs_type) {
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
         // The following match arms encode the following logic: Given the two
