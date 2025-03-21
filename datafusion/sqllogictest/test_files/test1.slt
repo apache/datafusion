@@ -1,0 +1,19 @@
+
+statement ok
+create or replace table t as select column1 as value, column2 as time from (select * from (values
+  (1, timestamp '2022-01-01 00:00:30'),
+  (2, timestamp '2022-01-01 01:00:10'),
+  (3, timestamp '2022-01-02 00:00:20')
+) as sq) as sq
+
+query PI
+select
+  date_trunc('minute',time) AS "trunc_time",
+  sum(value) + sum(value)
+FROM t
+GROUP BY time
+ORDER BY sum(value) + sum(value);
+----
+2022-01-01T00:00:00 2
+2022-01-01T01:00:00 4
+2022-01-02T00:00:00 6
