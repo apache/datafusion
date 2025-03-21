@@ -1,0 +1,138 @@
+{
+  "extensionUris": [
+    {
+      "extensionUriAnchor": 1,
+      "uri": "/functions_arithmetic.yaml"
+    }
+  ],
+  "extensions": [
+    {
+      "extensionFunction": {
+        "extensionUriReference": 1,
+        "functionAnchor": 0,
+        "name": "row_number:"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "project": {
+            "common": {
+              "emit": {
+                "outputMapping": [
+                  1,
+                  2
+                ]
+              }
+            },
+            "input": {
+              "read": {
+                "common": {
+                  "direct": {
+                  }
+                },
+                "baseSchema": {
+                  "names": [
+                    "A"
+                  ],
+                  "struct": {
+                    "types": [
+                      {
+                        "i32": {
+                          "typeVariationReference": 0,
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      }
+                    ],
+                    "typeVariationReference": 0,
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "namedTable": {
+                  "names": [
+                    "DATA"
+                  ]
+                }
+              }
+            },
+            "expressions": [
+              {
+                "windowFunction": {
+                  "functionReference": 0,
+                  "partitions": [],
+                  "sorts": [],
+                  "upperBound": {
+                    "currentRow": {
+                    }
+                  },
+                  "lowerBound": {
+                    "unbounded": {
+                    }
+                  },
+                  "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT",
+                  "outputType": {
+                    "i64": {
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "args": [],
+                  "arguments": [],
+                  "invocation": "AGGREGATION_INVOCATION_ALL",
+                  "options": [],
+                  "boundsType": "BOUNDS_TYPE_ROWS"
+                }
+              },
+              {
+                "windowFunction": {
+                  "functionReference": 0,
+                  "partitions": [
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 0
+                          }
+                        },
+                        "rootReference": {
+                        }
+                      }
+                    }
+                  ],
+                  "sorts": [],
+                  "upperBound": {
+                    "currentRow": {
+                    }
+                  },
+                  "lowerBound": {
+                    "unbounded": {
+                    }
+                  },
+                  "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT",
+                  "outputType": {
+                    "i64": {
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "args": [],
+                  "arguments": [],
+                  "invocation": "AGGREGATION_INVOCATION_ALL",
+                  "options": [],
+                  "boundsType": "BOUNDS_TYPE_ROWS"
+                }
+              }
+            ]
+          }
+        },
+        "names": [
+          "EXPR$0",
+          "EXPR$1"
+        ]
+      }
+    }
+  ],
+  "expectedTypeUrls": []
+}
