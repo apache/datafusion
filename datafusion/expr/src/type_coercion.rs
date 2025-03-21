@@ -37,14 +37,11 @@ pub mod aggregates {
 pub mod functions;
 pub mod other;
 
-use datafusion_common::plan_datafusion_err;
-use datafusion_common::plan_err;
 use datafusion_common::DFSchema;
 use datafusion_common::Result;
 pub use datafusion_expr_common::type_coercion::binary;
 
 use arrow::datatypes::DataType;
-use datafusion_expr_common::type_coercion::binary::comparison_coercion;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 
 use crate::BinaryExpr;
@@ -132,9 +129,6 @@ pub enum TypeCoerceResult<T> {
 /// Coerce the given binary expression to a valid expression
 pub fn coerce_binary_expr(expr: BinaryExpr, schema: &DFSchema) -> Result<BinaryExpr> {
     let BinaryExpr { left, op, right } = expr;
-
-    let left_type = left.get_type(schema)?;
-    let right_type = right.get_type(schema)?;
 
     let (left_type, right_type) =
         BinaryTypeCoercer::new(&left.get_type(schema)?, &op, &right.get_type(schema)?)

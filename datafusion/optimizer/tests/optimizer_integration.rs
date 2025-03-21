@@ -25,7 +25,10 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::test::function_stub::sum_udaf;
-use datafusion_expr::{AggregateUDF, LogicalPlan, LogicalPlanBuilderConfig, ScalarUDF, TableSource, WindowUDF};
+use datafusion_expr::{
+    AggregateUDF, LogicalPlan, LogicalPlanBuilderConfig, ScalarUDF, TableSource,
+    WindowUDF,
+};
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::planner::AggregateFunctionPlanner;

@@ -348,9 +348,14 @@ impl DataFrame {
         let plan = if window_func_exprs.is_empty() {
             self.plan
         } else {
-            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
+            UserDefinedLogicalBuilder::new(self.session_state.as_ref(), self.plan)
+                .window_plan(window_func_exprs)?
+                .build()?
         };
-        let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
+
+        let project_plan = UserDefinedLogicalBuilder::new(self.session_state.as_ref(), plan)
+            .project(expr_list)?
+            .build()?;
 
         Ok(DataFrame {
             session_state: self.session_state,
@@ -555,7 +560,7 @@ impl DataFrame {
         let aggr_expr_len = aggr_expr.len();
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = UserDefinedLogicalBuilder::new(self.session_state.as_ref(), self.plan)
             .with_options(options)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
@@ -570,7 +575,9 @@ impl DataFrame {
                 .filter(|(idx, _)| *idx != grouping_id_pos)
                 .map(|(_, column)| Expr::Column(column))
                 .collect::<Vec<_>>();
-            LogicalPlanBuilder::from(plan).project(exprs)?.build()?
+            UserDefinedLogicalBuilder::new(self.session_state.as_ref(), plan)
+                .project(exprs)?
+                .build()?
         } else {
             plan
         };
@@ -584,8 +591,8 @@ impl DataFrame {
     /// Return a new DataFrame that adds the result of evaluating one or more
     /// window functions ([`Expr::WindowFunction`]) to the existing columns
     pub fn window(self, window_exprs: Vec<Expr>) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
-            .window(window_exprs)?
+        let plan = UserDefinedLogicalBuilder::new(self.session_state.as_ref(), self.plan)
+            .window_plan(window_exprs)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -623,7 +630,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn limit(self, skip: usize, fetch: Option<usize>) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = UserDefinedLogicalBuilder::new(self.session_state.as_ref(), self.plan)
             .limit(skip, fetch)?
             .build()?;
         Ok(DataFrame {
@@ -661,8 +668,8 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn union(self, dataframe: DataFrame) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
-            .union(dataframe.plan)?
+        let plan = UserDefinedLogicalBuilder::new(self.session_state.as_ref(), self.plan)
+            .union(vec![dataframe.plan])?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -734,7 +741,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn distinct(self) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan).distinct()?.build()?;
+        let plan = UserDefinedLogicalBuilder::new(self.session_state.as_ref(), self.plan)
+            .distinct()?
+            .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -774,7 +783,7 @@ impl DataFrame {
         select_expr: Vec<Expr>,
         sort_expr: Option<Vec<SortExpr>>,
     ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = UserDefinedLogicalBuilder::new(self.session_state.as_ref(), self.plan)
             .distinct_on(on_expr, select_expr, sort_expr)?
             .build()?;
         Ok(DataFrame {
@@ -1027,7 +1036,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn sort(self, expr: Vec<SortExpr>) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan).sort(expr)?.build()?;
+        let plan = UserDefinedLogicalBuilder::new(self.session_state.as_ref(), self.plan)
+            .sort(expr, None)?
+            .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -1088,14 +1099,10 @@ impl DataFrame {
         right_cols: &[&str],
         filter: Option<Expr>,
     ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
-            .join(
-                right.plan,
-                join_type,
-                (left_cols.to_vec(), right_cols.to_vec()),
-                filter,
-            )?
+        let plan = UserDefinedLogicalBuilder::new(self.session_state.as_ref(), self.plan)
+            .join(right.plan, join_type, (left_cols.to_vec(), right_cols.to_vec()), filter)?
             .build()?;
+
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -1770,7 +1777,9 @@ impl DataFrame {
         } else {
             (
                 Some(window_func_exprs[0].to_string()),
-                LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?,
+                UserDefinedLogicalBuilder::new(self.session_state.as_ref(), self.plan)
+                    .window_plan(window_func_exprs)?
+                    .build()?,
             )
         };
 
@@ -1798,9 +1807,10 @@ impl DataFrame {
             fields.push((new_column, true));
         }
 
-        let project_plan = LogicalPlanBuilder::from(plan)
-            .project_with_validation(fields)?
-            .build()?;
+        let project_plan =
+            UserDefinedLogicalBuilder::new(self.session_state.as_ref(), plan)
+                .project_with_validation(fields)?
+                .build()?;
 
         Ok(DataFrame {
             session_state: self.session_state,

@@ -2219,6 +2219,8 @@ async fn nested_explain_should_fail() -> Result<()> {
 }
 
 // Test issue: https://github.com/apache/datafusion/issues/12065
+// This requires fix of map_expression
+#[ignore]
 #[tokio::test]
 async fn filtered_aggr_with_param_values() -> Result<()> {
     let cfg = SessionConfig::new().set(

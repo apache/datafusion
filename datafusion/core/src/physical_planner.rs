@@ -2153,7 +2153,7 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::user_defined_builder::UserDefinedLogicalBuilder;
-    use datafusion_expr::{col, lit, LogicalPlanBuilder, LogicalPlanBuilderConfig, LogicalPlanBuilderOptions, UserDefinedLogicalNodeCore};
+    use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -2187,19 +2187,8 @@ mod tests {
         let logical_plan = UserDefinedLogicalBuilder::new(&session_state, csv_scan)
             .filter(col("c7").lt(lit(5_u8)))?
             .project(vec![col("c1"), col("c2")])?
-            .aggregate(LogicalPlanBuilderOptions::new(), vec![col("c1")], vec![sum(col("c2"))])?
-            .sort(vec![col("c1").sort(true, true)], None)?
-            .limit(3, Some(10))?
-            .build()?;
-            
-
-        let logical_plan = test_csv_scan()
-            .await?
-            // filter clause needs the type coercion rule applied
-            .filter(col("c7").lt(lit(5_u8)))?
-            .project(vec![col("c1"), col("c2")])?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .sort(vec![col("c1").sort(true, true)])?
+            .sort(vec![col("c1").sort(true, true)], None)?
             .limit(3, Some(10))?
             .build()?;
 
@@ -2215,7 +2204,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_cube_expr() -> Result<()> {
-        let logical_plan = test_csv_scan().await?.build()?;
+        let logical_plan = test_csv_scan().await?;
 
         let plan = plan(&logical_plan).await?;
 
@@ -2242,7 +2231,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_rollup_expr() -> Result<()> {
-        let logical_plan = test_csv_scan().await?.build()?;
+        let logical_plan = test_csv_scan().await?;
 
         let plan = plan(&logical_plan).await?;
 
@@ -2288,11 +2277,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_csv_plan() -> Result<()> {
-        let logical_plan = test_csv_scan()
-            .await?
-            .filter(col("c7").lt(col("c12")))?
-            .limit(3, None)?
-            .build()?;
+        let csv_scan = test_csv_scan().await?;
+        let logical_plan =
+            UserDefinedLogicalBuilder::new(&make_session_state(), csv_scan)
+                .filter(col("c7").lt(col("c12")))?
+                .limit(3, None)?
+                .build()?;
 
         let plan = plan(&logical_plan).await?;
 
@@ -2326,7 +2316,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_zero_offset_plan() -> Result<()> {
-        let logical_plan = test_csv_scan().await?.limit(0, None)?.build()?;
+        let csv_scan = test_csv_scan().await?;
+        let logical_plan =
+            UserDefinedLogicalBuilder::new(&make_session_state(), csv_scan)
+                .limit(0, None)?
+                .build()?;
         let plan = plan(&logical_plan).await?;
         assert!(!format!("{plan:?}").contains("limit="));
         Ok(())
@@ -2360,8 +2354,12 @@ mod tests {
             // bool AND bool
             bool_expr.clone().and(bool_expr),
         ];
+
+        let csv_scan = test_csv_scan().await?;
         for case in cases {
-            test_csv_scan().await?.project(vec![case.clone()]).unwrap();
+            UserDefinedLogicalBuilder::new(&make_session_state(), csv_scan.clone())
+                .project(vec![case.clone()])?
+                .build()?;
         }
         Ok(())
     }
@@ -2435,12 +2433,14 @@ mod tests {
     async fn in_list_types() -> Result<()> {
         // expression: "a in ('a', 1)"
         let list = vec![lit("a"), lit(1i64)];
-        let logical_plan = test_csv_scan()
-            .await?
-            // filter clause needs the type coercion rule applied
-            .filter(col("c12").lt(lit(0.05)))?
-            .project(vec![col("c1").in_list(list, false)])?
-            .build()?;
+        let csv_scan = test_csv_scan().await?;
+        let logical_plan =
+            UserDefinedLogicalBuilder::new(&make_session_state(), csv_scan)
+                // filter clause needs the type coercion rule applied
+                .filter(col("c12").lt(lit(0.05)))?
+                .project(vec![col("c1").in_list(list, false)])?
+                .build()?;
+
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
@@ -2457,12 +2457,13 @@ mod tests {
         // expression: "a in (struct::null, 'a')"
         let list = vec![struct_literal(), lit("a")];
 
-        let logical_plan = test_csv_scan()
-            .await?
-            // filter clause needs the type coercion rule applied
-            .filter(col("c12").lt(lit(0.05)))?
-            .project(vec![col("c12").lt_eq(lit(0.025)).in_list(list, false)])?
-            .build()?;
+        let csv_scan = test_csv_scan().await?;
+        let logical_plan =
+            UserDefinedLogicalBuilder::new(&make_session_state(), csv_scan)
+                // filter clause needs the type coercion rule applied
+                .filter(col("c12").lt(lit(0.05)))?
+                .project(vec![col("c12").lt_eq(lit(0.025)).in_list(list, false)])?
+                .build()?;
         let e = plan(&logical_plan).await.unwrap_err().to_string();
 
         assert_contains!(
@@ -2485,10 +2486,11 @@ mod tests {
 
     #[tokio::test]
     async fn hash_agg_input_schema() -> Result<()> {
-        let logical_plan = test_csv_scan_with_name("aggregate_test_100")
-            .await?
-            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .build()?;
+        let csv_scan = test_csv_scan_with_name("aggregate_test_100").await?;
+        let logical_plan =
+            UserDefinedLogicalBuilder::new(&make_session_state(), csv_scan)
+                .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+                .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
         let final_hash_agg = execution_plan
@@ -2513,10 +2515,11 @@ mod tests {
             vec![col("c2")],
             vec![col("c1"), col("c2")],
         ]));
-        let logical_plan = test_csv_scan_with_name("aggregate_test_100")
-            .await?
-            .aggregate(vec![grouping_set_expr], vec![sum(col("c3"))])?
-            .build()?;
+        let csv_scan = test_csv_scan_with_name("aggregate_test_100").await?;
+        let logical_plan =
+            UserDefinedLogicalBuilder::new(&make_session_state(), csv_scan)
+                .aggregate(vec![grouping_set_expr], vec![sum(col("c3"))])?
+                .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
         let final_hash_agg = execution_plan
@@ -2536,10 +2539,11 @@ mod tests {
 
     #[tokio::test]
     async fn hash_agg_group_by_partitioned() -> Result<()> {
-        let logical_plan = test_csv_scan()
-            .await?
-            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .build()?;
+        let csv_scan = test_csv_scan().await?;
+        let logical_plan =
+            UserDefinedLogicalBuilder::new(&make_session_state(), csv_scan)
+                .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+                .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
@@ -2588,10 +2592,11 @@ mod tests {
             vec![col("c2")],
             vec![col("c1"), col("c2")],
         ]));
-        let logical_plan = test_csv_scan()
-            .await?
-            .aggregate(vec![grouping_set_expr], vec![sum(col("c3"))])?
-            .build()?;
+        let csv_scan = test_csv_scan().await?;
+        let logical_plan =
+            UserDefinedLogicalBuilder::new(&make_session_state(), csv_scan)
+                .aggregate(vec![grouping_set_expr], vec![sum(col("c3"))])?
+                .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
@@ -2834,7 +2839,7 @@ mod tests {
         }
     }
 
-    async fn test_csv_scan_with_name(name: &str) -> Result<LogicalPlanBuilder> {
+    async fn test_csv_scan_with_name(name: &str) -> Result<LogicalPlan> {
         let ctx = SessionContext::new();
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{testdata}/csv/aggregate_test_100.csv");
@@ -2855,7 +2860,7 @@ mod tests {
                 }
                 _ => unimplemented!(),
             };
-        Ok(LogicalPlanBuilder::from(logical_plan))
+        Ok(logical_plan)
     }
 
     async fn test_csv_scan() -> Result<LogicalPlan> {

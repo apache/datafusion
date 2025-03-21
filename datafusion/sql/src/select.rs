@@ -238,7 +238,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         } else {
             let plan = UserDefinedLogicalBuilder::new(self.context_provider, plan)
-                .window(window_func_exprs.clone())?
+                .window_plan(window_func_exprs.clone())?
                 .build()?;
 
             // Re-write the projection
@@ -827,7 +827,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
         let plan = UserDefinedLogicalBuilder::new(self.context_provider, input.clone())
-            .aggregate(options, group_by_exprs.to_vec(), aggr_exprs.to_vec())?
+            .with_options(options)
+            .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
             .build()?;
 
         let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {

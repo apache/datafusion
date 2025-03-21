@@ -22,10 +22,10 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{LogicalPlanBuilderConfig, WindowUDF};
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
 };
+use datafusion_expr::{LogicalPlanBuilderConfig, WindowUDF};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;

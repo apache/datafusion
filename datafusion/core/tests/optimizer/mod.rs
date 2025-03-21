@@ -30,7 +30,8 @@ use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{plan_err, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
-    col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilderConfig, Operator, ScalarUDF, TableSource, WindowUDF
+    col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan,
+    LogicalPlanBuilderConfig, Operator, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_optimizer::analyzer::Analyzer;

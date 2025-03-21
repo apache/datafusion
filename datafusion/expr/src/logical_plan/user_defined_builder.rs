@@ -20,11 +20,20 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use crate::{
-    expr::Alias, expr_rewriter::{normalize_col, normalize_sorts, rewrite_sort_cols_by_aggs}, lit, type_coercion::TypeCoerceResult, utils::{compare_sort_expr, group_window_expr_by_sort_keys}, Expr, ExprSchemable, SortExpr
+    expr::Alias,
+    expr_rewriter::{
+        normalize_col, normalize_cols, normalize_sorts, rewrite_sort_cols_by_aggs,
+    },
+    lit,
+    type_coercion::TypeCoerceResult,
+    utils::{columnize_expr, compare_sort_expr, group_window_expr_by_sort_keys},
+    Expr, ExprSchemable, SortExpr,
 };
 
 use super::{
-    builder::project, Distinct, Limit, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderConfig, LogicalPlanBuilderOptions, Projection, Sort, Union
+    builder::{project, validate_unique_names},
+    Distinct, Limit, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderConfig,
+    LogicalPlanBuilderOptions, Projection, Sort, Union,
 };
 
 use arrow::datatypes::Field;
@@ -42,17 +51,27 @@ use itertools::izip;
 pub struct UserDefinedLogicalBuilder<'a, C: LogicalPlanBuilderConfig> {
     config: &'a C,
     plan: LogicalPlan,
+    options: LogicalPlanBuilderOptions,
 }
 
 impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
     /// Create a new UserDefinedLogicalBuilder
     pub fn new(config: &'a C, plan: LogicalPlan) -> Self {
-        Self { config, plan }
+        Self {
+            config,
+            plan,
+            options: LogicalPlanBuilderOptions::default(),
+        }
     }
 
     // Return Result since most of the use cases expect Result
     pub fn build(self) -> Result<LogicalPlan> {
         Ok(self.plan)
+    }
+
+    pub fn with_options(mut self, options: LogicalPlanBuilderOptions) -> Self {
+        self.options = options;
+        self
     }
 
     pub fn filter(self, predicate: Expr) -> Result<Self> {
@@ -69,21 +88,39 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
         Ok(Self::new(self.config, plan))
     }
 
+    // Similar to `project_with_validation` in `LogicalPlanBuilder`
+    pub fn project_with_validation(self, expr: Vec<(Expr, bool)>) -> Result<Self> {
+        let mut projected_expr = vec![];
+        for (e, validate) in expr {
+            let e = e.into();
+            match e {
+                #[expect(deprecated)]
+                Expr::Wildcard { .. } => projected_expr.push(e),
+                _ => {
+                    if validate {
+                        projected_expr.push(columnize_expr(
+                            normalize_col(e, &self.plan)?,
+                            &self.plan,
+                        )?)
+                    } else {
+                        projected_expr.push(e)
+                    }
+                }
+            }
+        }
+        validate_unique_names("Projections", projected_expr.iter())?;
+        self.project(projected_expr)
+    }
+
     pub fn distinct(self) -> Result<Self> {
         let plan = LogicalPlan::Distinct(Distinct::All(Arc::new(self.plan)));
         Ok(Self::new(self.config, plan))
     }
 
-    pub fn aggregate(
-        self,
-        options: LogicalPlanBuilderOptions,
-        group_expr: Vec<Expr>,
-        aggr_expr: Vec<Expr>,
-    ) -> Result<Self> {
+    pub fn aggregate(self, group_expr: Vec<Expr>, aggr_expr: Vec<Expr>) -> Result<Self> {
         let group_expr = self.try_coerce_group_expr(group_expr)?;
 
         let plan = LogicalPlanBuilder::from(self.plan)
-            .with_options(options)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
         Ok(Self::new(self.config, plan))
@@ -92,6 +129,20 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
     pub fn having(self, expr: Expr) -> Result<Self> {
         let expr = self.try_coerce_having_expr(expr)?;
         let plan = LogicalPlanBuilder::from(self.plan).having(expr)?.build()?;
+        Ok(Self::new(self.config, plan))
+    }
+
+    pub fn join(
+        self,
+        right: LogicalPlan,
+        join_type: JoinType,
+        join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
+        filter: Option<Expr>
+    ) -> Result<Self> {
+        let filter = self.try_coerce_join_filter(right.schema(), filter)?;
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .join(right, join_type, join_keys, filter)?
+            .build()?;
         Ok(Self::new(self.config, plan))
     }
 
@@ -180,6 +231,10 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
         Ok(Self::new(self.config, plan))
     }
 
+    pub fn union_distinct(self) -> Result<Self> {
+        todo!()
+    }
+
     // Similar to `sort_with_limit` in `LogicalPlanBuilder` + coercion
     pub fn sort(self, sorts: Vec<SortExpr>, fetch: Option<usize>) -> Result<Self> {
         if sorts.is_empty() {
@@ -247,7 +302,12 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
         // Ok(Self::new(self.config, plan))
     }
 
-    pub fn window(self, window_exprs: Vec<Expr>) -> Result<Self> {
+    /// Function similar to LogicalPlanBuilder::window_plan,
+    ///
+    /// LogicalPlanBuilder(input, window_exprs) is equivalent to
+    ///
+    /// Self::new(config, plan).window_plan(window_exprs)
+    pub fn window_plan(self, window_exprs: Vec<Expr>) -> Result<Self> {
         let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
         // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
         // we compare the sort key themselves and if one window's sort keys are a prefix of another
@@ -277,6 +337,17 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
         Ok(result)
     }
 
+    // Function similar to LogicalPlanBuilder::window
+    pub fn window(self, window_exprs: Vec<Expr>) -> Result<Self> {
+        let window_exprs = self.try_coerce_window_exprs(window_exprs)?;
+
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .window(window_exprs)?
+            .build()?;
+
+        Ok(Self::new(self.config, plan))
+    }
+
     fn window_inner(self, window_exprs: Vec<Expr>) -> Result<Self> {
         let window_exprs = self.try_coerce_window_exprs(window_exprs)?;
 
@@ -288,7 +359,7 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
 
         Ok(Self::new(self.config, plan))
     }
-    
+
     /// Limit the number of rows returned
     ///
     /// `skip` - Number of rows to skip before fetch any row.
@@ -353,6 +424,18 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
             .into_iter()
             .map(|e| self.try_coerce_binary_expr(e, &schema))
             .collect()
+    }
+
+    fn try_coerce_join_filter(
+        &self,
+        right_schema: &DFSchemaRef,
+        filter: Option<Expr>,
+    ) -> Result<Option<Expr>> {
+        let schema = self.plan.schema().join(&right_schema).map(Arc::new)?;
+
+        filter
+            .map(|f| self.try_coerce_binary_expr(f, &schema))
+            .transpose()
     }
 
     fn try_coerce_distinct_on_expr(&self, expr: Vec<Expr>) -> Result<Vec<Expr>> {
