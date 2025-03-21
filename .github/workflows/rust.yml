@@ -45,7 +45,7 @@ jobs:
     name: Check License Header
     steps:
       - uses: actions/checkout@v4
-      - uses: korandoru/hawkeye@v6
+      - uses: korandoru/hawkeye@dd74178a96f27b1121447c6b4a4ccfce180d5bf7
 
   # Check crate compiles and base cargo check passes
   linux-build-lib:
@@ -152,7 +152,6 @@ jobs:
         run: cargo check --profile ci --no-default-features -p datafusion-proto --features=parquet
       - name: Check datafusion-proto (avro)
         run: cargo check --profile ci --no-default-features -p datafusion-proto --features=avro
-
 
   # Check datafusion crate features
   #
@@ -323,7 +322,6 @@ jobs:
       - name: Minio Output
         if: ${{ !cancelled() }}
         run: docker logs minio-container
-
 
   linux-test-example:
     name: cargo examples (amd64)
