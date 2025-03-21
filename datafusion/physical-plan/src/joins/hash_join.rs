@@ -800,34 +800,36 @@ impl ExecutionPlan for HashJoinExec {
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
-            PartitionMode::CollectLeft => self.left_fut.once(|| {
-                let reservation =
-                    MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
+            PartitionMode::CollectLeft => {
+                let left = coalesce_partitions_if_needed(Arc::clone(&self.left));
+                let left_stream = left.execute(0, Arc::clone(&context))?;
 
-                let left = coalesce_partitions_if_needed(self.left.clone());
-                collect_left_input(
-                    0,
-                    self.random_state.clone(),
-                    left,
-                    on_left.clone(),
-                    Arc::clone(&context),
-                    join_metrics.clone(),
-                    reservation,
-                    need_produce_result_in_final(self.join_type),
-                    self.right().output_partitioning().partition_count(),
-                )
-            }),
+                self.left_fut.once(|| {
+                    let reservation = MemoryConsumer::new("HashJoinInput")
+                        .register(context.memory_pool());
+
+                    collect_left_input(
+                        self.random_state.clone(),
+                        left_stream,
+                        on_left.clone(),
+                        join_metrics.clone(),
+                        reservation,
+                        need_produce_result_in_final(self.join_type),
+                        self.right().output_partitioning().partition_count(),
+                    )
+                })
+            }
             PartitionMode::Partitioned => {
+                let left_stream = self.left.execute(partition, Arc::clone(&context))?;
+
                 let reservation =
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
 
                 OnceFut::new(collect_left_input(
-                    partition,
                     self.random_state.clone(),
-                    Arc::clone(&self.left),
+                    left_stream,
                     on_left.clone(),
-                    Arc::clone(&context),
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
@@ -943,25 +945,21 @@ fn coalesce_partitions_if_needed(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
 /// hash table (`LeftJoinData`)
 #[allow(clippy::too_many_arguments)]
 async fn collect_left_input(
-    partition: usize,
     random_state: RandomState,
-    left: Arc<dyn ExecutionPlan>,
+    left_stream: SendableRecordBatchStream,
     on_left: Vec<PhysicalExprRef>,
-    context: Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
 ) -> Result<JoinLeftData> {
-    let schema = left.schema();
-
-    let stream = left.execute(partition, Arc::clone(&context))?;
+    let schema = left_stream.schema();
 
     // This operation performs 2 steps at once:
     // 1. creates a [JoinHashMap] of all batches from the stream
     // 2. stores the batches in a vector.
     let initial = (Vec::new(), 0, metrics, reservation);
-    let (batches, num_rows, metrics, mut reservation) = stream
+    let (batches, num_rows, metrics, mut reservation) = left_stream
         .try_fold(initial, |mut acc, batch| async {
             let batch_size = get_record_batch_memory_size(&batch);
             // Reserve memory for incoming batch
