@@ -15,8 +15,10 @@ use std::sync::Arc;
 // Remove the tokio::test attribute to make this a regular async function
 async fn test_datafusion_schema_evolution_with_compaction(
 ) -> Result<(), Box<dyn std::error::Error>> {
+    println!("==> Starting test function");
     let ctx = SessionContext::new();
 
+    println!("==> Creating schema1 (simple additionalInfo structure)");
     let schema1 = Arc::new(Schema::new(vec![
         Field::new("component", DataType::Utf8, true),
         Field::new("message", DataType::Utf8, true),
@@ -73,6 +75,7 @@ async fn test_datafusion_schema_evolution_with_compaction(
     let _ = fs::remove_file(path1);
 
     let df1 = ctx.read_batch(batch1)?;
+    println!("==> Writing first parquet file to {}", path1);
     df1.write_parquet(
         path1,
         DataFrameWriteOptions::default()
@@ -81,6 +84,8 @@ async fn test_datafusion_schema_evolution_with_compaction(
         None,
     )
     .await?;
+    println!("==> Successfully wrote first parquet file");
+    println!("==> Creating schema2 (extended additionalInfo with nested reason field)");
 
     let schema2 = Arc::new(Schema::new(vec![
         Field::new("component", DataType::Utf8, true),
@@ -224,6 +229,7 @@ async fn test_datafusion_schema_evolution_with_compaction(
     let _ = fs::remove_file(path2);
 
     let df2 = ctx.read_batch(batch2)?;
+    println!("==> Writing second parquet file to {}", path2);
     df2.write_parquet(
         path2,
         DataFrameWriteOptions::default()
@@ -232,17 +238,29 @@ async fn test_datafusion_schema_evolution_with_compaction(
         None,
     )
     .await?;
+    println!("==> Successfully wrote second parquet file");
 
     let paths_str = vec![path1.to_string(), path2.to_string()];
+    println!("==> Creating ListingTableConfig for paths: {:?}", paths_str);
+    println!("==> Using schema2 for files with different schemas");
+    println!(
+        "==> Schema difference: additionalInfo in schema1 doesn't have 'reason' field"
+    );
+
     let config = ListingTableConfig::new_with_multi_paths(
         paths_str
             .into_iter()
             .map(|p| ListingTableUrl::parse(&p))
             .collect::<Result<Vec<_>, _>>()?,
     )
-    .with_schema(schema2.as_ref().clone().into())
-    .infer(&ctx.state())
-    .await?;
+    .with_schema(schema2.as_ref().clone().into());
+
+    println!("==> About to infer config");
+    println!(
+        "==> This is where schema adaptation happens between different file schemas"
+    );
+    let config = config.infer(&ctx.state()).await?;
+    println!("==> Successfully inferred config");
 
     let config = ListingTableConfig {
         options: Some(ListingOptions {
@@ -254,19 +272,30 @@ async fn test_datafusion_schema_evolution_with_compaction(
         ..config
     };
 
+    println!("==> About to create ListingTable");
     let listing_table = ListingTable::try_new(config)?;
-    ctx.register_table("events", Arc::new(listing_table))?;
+    println!("==> Successfully created ListingTable");
 
+    println!("==> Registering table 'events'");
+    ctx.register_table("events", Arc::new(listing_table))?;
+    println!("==> Successfully registered table");
+
+    println!("==> Executing SQL query");
     let df = ctx
         .sql("SELECT * FROM events ORDER BY timestamp_utc")
         .await?;
+    println!("==> Successfully executed SQL query");
+
+    println!("==> Collecting results");
     let results = df.clone().collect().await?;
+    println!("==> Successfully collected results");
 
     assert_eq!(results[0].num_rows(), 2);
 
     let compacted_path = "test_data_compacted.parquet";
     let _ = fs::remove_file(compacted_path);
 
+    println!("==> writing compacted parquet file to {}", compacted_path);
     df.write_parquet(
         compacted_path,
         DataFrameWriteOptions::default()
@@ -287,6 +316,7 @@ async fn test_datafusion_schema_evolution_with_compaction(
     let listing_table = ListingTable::try_new(config)?;
     new_ctx.register_table("events", Arc::new(listing_table))?;
 
+    println!("==> select from compacted parquet file");
     let df = new_ctx
         .sql("SELECT * FROM events ORDER BY timestamp_utc")
         .await?;
