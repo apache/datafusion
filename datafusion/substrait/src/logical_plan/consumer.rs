@@ -1975,6 +1975,13 @@ pub async fn from_substrait_agg_func(
 
     let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
 
+    // deal with situation that count(*) got no arguments
+    let args = if udaf.name() == "count" && args.is_empty() {
+        vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
+    } else {
+        args
+    };
+
     Ok(Arc::new(Expr::AggregateFunction(
         expr::AggregateFunction::new_udf(udaf, args, distinct, filter, order_by, None),
     )))
