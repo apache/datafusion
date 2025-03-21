@@ -26,13 +26,11 @@ use datafusion_common::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::schema_adapter::DefaultSchemaAdapterFactory;
-use crate::schema_adapter::SchemaAdapter;
-use crate::schema_adapter::SchemaAdapterFactory;
-use crate::schema_adapter::SchemaMapper;
-use crate::schema_adapter::SchemaMapping;
-
-use arrow::array::ArrayRef;
+use crate::schema_adapter::{
+    DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
+    SchemaMapping,
+};
+use arrow::array::{Array, ArrayRef, StructArray};
 use arrow::compute::cast;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::arrow::array::new_null_array;
@@ -305,37 +303,9 @@ impl SchemaMapper for NestedStructSchemaMapping {
         for (field_idx, (field, col)) in
             schema.fields().iter().zip(batch_cols.iter()).enumerate()
         {
-            // Try to find matching field in table schema
-            if let Ok(table_field_idx) = self.table_schema.index_of(field.name()) {
-                let table_field = self.table_schema.field(table_field_idx);
-
-                // Handle adaptation based on field type
-                match (field.data_type(), table_field.data_type()) {
-                    // For nested structs, handle recursively
-                    (DataType::Struct(_), DataType::Struct(_)) => {
-                        // Add adapted column for struct field
-                        let adapted_col = self.adapt_column(col, table_field)?;
-                        cols.push(adapted_col);
-                        fields.push(table_field.clone());
-                    }
-                    // For non-struct fields, just cast if needed
-                    _ if field.data_type() == table_field.data_type() => {
-                        cols.push(col.clone());
-                        fields.push(table_field.clone());
-                    }
-                    // Types don't match, attempt to cast
-                    _ => {
-                        let cast_result = cast(col, table_field.data_type())?;
-                        cols.push(cast_result);
-                        fields.push(table_field.clone());
-                    }
-                }
-            } else {
-                // Field exists in file but not in table schema
-                // Include it as-is for potential predicate pushdown
-                cols.push(col.clone());
-                fields.push(field.clone());
-            }
+            // Just include the field as-is for partial batch
+            cols.push(col.clone());
+            fields.push(field.clone());
         }
 
         // Create record batch with adapted columns
@@ -358,13 +328,53 @@ impl NestedStructSchemaMapping {
         target_field: &Field,
     ) -> Result<ArrayRef> {
         match target_field.data_type() {
-            DataType::Struct(_) => {
-                // Special handling for struct fields is needed here
-                // For simplicity in this example, we just cast - in a real implementation,
-                // we would need to handle adapting each nested field individually
-                cast(source_col, target_field.data_type())
+            DataType::Struct(target_fields) => {
+                // For struct arrays, we need to handle them specially
+                if let Some(struct_array) =
+                    source_col.as_any().downcast_ref::<StructArray>()
+                {
+                    // Create a vector to store field-array pairs with the correct type
+                    let mut children: Vec<(Arc<Field>, Arc<dyn Array>)> = Vec::new();
+                    let num_rows = source_col.len();
+
+                    // For each field in the target schema
+                    for target_child_field in target_fields {
+                        // Create Arc<Field> directly (not Arc<Arc<Field>>)
+                        let field_arc = target_child_field.clone();
+
+                        // Try to find corresponding field in source
+                        match struct_array.column_by_name(target_child_field.name()) {
+                            Some(source_child_col) => {
+                                // Field exists in source, adapt it
+                                let adapted_child = self.adapt_column(
+                                    &source_child_col,
+                                    target_child_field,
+                                )?;
+                                children.push((field_arc, adapted_child));
+                            }
+                            None => {
+                                // Field doesn't exist in source, add null array
+                                children.push((
+                                    field_arc,
+                                    new_null_array(
+                                        target_child_field.data_type(),
+                                        num_rows,
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+
+                    // Create new struct array with all target fields
+                    let struct_array = StructArray::from(children);
+                    Ok(Arc::new(struct_array))
+                } else {
+                    // Not a struct array, but target expects struct - return nulls
+                    Ok(new_null_array(target_field.data_type(), source_col.len()))
+                }
             }
-            _ => cast(source_col, target_field.data_type()),
+            // For non-struct types, just cast
+            _ => Ok(cast(source_col, target_field.data_type())?),
         }
     }
 }
@@ -372,8 +382,11 @@ impl NestedStructSchemaMapping {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::DataType;
-    use arrow::datatypes::TimeUnit;
+    use arrow::array::{
+        Array, Int32Array, Int64Array, StringBuilder, StructArray,
+        TimestampMillisecondArray, UInt8Array,
+    };
+    use arrow::datatypes::{DataType, TimeUnit};
 
     #[test]
     fn test_nested_struct_evolution() -> Result<()> {
@@ -718,10 +731,6 @@ mod tests {
         ]))
     }
 
-    use arrow::array::{Int32Array, Int64Array, StringBuilder, UInt8Array};
-    use arrow::datatypes::DataType;
-    use arrow::datatypes::TimeUnit;
-
     #[test]
     fn test_nested_struct_schema_mapping_map_batch() -> Result<()> {
         // Create source schema with a simple nested struct
@@ -759,7 +768,7 @@ mod tests {
 
         // Create a record batch with the source schema
         let mut created_builder = StringBuilder::new();
-        created_builder.append_value("2023-01-01")?;
+        created_builder.append_value("2023-01-01");
 
         // Create struct array for metadata
         let metadata = StructArray::from(vec![(
@@ -850,7 +859,7 @@ mod tests {
 
         // Create a record batch with the source schema
         let mut created_builder = StringBuilder::new();
-        created_builder.append_value("2023-01-01")?;
+        created_builder.append_value("2023-01-01");
 
         // Create struct array for metadata
         let metadata = StructArray::from(vec![
@@ -933,7 +942,7 @@ mod tests {
 
         // Create a record batch with the source schema
         let mut location_builder = StringBuilder::new();
-        location_builder.append_value("USA")?;
+        location_builder.append_value("USA");
 
         // Create the additionalInfo struct array
         let additional_info = StructArray::from(vec![
@@ -966,7 +975,8 @@ mod tests {
         assert_eq!(mapped_batch.schema().fields().len(), 1); // additionalInfo
 
         // Check the additionalInfo field structure
-        let additional_info_field = mapped_batch.schema().field(0);
+        let binding = mapped_batch.schema();
+        let additional_info_field = binding.field(0);
         if let DataType::Struct(fields) = additional_info_field.data_type() {
             assert_eq!(fields.len(), 3); // location, timestamp_utc, reason
 
