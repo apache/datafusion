@@ -803,10 +803,12 @@ impl ExecutionPlan for HashJoinExec {
             PartitionMode::CollectLeft => self.left_fut.once(|| {
                 let reservation =
                     MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
+
+                let left = coalesce_partitions_if_needed(self.left.clone());
                 collect_left_input(
-                    None,
+                    0,
                     self.random_state.clone(),
-                    Arc::clone(&self.left),
+                    left,
                     on_left.clone(),
                     Arc::clone(&context),
                     join_metrics.clone(),
@@ -821,7 +823,7 @@ impl ExecutionPlan for HashJoinExec {
                         .register(context.memory_pool());
 
                 OnceFut::new(collect_left_input(
-                    Some(partition),
+                    partition,
                     self.random_state.clone(),
                     Arc::clone(&self.left),
                     on_left.clone(),
@@ -941,7 +943,7 @@ fn coalesce_partitions_if_needed(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
 /// hash table (`LeftJoinData`)
 #[allow(clippy::too_many_arguments)]
 async fn collect_left_input(
-    partition: Option<usize>,
+    partition: usize,
     random_state: RandomState,
     left: Arc<dyn ExecutionPlan>,
     on_left: Vec<PhysicalExprRef>,
@@ -953,15 +955,7 @@ async fn collect_left_input(
 ) -> Result<JoinLeftData> {
     let schema = left.schema();
 
-    let (left_input, left_input_partition) = if let Some(partition) = partition {
-        (left, partition)
-    } else {
-        let left_input = coalesce_partitions_if_needed(left);
-        (left_input, 0)
-    };
-
-    // Depending on partition argument load single partition or whole left side in memory
-    let stream = left_input.execute(left_input_partition, Arc::clone(&context))?;
+    let stream = left.execute(partition, Arc::clone(&context))?;
 
     // This operation performs 2 steps at once:
     // 1. creates a [JoinHashMap] of all batches from the stream
