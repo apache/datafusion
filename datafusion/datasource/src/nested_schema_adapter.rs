@@ -10,8 +10,8 @@
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS
+// OF ANY KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
 
@@ -264,7 +264,6 @@ impl NestedStructSchemaMapping {
 
 impl SchemaMapper for NestedStructSchemaMapping {
     fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        println!("==> NestedStructSchemaMapping::map_batch+");
         let batch_rows = batch.num_rows();
         let batch_cols = batch.columns().to_vec();
 
@@ -287,12 +286,10 @@ impl SchemaMapper for NestedStructSchemaMapping {
         let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
         let schema = Arc::clone(&self.projected_table_schema);
         let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
-        println!("==> NestedStructSchemaMapping::map_batch-");
         Ok(record_batch)
     }
 
     fn map_partial_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        println!("==> NestedStructSchemaMapping::map_partial_batch+");
         let batch_cols = batch.columns().to_vec();
         let schema = batch.schema();
 
@@ -314,7 +311,6 @@ impl SchemaMapper for NestedStructSchemaMapping {
             Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
         let record_batch =
             RecordBatch::try_new_with_options(adapted_schema, cols, &options)?;
-        println!("==> NestedStructSchemaMapping::map_partial_batch-");
         Ok(record_batch)
     }
 }
@@ -818,7 +814,6 @@ mod tests {
         assert_eq!(status_col.len(), 1);
         assert!(status_col.is_null(0), "Status should be null");
 
-        println!("map_batch test completed successfully");
         Ok(())
     }
 
@@ -828,6 +823,11 @@ mod tests {
         let source_schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("extra_field", DataType::UInt8, true), // Extra field in source
+            Field::new(
+                "metadata",
+                DataType::Struct(
+                    vec![
+                        Field::new("created", DataType::Utf8, true),
             Field::new(
                 "metadata",
                 DataType::Struct(
@@ -928,7 +928,6 @@ mod tests {
             panic!("Expected struct type for metadata field");
         }
 
-        println!("map_partial_batch test completed successfully");
         Ok(())
     }
 

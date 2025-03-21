@@ -13,13 +13,11 @@ use datafusion::prelude::*;
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
-// Remove the tokio::test attribute to make this a regular async function
+
 async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dyn Error>>
 {
-    println!("==> Starting test function");
     let ctx = SessionContext::new();
 
-    println!("==> Creating schema1 (simple additionalInfo structure)");
     let schema1 = create_schema1();
     let schema2 = create_schema2();
 
@@ -38,7 +36,6 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     let _ = fs::remove_file(path1);
 
     let df1 = ctx.read_batch(mapped_batch)?;
-    println!("==> Writing first parquet file to {}", path1);
     df1.write_parquet(
         path1,
         DataFrameWriteOptions::default()
@@ -47,8 +44,6 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
         None,
     )
     .await?;
-    println!("==> Successfully wrote first parquet file");
-    println!("==> Creating schema2 (extended additionalInfo with nested reason field)");
 
     let batch2 = create_batch2(&schema2)?;
 
@@ -56,7 +51,6 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     let _ = fs::remove_file(path2);
 
     let df2 = ctx.read_batch(batch2)?;
-    println!("==> Writing second parquet file to {}", path2);
     df2.write_parquet(
         path2,
         DataFrameWriteOptions::default()
@@ -65,14 +59,8 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
         None,
     )
     .await?;
-    println!("==> Successfully wrote second parquet file");
 
     let paths_str = vec![path1.to_string(), path2.to_string()];
-    println!("==> Creating ListingTableConfig for paths: {:?}", paths_str);
-    println!("==> Using schema2 for files with different schemas");
-    println!(
-        "==> Schema difference: additionalInfo in schema1 doesn't have 'reason' field"
-    );
 
     let config = ListingTableConfig::new_with_multi_paths(
         paths_str
@@ -82,12 +70,7 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     )
     .with_schema(schema2.as_ref().clone().into());
 
-    println!("==> About to infer config");
-    println!(
-        "==> This is where schema adaptation happens between different file schemas"
-    );
     let config = config.infer(&ctx.state()).await?;
-    println!("==> Successfully inferred config");
 
     let config = ListingTableConfig {
         options: Some(ListingOptions {
@@ -99,30 +82,21 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
         ..config
     };
 
-    println!("==> About to create ListingTable");
     let listing_table = ListingTable::try_new(config)?;
-    println!("==> Successfully created ListingTable");
 
-    println!("==> Registering table 'events'");
     ctx.register_table("events", Arc::new(listing_table))?;
-    println!("==> Successfully registered table");
 
-    println!("==> Executing SQL query");
     let df = ctx
         .sql("SELECT * FROM events ORDER BY timestamp_utc")
         .await?;
-    println!("==> Successfully executed SQL query");
 
-    println!("==> Collecting results");
     let results = df.clone().collect().await?;
-    println!("==> Successfully collected results");
 
     assert_eq!(results[0].num_rows(), 2);
 
     let compacted_path = "test_data_compacted.parquet";
     let _ = fs::remove_file(compacted_path);
 
-    println!("==> writing compacted parquet file to {}", compacted_path);
     df.write_parquet(
         compacted_path,
         DataFrameWriteOptions::default()
@@ -143,7 +117,6 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     let listing_table = ListingTable::try_new(config)?;
     new_ctx.register_table("events", Arc::new(listing_table))?;
 
-    println!("==> select from compacted parquet file");
     let df = new_ctx
         .sql("SELECT * FROM events ORDER BY timestamp_utc")
         .await?;
