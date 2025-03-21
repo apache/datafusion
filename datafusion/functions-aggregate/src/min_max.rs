@@ -33,9 +33,10 @@ use arrow::array::{
 };
 use arrow::compute;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float16Type, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type,
+    DataType, Decimal128Type, Decimal256Type, DurationMicrosecondType,
+    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Float16Type,
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -264,6 +265,7 @@ impl AggregateUDFImpl for Max {
                 | Binary
                 | LargeBinary
                 | BinaryView
+                | Duration(_)
         )
     }
 
@@ -317,6 +319,18 @@ impl AggregateUDFImpl for Max {
             }
             Timestamp(Nanosecond, _) => {
                 primitive_max_accumulator!(data_type, i64, TimestampNanosecondType)
+            }
+            Duration(Second) => {
+                primitive_max_accumulator!(data_type, i64, DurationSecondType)
+            }
+            Duration(Millisecond) => {
+                primitive_max_accumulator!(data_type, i64, DurationMillisecondType)
+            }
+            Duration(Microsecond) => {
+                primitive_max_accumulator!(data_type, i64, DurationMicrosecondType)
+            }
+            Duration(Nanosecond) => {
+                primitive_max_accumulator!(data_type, i64, DurationNanosecondType)
             }
             Decimal128(_, _) => {
                 primitive_max_accumulator!(data_type, i128, Decimal128Type)
@@ -1118,6 +1132,7 @@ impl AggregateUDFImpl for Min {
                 | Binary
                 | LargeBinary
                 | BinaryView
+                | Duration(_)
         )
     }
 
@@ -1171,6 +1186,18 @@ impl AggregateUDFImpl for Min {
             }
             Timestamp(Nanosecond, _) => {
                 primitive_min_accumulator!(data_type, i64, TimestampNanosecondType)
+            }
+            Duration(Second) => {
+                primitive_min_accumulator!(data_type, i64, DurationSecondType)
+            }
+            Duration(Millisecond) => {
+                primitive_min_accumulator!(data_type, i64, DurationMillisecondType)
+            }
+            Duration(Microsecond) => {
+                primitive_min_accumulator!(data_type, i64, DurationMicrosecondType)
+            }
+            Duration(Nanosecond) => {
+                primitive_min_accumulator!(data_type, i64, DurationNanosecondType)
             }
             Decimal128(_, _) => {
                 primitive_min_accumulator!(data_type, i128, Decimal128Type)
