@@ -47,6 +47,7 @@ members = [
     "datafusion/proto/gen",
     "datafusion/proto-common",
     "datafusion/proto-common/gen",
+    "datafusion/session",
     "datafusion/sql",
     "datafusion/sqllogictest",
     "datafusion/substrait",
@@ -136,6 +137,7 @@ datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", versio
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "46.0.1" }
 datafusion-proto = { path = "datafusion/proto", version = "46.0.1" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "46.0.1" }
+datafusion-session = { path = "datafusion/session", version = "46.0.1" }
 datafusion-sql = { path = "datafusion/sql", version = "46.0.1" }
 doc-comment = "0.3"
 env_logger = "0.11"

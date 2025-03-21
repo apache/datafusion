@@ -73,8 +73,9 @@ use crate::execution::session_state::SessionStateBuilder;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_catalog::{
-    DynamicFileCatalog, SessionStore, TableFunction, TableFunctionImpl, UrlTableFactory,
+    DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
+use datafusion_session::SessionStore;
 use datafusion_common::config::ConfigOptions;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;

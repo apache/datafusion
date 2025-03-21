@@ -54,7 +54,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 
 use async_trait::async_trait;
 use bytes::Bytes;

@@ -40,6 +40,8 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-datasource = { workspace = true }
+datafusion-session = { workspace = true }
 datafusion-sql = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }

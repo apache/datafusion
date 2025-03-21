@@ -36,6 +36,7 @@ pub use datafusion_catalog::stream;
 pub use datafusion_catalog::view;
 pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::source;
+pub use datafusion_datasource::sink;
 
 // backwards compatibility
 pub use self::default_table_source::{

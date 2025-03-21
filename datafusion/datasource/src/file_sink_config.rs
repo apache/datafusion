@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::sink::DataSink;
 use crate::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
 use crate::{ListingTableUrl, PartitionedFile};
 use arrow::datatypes::{DataType, SchemaRef};
@@ -24,7 +25,6 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_physical_plan::insert::DataSink;
 use object_store::ObjectStore;
 use std::sync::Arc;
 

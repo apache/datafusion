@@ -29,7 +29,6 @@ use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_catalog::Session;
 use datafusion_common::internal_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::GetExt;
@@ -38,6 +37,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_session::Session;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 use crate::avro_to_arrow::read_avro_schema_from_reader;

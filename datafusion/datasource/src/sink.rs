@@ -22,13 +22,13 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::{
+use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_physical_plan::ExecutionPlanProperties;
+use datafusion_physical_plan::{
     execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use crate::metrics::MetricsSet;
-use crate::stream::RecordBatchStreamAdapter;
-use crate::ExecutionPlanProperties;
 
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};

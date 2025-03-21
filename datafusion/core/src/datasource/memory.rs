@@ -26,7 +26,7 @@ use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::insert::{DataSink, DataSinkExec};
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,

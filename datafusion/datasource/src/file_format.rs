@@ -30,12 +30,12 @@ use crate::file_sink_config::FileSinkConfig;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_catalog::Session;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt, Result, Statistics};
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_session::Session;
 
 use object_store::{ObjectMeta, ObjectStore};
 
