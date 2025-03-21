@@ -204,7 +204,7 @@ fn update_coalesce_ctx_children(
 ///     a [`SortExec`] and a [`CoalescePartitionsExec`] into one [`SortPreservingMergeExec`]
 ///     or a [`SortExec`] + [`RepartitionExec`] combination into an order preserving [`RepartitionExec`]
 /// 4. [`sort_pushdown`] Works top-down. Responsible to push down sort operators as deep as possible in the plan.
-/// 5. [`replace_with_partial_sort`] Checks if it's possible to replace [`SortExec`]s with [`PartialSortExec`] operators
+/// 5. `replace_with_partial_sort` Checks if it's possible to replace [`SortExec`]s with [`PartialSortExec`] operators
 impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
         &self,
@@ -376,12 +376,12 @@ fn replace_with_partial_sort(
 /// 1. Checks if the plan is either [`SortExec`]/[`SortPreservingMergeExec`]/[`CoalescePartitionsExec`] otherwise does nothing
 /// 2. If the plan is a [`SortExec`] or a final [`SortPreservingMergeExec`] (output partitioning is 1)
 ///     2.1. Check for [`CoalescePartitionsExec`] in children, when found check if it can be removed (with possible [`RepartitionExec`]s)
-///         if so remove. (see [`remove_bottleneck_in_subplan`])
+///         if so remove. (see `remove_bottleneck_in_subplan`)
 ///     2.2. If the plan is satisfying the ordering requirements, add a `SortExec`
 ///     2.3. Add an SPM above the plan and return
 /// 3. If the plan is a [`CoalescePartitionsExec`]
 ///     3.1. Check if it can be removed (with possible [`RepartitionExec`]s)
-///         if so remove (see [`remove_bottleneck_in_subplan`])
+///         if so remove (see `remove_bottleneck_in_subplan`)
 pub fn parallelize_sorts(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<Transformed<PlanWithCorrespondingCoalescePartitions>> {
