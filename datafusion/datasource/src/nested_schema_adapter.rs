@@ -234,13 +234,15 @@ mod tests {
     use arrow::datatypes::DataType;
     use arrow::datatypes::TimeUnit;
     // Add imports for the new test
+    use crate::url::ListingTableUrl;
+
+
+    use datafusion_core;
     use arrow::array::{
         Array, Float64Array, StringArray, StructArray, TimestampMillisecondArray,
     };
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::DataFusionError;
 
-    use datafusion_expr::col;
     use std::fs;
 
     #[test]
@@ -887,6 +889,7 @@ mod tests {
         let _ = fs::remove_file(path2);
         let _ = fs::remove_file(compacted_path);
 
+        let _ = 
         Ok(())
     }
 }
