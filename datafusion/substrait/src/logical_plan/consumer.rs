@@ -1059,7 +1059,7 @@ pub async fn from_project_rel(
     p: &ProjectRel,
 ) -> Result<LogicalPlan> {
     if let Some(input) = p.input.as_ref() {
-        let mut input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
+        let input = consumer.consume_rel(input).await?;
         let original_schema = Arc::clone(input.schema());
 
         // Ensure that all expressions have a unique display name, so that
@@ -1075,6 +1075,10 @@ pub async fn from_project_rel(
         // leaving only explicit expressions.
 
         let mut explicit_exprs: Vec<Expr> = vec![];
+        // For WindowFunctions, we need to wrap them in a Window relation. If there are duplicates,
+        // we can do the window'ing only once, then the project will duplicate the result.
+        // Order here doesn't matter since LPB::window_plan sorts the expressions.
+        let mut window_exprs: HashSet<Expr> = HashSet::new();
         for expr in &p.expressions {
             let e = consumer
                 .consume_expression(expr, input.clone().schema())
@@ -1084,10 +1088,16 @@ pub async fn from_project_rel(
                 // Adding the same expression here and in the project below
                 // works because the project's builder uses columnize_expr(..)
                 // to transform it into a column reference
-                input = input.window(vec![e.clone()])?
+                window_exprs.insert(e.clone());
             }
             explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
+
+        let input = if !window_exprs.is_empty() {
+            LogicalPlanBuilder::window_plan(input, window_exprs)?
+        } else {
+            input
+        };
 
         let mut final_exprs: Vec<Expr> = vec![];
         for index in 0..original_schema.fields().len() {
@@ -1095,7 +1105,7 @@ pub async fn from_project_rel(
             final_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
         final_exprs.append(&mut explicit_exprs);
-        input.project(final_exprs)?.build()
+        project(input, final_exprs)
     } else {
         not_impl_err!("Projection without an input is not supported")
     }

@@ -867,7 +867,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                let provider = ViewTable::try_new(input, definition)?;
+                let provider = ViewTable::new(input, definition);
 
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ViewScan")?;

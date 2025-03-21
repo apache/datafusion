@@ -49,4 +49,6 @@ pub use r#async::*;
 pub use schema::*;
 pub use session::*;
 pub use table::*;
+pub mod stream;
 pub mod streaming;
+pub mod view;

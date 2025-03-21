@@ -23,7 +23,6 @@ use std::time::SystemTime;
 use arrow::array::{ArrayRef, Int64Array, Int8Array, StringArray};
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::RecordBatch;
-use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -33,11 +32,13 @@ use datafusion::datasource::physical_plan::{
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::SessionContext;
+use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::Result;
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
+use insta::assert_snapshot;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
@@ -96,17 +97,15 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
     let task_ctx = session_ctx.task_ctx();
     let read = collect(parquet_exec, task_ctx).await.unwrap();
 
-    let expected = [
-        "+-----+----+----+",
-        "| c1  | c2 | c3 |",
-        "+-----+----+----+",
-        "| Foo | 1  | 10 |",
-        "|     | 2  | 20 |",
-        "| bar |    |    |",
-        "+-----+----+----+",
-    ];
-
-    assert_batches_sorted_eq!(expected, &read);
+    assert_snapshot!(batches_to_sort_string(&read), @r"
+    +-----+----+----+
+    | c1  | c2 | c3 |
+    +-----+----+----+
+    |     | 2  | 20 |
+    | Foo | 1  | 10 |
+    | bar |    |    |
+    +-----+----+----+
+    ");
 }
 
 #[derive(Debug)]
