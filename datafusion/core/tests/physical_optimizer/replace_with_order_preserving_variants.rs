@@ -994,7 +994,6 @@ async fn test_with_lost_and_kept_ordering(
             "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "                DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
-
     assert_optimized_in_all_boundedness_situations!(
         expected_input_unbounded,
         expected_input_bounded,

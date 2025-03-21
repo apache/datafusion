@@ -444,6 +444,9 @@ mod tests {
 
     use datafusion_functions::string::concat;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::sort_expr::{
+        LexRequirement, PhysicalSortRequirement,
+    };
 
     #[test]
     fn project_equivalence_properties_test() -> Result<()> {
@@ -1345,6 +1348,85 @@ mod tests {
         assert_eq!(orderings.len(), 2);
         assert!(orderings.contains(&expected_ordering1));
         assert!(orderings.contains(&expected_ordering2));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_equivalence_with_empty_requirements() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        let col_a = col("a", &schema)?;
+
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        assert_eq!(
+            eq_properties.ordering_satisfy_requirement(&LexRequirement::default()),
+            true
+        );
+
+        eq_properties.add_new_ordering(LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
+        ]));
+        assert_eq!(
+            eq_properties.ordering_satisfy_requirement(&LexRequirement::default()),
+            true
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_requirements_compatible() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]));
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+
+        let eq_properties = EquivalenceProperties::new(schema);
+        let default_lex = LexRequirement::default();
+        let lex_a = LexRequirement::new(vec![PhysicalSortRequirement {
+            expr: col_a.clone(),
+            options: None,
+        }]);
+        let lex_a_b = LexRequirement::new(vec![
+            PhysicalSortRequirement {
+                expr: col_a,
+                options: None,
+            },
+            PhysicalSortRequirement {
+                expr: col_b,
+                options: None,
+            },
+        ]);
+        let lex_c = LexRequirement::new(vec![PhysicalSortRequirement {
+            expr: col_c,
+            options: None,
+        }]);
+
+        let res = eq_properties.requirements_compatible(&default_lex, &default_lex);
+        assert_eq!(res, true);
+
+        let res = eq_properties.requirements_compatible(&lex_a, &default_lex);
+        assert_eq!(res, true);
+
+        let res = eq_properties.requirements_compatible(&default_lex, &lex_a);
+        assert_eq!(res, false);
+
+        let res = eq_properties.requirements_compatible(&lex_a, &lex_a);
+        assert_eq!(res, true);
+
+        let res = eq_properties.requirements_compatible(&lex_a, &lex_a_b);
+        assert_eq!(res, false);
+
+        let res = eq_properties.requirements_compatible(&lex_a_b, &lex_a);
+        assert_eq!(res, true);
+
+        let res = eq_properties.requirements_compatible(&lex_c, &lex_a);
+        assert_eq!(res, false);
 
         Ok(())
     }
