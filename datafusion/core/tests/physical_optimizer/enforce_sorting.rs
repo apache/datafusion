@@ -18,13 +18,14 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    aggregate_exec, bounded_window_exec, check_integrity, coalesce_batches_exec,
-    coalesce_partitions_exec, create_test_schema, create_test_schema2,
-    create_test_schema3, filter_exec, global_limit_exec, hash_join_exec, limit_exec,
-    local_limit_exec, memory_exec, parquet_exec, repartition_exec, sort_exec,
-    sort_exec_with_fetch, sort_expr, sort_expr_options, sort_merge_join_exec,
-    sort_preserving_merge_exec, sort_preserving_merge_exec_with_fetch,
-    spr_repartition_exec, stream_exec_ordered, union_exec, RequirementsTestExec,
+    aggregate_exec, bounded_window_exec, bounded_window_exec_with_partition,
+    check_integrity, coalesce_batches_exec, coalesce_partitions_exec, create_test_schema,
+    create_test_schema2, create_test_schema3, filter_exec, global_limit_exec,
+    hash_join_exec, limit_exec, local_limit_exec, memory_exec, parquet_exec,
+    projection_exec, repartition_exec, sort_exec, sort_exec_with_fetch, sort_expr,
+    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec,
+    sort_preserving_merge_exec_with_fetch, spr_repartition_exec, stream_exec_ordered,
+    union_exec, RequirementsTestExec,
 };
 
 use arrow::compute::SortOptions;
@@ -35,9 +36,9 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{JoinType, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_expr::expressions::{col, Column, NotExpr};
-use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
+use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
+use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -55,6 +56,9 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
+use datafusion_expr_common::operator::Operator;
+use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 
 use rstest::rstest;
 
@@ -626,6 +630,418 @@ async fn test_union_inputs_different_sorted8() -> Result<()> {
         "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet"];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_soft_hard_requirements_remove_soft_requirement() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec_sorted(&schema, vec![]);
+
+    let sort_exprs = vec![sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )];
+    let sort = sort_exec(sort_exprs.clone(), Arc::clone(&source));
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let bounded_window =
+        bounded_window_exec_with_partition("nullable_col", vec![], partition_bys, sort);
+
+    let physical_plan = bounded_window;
+
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ]
+        ;
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_soft_hard_requirements_remove_soft_requirement_without_pushdowns(
+) -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec_sorted(&schema, vec![]);
+
+    let sort_exprs = vec![sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )];
+    let sort = sort_exec(sort_exprs.clone(), source.clone());
+    let proj_exprs = vec![(
+        Arc::new(BinaryExpr::new(
+            col("nullable_col", &schema).unwrap(),
+            Operator::Plus,
+            col("non_nullable_col", &schema).unwrap(),
+        )) as Arc<dyn PhysicalExpr>,
+        "count".to_string(),
+    )];
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let bounded_window =
+        bounded_window_exec_with_partition("nullable_col", vec![], partition_bys, sort);
+    let projection = projection_exec(proj_exprs, bounded_window)?;
+    let physical_plan = projection;
+
+    let expected_input = [
+        "ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as count]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as count]",
+    //     "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as count]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+    let sort_exprs = vec![sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )];
+    let sort = sort_exec(sort_exprs.clone(), source.clone());
+    let proj_exprs = vec![(
+        Arc::new(BinaryExpr::new(
+            col("nullable_col", &schema).unwrap(),
+            Operator::Plus,
+            col("non_nullable_col", &schema).unwrap(),
+        )) as Arc<dyn PhysicalExpr>,
+        "nullable_col".to_string(),
+    )];
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let projection = projection_exec(proj_exprs, sort)?;
+    let bounded_window = bounded_window_exec_with_partition(
+        "nullable_col",
+        vec![],
+        partition_bys,
+        projection,
+    );
+    let physical_plan = bounded_window;
+
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "  ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+    //     "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "    ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "      SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_soft_hard_requirements_multiple_soft_requirements() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec_sorted(&schema, vec![]);
+
+    let sort_exprs = vec![sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )];
+    let sort = sort_exec(sort_exprs.clone(), source.clone());
+    let proj_exprs = vec![(
+        Arc::new(BinaryExpr::new(
+            col("nullable_col", &schema).unwrap(),
+            Operator::Plus,
+            col("non_nullable_col", &schema).unwrap(),
+        )) as Arc<dyn PhysicalExpr>,
+        "nullable_col".to_string(),
+    )];
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let projection = projection_exec(proj_exprs, sort)?;
+    let bounded_window = bounded_window_exec_with_partition(
+        "nullable_col",
+        vec![],
+        partition_bys,
+        projection,
+    );
+    let bounded_window2 = bounded_window_exec_with_partition(
+        "count",
+        vec![],
+        partition_bys,
+        bounded_window,
+    );
+    let physical_plan = bounded_window2;
+
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "      SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "    ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+    //     "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "      ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "        SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+    let sort_exprs = vec![sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )];
+    let sort = sort_exec(sort_exprs.clone(), source.clone());
+    let proj_exprs = vec![(
+        Arc::new(BinaryExpr::new(
+            col("nullable_col", &schema).unwrap(),
+            Operator::Plus,
+            col("non_nullable_col", &schema).unwrap(),
+        )) as Arc<dyn PhysicalExpr>,
+        "nullable_col".to_string(),
+    )];
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let projection = projection_exec(proj_exprs, sort)?;
+    let bounded_window = bounded_window_exec_with_partition(
+        "nullable_col",
+        vec![],
+        partition_bys,
+        projection,
+    );
+
+    let sort_exprs2 = vec![sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )];
+    let sort2 = sort_exec(sort_exprs2.clone(), bounded_window.clone());
+    let sort3 = sort_exec(sort_exprs2.clone(), sort2);
+    let bounded_window2 =
+        bounded_window_exec_with_partition("count", vec![], partition_bys, sort3);
+    let physical_plan = bounded_window2;
+
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "        ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "          SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "    ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+    //     "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "      ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "        SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ]
+        ;
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    Ok(())
+}
+#[tokio::test]
+async fn test_soft_hard_requirements_multiple_sorts() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec_sorted(&schema, vec![]);
+
+    let sort_exprs = vec![sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )];
+    let sort = sort_exec(sort_exprs.clone(), source.clone());
+    let proj_exprs = vec![(
+        Arc::new(BinaryExpr::new(
+            col("nullable_col", &schema).unwrap(),
+            Operator::Plus,
+            col("non_nullable_col", &schema).unwrap(),
+        )) as Arc<dyn PhysicalExpr>,
+        "nullable_col".to_string(),
+    )];
+    let partition_bys = &[col("nullable_col", &schema)?];
+    let projection = projection_exec(proj_exprs, sort)?;
+    let bounded_window = bounded_window_exec_with_partition(
+        "nullable_col",
+        vec![],
+        partition_bys,
+        projection,
+    );
+
+    let sort_exprs2 = vec![sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )];
+    let sort2 = sort_exec(sort_exprs2.clone(), bounded_window.clone());
+    let sort3 = sort_exec(sort_exprs2.clone(), sort2);
+    let physical_plan = sort3;
+
+    let expected_input = [
+        "SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "  SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "      ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "        SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "  ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+    //     "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "      ProjectionExec: expr=[nullable_col@0 + non_nullable_col@1 as nullable_col]",
+        "        SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_requirement(
+) -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = parquet_exec_sorted(&schema, vec![]);
+
+    let sort_exprs1 = vec![sort_expr_options(
+        "nullable_col",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )];
+    let sort = sort_exec(sort_exprs1.clone(), source.clone());
+    let partition_bys1 = &[col("nullable_col", &schema)?];
+    let bounded_window =
+        bounded_window_exec_with_partition("nullable_col", vec![], partition_bys1, sort);
+
+    let sort_exprs2 = vec![sort_expr_options(
+        "non_nullable_col",
+        &schema,
+        SortOptions {
+            descending: false,
+            nulls_first: true,
+        },
+    )];
+    let partition_bys2 = &[col("non_nullable_col", &schema)?];
+    let bounded_window2 = bounded_window_exec_with_partition(
+        "non_nullable_col",
+        vec![],
+        partition_bys2,
+        bounded_window,
+    );
+    let output_requirements: Arc<dyn ExecutionPlan> =
+        Arc::new(OutputRequirementExec::new(
+            bounded_window2,
+            RequiredInputOrdering::new(
+                vec![LexRequirement::from_lex_ordering(LexOrdering::new(
+                    sort_exprs2,
+                ))],
+                false,
+            ),
+            Distribution::SinglePartition,
+        ));
+    let physical_plan = output_requirements;
+
+    let expected_input = [
+        "OutputRequirementExec",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "      SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    // TODO When sort pushdown respects to the alternatives, and removes soft SortExecs this should be changed
+    // let expected_optimized = [
+    //     "OutputRequirementExec",
+    //     "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+    //     "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], preserve_partitioning=[false]",
+    //     "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Linear]",
+    //     "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    // ];
+    let expected_optimized = [
+        "OutputRequirementExec",
+        "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], preserve_partitioning=[false]",
+        "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "        SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
     Ok(())
 }
 

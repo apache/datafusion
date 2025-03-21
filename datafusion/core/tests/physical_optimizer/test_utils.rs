@@ -54,6 +54,7 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -195,13 +196,22 @@ pub fn bounded_window_exec(
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
+    bounded_window_exec_with_partition(col_name, sort_exprs, &[], input)
+}
+
+pub fn bounded_window_exec_with_partition(
+    col_name: &str,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
     let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
     let schema = input.schema();
     let window_expr = create_window_expr(
         &WindowFunctionDefinition::AggregateUDF(count_udaf()),
         "count".to_owned(),
         &[col(col_name, &schema).unwrap()],
-        &[],
+        partition_by,
         sort_exprs.as_ref(),
         Arc::new(WindowFrame::new(Some(false))),
         schema.as_ref(),
@@ -305,6 +315,13 @@ pub fn sort_exec_with_fetch(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
     Arc::new(SortExec::new(sort_exprs, input).with_fetch(fetch))
+}
+
+pub fn projection_exec(
+    expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    input: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    Ok(Arc::new(ProjectionExec::try_new(expr, input)?))
 }
 
 /// A test [`ExecutionPlan`] whose requirements can be configured.
