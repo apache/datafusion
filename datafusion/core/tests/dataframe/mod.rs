@@ -5482,6 +5482,66 @@ async fn boolean_dictionary_as_filter() {
 }
 
 #[tokio::test]
+async fn test_union_by_name() -> Result<()> {
+    let df = create_test_table("test")
+        .await?
+        .select(vec![col("a"), col("b"), lit(1).alias("c")])?
+        .alias("table_alias")?;
+
+    let df2 = df.clone().select_columns(&["c", "b", "a"])?;
+    let result = df.union_by_name(df2)?;
+    
+    assert_snapshot!(
+        batches_to_sort_string(&result.collect().await?),
+        @r"
+    +-----------+-----+-----------+
+    | a         | b   | c         |
+    +-----------+-----+-----------+
+    | 1         | 1   | abcDEF    |
+    | 1         | 10  | CBAdef    |
+    | 1         | 10  | abc123    |
+    | 1         | 100 | 123AbcDef |
+    | 123AbcDef | 100 | 1         |
+    | CBAdef    | 10  | 1         |
+    | abc123    | 10  | 1         |
+    | abcDEF    | 1   | 1         |
+    +-----------+-----+-----------+
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_union_by_name_distinct() -> Result<()> {
+    let df = create_test_table("test")
+        .await?
+        .select(vec![col("a"), col("b"), lit(1).alias("c")])?
+        .alias("table_alias")?;
+
+    let df2 = df.clone().select_columns(&["c", "b", "a"])?;
+    let result = df.union_by_name_distinct(df2)?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&result.collect().await?),
+        @r"
+    +-----------+-----+-----------+
+    | a         | b   | c         |
+    +-----------+-----+-----------+
+    | 1         | 1   | abcDEF    |
+    | 1         | 10  | CBAdef    |
+    | 1         | 10  | abc123    |
+    | 1         | 100 | 123AbcDef |
+    | 123AbcDef | 100 | 1         |
+    | CBAdef    | 10  | 1         |
+    | abc123    | 10  | 1         |
+    | abcDEF    | 1   | 1         |
+    +-----------+-----+-----------+
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_alias() -> Result<()> {
     let df = create_test_table("test")
         .await?
