@@ -1226,7 +1226,7 @@ use datafusion::arrow::util::pretty;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = SessionContext::new().set_str("datafusion.sql_parser.dialect", "postgres");
+    let config = SessionConfig::new().set_str("datafusion.sql_parser.dialect", "postgres");
     let mut ctx = SessionContext::new_with_config(config);
     ctx.register_expr_planner(Arc::new(MyCustomPlanner))?;
     let results = ctx.sql("select 'foo'->'bar';").await?.collect().await?;
