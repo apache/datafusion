@@ -2255,11 +2255,16 @@ pub async fn from_window_function(
 
     window_frame.regularize_order_bys(&mut order_by)?;
 
+    let args = if fun.name() == "count" && window.arguments.is_empty() {
+        vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
+    } else {
+        from_substrait_func_args(consumer, &window.arguments, input_schema).await?
+    };
+
     Ok(Expr::WindowFunction(expr::WindowFunction {
         fun,
         params: WindowFunctionParams {
-            args: from_substrait_func_args(consumer, &window.arguments, input_schema)
-                .await?,
+            args,
             partition_by: from_substrait_rex_vec(
                 consumer,
                 &window.partitions,
@@ -3407,6 +3412,33 @@ mod test {
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
             Expr::WindowFunction(window_function) => {
                 assert_eq!(window_function.params.order_by.len(), 1)
+            }
+            _ => panic!("expr was not a WindowFunction"),
+        };
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_function_with_count() -> Result<()> {
+        let substrait = substrait::proto::Expression {
+            rex_type: Some(substrait::proto::expression::RexType::WindowFunction(
+                substrait::proto::expression::WindowFunction {
+                    function_reference: 0,
+                    ..Default::default()
+                },
+            )),
+        };
+
+        let mut consumer = test_consumer();
+
+        let mut extensions = Extensions::default();
+        extensions.register_function("count".to_string());
+        consumer.extensions = &extensions;
+
+        match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
+            Expr::WindowFunction(window_function) => {
+                assert_eq!(window_function.params.args.len(), 1)
             }
             _ => panic!("expr was not a WindowFunction"),
         };
