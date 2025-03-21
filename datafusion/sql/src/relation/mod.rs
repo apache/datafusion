@@ -151,8 +151,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     self.try_process_unnest(input, unnest_exprs)?;
 
                 let plan = UserDefinedLogicalBuilder::new(self.context_provider, plan)
-                        .project(select_exprs)?
-                        .build()?;
+                    .project(select_exprs)?
+                    .build()?;
 
                 (plan, alias)
             }

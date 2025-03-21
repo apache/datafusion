@@ -27,7 +27,7 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Column, DFSchema, DFSchemaRef, Result};
+use datafusion_common::{not_impl_err, plan_err, Column, DFSchema, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -39,8 +39,8 @@ use datafusion_expr::utils::{
     find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
-    Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
-    LogicalPlanBuilderOptions, Partitioning, SortExpr,
+    Aggregate, Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder,
+    LogicalPlanBuilderOptions, Partitioning,
 };
 
 use indexmap::IndexMap;
@@ -109,8 +109,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut combined_schema = base_plan.schema().as_ref().clone();
         combined_schema.merge(projected_plan.schema());
 
-        let mut combined_schema_for_order_by = projected_plan.schema().as_ref().clone();
-        combined_schema_for_order_by.merge(base_plan.schema().as_ref());
+        let mut combined_schema_projected_plan_then_base_plan =
+            projected_plan.schema().as_ref().clone();
+        combined_schema_projected_plan_then_base_plan.merge(base_plan.schema().as_ref());
 
         // Order-by expressions prioritize referencing columns from the select list,
         // then from the FROM clause.
@@ -240,8 +241,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .window(window_func_exprs.clone())?
                 .build()?;
 
-            // let plan = LogicalPlanBuilder::window_plan(plan, window_func_exprs.clone())?;
-
             // Re-write the projection
             select_exprs_post_aggr = select_exprs_post_aggr
                 .iter()
@@ -257,84 +256,50 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Process distinct clause
         match select.distinct {
-            None => {
-                if order_by_rex.is_empty() {
-                    let plan =
-                        UserDefinedLogicalBuilder::new(self.context_provider, plan)
-                            .project(select_exprs)?
-                            .build()?;
+            None | Some(Distinct::Distinct) => {
+                let is_distinct = matches!(select.distinct, Some(Distinct::Distinct));
 
-                    // DISTRIBUTE BY
-                    self.handle_distribute_by(
-                        plan,
-                        &select.distribute_by,
-                        &combined_schema,
-                        planner_context,
-                    )
-                } else {
-                    let projected_plan = UserDefinedLogicalBuilder::new(
-                        self.context_provider,
-                        plan.clone(),
-                    )
-                    .project(select_exprs.clone())?
-                    .build()?;
-                    // DISTRIBUTE BY
-                    let plan = self.handle_distribute_by(
-                        projected_plan,
-                        &select.distribute_by,
-                        &combined_schema,
-                        planner_context,
-                    )?;
-
+                // Build initial projection plan
+                let mut builder =
                     UserDefinedLogicalBuilder::new(self.context_provider, plan)
-                        .sort(order_by_rex.clone(), None)?
+                        .project(select_exprs.clone())?;
+
+                // Add distinct if needed
+                if is_distinct {
+                    builder = builder.distinct()?;
+                }
+
+                // Build plan
+                let projected_plan = builder.build()?;
+
+                // Handle DISTRIBUTE BY
+                let plan = self.handle_distribute_by(
+                    projected_plan,
+                    &select.distribute_by,
+                    &combined_schema,
+                    planner_context,
+                )?;
+
+                // Add sort if needed
+                if !order_by_rex.is_empty() {
+                    UserDefinedLogicalBuilder::new(self.context_provider, plan)
+                        .sort(order_by_rex, None)?
                         .build()
+                } else {
+                    Ok(plan)
                 }
             }
-            Some(Distinct::Distinct) => {
-                if order_by_rex.is_empty() {
-                    let plan =
-                        UserDefinedLogicalBuilder::new(self.context_provider, plan)
-                            .project(select_exprs)?
-                            .distinct()?
-                            .build()?;
 
-                    // DISTRIBUTE BY
-                    self.handle_distribute_by(
-                        plan,
-                        &select.distribute_by,
-                        &combined_schema,
-                        planner_context,
-                    )
-                } else {
-                    let projected_plan = UserDefinedLogicalBuilder::new(
-                        self.context_provider,
-                        plan.clone(),
-                    )
-                    .project(select_exprs.clone())?
-                    .distinct()?
-                    .build()?;
-
-                    // DISTRIBUTE BY
-                    let plan = self.handle_distribute_by(
-                        projected_plan,
-                        &select.distribute_by,
-                        &combined_schema,
-                        planner_context,
-                    )?;
-                    UserDefinedLogicalBuilder::new(self.context_provider, plan)
-                        .sort(order_by_rex.clone(), None)?
-                        .build()
-                }
-            }
             Some(Distinct::On(on_expr)) => {
+                // Validate unsupported cases
                 if !aggr_exprs.is_empty()
                     || !group_by_exprs.is_empty()
                     || !window_func_exprs.is_empty()
                 {
-                    return not_impl_err!("DISTINCT ON expressions with GROUP BY, aggregation or window functions are not supported ");
+                    return not_impl_err!("DISTINCT ON expressions with GROUP BY, aggregation or window functions are not supported");
                 }
 
+                // Convert expressions
                 let on_expr = on_expr
                     .into_iter()
                     .map(|e| {
@@ -342,14 +307,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                // let order_by_rex = std::mem::take(&mut order_by_rex);
-                // In case of `DISTINCT ON` we must capture the sort expressions since during the plan
-                // optimization we're effectively doing a `first_value` aggregation according to them.
+                // Build plan with DISTINCT ON
                 let plan =
                     UserDefinedLogicalBuilder::new(self.context_provider, base_plan)
                         .distinct_on(on_expr, select_exprs, Some(order_by_rex))?
                         .build()?;
 
+                // Handle DISTRIBUTE BY
                 self.handle_distribute_by(
                     plan,
                     &select.distribute_by,
