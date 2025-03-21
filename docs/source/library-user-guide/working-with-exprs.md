@@ -52,7 +52,7 @@ As the writer of a library, you can use `Expr`s to represent computations that y
 
 ## Arrow Schema and DataFusion DFSchema
 
-Schema and DFSchema are both exist in datafusion because `Schema` provides a lightweight structure for defining data, and `DFSchema` extends it with extra information. This makes the engine could handle both simple data definitions and complex query scenarios efficiently.
+Apache Arrow `Schema` provides a lightweight structure for defining data, and Apache Datafusion`DFSchema` extends it with extra information such as column qualifiers and functional dependencies. Column qualifiers are multi part path to the table e.g table, schema, catalog. Functional Dependency is the relationship between attributes(characteristics) of a table related to each other.
 
 ### Difference between Schema and DFSchema
 
