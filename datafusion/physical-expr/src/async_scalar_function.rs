@@ -107,7 +107,8 @@ impl AsyncFuncExpr {
         batch: &RecordBatch,
         option: &ConfigOptions,
     ) -> Result<ColumnarValue> {
-        let Some(scalar_function_expr) = self.func.as_any().downcast_ref::<ScalarFunctionExpr>()
+        let Some(scalar_function_expr) =
+            self.func.as_any().downcast_ref::<ScalarFunctionExpr>()
         else {
             return internal_err!(
                 "unexpected function type, expected ScalarFunctionExpr, got: {:?}",
