@@ -242,16 +242,13 @@ fn transformed_limit(
 fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
     use JoinType::*;
 
-    fn is_no_join_condition(join: &Join) -> bool {
-        join.on.is_empty() && join.filter.is_none()
+    // Cross join is the special case of inner join where there is no join condition. see [LogicalPlanBuilder::cross_join]
+    fn is_cross_join(join: &Join) -> bool {
+        join.join_type == Inner && join.on.is_empty() && join.filter.is_none()
     }
 
-    let (left_limit, right_limit) = if is_no_join_condition(&join) {
-        match join.join_type {
-            Left | Right | Full | Inner => (Some(limit), Some(limit)),
-            LeftAnti | LeftSemi | LeftMark => (Some(limit), None),
-            RightAnti | RightSemi => (None, Some(limit)),
-        }
+    let (left_limit, right_limit) = if is_cross_join(&join) {
+        (Some(limit), Some(limit))
     } else {
         match join.join_type {
             Left => (Some(limit), None),
@@ -859,167 +856,6 @@ mod test {
         \n      TableScan: test2";
 
         assert_optimized_plan_equal(outer_query, expected)
-    }
-
-    #[test]
-    fn limit_should_push_down_join_without_condition() -> Result<()> {
-        let table_scan_1 = test_table_scan()?;
-        let table_scan_2 = test_table_scan_with_name("test2")?;
-        let left_keys: Vec<&str> = Vec::new();
-        let right_keys: Vec<&str> = Vec::new();
-        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
-            .join(
-                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
-                JoinType::Left,
-                (left_keys.clone(), right_keys.clone()),
-                None,
-            )?
-            .limit(0, Some(1000))?
-            .build()?;
-
-        let expected = "Limit: skip=0, fetch=1000\
-        \n  Left Join: \
-        \n    Limit: skip=0, fetch=1000\
-        \n      TableScan: test, fetch=1000\
-        \n    Limit: skip=0, fetch=1000\
-        \n      TableScan: test2, fetch=1000";
-
-        assert_optimized_plan_equal(plan, expected)?;
-
-        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
-            .join(
-                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
-                JoinType::Right,
-                (left_keys.clone(), right_keys.clone()),
-                None,
-            )?
-            .limit(0, Some(1000))?
-            .build()?;
-
-        let expected = "Limit: skip=0, fetch=1000\
-        \n  Right Join: \
-        \n    Limit: skip=0, fetch=1000\
-        \n      TableScan: test, fetch=1000\
-        \n    Limit: skip=0, fetch=1000\
-        \n      TableScan: test2, fetch=1000";
-
-        assert_optimized_plan_equal(plan, expected)?;
-
-        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
-            .join(
-                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
-                JoinType::Full,
-                (left_keys.clone(), right_keys.clone()),
-                None,
-            )?
-            .limit(0, Some(1000))?
-            .build()?;
-
-        let expected = "Limit: skip=0, fetch=1000\
-        \n  Full Join: \
-        \n    Limit: skip=0, fetch=1000\
-        \n      TableScan: test, fetch=1000\
-        \n    Limit: skip=0, fetch=1000\
-        \n      TableScan: test2, fetch=1000";
-
-        assert_optimized_plan_equal(plan, expected)?;
-
-        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
-            .join(
-                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
-                JoinType::LeftSemi,
-                (left_keys.clone(), right_keys.clone()),
-                None,
-            )?
-            .limit(0, Some(1000))?
-            .build()?;
-
-        let expected = "Limit: skip=0, fetch=1000\
-        \n  LeftSemi Join: \
-        \n    Limit: skip=0, fetch=1000\
-        \n      TableScan: test, fetch=1000\
-        \n    TableScan: test2";
-
-        assert_optimized_plan_equal(plan, expected)?;
-
-        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
-            .join(
-                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
-                JoinType::LeftAnti,
-                (left_keys.clone(), right_keys.clone()),
-                None,
-            )?
-            .limit(0, Some(1000))?
-            .build()?;
-
-        let expected = "Limit: skip=0, fetch=1000\
-        \n  LeftAnti Join: \
-        \n    Limit: skip=0, fetch=1000\
-        \n      TableScan: test, fetch=1000\
-        \n    TableScan: test2";
-
-        assert_optimized_plan_equal(plan, expected)?;
-
-        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
-            .join(
-                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
-                JoinType::RightSemi,
-                (left_keys.clone(), right_keys.clone()),
-                None,
-            )?
-            .limit(0, Some(1000))?
-            .build()?;
-
-        let expected = "Limit: skip=0, fetch=1000\
-        \n  RightSemi Join: \
-        \n    TableScan: test\
-        \n    Limit: skip=0, fetch=1000\
-        \n      TableScan: test2, fetch=1000";
-
-        assert_optimized_plan_equal(plan, expected)?;
-
-        let plan = LogicalPlanBuilder::from(table_scan_1)
-            .join(
-                LogicalPlanBuilder::from(table_scan_2).build()?,
-                JoinType::RightAnti,
-                (left_keys, right_keys),
-                None,
-            )?
-            .limit(0, Some(1000))?
-            .build()?;
-
-        let expected = "Limit: skip=0, fetch=1000\
-        \n  RightAnti Join: \
-        \n    TableScan: test\
-        \n    Limit: skip=0, fetch=1000\
-        \n      TableScan: test2, fetch=1000";
-
-        assert_optimized_plan_equal(plan, expected)
-    }
-
-    #[test]
-    fn limit_should_push_down_left_outer_join() -> Result<()> {
-        let table_scan_1 = test_table_scan()?;
-        let table_scan_2 = test_table_scan_with_name("test2")?;
-
-        let plan = LogicalPlanBuilder::from(table_scan_1)
-            .join(
-                LogicalPlanBuilder::from(table_scan_2).build()?,
-                JoinType::Left,
-                (vec!["a"], vec!["a"]),
-                None,
-            )?
-            .limit(0, Some(1000))?
-            .build()?;
-
-        // Limit pushdown Not supported in Join
-        let expected = "Limit: skip=0, fetch=1000\
-        \n  Left Join: test.a = test2.a\
-        \n    Limit: skip=0, fetch=1000\
-        \n      TableScan: test, fetch=1000\
-        \n    TableScan: test2";
-
-        assert_optimized_plan_equal(plan, expected)
     }
 
     #[test]

@@ -1074,13 +1074,18 @@ impl LogicalPlanBuilder {
         let left_keys = left_keys.into_iter().collect::<Result<Vec<Column>>>()?;
         let right_keys = right_keys.into_iter().collect::<Result<Vec<Column>>>()?;
 
-        let on = left_keys
+        let on: Vec<_> = left_keys
             .into_iter()
             .zip(right_keys)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+
+        // Inner type without join condition is cross join
+        if join_type != JoinType::Inner && on.is_empty() && filter.is_none() {
+            return plan_err!("join condition should not be empty");
+        }
 
         Ok(Self::new(LogicalPlan::Join(Join {
             left: self.plan,
