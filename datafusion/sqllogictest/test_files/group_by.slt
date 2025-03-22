@@ -2665,6 +2665,47 @@ TUR [100.0, 75.0] 175
 # test_reverse_aggregate_expr
 # Some of the Aggregators can be reversed, by this way we can still run aggregators without re-ordering
 # that have contradictory requirements at first glance.
+
+statement ok
+CREATE TABLE null_group (
+          a INT, b INT, c INT, d INT
+) as VALUES
+  (6, 6, null, null),
+  (6, 6, 1, null),
+  (6, 6, null, 1)
+
+query III rowsort
+select c, d, first_value(a order by b) from null_group group by c, d;
+----
+1 NULL 6
+NULL 1 6
+NULL NULL 6
+
+
+
+statement ok
+CREATE TABLE first_null (
+          k INT,
+          val INT,
+          o int
+        ) as VALUES
+          (0, NULL, -9),
+          (0, 1, 1),
+          (1, 1, 1);
+
+query II rowsort
+select k, first_value(val order by o) IGNORE NULLS from first_null group by k;
+----
+0 1
+1 1
+
+query II rowsort
+select k, first_value(val order by o) respect NULLS from first_null group by k;
+----
+0 NULL
+1 1
+
+
 query TT
 EXPLAIN SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,

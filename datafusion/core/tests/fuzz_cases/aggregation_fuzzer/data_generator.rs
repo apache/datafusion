@@ -228,6 +228,10 @@ impl ColumnDescr {
         }
     }
 
+    pub fn get_max_num_distinct(&self) -> Option<usize> {
+        self.max_num_distinct
+    }
+
     /// set the maximum number of distinct values in this column
     ///
     /// If `None`, the number of distinct values is randomly selected between 1
