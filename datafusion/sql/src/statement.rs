@@ -79,6 +79,8 @@ fn object_name_to_string(object_name: &ObjectName) -> String {
         .map(|object_name_part| {
             object_name_part
                 .as_ident()
+                // TODO: It might be better to return an error
+                // than to silently use a default value.
                 .map_or_else(String::new, ident_to_string)
         })
         .collect::<Vec<String>>()
@@ -948,15 +950,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => {
                 let froms =
                     from.map(|update_table_from_kind| match update_table_from_kind {
-                        UpdateTableFromKind::BeforeSet(froms) => froms.clone(),
-                        UpdateTableFromKind::AfterSet(froms) => froms.clone(),
+                        UpdateTableFromKind::BeforeSet(froms) => froms,
+                        UpdateTableFromKind::AfterSet(froms) => froms,
                     });
                 // TODO: support multiple tables in UPDATE SET FROM
-                if froms.clone().is_some_and(|f| f.len() > 1) {
+                if froms.as_ref().is_some_and(|f| f.len() > 1) {
                     println!("---------------------------------------------");
                     plan_err!("Multiple tables in UPDATE SET FROM not yet supported")?;
                 }
-                let update_from = froms.map(|f| f.first().unwrap().clone());
+                let update_from = froms.and_then(|mut f| f.pop());
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
                 }

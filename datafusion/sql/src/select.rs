@@ -94,7 +94,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )?;
 
         let order_by =
-            to_order_by_exprs_with_select(query_order_by, Some(select_exprs.clone()))?;
+            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
 
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs)?;

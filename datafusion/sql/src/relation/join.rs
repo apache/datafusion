@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, Column, Result};
+use datafusion_common::{not_impl_err, plan_datafusion_err, Column, Result};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
@@ -138,8 +138,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             let id = object_names.swap_remove(0);
                             id.as_ident()
                                 .ok_or_else(|| {
-                                    datafusion_common::DataFusionError::Plan(
-                                        "Expected identifier in USING clause".to_string(),
+                                    plan_datafusion_err!(
+                                        "Expected identifier in USING clause"
                                     )
                                 })
                                 .map(|ident| self.ident_normalizer.normalize(ident.clone()))

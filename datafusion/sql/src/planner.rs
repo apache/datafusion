@@ -770,8 +770,15 @@ pub fn object_name_to_table_reference(
     let ObjectName(object_name_parts) = object_name;
     let idents = object_name_parts
         .into_iter()
-        .map(|object_name_part| object_name_part.as_ident().unwrap().clone())
-        .collect();
+        .map(|object_name_part| {
+            object_name_part.as_ident().cloned().ok_or_else(|| {
+                plan_datafusion_err!(
+                    "Expected identifier, but found: {:?}",
+                    object_name_part
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     idents_to_table_reference(idents, enable_normalization)
 }
 
@@ -872,10 +879,10 @@ pub fn object_name_to_qualifier(
                     )
                 })
                 .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
+                    plan_datafusion_err!(
                         "Expected identifier, but found: {:?}",
                         object_name_part
-                    ))
+                    )
                 })
         })
         .collect::<Result<Vec<_>>>()
