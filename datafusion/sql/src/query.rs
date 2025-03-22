@@ -22,12 +22,13 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::stack::StackGuard;
 use datafusion_common::{not_impl_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Offset as SQLOffset, OrderBy, OrderByExpr, Query, SelectInto,
-    SetExpr,
+    Expr as SQLExpr, Offset as SQLOffset, OrderBy, OrderByExpr, OrderByKind, Query,
+    SelectInto, SetExpr,
 };
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -50,10 +51,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match set_expr {
             SetExpr::Select(mut select) => {
                 let select_into = select.into.take();
-                // Order-by expressions may refer to columns in the `FROM` clause,
-                // so we need to process `SELECT` and `ORDER BY` together.
-                let oby_exprs = to_order_by_exprs(query.order_by)?;
-                let plan = self.select_to_plan(*select, oby_exprs, planner_context)?;
+                let plan =
+                    self.select_to_plan(*select, query.order_by, planner_context)?;
                 let plan =
                     self.limit(plan, query.offset, query.limit, planner_context)?;
                 // Process the `SELECT INTO` after `LIMIT`.
@@ -153,12 +152,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
 /// Returns the order by expressions from the query.
 fn to_order_by_exprs(order_by: Option<OrderBy>) -> Result<Vec<OrderByExpr>> {
-    let Some(OrderBy { exprs, interpolate }) = order_by else {
+    to_order_by_exprs_with_select(order_by, None)
+}
+
+/// Returns the order by expressions from the query with the select expressions.
+pub(crate) fn to_order_by_exprs_with_select(
+    order_by: Option<OrderBy>,
+    _select_exprs: Option<&Vec<SelectExpr>>, // TODO: ORDER BY ALL
+) -> Result<Vec<OrderByExpr>> {
+    let Some(OrderBy { kind, interpolate }) = order_by else {
         // If no order by, return an empty array.
         return Ok(vec![]);
     };
     if let Some(_interpolate) = interpolate {
         return not_impl_err!("ORDER BY INTERPOLATE is not supported");
     }
-    Ok(exprs)
+    match kind {
+        OrderByKind::All(_) => not_impl_err!("ORDER BY ALL is not supported"),
+        OrderByKind::Expressions(order_by_exprs) => Ok(order_by_exprs),
+    }
 }

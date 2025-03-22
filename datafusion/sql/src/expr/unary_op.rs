@@ -21,7 +21,7 @@ use datafusion_expr::{
     type_coercion::{is_interval, is_timestamp},
     Expr, ExprSchemable,
 };
-use sqlparser::ast::{Expr as SQLExpr, UnaryOperator, Value};
+use sqlparser::ast::{Expr as SQLExpr, UnaryOperator, Value, ValueWithSpan};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_sql_unary_op(
@@ -61,9 +61,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 match expr {
                     // Optimization: if it's a number literal, we apply the negative operator
                     // here directly to calculate the new literal.
-                    SQLExpr::Value(Value::Number(n, _)) => {
-                        self.parse_sql_number(&n, true)
-                    }
+                    SQLExpr::Value(ValueWithSpan {
+                        value: Value::Number(n, _),
+                        span: _,
+                    }) => self.parse_sql_number(&n, true),
                     SQLExpr::Interval(interval) => {
                         self.sql_interval_to_expr(true, interval)
                     }

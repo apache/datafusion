@@ -81,7 +81,7 @@ impl Visitor for RelationVisitor {
                     cte.visit(self);
                 }
                 self.ctes_in_scope
-                    .push(ObjectName(vec![cte.alias.name.clone()]));
+                    .push(ObjectName::from(vec![cte.alias.name.clone()]));
             }
         }
         ControlFlow::Continue(())
@@ -120,7 +120,7 @@ impl Visitor for RelationVisitor {
         );
         if requires_information_schema {
             for s in INFORMATION_SCHEMA_TABLES {
-                self.relations.insert(ObjectName(vec![
+                self.relations.insert(ObjectName::from(vec![
                     Ident::new(INFORMATION_SCHEMA),
                     Ident::new(*s),
                 ]));

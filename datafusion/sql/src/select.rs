@@ -19,6 +19,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
@@ -44,8 +45,8 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
-    WildcardAdditionalOptions, WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderBy,
+    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -54,7 +55,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn select_to_plan(
         &self,
         mut select: Select,
-        order_by: Vec<OrderByExpr>,
+        query_order_by: Option<OrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // Check for unsupported syntax first
@@ -91,6 +92,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             empty_from,
             planner_context,
         )?;
+
+        let order_by =
+            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
 
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs)?;
@@ -643,6 +647,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
+                let object_name = match object_name {
+                    SelectItemQualifiedWildcardKind::ObjectName(object_name) => {
+                        object_name
+                    }
+                    SelectItemQualifiedWildcardKind::Expr(_) => {
+                        return plan_err!(
+                            "Qualified wildcard with expression not supported"
+                        )
+                    }
+                };
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 let planned_options = self.plan_wildcard_options(
                     plan,
