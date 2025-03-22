@@ -1706,7 +1706,6 @@ mod tests {
         );
         }
 
-
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
         assert_eq!(12, output_rows);
