@@ -18,8 +18,8 @@
 use std::cmp::Ordering;
 
 use arrow::array::{
-    types::ByteArrayType, Array, ArrowPrimitiveType, GenericByteArray, OffsetSizeTrait,
-    PrimitiveArray,
+    types::ByteArrayType, Array, ArrowPrimitiveType, GenericByteArray,
+    GenericByteViewArray, OffsetSizeTrait, PrimitiveArray, StringViewArray,
 };
 use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::SortOptions;
@@ -278,6 +278,33 @@ impl<T: ByteArrayType> CursorArray for GenericByteArray<T> {
             offsets: self.offsets().clone(),
             values: self.values().clone(),
         }
+    }
+}
+
+impl CursorArray for StringViewArray {
+    type Values = StringViewArray;
+    fn values(&self) -> Self {
+        self.clone()
+    }
+}
+
+impl CursorValues for StringViewArray {
+    fn len(&self) -> usize {
+        self.views().len()
+    }
+
+    fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx).is_eq() }
+    }
+
+    fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
+        unsafe {
+            GenericByteViewArray::compare_unchecked(cursor, idx, cursor, idx - 1).is_eq()
+        }
+    }
+
+    fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx) }
     }
 }
 
