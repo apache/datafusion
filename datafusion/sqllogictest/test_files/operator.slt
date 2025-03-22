@@ -70,7 +70,7 @@ select
     arrow_typeof(decimal + 2)
 from numeric_types;
 ----
-Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Float32 Float64 Decimal128(23, 2)
+Int64 Int64 Int64 Int64 Int64 Int64 Int64 Decimal128(21, 0) Float32 Float64 Decimal128(23, 2)
 
 # Plus with literal decimal
 query TTTTTTTTTTT
@@ -127,7 +127,7 @@ select
     arrow_typeof(decimal - 2)
 from numeric_types;
 ----
-Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Float32 Float64 Decimal128(23, 2)
+Int64 Int64 Int64 Int64 Int64 Int64 Int64 Decimal128(21, 0) Float32 Float64 Decimal128(23, 2)
 
 # Minus with literal decimal
 query TTTTTTTTTTT
@@ -184,7 +184,7 @@ select
     arrow_typeof(decimal * 2)
 from numeric_types;
 ----
-Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Float32 Float64 Decimal128(26, 2)
+Int64 Int64 Int64 Int64 Int64 Int64 Int64 Decimal128(38, 0) Float32 Float64 Decimal128(26, 2)
 
 # Multiply with literal decimal
 query TTTTTTTTTTT
@@ -242,7 +242,7 @@ select
     arrow_typeof(decimal / 2)
 from numeric_types;
 ----
-Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Float32 Float64 Decimal128(9, 6)
+Int64 Int64 Int64 Int64 Int64 Int64 Int64 Decimal128(24, 4) Float32 Float64 Decimal128(9, 6)
 
 # Divide with literal decimal
 query TTTTTTTTTTT

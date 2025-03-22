@@ -164,22 +164,22 @@ INSERT into test_nullable_integer values(127, 32767, 2147483647, 922337203685477
 ----
 1
 
-query IIIIIIII
+query IIIIIIIR
 SELECT c1*0, c2*0, c3*0, c4*0, c5*0, c6*0, c7*0, c8*0 FROM test_nullable_integer where dataset = 'nulls'
 ----
 NULL NULL NULL NULL NULL NULL NULL NULL
 
-query IIIIIIII
+query IIIIIIIR
 SELECT c1/0, c2/0, c3/0, c4/0, c5/0, c6/0, c7/0, c8/0 FROM test_nullable_integer where dataset = 'nulls'
 ----
 NULL NULL NULL NULL NULL NULL NULL NULL
 
-query IIIIIIII
+query IIIIIIIR
 SELECT c1%0, c2%0, c3%0, c4%0, c5%0, c6%0, c7%0, c8%0 FROM test_nullable_integer where dataset = 'nulls'
 ----
 NULL NULL NULL NULL NULL NULL NULL NULL
 
-query IIIIIIII rowsort
+query IIIIIIIR rowsort
 select c1*0, c2*0, c3*0, c4*0, c5*0, c6*0, c7*0, c8*0 from test_nullable_integer where dataset != 'maxs'
 ----
 0 0 0 0 0 0 0 0
@@ -300,7 +300,7 @@ INSERT INTO test_non_nullable_integer VALUES(1, 1, 1, 1, 1, 1, 1, 1)
 ----
 1
 
-query IIIIIIII rowsort
+query IIIIIIIR rowsort
 select c1*0, c2*0, c3*0, c4*0, c5*0, c6*0, c7*0, c8*0 from test_non_nullable_integer
 ----
 0 0 0 0 0 0 0 0
