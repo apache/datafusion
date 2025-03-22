@@ -29,7 +29,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::Statistics;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion_physical_plan::DisplayFormatType;
+use datafusion_physical_plan::{DisplayFormatType, DynamicFilterSource};
 
 use object_store::ObjectStore;
 
@@ -91,6 +91,17 @@ pub trait FileSource: Send + Sync {
             source.file_groups = repartitioned_file_groups;
             return Ok(Some(source));
         }
+        Ok(None)
+    }
+
+    fn supports_dynamic_filter_pushdown(&self) -> bool {
+        false
+    }
+
+    fn push_down_dynamic_filter(
+        &self,
+        _dynamic_filter: Arc<dyn DynamicFilterSource>,
+    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
         Ok(None)
     }
 }

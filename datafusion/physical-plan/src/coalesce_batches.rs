@@ -212,6 +212,23 @@ impl ExecutionPlan for CoalesceBatchesExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
     }
+
+    fn supports_dynamic_filter_pushdown(&self) -> bool {
+        self.input.supports_dynamic_filter_pushdown()
+    }
+
+    fn push_down_dynamic_filter(
+        &self,
+        dynamic_filter: Arc<dyn crate::DynamicFilterSource>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(input) = self.input.push_down_dynamic_filter(dynamic_filter)? {
+            return Ok(Some(Arc::new(Self {
+                input,
+                ..self.clone()
+            })));
+        }
+        Ok(None)
+    }
 }
 
 /// Stream for [`CoalesceBatchesExec`]. See [`CoalesceBatchesExec`] for more details.

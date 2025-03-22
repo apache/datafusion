@@ -20,6 +20,8 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use crate::opener::build_page_pruning_predicate;
+use crate::opener::build_pruning_predicate;
 use crate::opener::ParquetOpener;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::DefaultParquetFileReaderFactory;
@@ -40,8 +42,8 @@ use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion_physical_plan::DisplayFormatType;
 
+use datafusion_physical_plan::DynamicFilterSource;
 use itertools::Itertools;
-use log::debug;
 use object_store::ObjectStore;
 
 /// Execution plan for reading one or more Parquet files.
@@ -259,6 +261,8 @@ pub struct ParquetSource {
     pub(crate) metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for row filtering during parquet scan
     pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// Dynamic filters for row filtering during parquet scan
+    pub(crate) dynamic_filters: Vec<Arc<dyn DynamicFilterSource>>,
     /// Optional predicate for pruning row groups (derived from `predicate`)
     pub(crate) pruning_predicate: Option<Arc<PruningPredicate>>,
     /// Optional predicate for pruning pages (derived from `predicate`)
@@ -317,24 +321,10 @@ impl ParquetSource {
         conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
 
-        match PruningPredicate::try_new(Arc::clone(&predicate), Arc::clone(&file_schema))
-        {
-            Ok(pruning_predicate) => {
-                if !pruning_predicate.always_true() {
-                    conf.pruning_predicate = Some(Arc::new(pruning_predicate));
-                }
-            }
-            Err(e) => {
-                debug!("Could not create pruning predicate for: {e}");
-                predicate_creation_errors.add(1);
-            }
-        };
-
-        let page_pruning_predicate = Arc::new(PagePruningAccessPlanFilter::new(
-            &predicate,
-            Arc::clone(&file_schema),
-        ));
-        conf.page_pruning_predicate = Some(page_pruning_predicate);
+        conf.page_pruning_predicate =
+            Some(build_page_pruning_predicate(&predicate, &file_schema));
+        conf.pruning_predicate =
+            build_pruning_predicate(predicate, &file_schema, &predicate_creation_errors);
 
         conf
     }
@@ -489,6 +479,7 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
             predicate: self.predicate.clone(),
+            dynamic_filters: self.dynamic_filters.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             page_pruning_predicate: self.page_pruning_predicate.clone(),
             table_schema: Arc::clone(&base_config.file_schema),
@@ -586,5 +577,18 @@ impl FileSource for ParquetSource {
                 Ok(())
             }
         }
+    }
+
+    fn supports_dynamic_filter_pushdown(&self) -> bool {
+        true
+    }
+
+    fn push_down_dynamic_filter(
+        &self,
+        dynamic_filter: Arc<dyn DynamicFilterSource>,
+    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
+        let mut conf = self.clone();
+        conf.dynamic_filters.push(dynamic_filter);
+        Ok(Some(Arc::new(conf)))
     }
 }

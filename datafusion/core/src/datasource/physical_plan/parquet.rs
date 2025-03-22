@@ -43,6 +43,7 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
+    use arrow::util::pretty::pretty_format_batches;
     use arrow_schema::SchemaRef;
     use bytes::{BufMut, BytesMut};
     use datafusion_common::config::TableParquetOptions;
@@ -1975,5 +1976,103 @@ mod tests {
         let calls = size_hint_calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls, vec![Some(123), Some(456)]);
+    }
+
+    #[tokio::test]
+    async fn test_topk_predicate_pushdown() {
+        let ctx = SessionContext::new();
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()))
+            // We need to force 1 partition because TopK predicate pushdown happens on a per-partition basis
+            // If we had 1 file per partition (as an example) no pushdown would happen
+            .with_target_partitions(1);
+
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().to_str().unwrap().to_string();
+        // The point here is that we write many, many files.
+        // So when we scan after we processed the first one we should be able to skip the rest
+        // because of the TopK predicate pushdown.
+        for file in 0..100 {
+            let name = format!("test{:02}.parquet", file);
+            write_file(&format!("{path}/{name}"));
+        }
+        ctx.register_listing_table("base_table", path, opt, None, None)
+            .await
+            .unwrap();
+
+        let query = "select name from base_table order by id desc limit 3";
+
+        let batches = ctx.sql(query).await.unwrap().collect().await.unwrap();
+        #[rustfmt::skip]
+        let expected = [
+            "+--------+",
+            "| name   |",
+            "+--------+",
+            "| test02 |",
+            "| test02 |",
+            "| test02 |",
+            "+--------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+
+        let sql = format!("explain analyze {query}");
+        let batches = ctx.sql(&sql).await.unwrap().collect().await.unwrap();
+        let explain_plan = format!("{}", pretty_format_batches(&batches).unwrap());
+        assert_contains!(explain_plan, "row_groups_pruned_statistics=96");
+    }
+
+    #[tokio::test]
+    async fn test_topk_predicate_pushdown_ignores_partition_columns() {
+        // The TopK operator will try to push down predicates on `file_id`.
+        // But since `file_id` is a partition column and not part of the file itself
+        // we cannot actually do any filtering on it at the file level.
+        // Thus it has to be ignored by `ParquetSource`.
+        // This test only shows that this does not result in any errors or panics,
+        // it is expected that "nothing exciting" happens here.
+        // I do think in the future it would be interesting to re-design how partition columns
+        // get handled, in particular by pushing them into SchemaAdapter so that the table schema == file schema
+        // and we can do predicate pushdown on them as well without relying on each TableProvider to
+        // do special handling of partition columns.
+
+        let ctx = SessionContext::new();
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()))
+            .with_table_partition_cols(vec![("file_id".to_string(), DataType::UInt32)])
+            // We need to force 1 partition because TopK predicate pushdown happens on a per-partition basis
+            // If we had 1 file per partition (as an example) no pushdown would happen
+            .with_target_partitions(1);
+
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().to_str().unwrap().to_string();
+        // The point here is that we write many, many files.
+        // So when we scan after we processed the first one we should be able to skip the rest
+        // because of the TopK predicate pushdown.
+        for file in 0..100 {
+            // crete a directory for the partition
+            fs::create_dir_all(format!("{path}/file_id={file}")).unwrap();
+            let name = format!("file_id={file}/test.parquet");
+            write_file(&format!("{path}/{name}"));
+        }
+        ctx.register_listing_table("base_table", path, opt, None, None)
+            .await
+            .unwrap();
+
+        let query = "select file_id from base_table order by file_id asc limit 3";
+
+        let batches = ctx.sql(query).await.unwrap().collect().await.unwrap();
+        #[rustfmt::skip]
+        let expected = [
+            "+---------+",
+            "| file_id |",
+            "+---------+",
+            "| 0       |",
+            "| 0       |",
+            "| 1       |",
+            "+---------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+
+        let sql = format!("explain analyze {query}");
+        let batches = ctx.sql(&sql).await.unwrap().collect().await.unwrap();
+        let explain_plan = format!("{}", pretty_format_batches(&batches).unwrap());
+        assert_contains!(explain_plan, "row_groups_pruned_statistics=0"); // just documenting current behavior
     }
 }

@@ -590,6 +590,9 @@ config_namespace! {
         /// during aggregations, if possible
         pub enable_topk_aggregation: bool, default = true
 
+        /// When set to true attempts to push down dynamic filters from TopK operations into file scans
+        pub enable_dynamic_filter_pushdown: bool, default = true
+
         /// When set to true, the optimizer will insert filters before a join between
         /// a nullable and non-nullable column to filter out nulls on the nullable side. This
         /// filter can add additional overhead when the file format does not fully support
