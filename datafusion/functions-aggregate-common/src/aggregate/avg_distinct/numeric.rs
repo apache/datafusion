@@ -33,21 +33,13 @@ use crate::utils::Hashable;
 
 /// Specialized implementation of `AVG DISTINCT` for Float64 values, handling the
 /// special case for NaN values and floating-point equality.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Float64DistinctAvgAccumulator {
     values: HashSet<Hashable<f64>, RandomState>,
 }
 
 impl Float64DistinctAvgAccumulator {
     pub fn new() -> Self {
-        Self {
-            values: HashSet::default(),
-        }
-    }
-}
-
-impl Default for Float64DistinctAvgAccumulator {
-    fn default() -> Self {
         Self {
             values: HashSet::default(),
         }
