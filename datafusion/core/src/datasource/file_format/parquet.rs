@@ -125,8 +125,9 @@ mod tests {
     };
     use datafusion_common::config::{ParquetOptions, TableParquetOptions};
     use datafusion_common::stats::Precision;
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common::ScalarValue::Utf8;
-    use datafusion_common::{assert_batches_eq, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
     use datafusion_datasource::{ListingTableUrl, PartitionedFile};
@@ -149,6 +150,7 @@ mod tests {
     use async_trait::async_trait;
     use futures::stream::BoxStream;
     use futures::{Stream, StreamExt};
+    use insta::assert_snapshot;
     use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectMeta;
@@ -1090,10 +1092,11 @@ mod tests {
             .expect("read_parquet should succeed");
 
         let result = df.collect().await?;
-        #[rustfmt::skip]
-        let expected = ["++",
-            "++"];
-        assert_batches_eq!(expected, &result);
+
+        assert_snapshot!(batches_to_string(&result), @r###"
+            ++
+            ++
+       "###);
 
         Ok(())
     }
@@ -1120,10 +1123,11 @@ mod tests {
             .expect("read_parquet should succeed");
 
         let result = df.collect().await?;
-        #[rustfmt::skip]
-        let expected = ["++",
-            "++"];
-        assert_batches_eq!(expected, &result);
+
+        assert_snapshot!(batches_to_string(&result), @r###"
+            ++
+            ++
+       "###);
 
         Ok(())
     }
