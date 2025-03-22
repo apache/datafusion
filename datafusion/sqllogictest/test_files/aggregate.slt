@@ -3807,6 +3807,52 @@ SELECT MIN(value), MAX(value) FROM timestampmicrosecond
 statement ok
 DROP TABLE timestampmicrosecond;
 
+# min_duration, max_duration
+statement ok
+create table d
+as values
+  (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)'),  arrow_cast(3, 'Duration(Microsecond)'),  arrow_cast(4, 'Duration(Nanosecond)'), 1),
+  (arrow_cast(11, 'Duration(Second)'),arrow_cast(22, 'Duration(Millisecond)'), arrow_cast(33, 'Duration(Microsecond)'), arrow_cast(44, 'Duration(Nanosecond)'), 1);
+
+query ????
+SELECT min(column1), min(column2), min(column3), min(column4) FROM d;
+----
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.002 secs 0 days 0 hours 0 mins 0.000003 secs 0 days 0 hours 0 mins 0.000000004 secs
+
+query ????
+SELECT max(column1), max(column2), max(column3), max(column4) FROM d;
+----
+0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs
+
+# GROUP BY follows a different code path
+query ????I
+SELECT min(column1), min(column2), min(column3), min(column4), column5 FROM d GROUP BY column5;
+----
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.002 secs 0 days 0 hours 0 mins 0.000003 secs 0 days 0 hours 0 mins 0.000000004 secs 1
+
+query ????I
+SELECT max(column1), max(column2), max(column3), max(column4), column5 FROM d GROUP BY column5;
+----
+0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs 1
+
+statement ok
+INSERT INTO d VALUES
+  (arrow_cast(3, 'Duration(Second)'), arrow_cast(1, 'Duration(Millisecond)'), arrow_cast(7, 'Duration(Microsecond)'), arrow_cast(2, 'Duration(Nanosecond)'), 1),
+  (arrow_cast(0, 'Duration(Second)'), arrow_cast(9, 'Duration(Millisecond)'), arrow_cast(5, 'Duration(Microsecond)'), arrow_cast(8, 'Duration(Nanosecond)'), 1);
+
+query ????I
+SELECT max(column1), max(column2), max(column3), max(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
+----
+0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs 1
+
+query ????I
+SELECT min(column1), min(column2), min(column3), min(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
+----
+0 days 0 hours 0 mins 0 secs 0 days 0 hours 0 mins 0.001 secs 0 days 0 hours 0 mins 0.000003 secs 0 days 0 hours 0 mins 0.000000002 secs 1
+
+statement ok
+drop table d;
+
 # max_bool
 statement ok
 CREATE TABLE max_bool (value BOOLEAN);

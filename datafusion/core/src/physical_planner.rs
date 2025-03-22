@@ -39,7 +39,6 @@ use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
@@ -78,7 +77,7 @@ use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
     Analyze, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, RecursiveQuery, SkipType, SortExpr, StringifiedPlan, WindowFrame,
+    Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
@@ -1588,6 +1587,7 @@ type AggregateExprWithOptionalArgs = (
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
+    human_displan: String,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
@@ -1642,6 +1642,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         .order_by(ordering_reqs)
                         .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
+                        .human_display(human_displan)
                         .with_ignore_nulls(ignore_nulls)
                         .with_distinct(*distinct)
                         .build()
@@ -1664,52 +1665,35 @@ pub fn create_aggregate_expr_and_maybe_filter(
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
-    let (name, e) = match e {
-        Expr::Alias(Alias { expr, name, .. }) => (Some(name.clone()), expr.as_ref()),
-        Expr::AggregateFunction(_) => (Some(e.schema_name().to_string()), e),
-        _ => (None, e),
+    let (name, human_display, e) = match e {
+        Expr::Alias(Alias { expr, name, .. }) => {
+            (Some(name.clone()), String::default(), expr.as_ref())
+        }
+        Expr::AggregateFunction(_) => (
+            Some(e.schema_name().to_string()),
+            e.human_display().to_string(),
+            e,
+        ),
+        _ => (None, String::default(), e),
     };
 
     create_aggregate_expr_with_name_and_maybe_filter(
         e,
         name,
+        human_display,
         logical_input_schema,
         physical_input_schema,
         execution_props,
     )
 }
 
-/// Create a physical sort expression from a logical expression
-pub fn create_physical_sort_expr(
-    e: &SortExpr,
-    input_dfschema: &DFSchema,
-    execution_props: &ExecutionProps,
-) -> Result<PhysicalSortExpr> {
-    let SortExpr {
-        expr,
-        asc,
-        nulls_first,
-    } = e;
-    Ok(PhysicalSortExpr {
-        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-        options: SortOptions {
-            descending: !asc,
-            nulls_first: *nulls_first,
-        },
-    })
-}
-
-/// Create vector of physical sort expression from a vector of logical expression
-pub fn create_physical_sort_exprs(
-    exprs: &[SortExpr],
-    input_dfschema: &DFSchema,
-    execution_props: &ExecutionProps,
-) -> Result<LexOrdering> {
-    exprs
-        .iter()
-        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<LexOrdering>>()
-}
+#[deprecated(
+    since = "47.0.0",
+    note = "use datafusion::{create_physical_sort_expr, create_physical_sort_exprs}"
+)]
+pub use datafusion_physical_expr::{
+    create_physical_sort_expr, create_physical_sort_exprs,
+};
 
 impl DefaultPhysicalPlanner {
     /// Handles capturing the various plans for EXPLAIN queries

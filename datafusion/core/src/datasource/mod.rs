@@ -19,8 +19,6 @@
 //!
 //! [`ListingTable`]: crate::datasource::listing::ListingTable
 
-pub mod cte_worktable;
-pub mod default_table_source;
 pub mod dynamic_file;
 pub mod empty;
 pub mod file_format;
@@ -32,11 +30,6 @@ pub mod provider;
 mod statistics;
 mod view_test;
 
-pub use datafusion_catalog::stream;
-pub use datafusion_catalog::view;
-pub use datafusion_datasource::schema_adapter;
-pub use datafusion_datasource::source;
-
 // backwards compatibility
 pub use self::default_table_source::{
     provider_as_source, source_as_provider, DefaultTableSource,
@@ -45,6 +38,12 @@ pub use self::memory::MemTable;
 pub use self::view::ViewTable;
 pub use crate::catalog::TableProvider;
 pub use crate::logical_expr::TableType;
+pub use datafusion_catalog::cte_worktable;
+pub use datafusion_catalog::default_table_source;
+pub use datafusion_catalog::stream;
+pub use datafusion_catalog::view;
+pub use datafusion_datasource::schema_adapter;
+pub use datafusion_datasource::source;
 pub use datafusion_execution::object_store;
 pub use datafusion_physical_expr::create_ordering;
 pub use statistics::get_statistics_with_limit;
@@ -261,13 +260,6 @@ mod tests {
             new_columns.push(extra_column);
 
             Ok(RecordBatch::try_new(schema, new_columns).unwrap())
-        }
-
-        fn map_partial_batch(
-            &self,
-            batch: RecordBatch,
-        ) -> datafusion_common::Result<RecordBatch> {
-            self.map_batch(batch)
         }
     }
 }
