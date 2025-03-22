@@ -572,8 +572,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Int4Unsigned(_) => Ok(DataType::UInt32),
             SQLDataType::Varchar(length) => {
                 match (length, self.options.support_varchar_with_length) {
-                    (Some(_), false) => plan_err!("does not support Varchar with length, \
-                    please set `support_varchar_with_length` to be true"),
+                    (Some(_), false) => plan_err!(
+                        "does not support Varchar with length, \
+                    please set `support_varchar_with_length` to be true"
+                    ),
                     _ => {
                         if self.options.map_varchar_to_utf8view {
                             Ok(DataType::Utf8View)
@@ -686,9 +688,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
-            // Unsupported precision
             | SQLDataType::Timestamp(_, _)
-            // Precision is not supported
             | SQLDataType::Time(Some(_), _)
             | SQLDataType::Dec(_)
             | SQLDataType::BigNumeric(_)
@@ -699,7 +699,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Float64
             | SQLDataType::JSONB
             | SQLDataType::Unspecified
-            // Clickhouse datatypes
             | SQLDataType::Int16
             | SQLDataType::Int32
             | SQLDataType::Int128
@@ -721,7 +720,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Nullable(_)
             | SQLDataType::LowCardinality(_)
             | SQLDataType::Trigger
-            // MySQL datatypes
             | SQLDataType::TinyBlob
             | SQLDataType::MediumBlob
             | SQLDataType::LongBlob
@@ -734,15 +732,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::SignedInteger
             | SQLDataType::Unsigned
             | SQLDataType::UnsignedInteger
-            // BigQuery UDFs
             | SQLDataType::AnyType
-            // Postgres datatypes
             | SQLDataType::Table(_)
             | SQLDataType::VarBit(_)
-            | SQLDataType::GeometricType(_)
-            => not_impl_err!(
-                "Unsupported SQL type {sql_type:?}"
-            ),
+            | SQLDataType::GeometricType(_) => {
+                not_impl_err!("Unsupported SQL type {sql_type:?}")
+            }
         }
     }
 
