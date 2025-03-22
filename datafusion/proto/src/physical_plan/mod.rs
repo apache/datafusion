@@ -33,7 +33,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::physical_plan::AvroSource;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig};
+use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, JsonSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
@@ -246,6 +246,15 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 .with_newlines_in_values(scan.newlines_in_values)
                 .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
                 Ok(conf.build())
+            }
+            PhysicalPlanType::JsonScan(scan) => {
+                let scan_conf = parse_protobuf_file_scan_config(
+                    scan.base_conf.as_ref().unwrap(),
+                    registry,
+                    extension_codec,
+                    Arc::new(JsonSource::new()),
+                )?;
+                Ok(scan_conf.build())
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
@@ -1677,6 +1686,26 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                     None
                                 },
                                 newlines_in_values: maybe_csv.newlines_in_values(),
+                            },
+                        )),
+                    });
+                }
+            }
+        }
+
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>() {
+            let data_source = data_source_exec.data_source();
+            if let Some(scan_conf) = data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
+                let source = scan_conf.file_source();
+                if let Some(_json_source) = source.as_any().downcast_ref::<JsonSource>() {
+                    return Ok(protobuf::PhysicalPlanNode {
+                        physical_plan_type: Some(PhysicalPlanType::JsonScan(
+                            protobuf::JsonScanExecNode {
+                                base_conf: Some(serialize_file_scan_config(
+                                    scan_conf,
+                                    extension_codec,
+                                )?),
                             },
                         )),
                     });
