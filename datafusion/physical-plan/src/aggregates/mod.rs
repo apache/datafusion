@@ -1799,6 +1799,8 @@ mod tests {
             | 4 | 3.6666666666666665 |
             +---+--------------------+
             ");
+            // For row 2: 3, (2 + 3 + 2) / 3
+            // For row 3: 4, (3 + 4 + 4) / 3
         }
 
         let metrics = merged_aggregate.metrics().unwrap();
