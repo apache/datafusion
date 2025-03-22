@@ -123,6 +123,7 @@ where
     }
 }
 
+/// This accumulator is specifically designed for floating-point types, which don't naturally implement Hash or Eq because of special values like NaN and issues with floating-point equality.
 #[derive(Debug)]
 pub struct FloatDistinctCountAccumulator<T>
 where

@@ -76,7 +76,7 @@ use datafusion_expr::{
     WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
     WindowUDFImpl,
 };
-use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::average::{avg_distinct, avg_udaf};
 use datafusion_functions_aggregate::expr_fn::{
     approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
     nth_value,
@@ -951,6 +951,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
         count(lit(1)),
         count_distinct(lit(1)),
+        avg_distinct(lit(1)),
         first_value(lit(1), None),
         first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
         functions_window::nth_value::first_value(lit(1)),
