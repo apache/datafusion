@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use arrow::array::cast::AsArray;
 use arrow::array::{new_null_array, Array, ArrayRef, StringArray};
+use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Time32, Time64, Timestamp, Utf8,
@@ -210,7 +211,7 @@ fn _to_char_scalar(
     // of the implementation in arrow-rs we need to convert it to an array
     let data_type = &expression.data_type();
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
-    let array = expression.into_array(1)?;
+    let array = expression.clone().into_array(1)?;
 
     if format.is_none() {
         if is_scalar_expression {
@@ -247,6 +248,10 @@ fn _to_char_scalar(
             ))
         }
     } else {
+        if data_type == &Date32 {
+            return _to_char_scalar(expression.clone().cast_to(&Date64, None)?, format);
+        }
+
         exec_err!("{}", formatted.unwrap_err())
     }
 }
@@ -277,7 +282,25 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let result = formatter.value(idx).try_to_string();
         match result {
             Ok(value) => results.push(Some(value)),
-            Err(e) => return exec_err!("{}", e),
+            Err(e) => {
+                if data_type == &Date32 {
+                    let format_options = match _build_format_options(&Date64, format) {
+                        Ok(value) => value,
+                        Err(value) => return value,
+                    };
+
+                    let array = cast(arrays[0].as_ref(), &Date64)?;
+                    let formatter =
+                        ArrayFormatter::try_new(array.as_ref(), &format_options)?;
+                    let result = formatter.value(idx).try_to_string();
+                    match result {
+                        Ok(value) => results.push(Some(value)),
+                        Err(e) => return exec_err!("{}", e),
+                    }
+                } else {
+                    return exec_err!("{}", e);
+                }
+            }
         }
     }
 
@@ -327,6 +350,11 @@ mod tests {
                 ScalarValue::Date32(Some(18506)),
                 ScalarValue::Utf8(Some("%Y::%m::%d".to_string())),
                 "2020::09::01".to_string(),
+            ),
+            (
+                ScalarValue::Date32(Some(18506)),
+                ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
+                "2020::09::01 00::00::00 000000000".to_string(),
             ),
             (
                 ScalarValue::Date64(Some(date.and_utc().timestamp_millis())),
@@ -406,6 +434,11 @@ mod tests {
                 ScalarValue::Date32(Some(18506)),
                 StringArray::from(vec!["%Y::%m::%d".to_string()]),
                 "2020::09::01".to_string(),
+            ),
+            (
+                ScalarValue::Date32(Some(18506)),
+                StringArray::from(vec!["%Y::%m::%d %S::%M::%H %f".to_string()]),
+                "2020::09::01 00::00::00 000000000".to_string(),
             ),
             (
                 ScalarValue::Date64(Some(date.and_utc().timestamp_millis())),
@@ -491,6 +524,14 @@ mod tests {
                 StringArray::from(vec!["2020::09::01", "2020::09::02"]),
             ),
             (
+                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
+                ScalarValue::Utf8(Some("%Y::%m::%d %S::%M::%H %f".to_string())),
+                StringArray::from(vec![
+                    "2020::09::01 00::00::00 000000000",
+                    "2020::09::02 00::00::00 000000000",
+                ]),
+            ),
+            (
                 Arc::new(Date64Array::from(vec![
                     date.and_utc().timestamp_millis(),
                     date2.and_utc().timestamp_millis(),
@@ -505,6 +546,25 @@ mod tests {
                 Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
                 StringArray::from(vec!["%Y::%m::%d", "%d::%m::%Y"]),
                 StringArray::from(vec!["2020::09::01", "02::09::2020"]),
+            ),
+            (
+                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
+                StringArray::from(vec![
+                    "%Y::%m::%d %S::%M::%H %f",
+                    "%Y::%m::%d %S::%M::%H %f",
+                ]),
+                StringArray::from(vec![
+                    "2020::09::01 00::00::00 000000000",
+                    "2020::09::02 00::00::00 000000000",
+                ]),
+            ),
+            (
+                Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
+                StringArray::from(vec!["%Y::%m::%d", "%Y::%m::%d %S::%M::%H %f"]),
+                StringArray::from(vec![
+                    "2020::09::01",
+                    "2020::09::02 00::00::00 000000000",
+                ]),
             ),
             (
                 Arc::new(Date64Array::from(vec![
