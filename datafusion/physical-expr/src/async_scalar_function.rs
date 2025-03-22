@@ -107,7 +107,7 @@ impl AsyncFuncExpr {
         batch: &RecordBatch,
         option: &ConfigOptions,
     ) -> Result<ColumnarValue> {
-        let Some(llm_function) = self.func.as_any().downcast_ref::<ScalarFunctionExpr>()
+        let Some(scalar_function_expr) = self.func.as_any().downcast_ref::<ScalarFunctionExpr>()
         else {
             return internal_err!(
                 "unexpected function type, expected ScalarFunctionExpr, got: {:?}",
@@ -115,7 +115,7 @@ impl AsyncFuncExpr {
             );
         };
 
-        let Some(async_udf) = llm_function
+        let Some(async_udf) = scalar_function_expr
             .fun()
             .inner()
             .as_any()
@@ -123,7 +123,7 @@ impl AsyncFuncExpr {
         else {
             return not_impl_err!(
                 "Don't know how to evaluate async function: {:?}",
-                llm_function
+                scalar_function_expr
             );
         };
 
@@ -139,7 +139,7 @@ impl AsyncFuncExpr {
 
                 let current_batch = remainder.slice(0, size); // get next 10 rows
                 remainder = remainder.slice(size, remainder.num_rows() - size);
-                let args = llm_function
+                let args = scalar_function_expr
                     .args()
                     .iter()
                     .map(|e| e.evaluate(&current_batch))
@@ -158,7 +158,7 @@ impl AsyncFuncExpr {
                 );
             }
         } else {
-            let args = llm_function
+            let args = scalar_function_expr
                 .args()
                 .iter()
                 .map(|e| e.evaluate(batch))
