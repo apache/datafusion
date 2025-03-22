@@ -30,7 +30,8 @@ mod tests {
     use crate::prelude::SessionContext;
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::datatypes::{DataType, Field, SchemaBuilder};
-    use datafusion_common::{assert_batches_eq, test_util, Result, ScalarValue};
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::{test_util, Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_scan_config::FileScanConfig;
     use datafusion_datasource::PartitionedFile;
@@ -40,6 +41,7 @@ mod tests {
     use datafusion_physical_plan::ExecutionPlan;
 
     use futures::StreamExt;
+    use insta::assert_snapshot;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
@@ -102,22 +104,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+-------------+",
-            "| id | bool_col | tinyint_col |",
-            "+----+----------+-------------+",
-            "| 4  | true     | 0           |",
-            "| 5  | false    | 1           |",
-            "| 6  | true     | 0           |",
-            "| 7  | false    | 1           |",
-            "| 2  | true     | 0           |",
-            "| 3  | false    | 1           |",
-            "| 0  | true     | 0           |",
-            "| 1  | false    | 1           |",
-            "+----+----------+-------------+",
-        ];
-
-        assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+-------------+
+            | id | bool_col | tinyint_col |
+            +----+----------+-------------+
+            | 4  | true     | 0           |
+            | 5  | false    | 1           |
+            | 6  | true     | 0           |
+            | 7  | false    | 1           |
+            | 2  | true     | 0           |
+            | 3  | false    | 1           |
+            | 0  | true     | 0           |
+            | 1  | false    | 1           |
+            +----+----------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -176,22 +176,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+-------------+-------------+",
-            "| id | bool_col | tinyint_col | missing_col |",
-            "+----+----------+-------------+-------------+",
-            "| 4  | true     | 0           |             |",
-            "| 5  | false    | 1           |             |",
-            "| 6  | true     | 0           |             |",
-            "| 7  | false    | 1           |             |",
-            "| 2  | true     | 0           |             |",
-            "| 3  | false    | 1           |             |",
-            "| 0  | true     | 0           |             |",
-            "| 1  | false    | 1           |             |",
-            "+----+----------+-------------+-------------+",
-        ];
-
-        assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+-------------+-------------+
+            | id | bool_col | tinyint_col | missing_col |
+            +----+----------+-------------+-------------+
+            | 4  | true     | 0           |             |
+            | 5  | false    | 1           |             |
+            | 6  | true     | 0           |             |
+            | 7  | false    | 1           |             |
+            | 2  | true     | 0           |             |
+            | 3  | false    | 1           |             |
+            | 0  | true     | 0           |             |
+            | 1  | false    | 1           |             |
+            +----+----------+-------------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -251,21 +249,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+------------+-------------+",
-            "| id | bool_col | date       | tinyint_col |",
-            "+----+----------+------------+-------------+",
-            "| 4  | true     | 2021-10-26 | 0           |",
-            "| 5  | false    | 2021-10-26 | 1           |",
-            "| 6  | true     | 2021-10-26 | 0           |",
-            "| 7  | false    | 2021-10-26 | 1           |",
-            "| 2  | true     | 2021-10-26 | 0           |",
-            "| 3  | false    | 2021-10-26 | 1           |",
-            "| 0  | true     | 2021-10-26 | 0           |",
-            "| 1  | false    | 2021-10-26 | 1           |",
-            "+----+----------+------------+-------------+",
-        ];
-        assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+------------+-------------+
+            | id | bool_col | date       | tinyint_col |
+            +----+----------+------------+-------------+
+            | 4  | true     | 2021-10-26 | 0           |
+            | 5  | false    | 2021-10-26 | 1           |
+            | 6  | true     | 2021-10-26 | 0           |
+            | 7  | false    | 2021-10-26 | 1           |
+            | 2  | true     | 2021-10-26 | 0           |
+            | 3  | false    | 2021-10-26 | 1           |
+            | 0  | true     | 2021-10-26 | 0           |
+            | 1  | false    | 2021-10-26 | 1           |
+            +----+----------+------------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());
