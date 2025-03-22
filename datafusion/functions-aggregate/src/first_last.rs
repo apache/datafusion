@@ -18,7 +18,6 @@
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::mem::size_of_val;
 use std::sync::Arc;
@@ -314,6 +313,11 @@ where
     // to avoid calling `ScalarValue::size_of_vec` by Self.size.
     size_of_orderings: usize,
 
+    // buffer for `get_filtered_min_of_each_group`
+    // filter_min_of_each_group_buf.0[group_idx] -> idx_in_val
+    // only valid if filter_min_of_each_group_buf.1[group_idx] == true
+    min_of_each_group_buf: (Vec<usize>, BooleanBufferBuilder),
+
     // =========== option ============
 
     // Stores the applicable ordering requirement.
@@ -360,6 +364,7 @@ where
             orderings: Vec::new(),
             is_sets: BooleanBufferBuilder::new(0),
             size_of_orderings: 0,
+            min_of_each_group_buf: (Vec::new(), BooleanBufferBuilder::new(0)),
         })
     }
 
@@ -447,6 +452,9 @@ where
         }
 
         self.is_sets.resize(new_size);
+
+        self.min_of_each_group_buf.0.resize(new_size, 0);
+        self.min_of_each_group_buf.1.resize(new_size);
     }
 
     fn update_state(
@@ -469,6 +477,22 @@ where
         self.size_of_orderings = self.size_of_orderings - old_size + new_size;
     }
 
+    fn take_state(
+        &mut self,
+        emit_to: EmitTo,
+    ) -> (ArrayRef, Vec<Vec<ScalarValue>>, BooleanBuffer) {
+        emit_to.take_needed(&mut self.min_of_each_group_buf.0);
+        self.min_of_each_group_buf
+            .1
+            .truncate(self.min_of_each_group_buf.0.len());
+
+        (
+            self.take_vals_and_null_buf(emit_to),
+            self.take_orderings(emit_to),
+            Self::take_need(&mut self.is_sets, emit_to),
+        )
+    }
+
     // should be used in test only
     #[cfg(test)]
     fn compute_size_of_orderings(&self) -> usize {
@@ -478,18 +502,25 @@ where
             .sum::<usize>()
     }
 
-    /// Returns a hashmap where each group (identified by `group_indices`) is mapped to
-    /// the index of its minimum value in `orderings`, based on lexicographical comparison.
-    /// The function filters values using `opt_filter` and `is_set_arr`
+    /// Returns a vector of tuples `(group_idx, idx_in_val)` representing the index of the
+    /// minimum value in `orderings` for each group, using lexicographical comparison.
+    /// Values are filtered using `opt_filter` and `is_set_arr` if provided.
     fn get_filtered_min_of_each_group(
-        &self,
+        &mut self,
         orderings: &[ArrayRef],
         group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
         vals: &PrimitiveArray<T>,
         is_set_arr: Option<&BooleanArray>,
-    ) -> Result<HashMap<usize, usize>> {
-        let mut result = HashMap::with_capacity(orderings.len()); // group_idx -> idx_in_orderings
+    ) -> Result<Vec<(usize, usize)>> {
+        // Set all values in min_of_each_group_buf.1 to false.
+        self.min_of_each_group_buf.1.truncate(0);
+        self.min_of_each_group_buf
+            .1
+            .append_n(self.vals.len(), false);
+
+        // No need to call `clear` since `self.min_of_each_group_buf.0[group_idx]`
+        // is only valid when `self.min_of_each_group_buf.1[group_idx] == true`.
 
         let comparator = {
             assert_eq!(orderings.len(), self.ordering_req.len());
@@ -524,17 +555,27 @@ where
                 continue;
             }
 
-            result
-                .entry(group_idx)
-                .and_modify(|x| {
-                    if comparator.compare(*x, idx_in_val).is_gt() {
-                        *x = idx_in_val;
-                    }
-                })
-                .or_insert(idx_in_val);
+            let is_valid = self.min_of_each_group_buf.1.get_bit(group_idx);
+            if is_valid
+                && comparator
+                    .compare(self.min_of_each_group_buf.0[group_idx], idx_in_val)
+                    .is_gt()
+            {
+                self.min_of_each_group_buf.0[group_idx] = idx_in_val;
+            } else if !is_valid {
+                self.min_of_each_group_buf.1.set_bit(group_idx, true);
+                self.min_of_each_group_buf.0[group_idx] = idx_in_val;
+            }
         }
 
-        Ok(result)
+        Ok(self
+            .min_of_each_group_buf
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(group_idx, _)| self.min_of_each_group_buf.1.get_bit(*group_idx))
+            .map(|(group_idx, idx_in_val)| (group_idx, *idx_in_val))
+            .collect::<Vec<_>>())
     }
 
     fn take_vals_and_null_buf(&mut self, emit_to: EmitTo) -> ArrayRef {
@@ -597,18 +638,14 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        self.take_orderings(emit_to);
-        Self::take_need(&mut self.is_sets, emit_to);
-
-        Ok(self.take_vals_and_null_buf(emit_to))
+        Ok(self.take_state(emit_to).0)
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let (val_arr, orderings, is_sets) = self.take_state(emit_to);
         let mut result = Vec::with_capacity(self.orderings.len() + 2);
 
-        result.push(self.take_vals_and_null_buf(emit_to));
-
-        let orderings = self.take_orderings(emit_to);
+        result.push(val_arr);
 
         let ordering_cols = {
             let mut ordering_cols = Vec::with_capacity(self.ordering_req.len());
@@ -628,7 +665,6 @@ where
             result.push(ScalarValue::iter_to_array(ordering_col)?);
         }
 
-        let is_sets = Self::take_need(&mut self.is_sets, emit_to);
         result.push(Arc::new(BooleanArray::new(is_sets, None)));
 
         Ok(result)
@@ -683,6 +719,8 @@ where
             + self.null_builder.capacity() / 8 // capacity is in bits, so convert to bytes 
             + self.is_sets.capacity() / 8
             + self.size_of_orderings
+            + self.min_of_each_group_buf.0.capacity() * size_of::<usize>()
+            + self.min_of_each_group_buf.1.capacity() / 8
     }
 
     fn supports_convert_to_state(&self) -> bool {
