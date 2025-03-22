@@ -182,4 +182,29 @@ mod test {
         let task_ctx = ctx.task_ctx();
         let _ = collect(physical_plan, task_ctx).await.unwrap();
     }
+
+    #[wasm_bindgen_test(unsupported = tokio::test)]
+    async fn test_parquet_write() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+
+        let data: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(StringArray::from(vec!["a"])),
+        ];
+
+        let batch = RecordBatch::try_new(schema.clone(), data).unwrap();
+        let mut buffer = Vec::new();
+        let mut writer = datafusion::parquet::arrow::ArrowWriter::try_new(
+            &mut buffer,
+            schema.clone(),
+            None,
+        )
+        .unwrap();
+
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
 }
