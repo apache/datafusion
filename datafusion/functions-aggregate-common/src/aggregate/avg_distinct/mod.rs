@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod avg_distinct;
-pub mod count_distinct;
-pub mod groups_accumulator;
+mod avg_distinct_accumulator;
+
+pub use avg_distinct_accumulator::DecimalDistinctAvgAccumulator;
+pub use avg_distinct_accumulator::Float64DistinctAvgAccumulator;
