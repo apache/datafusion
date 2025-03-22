@@ -17,7 +17,7 @@
 
 //! The table implementation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::{any::Any, str::FromStr, sync::Arc};
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
@@ -33,8 +33,9 @@ use crate::datasource::{
 };
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
+use datafusion_catalog_listing::metadata::apply_metadata_filters;
 use datafusion_common::{config_err, DataFusionError, Result};
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::{file_scan_config::FileScanConfig, metadata::MetadataColumn};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
@@ -282,6 +283,9 @@ pub struct ListingOptions {
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
     pub file_sort_order: Vec<Vec<SortExpr>>,
+    /// Additional columns to include in the table schema, based on the metadata of the files.
+    /// See [Self::with_metadata_cols] for details.
+    pub metadata_cols: Vec<MetadataColumn>,
 }
 
 impl ListingOptions {
@@ -299,6 +303,7 @@ impl ListingOptions {
             collect_stat: true,
             target_partitions: 1,
             file_sort_order: vec![],
+            metadata_cols: vec![],
         }
     }
 
@@ -417,6 +422,51 @@ impl ListingOptions {
         self
     }
 
+    /// Set metadata columns on [`ListingOptions`] and returns self.
+    ///
+    /// "metadata columns" are columns that are computed from the `ObjectMeta` of the files from object store.
+    ///
+    /// Available metadata columns:
+    /// - `location`: The full path to the object
+    /// - `last_modified`: The last modified time
+    /// - `size`: The size in bytes of the object
+    ///
+    /// For example, given the following files in object store:
+    ///
+    /// ```text
+    /// /mnt/nyctaxi/tripdata01.parquet
+    /// /mnt/nyctaxi/tripdata02.parquet
+    /// /mnt/nyctaxi/tripdata03.parquet
+    /// ```
+    ///
+    /// If the `last_modified` field in the `ObjectMeta` for `tripdata01.parquet` is `2024-01-01 12:00:00`,
+    /// then the table schema will include a column named `last_modified` with the value `2024-01-01 12:00:00`
+    /// for all rows read from `tripdata01.parquet`.
+    ///
+    /// | [other columns] | last_modified         |
+    /// |-----------------|-----------------------|
+    /// | ...             | 2024-01-01 12:00:00   |
+    /// | ...             | 2024-01-02 15:30:00   |
+    /// | ...             | 2024-01-03 09:15:00   |
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_datasource::metadata::MetadataColumn;
+    ///
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::default()
+    ///   ))
+    ///   .with_metadata_cols(vec![MetadataColumn::LastModified]);
+    ///
+    /// assert_eq!(listing_options.metadata_cols, vec![MetadataColumn::LastModified]);
+    /// ```
+    pub fn with_metadata_cols(mut self, metadata_cols: Vec<MetadataColumn>) -> Self {
+        self.metadata_cols = metadata_cols;
+        self
+    }
+
     /// Set stat collection on [`ListingOptions`] and returns self.
     ///
     /// ```
@@ -501,6 +551,26 @@ impl ListingOptions {
         let schema = self.format.infer_schema(state, &store, &files).await?;
 
         Ok(schema)
+    }
+
+    /// Validates that the metadata columns do not already exist in the schema,
+    /// and that there are no duplicate metadata columns of the same variant.
+    pub fn validate_metadata_cols(&self, schema: &SchemaRef) -> Result<()> {
+        let mut seen = HashSet::with_capacity(self.metadata_cols.len());
+
+        for col in self.metadata_cols.iter() {
+            // Check if column already exists in the schema
+            if schema.column_with_name(col.name()).is_some() {
+                return plan_err!("Column {} already exists in schema", col);
+            }
+
+            // Check for duplicate metadata columns
+            if !seen.insert(*col) {
+                return plan_err!("Duplicate metadata column: {}", col);
+            }
+        }
+
+        Ok(())
     }
 
     /// Infers the partition columns stored in `LOCATION` and compares
@@ -716,7 +786,7 @@ pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
     /// File fields only
     file_schema: SchemaRef,
-    /// File fields + partition columns
+    /// File fields + partition columns + metadata columns
     table_schema: SchemaRef,
     options: ListingOptions,
     definition: Option<String>,
@@ -733,9 +803,8 @@ impl ListingTable {
     /// `ListingOptions` and `SchemaRef` are optional.  If they are not
     /// provided the file type is inferred based on the file suffix.
     /// If the schema is provided then it must be resolved before creating the table
-    /// and should contain the fields of the file without the table
-    /// partitioning columns.
-    ///
+    /// and should contain the fields of the file without the extended table columns,
+    /// i.e. the partitioning and metadata columns.
     pub fn try_new(config: ListingTableConfig) -> Result<Self> {
         let file_schema = config
             .file_schema
@@ -749,6 +818,12 @@ impl ListingTable {
         let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());
         for (part_col_name, part_col_type) in &options.table_partition_cols {
             builder.push(Field::new(part_col_name, part_col_type.clone(), false));
+        }
+
+        // Validate and add metadata columns to the schema
+        options.validate_metadata_cols(&file_schema)?;
+        for col in &options.metadata_cols {
+            builder.push(col.field());
         }
 
         let table_schema = Arc::new(
@@ -818,16 +893,39 @@ impl ListingTable {
     fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
         create_ordering(&self.table_schema, &self.options.file_sort_order)
     }
+
+    /// Returns the partition column fields from the table schema.
+    fn partition_column_fields(&self) -> Result<Vec<&Field>> {
+        self.options
+            .table_partition_cols
+            .iter()
+            .map(|col| Ok(self.table_schema.field_with_name(&col.0)?))
+            .collect::<Result<Vec<_>>>()
+    }
+
+    /// Returns the partition column names from the table schema.
+    fn partition_column_names(&self) -> Result<impl Iterator<Item = &str>> {
+        Ok(self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col| col.0.as_str()))
+    }
+
+    /// Returns the metadata column names from the table schema.
+    fn metadata_column_names(&self) -> impl Iterator<Item = &str> {
+        self.options.metadata_cols.iter().map(|col| col.name())
+    }
 }
 
-// Expressions can be used for parttion pruning if they can be evaluated using
-// only the partiton columns and there are partition columns.
-fn can_be_evaluted_for_partition_pruning(
-    partition_column_names: &[&str],
+// Expressions can be used for extended columns (partition/metadata) pruning if they can be evaluated using
+// only the extended columns and there are extended columns.
+fn can_be_evaluated_for_extended_col_pruning(
+    extended_column_names: &[&str],
     expr: &Expr,
 ) -> bool {
-    !partition_column_names.is_empty()
-        && expr_applicable_for_cols(partition_column_names, expr)
+    !extended_column_names.is_empty()
+        && expr_applicable_for_cols(extended_column_names, expr)
 }
 
 #[async_trait]
@@ -855,23 +953,19 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // extract types of partition columns
-        let table_partition_cols = self
-            .options
-            .table_partition_cols
-            .iter()
-            .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
-            .collect::<Result<Vec<_>>>()?;
+        // extract types of extended columns (partition + metadata columns)
+        let partition_col_names = self.partition_column_names()?.collect::<Vec<_>>();
+        let metadata_col_names = self.metadata_column_names().collect::<Vec<_>>();
 
-        let table_partition_col_names = table_partition_cols
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect::<Vec<_>>();
-        // If the filters can be resolved using only partition cols, there is no need to
-        // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
+        // If the filters can be resolved using only partition/metadata cols, there is no need to
+        // push it down to the TableScan, otherwise, `unhandled` pruning predicates will be generated
         let (partition_filters, filters): (Vec<_>, Vec<_>) =
             filters.iter().cloned().partition(|filter| {
-                can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
+                can_be_evaluated_for_extended_col_pruning(&partition_col_names, filter)
+            });
+        let (metadata_filters, filters): (Vec<_>, Vec<_>) =
+            filters.iter().cloned().partition(|filter| {
+                can_be_evaluated_for_extended_col_pruning(&metadata_col_names, filter)
             });
         // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
         let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
@@ -881,7 +975,12 @@ impl TableProvider for ListingTable {
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
         let (mut partitioned_file_lists, statistics) = self
-            .list_files_for_scan(session_state, &partition_filters, statistic_file_limit)
+            .list_files_for_scan(
+                session_state,
+                &partition_filters,
+                &metadata_filters,
+                statistic_file_limit,
+            )
             .await?;
 
         // if no files need to be read, return an `EmptyExec`
@@ -936,6 +1035,17 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
+        let table_partition_cols = self
+            .partition_column_fields()?
+            .into_iter()
+            .cloned()
+            .collect();
+
+        let metadata_cols = self
+            .metadata_column_names()
+            .filter_map(|c| MetadataColumn::from_str(c).ok())
+            .collect::<Vec<_>>();
+
         // create the execution plan
         self.options
             .format
@@ -952,7 +1062,8 @@ impl TableProvider for ListingTable {
                 .with_projection(projection.cloned())
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
-                .with_table_partition_cols(table_partition_cols),
+                .with_table_partition_cols(table_partition_cols)
+                .with_metadata_cols(metadata_cols),
                 filters.as_ref(),
             )
             .await
@@ -962,18 +1073,19 @@ impl TableProvider for ListingTable {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        let partition_column_names = self
-            .options
-            .table_partition_cols
-            .iter()
-            .map(|col| col.0.as_str())
+        let extended_column_names = self
+            .partition_column_names()?
+            .chain(self.metadata_column_names())
             .collect::<Vec<_>>();
+
         filters
             .iter()
             .map(|filter| {
-                if can_be_evaluted_for_partition_pruning(&partition_column_names, filter)
-                {
-                    // if filter can be handled by partition pruning, it is exact
+                if can_be_evaluated_for_extended_col_pruning(
+                    &extended_column_names,
+                    filter,
+                ) {
+                    // if filter can be handled by pruning from the extended columns, it is exact
                     return Ok(TableProviderFilterPushDown::Exact);
                 }
 
@@ -1086,7 +1198,8 @@ impl ListingTable {
     async fn list_files_for_scan<'a>(
         &'a self,
         ctx: &'a dyn Session,
-        filters: &'a [Expr],
+        partition_filters: &'a [Expr],
+        metadata_filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
         let store = if let Some(url) = self.table_paths.first() {
@@ -1100,7 +1213,7 @@ impl ListingTable {
                 ctx,
                 store.as_ref(),
                 table_path,
-                filters,
+                partition_filters,
                 &self.options.file_extension,
                 &self.options.table_partition_cols,
             )
@@ -1109,10 +1222,29 @@ impl ListingTable {
         let meta_fetch_concurrency =
             ctx.config_options().execution.meta_fetch_concurrency;
         let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
-        // collect the statistics if required by the config
+
+        let metadata_cols = self
+            .metadata_column_names()
+            .map(MetadataColumn::from_str)
+            .collect::<Result<Vec<_>>>()?;
+
+        // collect the statistics if required by the config + filter out files that don't match the metadata filters
         let files = file_list
+            .filter_map(|par_file| async {
+                if metadata_cols.is_empty() {
+                    return Some(par_file);
+                }
+
+                let Ok(par_file) = par_file else {
+                    return Some(par_file);
+                };
+
+                apply_metadata_filters(par_file, metadata_filters, &metadata_cols)
+                    .transpose()
+            })
             .map(|part_file| async {
                 let part_file = part_file?;
+
                 if self.options.collect_stat {
                     let statistics =
                         self.do_collect_statistics(ctx, &store, &part_file).await?;
@@ -1188,6 +1320,8 @@ mod tests {
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
+    use std::collections::HashMap;
+
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
     use crate::{
@@ -1714,7 +1848,9 @@ mod tests {
 
         let table = ListingTable::try_new(config)?;
 
-        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let (file_list, _) = table
+            .list_files_for_scan(&ctx.state(), &[], &[], None)
+            .await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 
@@ -1749,7 +1885,9 @@ mod tests {
 
         let table = ListingTable::try_new(config)?;
 
-        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let (file_list, _) = table
+            .list_files_for_scan(&ctx.state(), &[], &[], None)
+            .await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 
@@ -1799,7 +1937,9 @@ mod tests {
 
         let table = ListingTable::try_new(config)?;
 
-        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let (file_list, _) = table
+            .list_files_for_scan(&ctx.state(), &[], &[], None)
+            .await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 
@@ -2362,6 +2502,59 @@ mod tests {
         let schema = config_with_schema.file_schema.unwrap();
 
         assert_eq!(schema.fields.len(), 13);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_metadata_cols() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+
+        // Test valid case - no metadata columns
+        let options = ListingOptions::new(Arc::new(CsvFormat::default()));
+        assert!(options.validate_metadata_cols(&schema).is_ok());
+
+        // Test valid case - all different metadata columns
+        let options = ListingOptions::new(Arc::new(CsvFormat::default()))
+            .with_metadata_cols(vec![
+                MetadataColumn::Location,
+                MetadataColumn::Size,
+                MetadataColumn::LastModified,
+            ]);
+        assert!(options.validate_metadata_cols(&schema).is_ok());
+
+        // Test invalid case - duplicate metadata column
+        let options = ListingOptions::new(Arc::new(CsvFormat::default()))
+            .with_metadata_cols(vec![
+                MetadataColumn::Location,
+                MetadataColumn::Size,
+                MetadataColumn::Size, // Duplicate
+            ]);
+        let result = options.validate_metadata_cols(&schema);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Duplicate metadata column"));
+
+        // Test invalid case - column already exists in schema
+        let schema_with_location = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("location", DataType::Utf8, false), // Same name as Location metadata
+        ]));
+
+        let options = ListingOptions::new(Arc::new(CsvFormat::default()))
+            .with_metadata_cols(vec![MetadataColumn::Location]);
+
+        let result = options.validate_metadata_cols(&schema_with_location);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("already exists in schema"));
 
         Ok(())
     }
