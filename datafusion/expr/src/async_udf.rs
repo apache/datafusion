@@ -112,8 +112,8 @@ impl ScalarUDFImpl for AsyncScalarUDF {
         self.inner.signature()
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(_arg_types)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        self.inner.return_type(arg_types)
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

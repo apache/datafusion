@@ -198,12 +198,12 @@ impl PhysicalExpr for AsyncFuncExpr {
         self
     }
 
-    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        self.func.data_type(_input_schema)
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        self.func.data_type(input_schema)
     }
 
-    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        self.func.nullable(_input_schema)
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        self.func.nullable(input_schema)
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -224,5 +224,9 @@ impl PhysicalExpr for AsyncFuncExpr {
             name: self.name.clone(),
             func: new_func,
         }))
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.func)
     }
 }
