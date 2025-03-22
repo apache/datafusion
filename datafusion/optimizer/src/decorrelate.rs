@@ -501,10 +501,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
         let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
-        if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_))) {
-            expr_result_map_for_count_bug
-                .insert(e.schema_name().to_string(), result_expr);
-        }
+        expr_result_map_for_count_bug.insert(e.schema_name().to_string(), result_expr);
     }
     Ok(())
 }
