@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Specialized implementation of `AVG DISTINCT` for "Native" arrays such as
-//! [`Int64Array`] and [`Float64Array`]
-//!
-//! [`Int64Array`]: arrow::array::Int64Array
-//! [`Float64Array`]: arrow::array::Float64Array
 use std::fmt::Debug;
 use std::mem::size_of_val;
 use std::sync::Arc;
