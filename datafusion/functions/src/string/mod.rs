@@ -55,7 +55,6 @@ make_udf_function!(levenshtein::LevenshteinFunc, levenshtein);
 make_udf_function!(ltrim::LtrimFunc, ltrim);
 make_udf_function!(lower::LowerFunc, lower);
 make_udf_function!(octet_length::OctetLengthFunc, octet_length);
-make_udf_function!(overlay::OverlayFunc, overlay);
 make_udf_function!(repeat::RepeatFunc, repeat);
 make_udf_function!(replace::ReplaceFunc, replace);
 make_udf_function!(rtrim::RtrimFunc, rtrim);
@@ -108,10 +107,6 @@ pub mod expr_fn {
         octet_length,
         "returns the number of bytes of a string",
         args
-    ),(
-        overlay,
-        "replace the substring of string that starts at the start'th character and extends for count characters with new substring",
-        args,
     ),(
         repeat,
         "Repeats the `string` to `n` times",

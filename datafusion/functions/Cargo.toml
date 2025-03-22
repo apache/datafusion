@@ -35,14 +35,11 @@ all-features = true
 workspace = true
 
 [features]
-# enable core functions
-core_expressions = []
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 # enable datetime functions
 datetime_expressions = []
 # Enable encoding by default so the doctests work. In general don't automatically enable all packages.
 default = [
-    "core_expressions",
     "datetime_expressions",
     "encoding_expressions",
     "math_expressions",
@@ -146,7 +143,6 @@ required-features = ["math_expressions"]
 [[bench]]
 harness = false
 name = "nullif"
-required-features = ["core_expressions"]
 
 [[bench]]
 harness = false
