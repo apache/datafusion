@@ -103,36 +103,34 @@ fn criterion_benchmark(c: &mut Criterion) {
     let partitions = 10;
     let samples = 1_000_000;
 
-    let rt = Runtime::new().unwrap();
-    let topk_real = rt.block_on(async {
-        create_context(limit, partitions, samples, false, true)
-            .await
-            .unwrap()
-    });
-    let topk_asc = rt.block_on(async {
-        create_context(limit, partitions, samples, true, true)
-            .await
-            .unwrap()
-    });
-    let real = rt.block_on(async {
-        create_context(limit, partitions, samples, false, false)
-            .await
-            .unwrap()
-    });
-    let asc = rt.block_on(async {
-        create_context(limit, partitions, samples, true, false)
-            .await
-            .unwrap()
-    });
-
     c.bench_function(
         format!("aggregate {} time-series rows", partitions * samples).as_str(),
-        |b| b.iter(|| run(real.0.clone(), real.1.clone(), false)),
+        |b| {
+            b.iter(|| {
+                let rt = Runtime::new().unwrap();
+                let real = rt.block_on(async {
+                    create_context(limit, partitions, samples, false, false)
+                        .await
+                        .unwrap()
+                });
+                run(real.0.clone(), real.1.clone(), false)
+            })
+        },
     );
 
     c.bench_function(
         format!("aggregate {} worst-case rows", partitions * samples).as_str(),
-        |b| b.iter(|| run(asc.0.clone(), asc.1.clone(), true)),
+        |b| {
+            b.iter(|| {
+                let rt = Runtime::new().unwrap();
+                let asc = rt.block_on(async {
+                    create_context(limit, partitions, samples, true, false)
+                        .await
+                        .unwrap()
+                });
+                run(asc.0.clone(), asc.1.clone(), true)
+            })
+        },
     );
 
     c.bench_function(
@@ -141,7 +139,17 @@ fn criterion_benchmark(c: &mut Criterion) {
             partitions * samples
         )
         .as_str(),
-        |b| b.iter(|| run(topk_real.0.clone(), topk_real.1.clone(), false)),
+        |b| {
+            b.iter(|| {
+                let rt = Runtime::new().unwrap();
+                let topk_real = rt.block_on(async {
+                    create_context(limit, partitions, samples, false, true)
+                        .await
+                        .unwrap()
+                });
+                run(topk_real.0.clone(), topk_real.1.clone(), false)
+            })
+        },
     );
 
     c.bench_function(
@@ -150,7 +158,17 @@ fn criterion_benchmark(c: &mut Criterion) {
             partitions * samples
         )
         .as_str(),
-        |b| b.iter(|| run(topk_asc.0.clone(), topk_asc.1.clone(), true)),
+        |b| {
+            b.iter(|| {
+                let rt = Runtime::new().unwrap();
+                let topk_asc = rt.block_on(async {
+                    create_context(limit, partitions, samples, true, true)
+                        .await
+                        .unwrap()
+                });
+                run(topk_asc.0.clone(), topk_asc.1.clone(), true)
+            })
+        },
     );
 }
 
