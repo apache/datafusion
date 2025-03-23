@@ -330,8 +330,8 @@ impl CursorValues for StringViewArray {
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         // SAFETY: Prior assertions guarantee that l_idx and r_idx are valid indices.
         // Null-checks are assumed to have been handled in the wrapper (e.g., ArrayValues).
-        assert!(l_idx < l.len());
-        assert!(r_idx < r.len());
+        assert!(l_idx < l.views().len());
+        assert!(r_idx < r.views().len());
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx) }
     }
 }
