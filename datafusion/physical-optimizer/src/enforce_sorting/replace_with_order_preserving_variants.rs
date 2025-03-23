@@ -25,9 +25,9 @@ use crate::utils::{
     is_coalesce_partitions, is_repartition, is_sort, is_sort_preserving_merge,
 };
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -35,7 +35,6 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_common::config::ConfigOptions;
 use itertools::izip;
 
 /// For a given `plan`, this object carries the information one needs from its
@@ -264,16 +263,12 @@ pub fn replace_with_order_preserving_variants(
     )?;
 
     // If the alternate plan makes this sort unnecessary, accept the alternate:
-    if alternate_plan
-        .plan
-        .equivalence_properties()
-        .ordering_satisfy(
-            requirements
-                .plan
-                .output_ordering()
-                .unwrap_or(LexOrdering::empty()),
-        )
-    {
+    if requirements.plan.output_ordering().is_none_or(|ordering| {
+        alternate_plan
+            .plan
+            .equivalence_properties()
+            .ordering_satisfy(ordering)
+    }) {
         for child in alternate_plan.children.iter_mut() {
             child.data = false;
         }

@@ -529,7 +529,7 @@ pub fn ensure_sorting(
 
 /// Analyzes if there are any immediate sort removals by checking the `SortExec`s
 /// and their ordering requirement satisfactions with children
-/// If the sort is unnecessary, either replaces it with [`SortPreservingMergeExec`]/`[LimitExec`]
+/// If the sort is unnecessary, either replaces it with [`SortPreservingMergeExec`]/`LimitExec`
 /// or removes the [`SortExec`].
 /// Otherwise, returns the original plan
 fn analyze_immediate_sort_removal(
@@ -539,13 +539,16 @@ fn analyze_immediate_sort_removal(
         return Transformed::no(node);
     };
     let sort_input = sort_exec.input();
-    // Check if the sort is unnecessary
-    if !sort_input.equivalence_properties().ordering_satisfy(
-        sort_exec
-            .properties()
-            .output_ordering()
-            .unwrap_or(LexOrdering::empty()),
-    ) {
+    // Check if the sort is unnecessary:
+    if !sort_exec
+        .properties()
+        .output_ordering()
+        .is_none_or(|ordering| {
+            sort_input
+                .equivalence_properties()
+                .ordering_satisfy(ordering)
+        })
+    {
         return Transformed::no(node);
     };
     node.plan = if !sort_exec.preserve_partitioning()
