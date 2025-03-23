@@ -119,9 +119,8 @@ async fn distinct_with_limit(
 }
 
 fn run(rt: &Runtime, plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>) {
-    criterion::black_box(
-        rt.block_on(distinct_with_limit(plan.clone(), ctx.clone()))
-    ).unwrap();
+    criterion::black_box(rt.block_on(distinct_with_limit(plan.clone(), ctx.clone())))
+        .unwrap();
 }
 
 pub async fn create_context_sampled_data(
