@@ -351,23 +351,18 @@ impl TableProvider for StreamTable {
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let ordering = match self.0.order.first() {
-            Some(x) => {
-                let schema = self.0.source.schema();
-                let orders = create_ordering(schema, std::slice::from_ref(x))?;
-                let ordering = orders.into_iter().next().unwrap();
-                RequiredInputOrdering::new(
-                    vec![ordering.into_iter().map(Into::into).collect()],
-                    false,
-                )
-            }
-            None => None,
-        };
+        let schema = self.0.source.schema();
+        let orders = create_ordering(schema, &self.0.order)?;
+        // It is sufficient to pass only one of the equivalent orderings:
+        let order_requirements = orders.first().and_then(|ordering| {
+            let reqs = ordering.iter().cloned().map(Into::into).collect();
+            RequiredInputOrdering::new(reqs)
+        });
 
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(StreamWrite(Arc::clone(&self.0))),
-            ordering,
+            order_requirements,
         )))
     }
 }

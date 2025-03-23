@@ -91,7 +91,7 @@ fn pushdown_sorts_helper(
 ) -> Result<Transformed<SortPushDown>> {
     let plan = &Arc::clone(&sort_push_down.plan);
     let parent_reqs = sort_push_down.data.ordering_requirement.clone();
-    let satisfy_parent = parent_reqs.clone().is_none_or(|reqs| {
+    let satisfy_parent = parent_reqs.as_ref().is_none_or(|reqs| {
         plan.equivalence_properties()
             .ordering_satisfy_requirement(reqs.lex_requirement())
     });
@@ -105,13 +105,13 @@ fn pushdown_sorts_helper(
         let current_plan_ordering_as_req =
             RequiredInputOrdering::from(current_plan_ordering).unwrap();
 
-        let parent_is_stricter = parent_reqs.clone().is_some_and(|parent_req| {
+        let parent_is_stricter = parent_reqs.as_ref().is_some_and(|parent_req| {
             plan.equivalence_properties().requirements_compatible(
                 parent_req.lex_requirement(),
                 current_plan_ordering_as_req.lex_requirement(),
             )
         });
-        let current_is_stricter = parent_reqs.clone().is_none_or(|parent_req| {
+        let current_is_stricter = parent_reqs.as_ref().is_none_or(|parent_req| {
             plan.equivalence_properties().requirements_compatible(
                 current_plan_ordering_as_req.lex_requirement(),
                 parent_req.lex_requirement(),
@@ -128,7 +128,7 @@ fn pushdown_sorts_helper(
             sort_push_down = sort_push_down.children.swap_remove(0);
             sort_push_down = sort_push_down.update_plan_from_children()?; // changed plan
 
-            if let Some(parent_reqs) = parent_reqs.clone() {
+            if let Some(parent_reqs) = &parent_reqs {
                 // add back sort exec matching parent
                 sort_push_down = add_sort_above(
                     sort_push_down,
@@ -155,12 +155,11 @@ fn pushdown_sorts_helper(
             sort_push_down.data.fetch = min_fetch(current_sort_fetch, parent_req_fetch);
 
             // set the stricter ordering
-            if current_is_stricter {
-                sort_push_down.data.ordering_requirement =
-                    Some(current_plan_ordering_as_req);
+            sort_push_down.data.ordering_requirement = if current_is_stricter {
+                Some(current_plan_ordering_as_req)
             } else {
-                sort_push_down.data.ordering_requirement = parent_reqs;
-            }
+                parent_reqs
+            };
 
             // recursive call to helper, so it doesn't transform_down and miss the new node (previous child of sort)
             return pushdown_sorts_helper(sort_push_down);
@@ -195,13 +194,10 @@ fn pushdown_sorts_helper(
         sort_push_down.data.ordering_requirement = None;
     } else {
         // Can not push down requirements, add new `SortExec`:
-        let sort_reqs = sort_push_down.data.ordering_requirement.clone();
-        if let Some(sort_reqs) = sort_reqs {
-            sort_push_down = add_sort_above(
-                sort_push_down,
-                sort_reqs.lex_requirement().clone(),
-                parent_fetch,
-            );
+        if let Some(sort_reqs) = &sort_push_down.data.ordering_requirement {
+            let sort_requirements = sort_reqs.lex_requirement().clone();
+            sort_push_down =
+                add_sort_above(sort_push_down, sort_requirements, parent_fetch);
         }
         assign_initial_requirements(&mut sort_push_down);
     }
@@ -217,20 +213,14 @@ fn pushdown_requirement_to_children(
 ) -> Result<Option<Vec<Option<RequiredInputOrdering>>>> {
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
-        let required_input_ordering = plan.required_input_ordering();
-        let maybe_child_requirement = required_input_ordering[0].clone();
+        let mut required_input_ordering = plan.required_input_ordering();
+        let maybe_child_requirement = required_input_ordering.swap_remove(0);
         let child_plan = plan.children().swap_remove(0);
         let Some(child_req) = maybe_child_requirement else {
             return Ok(None);
         };
         match determine_children_requirement(parent_required, &child_req, child_plan) {
-            RequirementsCompatibility::Satisfy => {
-                let req = RequiredInputOrdering::new(
-                    vec![LexRequirement::new(child_req.to_vec())],
-                    false,
-                );
-                Ok(Some(vec![req]))
-            }
+            RequirementsCompatibility::Satisfy => Ok(Some(vec![Some(child_req)])),
             RequirementsCompatibility::Compatible(adjusted) => {
                 // If parent requirements are more specific than output ordering
                 // of the window plan, then we can deduce that the parent expects
@@ -287,11 +277,7 @@ fn pushdown_requirement_to_children(
             .eq_properties
             .requirements_compatible(parent_required.lex_requirement(), &output_req)
         {
-            let req = RequiredInputOrdering::new(
-                vec![LexRequirement::new(parent_required.to_vec())],
-                false,
-            );
-            Ok(Some(vec![req]))
+            Ok(Some(vec![Some(parent_required.clone())]))
         } else {
             Ok(None)
         }
@@ -353,19 +339,16 @@ fn pushdown_requirement_to_children(
         let mut spm_eqs = plan.equivalence_properties().clone();
         // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
         spm_eqs = spm_eqs.with_reorder(new_ordering);
-        // Do not push-down through SortPreservingMergeExec when
-        // ordering requirement invalidates requirement of sort preserving merge exec.
-        if !spm_eqs.ordering_satisfy(&plan.output_ordering().cloned().unwrap_or_default())
+        if spm_eqs
+            .ordering_satisfy(plan.output_ordering().unwrap_or(&LexOrdering::default()))
         {
-            Ok(None)
-        } else {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
             // than SortPreservingMergeExec output ordering.
-            let req = RequiredInputOrdering::new(
-                vec![LexRequirement::new(parent_required.to_vec())],
-                false,
-            );
-            Ok(Some(vec![req]))
+            Ok(Some(vec![Some(parent_required.clone())]))
+        } else {
+            // Do not push-down through SortPreservingMergeExec when
+            // ordering requirement invalidates requirement of sort preserving merge exec.
+            Ok(None)
         }
     } else if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
         handle_hash_join(hash_join, parent_required)
@@ -409,23 +392,20 @@ fn determine_children_requirement(
     child_requirement: &RequiredInputOrdering,
     child_plan: &Arc<dyn ExecutionPlan>,
 ) -> RequirementsCompatibility {
-    if child_plan.equivalence_properties().requirements_compatible(
+    let eqp = child_plan.equivalence_properties();
+    if eqp.requirements_compatible(
         child_requirement.lex_requirement(),
         parent_required.lex_requirement(),
     ) {
         // Child requirements are more specific, no need to push down.
         RequirementsCompatibility::Satisfy
-    } else if child_plan.equivalence_properties().requirements_compatible(
+    } else if eqp.requirements_compatible(
         parent_required.lex_requirement(),
         child_requirement.lex_requirement(),
     ) {
         // Parent requirements are more specific, adjust child's requirements
         // and push down the new requirements:
-        let adjusted = RequiredInputOrdering::new(
-            vec![LexRequirement::new(parent_required.to_vec())],
-            false,
-        );
-        RequirementsCompatibility::Compatible(adjusted)
+        RequirementsCompatibility::Compatible(Some(parent_required.clone()))
     } else {
         RequirementsCompatibility::NonCompatible
     }
@@ -678,7 +658,7 @@ fn handle_custom_pushdown(
             .iter()
             .map(|&maintains_order| {
                 if maintains_order {
-                    parent_required.with_updated_requirements(updated_parent_req.clone())
+                    RequiredInputOrdering::new(updated_parent_req.clone().into())
                 } else {
                     None
                 }
@@ -756,7 +736,7 @@ fn handle_hash_join(
         // Populating with the updated requirements for children that maintain order
         Ok(Some(vec![
             None,
-            parent_required.with_updated_requirements(updated_parent_req),
+            RequiredInputOrdering::new(updated_parent_req.into()),
         ]))
     } else {
         Ok(None)

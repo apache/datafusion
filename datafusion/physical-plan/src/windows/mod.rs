@@ -301,7 +301,10 @@ pub(crate) fn calc_requirements<
         }
     }
 
-    RequiredInputOrdering::new(vec![sort_reqs_with_partition, sort_reqs], false)
+    RequiredInputOrdering::new_with_alternatives(
+        vec![sort_reqs_with_partition, sort_reqs],
+        false,
+    )
 }
 
 /// This function calculates the indices such that when partition by expressions reordered with the indices
@@ -787,14 +790,13 @@ mod tests {
                     lex_requirement.push(res);
                 }
                 if !lex_requirement.is_empty() {
-                    if let Some(expect) = expected {
-                        expected = RequiredInputOrdering::new(
+                    expected = if let Some(expect) = expected {
+                        RequiredInputOrdering::new_with_alternatives(
                             vec![expect.lex_requirement().clone(), lex_requirement],
                             false,
                         )
                     } else {
-                        expected =
-                            RequiredInputOrdering::new(vec![lex_requirement], false)
+                        RequiredInputOrdering::new(lex_requirement)
                     }
                 }
             }

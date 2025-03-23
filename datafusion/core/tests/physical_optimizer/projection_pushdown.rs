@@ -648,24 +648,21 @@ fn test_projection_after_projection() -> Result<()> {
 fn test_output_req_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
     let sort_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
-        csv.clone(),
-        RequiredInputOrdering::new(
-            vec![LexRequirement::new(vec![
-                PhysicalSortRequirement {
-                    expr: Arc::new(Column::new("b", 1)),
-                    options: Some(SortOptions::default()),
-                },
-                PhysicalSortRequirement {
-                    expr: Arc::new(BinaryExpr::new(
-                        Arc::new(Column::new("c", 2)),
-                        Operator::Plus,
-                        Arc::new(Column::new("a", 0)),
-                    )),
-                    options: Some(SortOptions::default()),
-                },
-            ])],
-            false,
-        ),
+        csv,
+        RequiredInputOrdering::new(LexRequirement::new(vec![
+            PhysicalSortRequirement {
+                expr: Arc::new(Column::new("b", 1)),
+                options: Some(SortOptions::default()),
+            },
+            PhysicalSortRequirement {
+                expr: Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("c", 2)),
+                    Operator::Plus,
+                    Arc::new(Column::new("a", 0)),
+                )),
+                options: Some(SortOptions::default()),
+            },
+        ])),
         Distribution::HashPartitioned(vec![
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
@@ -698,23 +695,20 @@ fn test_output_req_after_projection() -> Result<()> {
         ];
 
     assert_eq!(get_plan_string(&after_optimize), expected);
-    let expected_reqs = RequiredInputOrdering::new(
-        vec![LexRequirement::new(vec![
-            PhysicalSortRequirement {
-                expr: Arc::new(Column::new("b", 2)),
-                options: Some(SortOptions::default()),
-            },
-            PhysicalSortRequirement {
-                expr: Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("c", 0)),
-                    Operator::Plus,
-                    Arc::new(Column::new("new_a", 1)),
-                )),
-                options: Some(SortOptions::default()),
-            },
-        ])],
-        false,
-    )
+    let expected_reqs = RequiredInputOrdering::new(LexRequirement::new(vec![
+        PhysicalSortRequirement {
+            expr: Arc::new(Column::new("b", 2)),
+            options: Some(SortOptions::default()),
+        },
+        PhysicalSortRequirement {
+            expr: Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("c", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("new_a", 1)),
+            )),
+            options: Some(SortOptions::default()),
+        },
+    ]))
     .unwrap();
     assert_eq!(
         after_optimize

@@ -523,7 +523,7 @@ impl AggregateExec {
             ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
 
         let required_input_ordering =
-            RequiredInputOrdering::new(vec![new_requirement], true);
+            RequiredInputOrdering::new_with_alternatives(vec![new_requirement], true);
 
         let cache = Self::compute_properties(
             &input,

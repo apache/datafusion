@@ -1320,7 +1320,7 @@ fn roundtrip_json_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        RequiredInputOrdering::new(vec![sort_order], false),
+        RequiredInputOrdering::new(sort_order),
     )))
 }
 
@@ -1346,16 +1346,15 @@ fn roundtrip_csv_sink() -> Result<()> {
         file_sink_config,
         CsvWriterOptions::new(WriterBuilder::default(), CompressionTypeVariant::ZSTD),
     ));
-    let sort_order = RequiredInputOrdering::new(
-        vec![LexRequirement::new(vec![PhysicalSortRequirement::new(
+    let sort_order = RequiredInputOrdering::new(LexRequirement::new(vec![
+        PhysicalSortRequirement::new(
             Arc::new(Column::new("plan_type", 0)),
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
             }),
-        )])],
-        false,
-    );
+        ),
+    ]));
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
@@ -1416,7 +1415,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        RequiredInputOrdering::new(vec![sort_order], false),
+        RequiredInputOrdering::new(sort_order),
     )))
 }
 

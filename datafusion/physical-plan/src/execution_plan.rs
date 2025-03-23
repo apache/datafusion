@@ -49,9 +49,7 @@ use datafusion_common::{exec_err, Constraints, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_expr_common::sort_expr::{
-    LexRequirement, PhysicalSortRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::stream::{StreamExt, TryStreamExt};
 
@@ -1087,61 +1085,52 @@ impl RequiredInputOrdering {
     /// Creates a new RequiredInputOrdering instance,
     /// empty requirements are not allowed inside this type,
     /// if given [`None`] will be returned
-    pub fn new(lex_requirements: Vec<LexRequirement>, is_soft: bool) -> Option<Self> {
-        if lex_requirements.is_empty() || lex_requirements[0].is_empty() {
-            return None;
-        }
-
-        Some(if is_soft {
-            RequiredInputOrdering::Soft(lex_requirements)
-        } else {
-            RequiredInputOrdering::Hard(lex_requirements)
+    pub fn new_with_alternatives(
+        lex_requirements: Vec<LexRequirement>,
+        soft: bool,
+    ) -> Option<Self> {
+        (!(lex_requirements.is_empty() || lex_requirements[0].is_empty())).then(|| {
+            if soft {
+                Self::Soft(lex_requirements)
+            } else {
+                Self::Hard(lex_requirements)
+            }
         })
     }
 
-    pub fn from(ordering: LexOrdering) -> Option<Self> {
-        RequiredInputOrdering::new(vec![LexRequirement::from(ordering)], false)
+    pub fn new(requirement: LexRequirement) -> Option<Self> {
+        (!requirement.is_empty()).then(|| Self::Hard(vec![requirement]))
     }
 
+    pub fn from(ordering: LexOrdering) -> Option<Self> {
+        Self::new(LexRequirement::from(ordering))
+    }
+
+    /// Returns the first (i.e. most preferred) among alternative requirements.
     pub fn lex_requirement(&self) -> &LexRequirement {
-        // TODO This function is returning the first alternative temporarily, once alternatives handled correctly, this will be changed
         match self {
-            RequiredInputOrdering::Hard(lex) => &lex[0],
-            RequiredInputOrdering::Soft(lex) => &lex[0],
+            Self::Hard(lex) => &lex[0],
+            Self::Soft(lex) => &lex[0],
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.lex_requirement().is_empty()
     }
-
-    pub fn to_vec(&self) -> Vec<PhysicalSortRequirement> {
-        self.lex_requirement().to_vec()
-    }
-
-    pub fn with_updated_requirements(
-        &self,
-        requirement: Vec<PhysicalSortRequirement>,
-    ) -> Option<Self> {
-        RequiredInputOrdering::new(
-            vec![LexRequirement::new(requirement)],
-            matches!(self, RequiredInputOrdering::Soft(_)),
-        )
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use std::any::Any;
     use std::sync::Arc;
 
+    use super::*;
+    use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
+
+    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-
-    use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
     #[derive(Debug)]
     pub struct EmptyExec;

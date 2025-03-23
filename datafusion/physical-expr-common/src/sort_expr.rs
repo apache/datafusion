@@ -236,12 +236,12 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
 
 impl From<PhysicalSortExpr> for PhysicalSortRequirement {
     fn from(value: PhysicalSortExpr) -> Self {
-        PhysicalSortRequirement::new(value.expr, Some(value.options))
+        Self::new(value.expr, Some(value.options))
     }
 }
 
 impl PartialEq for PhysicalSortRequirement {
-    fn eq(&self, other: &PhysicalSortRequirement) -> bool {
+    fn eq(&self, other: &Self) -> bool {
         self.options == other.options && self.expr.eq(&other.expr)
     }
 }
@@ -303,21 +303,6 @@ impl PhysicalSortRequirement {
             && other
                 .options
                 .is_none_or(|other_opts| self.options == Some(other_opts))
-    }
-
-    #[deprecated(since = "43.0.0", note = "use  LexRequirement::from_lex_ordering")]
-    pub fn from_sort_exprs<'a>(
-        ordering: impl IntoIterator<Item = &'a PhysicalSortExpr>,
-    ) -> LexRequirement {
-        let ordering = ordering.into_iter().cloned().collect();
-        LexRequirement::from_lex_ordering(ordering)
-    }
-    #[deprecated(since = "43.0.0", note = "use  LexOrdering::from_lex_requirement")]
-    pub fn to_sort_exprs(
-        requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
-    ) -> LexOrdering {
-        let requirements = requirements.into_iter().collect();
-        LexOrdering::from_lex_requirement(requirements)
     }
 }
 
@@ -480,7 +465,7 @@ impl From<Vec<PhysicalSortExpr>> for LexOrdering {
 
 impl From<LexRequirement> for LexOrdering {
     fn from(value: LexRequirement) -> Self {
-        Self::from_lex_requirement(value)
+        value.into_iter().map(Into::into).collect()
     }
 }
 
@@ -604,19 +589,6 @@ impl LexRequirement {
         self.inner.extend(requirements)
     }
 
-    /// Create a new [`LexRequirement`] from a [`LexOrdering`]
-    ///
-    /// Returns [`LexRequirement`] that requires the exact
-    /// sort of the [`PhysicalSortExpr`]s in `ordering`
-    pub fn from_lex_ordering(ordering: LexOrdering) -> Self {
-        Self::new(
-            ordering
-                .into_iter()
-                .map(PhysicalSortRequirement::from)
-                .collect(),
-        )
-    }
-
     /// Constructs a duplicate-free `LexOrderingReq` by filtering out
     /// duplicate entries that have same physical expression inside.
     ///
@@ -633,9 +605,15 @@ impl LexRequirement {
     }
 }
 
+impl From<Vec<PhysicalSortRequirement>> for LexRequirement {
+    fn from(value: Vec<PhysicalSortRequirement>) -> Self {
+        Self::new(value)
+    }
+}
+
 impl From<LexOrdering> for LexRequirement {
     fn from(value: LexOrdering) -> Self {
-        Self::from_lex_ordering(value)
+        Self::new(value.into_iter().map(Into::into).collect())
     }
 }
 

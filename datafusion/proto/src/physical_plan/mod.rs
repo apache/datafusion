@@ -1094,8 +1094,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 Ok(Arc::new(DataSinkExec::new(
                     input,
                     Arc::new(data_sink),
-                    sort_order
-                        .and_then(|order| RequiredInputOrdering::new(vec![order], false)),
+                    sort_order.and_then(RequiredInputOrdering::new),
                 )))
             }
             PhysicalPlanType::CsvSink(sink) => {
@@ -1124,8 +1123,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 Ok(Arc::new(DataSinkExec::new(
                     input,
                     Arc::new(data_sink),
-                    sort_order
-                        .and_then(|order| RequiredInputOrdering::new(vec![order], false)),
+                    sort_order.and_then(RequiredInputOrdering::new),
                 )))
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
@@ -1161,9 +1159,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     Ok(Arc::new(DataSinkExec::new(
                         input,
                         Arc::new(data_sink),
-                        sort_order.and_then(|order| {
-                            RequiredInputOrdering::new(vec![order], false)
-                        }),
+                        sort_order.and_then(RequiredInputOrdering::new),
                     )))
                 }
                 #[cfg(not(feature = "parquet"))]

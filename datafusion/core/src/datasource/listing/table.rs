@@ -22,40 +22,31 @@ use std::{any::Any, str::FromStr, sync::Arc};
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::{ListingTableUrl, PartitionedFile};
-
-use crate::datasource::{
-    create_ordering,
-    file_format::{
-        file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
-    },
-    get_statistics_with_limit,
-    physical_plan::FileSinkConfig,
+use crate::datasource::file_format::{
+    file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
 };
+use crate::datasource::physical_plan::FileSinkConfig;
+use crate::datasource::{create_ordering, get_statistics_with_limit};
 use crate::execution::context::SessionState;
-use datafusion_catalog::TableProvider;
-use datafusion_common::{config_err, DataFusionError, Result};
-use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_expr::dml::InsertOp;
-use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
-use datafusion_expr::{SortExpr, TableType};
-use datafusion_physical_plan::empty::EmptyExec;
-use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
-use datafusion_catalog::Session;
+use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::{
-    config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
-    SchemaExt, ToDFSchema,
+    config_datafusion_err, config_err, internal_err, plan_err, project_schema,
+    Constraints, DataFusionError, Result, SchemaExt, ToDFSchema,
 };
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::cache::{
     cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache,
 };
-use datafusion_physical_expr::{
-    create_physical_expr, LexOrdering, PhysicalSortRequirement,
-};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_expr::dml::InsertOp;
+use datafusion_expr::utils::conjunction;
+use datafusion_expr::{Expr, SortExpr, TableProviderFilterPushDown, TableType};
+use datafusion_physical_expr::{create_physical_expr, LexOrdering};
+use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
+use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
 use async_trait::async_trait;
 use futures::{future, stream, StreamExt, TryStreamExt};
@@ -278,6 +269,7 @@ pub struct ListingOptions {
     /// parquet metadata.
     ///
     /// See <https://github.com/apache/datafusion/issues/4177>
+    ///
     /// NOTE: This attribute stores all equivalent orderings (the outer `Vec`)
     ///       where each ordering consists of an individual lexicographic
     ///       ordering (encapsulated by a `Vec<Expr>`). If there aren't
@@ -1050,28 +1042,12 @@ impl TableProvider for ListingTable {
             file_extension: self.options().format.get_ext(),
         };
 
-        let order_requirements = if !self.options().file_sort_order.is_empty() {
-            // Multiple sort orders in outer vec are equivalent, so we pass only the first one
-            let orderings = self.try_create_output_ordering()?;
-            let Some(ordering) = orderings.first() else {
-                return internal_err!(
-                    "Expected ListingTable to have a sort order, but none found!"
-                );
-            };
-            // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
-            RequiredInputOrdering::new(
-                vec![LexRequirement::new(
-                    ordering
-                        .into_iter()
-                        .cloned()
-                        .map(PhysicalSortRequirement::from)
-                        .collect::<Vec<_>>(),
-                )],
-                false,
-            )
-        } else {
-            None
-        };
+        let orderings = self.try_create_output_ordering()?;
+        // It is sufficient to pass only one of the equivalent orderings:
+        let order_requirements = orderings.first().and_then(|ordering| {
+            let reqs = ordering.iter().cloned().map(Into::into).collect();
+            RequiredInputOrdering::new(reqs)
+        });
 
         self.options()
             .format
