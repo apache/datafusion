@@ -20,7 +20,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut, Index, Range, RangeFrom, RangeTo};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::vec::IntoIter;
 
 use crate::physical_expr::{fmt_sql, PhysicalExpr};
@@ -338,12 +338,6 @@ impl LexOrdering {
     /// Creates a new [`LexOrdering`] from a vector
     pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
         Self { inner }
-    }
-
-    /// Return an empty LexOrdering (no expressions)
-    pub fn empty() -> &'static LexOrdering {
-        static EMPTY_ORDER: LazyLock<LexOrdering> = LazyLock::new(LexOrdering::default);
-        &EMPTY_ORDER
     }
 
     /// Returns the number of elements that can be stored in the LexOrdering

@@ -52,30 +52,16 @@ macro_rules! merge_helper {
     }};
 }
 
+#[derive(Default)]
 pub struct StreamingMergeBuilder<'a> {
     streams: Vec<SendableRecordBatchStream>,
     schema: Option<SchemaRef>,
-    expressions: &'a LexOrdering,
+    expressions: Option<&'a LexOrdering>,
     metrics: Option<BaselineMetrics>,
     batch_size: Option<usize>,
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     enable_round_robin_tie_breaker: bool,
-}
-
-impl Default for StreamingMergeBuilder<'_> {
-    fn default() -> Self {
-        Self {
-            streams: vec![],
-            schema: None,
-            expressions: LexOrdering::empty(),
-            metrics: None,
-            batch_size: None,
-            fetch: None,
-            reservation: None,
-            enable_round_robin_tie_breaker: false,
-        }
-    }
 }
 
 impl<'a> StreamingMergeBuilder<'a> {
@@ -97,7 +83,7 @@ impl<'a> StreamingMergeBuilder<'a> {
     }
 
     pub fn with_expressions(mut self, expressions: &'a LexOrdering) -> Self {
-        self.expressions = expressions;
+        self.expressions = Some(expressions);
         self
     }
 
@@ -145,22 +131,13 @@ impl<'a> StreamingMergeBuilder<'a> {
             enable_round_robin_tie_breaker,
         } = self;
 
-        // Early return if streams or expressions are empty
-        let checks = [
-            (
-                streams.is_empty(),
-                "Streams cannot be empty for streaming merge",
-            ),
-            (
-                expressions.is_empty(),
-                "Sort expressions cannot be empty for streaming merge",
-            ),
-        ];
-
-        if let Some((_, error_message)) = checks.iter().find(|(condition, _)| *condition)
-        {
-            return internal_err!("{}", error_message);
+        // Early return if streams or expressions are empty:
+        if streams.is_empty() {
+            return internal_err!("Streams cannot be empty for streaming merge");
         }
+        let Some(expressions) = expressions else {
+            return internal_err!("Sort expressions cannot be empty for streaming merge");
+        };
 
         // Unwrapping mandatory fields
         let schema = schema.expect("Schema cannot be empty for streaming merge");

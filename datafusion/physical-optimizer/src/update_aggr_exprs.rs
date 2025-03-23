@@ -24,10 +24,10 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Result};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_expr::{
     reverse_order_bys, EquivalenceProperties, PhysicalSortRequirement,
 };
-use datafusion_physical_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::aggregates::concat_slices;
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{
@@ -159,30 +159,27 @@ fn try_convert_aggregate_if_better(
     aggr_exprs
         .into_iter()
         .map(|aggr_expr| {
-            let aggr_sort_exprs = aggr_expr.order_bys().unwrap_or(LexOrdering::empty());
-            let reverse_aggr_sort_exprs = reverse_order_bys(aggr_sort_exprs);
-            let aggr_sort_reqs = LexRequirement::from(aggr_sort_exprs.clone());
-            let reverse_aggr_req = LexRequirement::from(reverse_aggr_sort_exprs);
-
+            let order_bys = aggr_expr.order_bys();
             // If the aggregate expression benefits from input ordering, and
             // there is an actual ordering enabling this, try to update the
             // aggregate expression to benefit from the existing ordering.
             // Otherwise, leave it as is.
-            if aggr_expr.order_sensitivity().is_beneficial() && !aggr_sort_reqs.is_empty()
-            {
+            if !aggr_expr.order_sensitivity().is_beneficial() {
+                Ok(aggr_expr)
+            } else if let Some(order_bys) = order_bys {
+                let aggr_sort_reqs = LexRequirement::from(order_bys.clone());
                 let reqs = LexRequirement::new(concat_slices(
                     prefix_requirement,
                     &aggr_sort_reqs,
                 ));
-                let prefix_requirement = LexRequirement::new(prefix_requirement.to_vec());
 
                 if eq_properties.ordering_satisfy_requirement(&reqs) {
                     // Existing ordering satisfies the aggregator requirements:
                     aggr_expr.with_beneficial_ordering(true)?.map(Arc::new)
                 } else if eq_properties.ordering_satisfy_requirement(
                     &LexRequirement::new(concat_slices(
-                        &prefix_requirement,
-                        &reverse_aggr_req,
+                        &LexRequirement::from_iter(prefix_requirement.iter().cloned()),
+                        &LexRequirement::from(reverse_order_bys(order_bys)),
                     )),
                 ) {
                     // Converting to reverse enables more efficient execution
