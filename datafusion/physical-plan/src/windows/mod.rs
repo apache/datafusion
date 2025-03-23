@@ -613,10 +613,9 @@ pub fn get_window_mode(
     for (should_swap, order_by_reqs) in
         [(false, order_by_reqs), (true, reverse_order_by_reqs)]
     {
-        let req = LexRequirement::new(
-            [partition_by_reqs.to_vec(), order_by_reqs.to_vec()].concat(),
-        )
-        .collapse();
+        let mut req = partition_by_reqs.clone();
+        req.extend(order_by_reqs.clone());
+        req = req.collapse();
         if partition_by_eqs.ordering_satisfy_requirement(&req) {
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {

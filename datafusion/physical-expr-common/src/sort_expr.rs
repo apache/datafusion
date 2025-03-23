@@ -17,19 +17,20 @@
 
 //! Sort expressions
 
-use crate::physical_expr::{fmt_sql, PhysicalExpr};
-use std::fmt;
-use std::fmt::{Display, Formatter};
+use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, Index, Range, RangeFrom, RangeTo};
+use std::ops::{Deref, DerefMut, Index, Range, RangeFrom, RangeTo};
 use std::sync::{Arc, LazyLock};
 use std::vec::IntoIter;
+
+use crate::physical_expr::{fmt_sql, PhysicalExpr};
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr_common::columnar_value::ColumnarValue;
+
 use itertools::Itertools;
 
 /// Represents Sort operation for a column in a RecordBatch
@@ -137,7 +138,7 @@ impl AsRef<dyn PhysicalExpr> for PhysicalSortExpr {
 }
 
 impl PartialEq for PhysicalSortExpr {
-    fn eq(&self, other: &PhysicalSortExpr) -> bool {
+    fn eq(&self, other: &Self) -> bool {
         self.options == other.options && self.expr.eq(&other.expr)
     }
 }
@@ -181,13 +182,12 @@ impl PhysicalSortExpr {
     ) -> bool {
         // If the column is not nullable, NULLS FIRST/LAST is not important.
         let nullable = self.expr.nullable(schema).unwrap_or(true);
+        let opts = &requirement.options;
         self.expr.eq(&requirement.expr)
             && if nullable {
-                requirement.options.is_none_or(|opts| self.options == opts)
+                opts.is_none_or(|opts| self.options == opts)
             } else {
-                requirement
-                    .options
-                    .is_none_or(|opts| self.options.descending == opts.descending)
+                opts.is_none_or(|opts| self.options.descending == opts.descending)
             }
     }
 }
@@ -298,7 +298,7 @@ impl PhysicalSortRequirement {
     }
 
     /// Returns whether this requirement is equal or more specific than `other`.
-    pub fn compatible(&self, other: &PhysicalSortRequirement) -> bool {
+    pub fn compatible(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
             && other
                 .options
@@ -411,7 +411,7 @@ impl LexOrdering {
     }
 
     /// Merge the contents of `other` into `self`, removing duplicates.
-    pub fn merge(mut self, other: LexOrdering) -> Self {
+    pub fn merge(mut self, other: Self) -> Self {
         self.inner = self.inner.into_iter().chain(other).unique().collect();
         self
     }
@@ -424,7 +424,7 @@ impl LexOrdering {
     /// If the required ordering is `None` for an entry in `requirement`, the
     /// default ordering `ASC, NULLS LAST` is used (see
     /// [`PhysicalSortExpr::from`]).
-    pub fn from_lex_requirement(requirement: LexRequirement) -> LexOrdering {
+    pub fn from_lex_requirement(requirement: LexRequirement) -> Self {
         requirement
             .into_iter()
             .map(PhysicalSortExpr::from)
@@ -438,7 +438,7 @@ impl LexOrdering {
     ///
     /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
     pub fn collapse(self) -> Self {
-        let mut output = LexOrdering::default();
+        let mut output = Self::default();
         for item in self {
             if !output.iter().any(|req| req.expr.eq(&item.expr)) {
                 output.push(item);
@@ -564,10 +564,6 @@ impl LexRequirement {
         self.inner.is_empty()
     }
 
-    pub fn to_vec(&self) -> Vec<PhysicalSortRequirement> {
-        self.inner.clone()
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = &PhysicalSortRequirement> {
         self.inner.iter()
     }
@@ -576,7 +572,10 @@ impl LexRequirement {
         self.inner.push(physical_sort_requirement)
     }
 
-    pub fn extend(&mut self, requirements: impl IntoIterator<Item = PhysicalSortRequirement>) {
+    pub fn extend(
+        &mut self,
+        requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
+    ) {
         self.inner.extend(requirements)
     }
 
@@ -613,6 +612,12 @@ impl Deref for LexRequirement {
 
     fn deref(&self) -> &Self::Target {
         self.inner.as_slice()
+    }
+}
+
+impl DerefMut for LexRequirement {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.as_mut_slice()
     }
 }
 

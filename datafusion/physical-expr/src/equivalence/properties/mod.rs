@@ -738,8 +738,8 @@ impl EquivalenceProperties {
         req1: &LexRequirement,
         req2: &LexRequirement,
     ) -> Option<LexRequirement> {
-        let mut lhs = self.normalize_sort_requirements(req1).to_vec();
-        let mut rhs = self.normalize_sort_requirements(req2).to_vec();
+        let mut lhs = self.normalize_sort_requirements(req1);
+        let mut rhs = self.normalize_sort_requirements(req2);
         lhs.iter_mut()
             .zip(rhs.iter_mut())
             .all(|(lhs, rhs)| {
@@ -757,11 +757,7 @@ impl EquivalenceProperties {
                         (None, None) => true,
                     }
             })
-            .then_some(if lhs.len() >= rhs.len() {
-                LexRequirement::new(lhs)
-            } else {
-                LexRequirement::new(rhs)
-            })
+            .then_some(if lhs.len() >= rhs.len() { lhs } else { rhs })
     }
 
     /// we substitute the ordering according to input expression type, this is a simplified version

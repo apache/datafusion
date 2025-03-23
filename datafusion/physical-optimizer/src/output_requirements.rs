@@ -216,7 +216,7 @@ impl ExecutionPlan for OutputRequirementExec {
         let mut updated_sort_reqs = LexRequirement::new(vec![]);
         // None or empty_vec can be treated in the same way.
         if let Some(reqs) = &self.required_input_ordering()[0] {
-            for req in reqs.lex_requirement().to_vec() {
+            for req in reqs.lex_requirement().iter() {
                 let Some(new_expr) = update_expr(&req.expr, projection.expr(), false)?
                 else {
                     return Ok(None);
