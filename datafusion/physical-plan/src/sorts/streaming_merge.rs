@@ -83,7 +83,7 @@ impl<'a> StreamingMergeBuilder<'a> {
     }
 
     pub fn with_expressions(mut self, expressions: &'a LexOrdering) -> Self {
-        self.expressions = Some(expressions);
+        self.expressions = (!expressions.is_empty()).then(|| expressions);
         self
     }
 
