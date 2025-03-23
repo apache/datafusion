@@ -2280,19 +2280,19 @@ fn fetch_right_columns_from_batch_by_idxs(
             .map(|column| take(column, &buffered_indices, None))
             .collect::<Result<Vec<_>, ArrowError>>()
             .map_err(Into::<DataFusionError>::into)?),
-            // If the batch was spilled to disk, less likely
-            (Some(spill_file), None) => {
-                let mut buffered_cols: Vec<ArrayRef> =
-                    Vec::with_capacity(buffered_indices.len());
+        // If the batch was spilled to disk, less likely
+        (Some(spill_file), None) => {
+            let mut buffered_cols: Vec<ArrayRef> =
+                Vec::with_capacity(buffered_indices.len());
 
-                let file = BufReader::new(File::open(spill_file.path())?);
-                let reader = StreamReader::try_new(file, None)?;
+            let file = BufReader::new(File::open(spill_file.path())?);
+            let reader = StreamReader::try_new(file, None)?;
 
-                for batch in reader {
-                    batch?.columns().iter().for_each(|column| {
-                        buffered_cols.extend(take(column, &buffered_indices, None))
-                    });
-                }
+            for batch in reader {
+                batch?.columns().iter().for_each(|column| {
+                    buffered_cols.extend(take(column, &buffered_indices, None))
+                });
+            }
 
                 Ok(buffered_cols)
             }
