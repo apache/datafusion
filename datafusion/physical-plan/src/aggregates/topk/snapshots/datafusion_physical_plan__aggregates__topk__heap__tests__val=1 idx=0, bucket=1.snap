@@ -1,0 +1,5 @@
+---
+source: datafusion/physical-plan/src/aggregates/topk/heap.rs
+expression: "r#\"\nval=1 idx=0, bucket=1\n            \"#.trim()"
+---
+val=1 idx=0, bucket=1
