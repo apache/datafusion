@@ -2739,14 +2739,16 @@ impl Union {
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
-        type FieldData<'a> = (&'a DataType, bool, Vec<&'a HashMap<String, String>>);
+        type FieldData<'a> =
+            (&'a DataType, bool, Vec<&'a HashMap<String, String>>, usize);
         // Prefer `BTreeMap` as it produces items in order by key when iterated over
         let mut cols: BTreeMap<&str, FieldData> = BTreeMap::new();
         for input in inputs.iter() {
             for field in input.schema().fields() {
                 match cols.entry(field.name()) {
                     std::collections::btree_map::Entry::Occupied(mut occupied) => {
-                        let (data_type, is_nullable, metadata) = occupied.get_mut();
+                        let (data_type, is_nullable, metadata, occurrences) =
+                            occupied.get_mut();
                         if !loose_types && *data_type != field.data_type() {
                             return plan_err!(
                                 "Found different types for field {}",
@@ -2758,12 +2760,14 @@ impl Union {
                         // If the field is nullable in any one of the inputs,
                         // then the field in the final schema is also nullable.
                         *is_nullable |= field.is_nullable();
+                        *occurrences += 1;
                     }
                     std::collections::btree_map::Entry::Vacant(vacant) => {
                         vacant.insert((
                             field.data_type(),
                             field.is_nullable(),
                             vec![field.metadata()],
+                            1,
                         ));
                     }
                 }
@@ -2772,12 +2776,24 @@ impl Union {
 
         let union_fields = cols
             .into_iter()
-            .map(|(name, (data_type, is_nullable, unmerged_metadata))| {
-                let mut field = Field::new(name, data_type.clone(), is_nullable);
-                field.set_metadata(intersect_maps(unmerged_metadata));
+            .map(
+                |(name, (data_type, is_nullable, unmerged_metadata, occurrences))| {
+                    // If the final number of occurrences of the field is less
+                    // than the number of inputs (i.e. the field is missing from
+                    // one or more inputs), then it must be treated as nullable.
+                    let final_is_nullable = if occurrences == inputs.len() {
+                        is_nullable
+                    } else {
+                        true
+                    };
 
-                (None, Arc::new(field))
-            })
+                    let mut field =
+                        Field::new(name, data_type.clone(), final_is_nullable);
+                    field.set_metadata(intersect_maps(unmerged_metadata));
+
+                    (None, Arc::new(field))
+                },
+            )
             .collect::<Vec<(Option<TableReference>, _)>>();
 
         let union_schema_metadata =
