@@ -501,12 +501,8 @@ impl Display for LexOrdering {
 
 impl FromIterator<PhysicalSortExpr> for LexOrdering {
     fn from_iter<T: IntoIterator<Item = PhysicalSortExpr>>(iter: T) -> Self {
-        let mut lex_ordering = LexOrdering::default();
-
-        for i in iter {
-            lex_ordering.push(i);
-        }
-
+        let mut lex_ordering = Self::default();
+        lex_ordering.extend(iter);
         lex_ordering
     }
 }
@@ -552,11 +548,6 @@ impl IntoIterator for LexOrdering {
     }
 }
 
-///`LexOrderingRef` is an alias for the type &`[PhysicalSortExpr]`, which represents
-/// a reference to a lexicographical ordering.
-#[deprecated(since = "43.0.0", note = "use &LexOrdering instead")]
-pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
-
 ///`LexRequirement` is an struct containing a `Vec<PhysicalSortRequirement>`, which
 /// represents a lexicographical ordering requirement.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -585,7 +576,7 @@ impl LexRequirement {
         self.inner.push(physical_sort_requirement)
     }
 
-    pub fn extend(&mut self, requirements: Vec<PhysicalSortRequirement>) {
+    pub fn extend(&mut self, requirements: impl IntoIterator<Item = PhysicalSortRequirement>) {
         self.inner.extend(requirements)
     }
 
@@ -627,12 +618,8 @@ impl Deref for LexRequirement {
 
 impl FromIterator<PhysicalSortRequirement> for LexRequirement {
     fn from_iter<T: IntoIterator<Item = PhysicalSortRequirement>>(iter: T) -> Self {
-        let mut lex_requirement = LexRequirement::new(vec![]);
-
-        for i in iter {
-            lex_requirement.inner.push(i);
-        }
-
+        let mut lex_requirement = Self::default();
+        lex_requirement.extend(iter);
         lex_requirement
     }
 }
@@ -654,8 +641,3 @@ impl<'a> IntoIterator for &'a LexOrdering {
         self.inner.iter()
     }
 }
-
-///`LexRequirementRef` is an alias for the type &`[PhysicalSortRequirement]`, which
-/// represents a reference to a lexicographical ordering requirement.
-/// #[deprecated(since = "43.0.0", note = "use &LexRequirement instead")]
-pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];

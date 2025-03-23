@@ -494,7 +494,7 @@ impl AggregateExec {
             input_eq_properties,
             &mode,
         )?;
-        new_requirement.extend(req.to_vec());
+        new_requirement.extend(req);
         new_requirement = new_requirement.collapse();
 
         // If our aggregation has grouping sets then our base grouping exprs will

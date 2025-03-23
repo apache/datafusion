@@ -24,7 +24,7 @@ use crate::utils::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{plan_err, HashSet, JoinSide, Result};
+use datafusion_common::{internal_err, plan_err, HashSet, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
@@ -100,10 +100,11 @@ fn pushdown_sorts_helper(
         let current_sort_fetch = plan.fetch();
         let parent_req_fetch = sort_push_down.data.fetch;
 
-        let current_plan_ordering = plan.output_ordering().cloned().unwrap_or_default();
-        // Since this is a SortExec it needs to have an output ordering
+        let Some(current_plan_ordering) = plan.output_ordering() else {
+            return internal_err!("SortExec should have output ordering");
+        };
         let current_plan_ordering_as_req =
-            RequiredInputOrdering::from(current_plan_ordering).unwrap();
+            RequiredInputOrdering::from(current_plan_ordering.clone()).unwrap();
 
         let parent_is_stricter = parent_reqs.as_ref().is_some_and(|parent_req| {
             plan.equivalence_properties().requirements_compatible(
@@ -684,7 +685,7 @@ fn handle_hash_join(
     }
 
     // Collect all unique column indices used in the parent-required sorting expression
-    let all_indices: HashSet<usize> = parent_required
+    let all_indices: HashSet<_> = parent_required
         .lex_requirement()
         .iter()
         .flat_map(|order| {
