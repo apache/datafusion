@@ -294,16 +294,44 @@ impl CursorValues for StringViewArray {
     }
 
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        // SAFETY: Both l_idx and r_idx are guaranteed to be within bounds,
+        // and any null-checks are handled in the outer layers.
+        // Fast path: Compare the lengths (or a proxy of the lengths) before full byte comparison.
+
+        let l_view = unsafe { l.views().get_unchecked(l_idx) };
+        let l_len = *l_view as u32;
+        let r_view = unsafe { r.views().get_unchecked(r_idx) };
+        let r_len = *r_view as u32;
+        if l_len != r_len {
+            return false;
+        }
+
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx).is_eq() }
     }
 
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
+        // SAFETY: The caller guarantees that idx > 0 and the indices are valid.
+        // Fast path: Compare the lengths of the current and previous views.
+
+        assert!(idx > 0);
+        let l_view = unsafe { cursor.views().get_unchecked(idx) };
+        let l_len = *l_view as u32;
+        let r_view = unsafe { cursor.views().get_unchecked(idx - 1) };
+        let r_len = *r_view as u32;
+        if l_len != r_len {
+            return false;
+        }
+
         unsafe {
             GenericByteViewArray::compare_unchecked(cursor, idx, cursor, idx - 1).is_eq()
         }
     }
 
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        // SAFETY: Prior assertions guarantee that l_idx and r_idx are valid indices.
+        // Null-checks are assumed to have been handled in the wrapper (e.g., ArrayValues).
+        assert!(l_idx < l.len());
+        assert!(r_idx < r.len());
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx) }
     }
 }
