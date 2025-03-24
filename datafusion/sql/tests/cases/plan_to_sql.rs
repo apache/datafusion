@@ -283,7 +283,7 @@ fn roundtrip_crossjoin() -> Result<()> {
 }
 
 #[test]
-fn roundtrip_statement_with_dialect() -> Result<()> {
+fn roundtrip_statement_with_dialect() -> Result<()> { 
     struct TestStatementWithDialect {
         sql: &'static str,
         expected: &'static str,
@@ -541,7 +541,19 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             expected: "SELECT min(*) AS `col_1` FROM (SELECT 1 AS `a`)",
             parser_dialect: Box::new(PostgreSqlDialect {}),
             unparser_dialect: Box::new(UnparserBigqueryDialect::new()),
-        },  
+        }, 
+        TestStatementWithDialect {
+            sql: "select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)",
+            expected: "SELECT `a` AS `col_1`, `b` AS `col_2` FROM (SELECT 1 AS `a`, 2 AS `b`)",
+            parser_dialect: Box::new(PostgreSqlDialect {}),
+            unparser_dialect: Box::new(UnparserBigqueryDialect::new()),
+        },
+        TestStatementWithDialect {
+            sql: "select a as \"a*\", b , c as \"c@\" from (select 1 as a , 2 as b, 3 as c)",
+            expected: "SELECT `a` AS `col_1`, `b`, `c` AS `col_2` FROM (SELECT 1 AS `a`, 2 AS `b`, 3 AS `c`)",
+            parser_dialect: Box::new(PostgreSqlDialect {}),
+            unparser_dialect: Box::new(UnparserBigqueryDialect::new()),
+        },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3])",
             expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,

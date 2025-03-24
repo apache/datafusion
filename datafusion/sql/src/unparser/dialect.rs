@@ -19,8 +19,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
 use arrow::datatypes::TimeUnit;
-use datafusion_common::Result;
 use datafusion_common::alias::AliasGenerator;
+use datafusion_common::Result;
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
@@ -277,8 +277,13 @@ impl Dialect for BigQueryDialect {
         _unparser: &Unparser,
         alias: &str,
     ) -> Result<Option<String>> {
-         // if alias has special characters, rewrite to alias from aliasGenerator
-         if alias.contains('*') {
+        // Check if alias contains any special characters not supported by BigQuery col names
+        // https://cloud.google.com/bigquery/docs/schemas#flexible-column-names
+        if alias.contains(|c| match c {
+            '!' | '"' | '$' | '(' | ')' | '*' | ',' | '.' | '/' | ';' | '?' | '@'
+            | '[' | '\\' | ']' | '^' | '`' | '{' | '}' | '~' => true,
+            _ => false,
+        }) {
             Ok(Some(self.col_alias_generator.next("col")))
         } else {
             Ok(Some(alias.to_string()))
