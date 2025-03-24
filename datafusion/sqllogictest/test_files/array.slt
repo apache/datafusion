@@ -2348,11 +2348,16 @@ NULL
 [NULL, 51, 52, 54, 55, 56, 57, 58, 59, 60]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70]
 
-# test with empty array
+# test with empty table
 query ?
-select array_sort([]);
+select array_sort(column1, 'DESC', 'NULLS FIRST') from arrays_values where false;
 ----
-[]
+
+# test with empty array
+query ??
+select array_sort([]), array_sort(NULL);
+----
+[] NULL
 
 # test with null arguments
 query ?
