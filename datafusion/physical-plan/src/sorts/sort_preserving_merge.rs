@@ -994,7 +994,7 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(&collected.as_slice()), @r#"
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
             +---+---+-------------------------------+
             | a | b | c                             |
             +---+---+-------------------------------+
@@ -1034,7 +1034,7 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(&collected.as_slice()), @r#"
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
             +---+---+
             | a | b |
             +---+---+
@@ -1065,7 +1065,7 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(&collected.as_slice()), @r#"
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
             +---+---+
             | a | b |
             +---+---+
@@ -1172,7 +1172,7 @@ mod tests {
         let collected = collect(Arc::clone(&merge) as Arc<dyn ExecutionPlan>, task_ctx)
             .await
             .unwrap();
-        assert_snapshot!(batches_to_string(&collected.as_slice()), @r#"
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
             +----+---+
             | a  | b |
             +----+---+
@@ -1285,7 +1285,7 @@ mod tests {
         // Expect the data to be sorted first by "batch_number" (because
         // that was the order it was fed in, even though only "value"
         // is in the sort key)
-        assert_snapshot!(batches_to_string(&collected.as_slice()), @r#"
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
                 +--------------+-------+
                 | batch_number | value |
                 +--------------+-------+
