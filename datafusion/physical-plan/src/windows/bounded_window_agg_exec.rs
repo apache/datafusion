@@ -1224,7 +1224,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{
-        assert_batches_eq, exec_datafusion_err, Result, ScalarValue,
+        exec_datafusion_err, Result, ScalarValue,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::{
