@@ -40,7 +40,9 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchBuilder, RecordBatchOptions};
+use arrow::array::{
+    builder, PrimitiveArray, RecordBatch, RecordBatchBuilder, RecordBatchOptions,
+};
 use arrow::compute::take_in_batch;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::utils::transpose;
@@ -269,12 +271,10 @@ impl BatchPartitioner {
                 } => {
                     if builders.is_empty() {
                         for _part in 0..*partitions {
-                            builders.push(
-                                RecordBatchBuilder::with_capacity(
-                                    batch.schema(),
-                                    8192
-                                )
-                            );
+                            builders.push(RecordBatchBuilder::with_capacity(
+                                batch.schema(),
+                                8192,
+                            ));
                         }
                     }
                     // Tracking time required for distributing indexes across output partitions
@@ -319,7 +319,7 @@ impl BatchPartitioner {
                                     &batch,
                                     &mut builders[partition],
                                     &indices,
-                                    None
+                                    None,
                                 );
 
                                 match r {
@@ -330,19 +330,19 @@ impl BatchPartitioner {
                                 let out_batch = builders[partition].finish();
                                 let out_batch = match out_batch {
                                     Ok(batch) => batch,
-                                    Err(e) => return Some(Err(e.into()))
+                                    Err(e) => return Some(Err(e.into())),
                                 };
 
                                 let r = take_in_batch(
                                     &batch,
                                     &mut builders[partition],
                                     &indices,
-                                    None
+                                    None,
                                 );
 
                                 match r {
                                     Err(e) => Some(Err(e.into())),
-                                    _ => Some(Ok((partition, out_batch)))
+                                    _ => Some(Ok((partition, out_batch))),
                                 }
                             }
 
@@ -365,6 +365,41 @@ impl BatchPartitioner {
                 }
             };
 
+        Ok(it)
+    }
+
+    fn finish(
+        &mut self,
+    ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {
+        let it: Box<dyn Iterator<Item = Result<(usize, RecordBatch)>> + Send> =
+            match &mut self.state {
+                BatchPartitionerState::RoundRobin {
+                    num_partitions,
+                    next_idx,
+                } => Box::new(std::iter::empty()),
+                BatchPartitionerState::Hash {
+                    random_state,
+                    exprs,
+                    num_partitions,
+                    hash_buffer,
+                    builders,
+                } => {
+                    let it = std::mem::take(builders).into_iter().enumerate().filter_map(
+                        |(ix, mut builder)| {
+                            if builder.len() == 0 {
+                                return None;
+                            } else {
+                                match builder.finish() {
+                                    Ok(batch) => Some(Ok((ix, batch))),
+                                    Err(e) => Some(Err(e.into())),
+                                }
+                            }
+                        },
+                    );
+
+                    Box::new(it)
+                }
+            };
         Ok(it)
     }
 
@@ -923,6 +958,24 @@ impl RepartitionExec {
             } else {
                 batches_until_yield -= 1;
             }
+        }
+
+        for res in partitioner.finish()? {
+            let (partition, batch) = res?;
+            let size = batch.get_array_memory_size();
+
+            let timer = metrics.send_time[partition].timer();
+            // if there is still a receiver, send to it
+            if let Some((tx, reservation)) = output_channels.get_mut(&partition) {
+                reservation.lock().try_grow(size)?;
+
+                if tx.send(Some(Ok(batch))).await.is_err() {
+                    // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                    reservation.lock().shrink(size);
+                    output_channels.remove(&partition);
+                }
+            }
+            timer.done();
         }
 
         Ok(())
