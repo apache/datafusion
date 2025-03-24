@@ -270,7 +270,7 @@ impl SpillManager {
     /// intended to incrementally write in-memory batches into the same spill file,
     /// use [`Self::create_in_progress_file`] instead.
     /// None is returned if no batches are spilled.
-    #[allow(dead_code)] // TODO: remove after change SPM to use SpillManager
+    #[allow(dead_code)] // TODO: remove after change SMJ to use SpillManager
     pub fn spill_record_batch_and_finish(
         &self,
         batches: &[RecordBatch],
@@ -311,6 +311,8 @@ impl SpillManager {
     }
 
     /// Reads a spill file as a stream. The file must be created by the current `SpillManager`.
+    /// This method will generate output in FIFO order: the batch appended first
+    /// will be read first.
     pub fn read_spill_as_stream(
         &self,
         spill_file_path: RefCountedTempFile,
@@ -327,6 +329,9 @@ impl SpillManager {
     }
 }
 
+/// Represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
+/// Caller is able to use this struct to incrementally append in-memory batches to
+/// the file, and then finalize the file by calling the `finish` method.
 pub(crate) struct InProgressSpillFile {
     spill_writer: Arc<SpillManager>,
     /// Lazily initialized writer

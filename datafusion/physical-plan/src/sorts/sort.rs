@@ -395,9 +395,14 @@ impl ExternalSorter {
         self.metrics.spill_metrics.spill_file_count.value()
     }
 
-    /// When calling, all `in_mem_batches` must be sorted, and then all of them will
+    /// When calling, all `in_mem_batches` must be sorted (*), and then all of them will
     /// be appended to the in-progress spill file.
+    ///
+    /// (*) 'Sorted' here means globally sorted for all buffered batches when the
+    /// memory limit is reached, instead of partially sorted within the batch.
     async fn spill_append(&mut self) -> Result<()> {
+        assert!(self.in_mem_batches_sorted);
+
         // we could always get a chance to free some memory as long as we are holding some
         if self.in_mem_batches.is_empty() {
             return Ok(());
