@@ -35,9 +35,9 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use async_trait::async_trait;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::StreamExt;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to

@@ -21,6 +21,11 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::vec;
 
+use crate::cases::{
+    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
+    MyRegexUdfNode,
+};
+
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
@@ -32,10 +37,6 @@ use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::min_max::max_udaf;
 use prost::Message;
 
-use crate::cases::{
-    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
-    MyRegexUdfNode,
-};
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};

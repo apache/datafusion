@@ -24,6 +24,8 @@ use std::fmt::Debug;
 use std::io::BufReader;
 use std::sync::Arc;
 
+use crate::source::JsonSource;
+
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
@@ -51,15 +53,13 @@ use datafusion_datasource::write::BatchSerializer;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
-
-use crate::source::JsonSource;
 
 #[derive(Default)]
 /// Factory struct used to create [JsonFormat]

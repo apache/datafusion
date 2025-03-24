@@ -21,6 +21,6 @@
 
 [DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-This crate is a submodule of DataFusion that provides session concept things
+This crate provides **session-related abstractions** used in the DataFusion query engine. A *session* represents the runtime context for query execution, including configuration, runtime environment, function registry, and planning.
 
 [df]: https://crates.io/crates/datafusion

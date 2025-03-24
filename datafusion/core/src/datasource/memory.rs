@@ -31,7 +31,6 @@ use crate::physical_plan::{
     Partitioning, SendableRecordBatchStream,
 };
 use crate::physical_planner::create_physical_sort_exprs;
-use datafusion_datasource::sink::{DataSink, DataSinkExec};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -39,6 +38,7 @@ use datafusion_catalog::Session;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
 use datafusion_common_runtime::JoinSet;
 pub use datafusion_datasource::memory::MemorySourceConfig;
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 pub use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
