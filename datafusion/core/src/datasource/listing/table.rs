@@ -1024,7 +1024,7 @@ impl TableProvider for ListingTable {
             .logically_equivalent_names_and_types(&input.schema())?;
 
         let table_path = &self.table_paths()[0];
-        if (!table_path.is_collection()) {
+        if !table_path.is_collection() {
             return plan_err!(
                 "Inserting into a ListingTable backed by a single file is not supported, URL is possibly missing a trailing `/`. \
                 To append to an existing file use StreamTable, e.g. by using CREATE UNBOUNDED EXTERNAL TABLE"

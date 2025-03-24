@@ -48,6 +48,7 @@ use datafusion_physical_plan::{
 };
 use log::{debug, warn};
 
+use crate::datasource::nested_schema_adapter::SchemaAdapterFactory;
 use crate::{
     display::FileGroupsDisplay,
     file::FileSource,
@@ -167,6 +168,8 @@ pub struct FileScanConfig {
     pub new_lines_in_values: bool,
     /// File source such as `ParquetSource`, `CsvSource`, `JsonSource`, etc.
     pub file_source: Arc<dyn FileSource>,
+    /// Optional schema adapter factory
+    pub schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl DataSource for FileScanConfig {
@@ -338,6 +341,7 @@ impl FileScanConfig {
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             new_lines_in_values: false,
             file_source: Arc::clone(&file_source),
+            schema_adapter_factory: None,
         };
 
         config = config.with_source(Arc::clone(&file_source));
@@ -643,6 +647,15 @@ impl FileScanConfig {
     /// Returns the file_source
     pub fn file_source(&self) -> &Arc<dyn FileSource> {
         &self.file_source
+    }
+
+    /// Add a schema adapter factory to the config
+    pub fn with_schema_adapter_factory(
+        mut self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Self {
+        self.schema_adapter_factory = Some(schema_adapter_factory);
+        self
     }
 }
 
