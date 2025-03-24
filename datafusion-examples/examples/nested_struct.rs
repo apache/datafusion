@@ -9,11 +9,12 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::datasource::nested_schema_adapter::NestedStructSchemaAdapterFactory;
+use datafusion::datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion::prelude::*;
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
-
+// Remove the tokio::test attribute to make this a regular async function
 async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dyn Error>>
 {
     let ctx = SessionContext::new();
@@ -22,8 +23,9 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     let schema2 = create_schema2();
 
     let batch1 = create_batch1(&schema1)?;
+    let adapter_factory: Arc<dyn SchemaAdapterFactory> =
+        Arc::new(NestedStructSchemaAdapterFactory {});
 
-    // Instead of manually mapping batch1, write it directly
     let path1 = "test_data1.parquet";
     let _ = fs::remove_file(path1);
 
@@ -54,9 +56,6 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
 
     let paths_str = vec![path1.to_string(), path2.to_string()];
 
-    // Create schema adapter factory
-    let adapter_factory = Arc::new(NestedStructSchemaAdapterFactory::default());
-
     let config = ListingTableConfig::new_with_multi_paths(
         paths_str
             .into_iter()
@@ -66,18 +65,18 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     .with_schema(schema2.as_ref().clone().into())
     .with_schema_adapter_factory(adapter_factory);
 
-    let config = config.infer(&ctx.state()).await?;
-
+    // Merged configuration that both preserves the schema_adapter_factory and sets sort order
+    let inferred_config = config.clone().infer(&ctx.state()).await?;
     let config = ListingTableConfig {
+        schema_adapter_factory: config.schema_adapter_factory.clone(),
         options: Some(ListingOptions {
             file_sort_order: vec![vec![col("timestamp_utc").sort(true, true)]],
-            ..config.options.unwrap_or_else(|| {
+            ..inferred_config.options.unwrap_or_else(|| {
                 ListingOptions::new(Arc::new(ParquetFormat::default()))
             })
         }),
-        ..config
+        ..inferred_config
     };
-
     let listing_table = ListingTable::try_new(config)?;
 
     ctx.register_table("events", Arc::new(listing_table))?;
@@ -85,8 +84,14 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     let df = ctx
         .sql("SELECT * FROM events ORDER BY timestamp_utc")
         .await?;
-
-    let results = df.clone().collect().await?;
+    let results = match df.clone().collect().await {
+        Ok(res) => res,
+        Err(e) => {
+            println!("Error collecting results: {}", e);
+            remove_data_files(path1, path2);
+            return Err(Box::new(e));
+        }
+    };
 
     assert_eq!(results[0].num_rows(), 2);
 
@@ -103,13 +108,10 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     .await?;
 
     let new_ctx = SessionContext::new();
-    // Create schema adapter factory for the new context too
-    let adapter_factory = Arc::new(NestedStructSchemaAdapterFactory::default());
     let config = ListingTableConfig::new_with_multi_paths(vec![ListingTableUrl::parse(
         compacted_path,
     )?])
     .with_schema(schema2.as_ref().clone().into())
-    .with_schema_adapter_factory(adapter_factory)
     .infer(&new_ctx.state())
     .await?;
 
@@ -119,16 +121,23 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     let df = new_ctx
         .sql("SELECT * FROM events ORDER BY timestamp_utc")
         .await?;
-    let compacted_results = df.collect().await?;
+    let compacted_results = df.collect().await;
+
+    remove_data_files(path1, path2);
+
+    let _ = fs::remove_file(compacted_path);
+
+    let compacted_results = compacted_results?;
 
     assert_eq!(compacted_results[0].num_rows(), 2);
     assert_eq!(results, compacted_results);
 
+    Ok(())
+}
+
+fn remove_data_files(path1: &str, path2: &str) {
     let _ = fs::remove_file(path1);
     let _ = fs::remove_file(path2);
-    let _ = fs::remove_file(compacted_path);
-
-    Ok(())
 }
 
 fn create_schema2() -> Arc<Schema> {

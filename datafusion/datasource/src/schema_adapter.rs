@@ -366,7 +366,6 @@ impl SchemaMapper for SchemaMapping {
     /// columns, so if one needs a RecordBatch with a schema that references columns which are not
     /// in the projected, it would be better to use `map_partial_batch`
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
-        println!("==> map_batch+");
         let batch_rows = batch.num_rows();
         let batch_cols = batch.columns().to_vec();
 
@@ -396,7 +395,6 @@ impl SchemaMapper for SchemaMapping {
 
         let schema = Arc::clone(&self.projected_table_schema);
         let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
-        println!("==> map_batch-");
         Ok(record_batch)
     }
 

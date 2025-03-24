@@ -35,6 +35,8 @@ use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
@@ -59,8 +61,6 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
-
-use crate::datasource::nested_schema_adapter::SchemaAdapterFactory;
 
 /// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
@@ -100,6 +100,7 @@ impl ListingTableConfig {
             table_paths,
             file_schema: None,
             options: None,
+            schema_adapter_factory: None,
         }
     }
     /// Add `schema` to [`ListingTableConfig`]
@@ -108,6 +109,7 @@ impl ListingTableConfig {
             table_paths: self.table_paths,
             file_schema: Some(schema),
             options: self.options,
+            schema_adapter_factory: self.schema_adapter_factory,
         }
     }
 
@@ -117,6 +119,19 @@ impl ListingTableConfig {
             table_paths: self.table_paths,
             file_schema: self.file_schema,
             options: Some(listing_options),
+            schema_adapter_factory: self.schema_adapter_factory,
+        }
+    }
+
+    pub fn with_schema_adapter_factory(
+        self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Self {
+        Self {
+            table_paths: self.table_paths,
+            file_schema: self.file_schema,
+            options: self.options,
+            schema_adapter_factory: Some(schema_adapter_factory),
         }
     }
 
@@ -679,7 +694,7 @@ impl ListingOptions {
 /// # use datafusion::error::Result;
 /// # use std::sync::Arc;
 /// # use datafusion::datasource::{
-/// #   listing::{
+/// #   listing:{
 /// #      ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 /// #   },
 /// #   file_format::parquet::ParquetFormat,
@@ -947,29 +962,33 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
-        // Create file scan config with schema adapter factory if available
-        let mut config = FileScanConfig::new(
-            object_store_url,
-            Arc::clone(&self.file_schema),
-            self.options.format.file_source(),
-        )
-        .with_file_groups(partitioned_file_lists)
-        .with_constraints(self.constraints.clone())
-        .with_statistics(statistics)
-        .with_projection(projection.cloned())
-        .with_limit(limit)
-        .with_output_ordering(output_ordering)
-        .with_table_partition_cols(table_partition_cols);
+        let mut source = self.options.format.file_source();
 
-        // Add schema adapter factory if available
-        if let Some(adapter_factory) = &self.schema_adapter_factory {
-            config = config.with_schema_adapter_factory(Arc::clone(adapter_factory));
+        if let (Some(parquet_source), Some(schema_adapter_factory)) = (
+            source.as_any().downcast_ref::<ParquetSource>(),
+            self.schema_adapter_factory.clone(),
+        ) {
+            let updated_source = parquet_source
+                .clone()
+                .with_schema_adapter_factory(schema_adapter_factory);
+            source = Arc::new(updated_source);
         }
+
+        // Create file scan config with schema adapter factory if available
+        let config =
+            FileScanConfig::new(object_store_url, Arc::clone(&self.file_schema), source)
+                .with_file_groups(partitioned_file_lists)
+                .with_constraints(self.constraints.clone())
+                .with_statistics(statistics)
+                .with_projection(projection.cloned())
+                .with_limit(limit)
+                .with_output_ordering(output_ordering)
+                .with_table_partition_cols(table_partition_cols);
 
         // create the execution plan
         self.options
             .format
-            .create_physical_plan(session_state, config, filters.as_ref())
+            .create_physical_plan(session_state, config.clone(), filters.as_ref())
             .await
     }
 

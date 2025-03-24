@@ -436,7 +436,6 @@ mod tests {
         )
     }
 
-    /// Helper function to create the reason nested field
     /// Helper function to create the reason nested field with its details subfield
     fn create_reason_field() -> Field {
         Field::new(
@@ -823,11 +822,6 @@ mod tests {
         let source_schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("extra_field", DataType::UInt8, true), // Extra field in source
-            Field::new(
-                "metadata",
-                DataType::Struct(
-                    vec![
-                        Field::new("created", DataType::Utf8, true),
             Field::new(
                 "metadata",
                 DataType::Struct(
