@@ -44,6 +44,8 @@ pub use dynamic_file::catalog::*;
 pub use r#async::*;
 pub use schema::*;
 pub use table::*;
+pub mod cte_worktable;
+pub mod default_table_source;
 pub mod stream;
 pub mod streaming;
 pub mod view;

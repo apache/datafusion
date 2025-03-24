@@ -267,6 +267,10 @@ impl Session for SessionState {
     fn table_options_mut(&mut self) -> &mut TableOptions {
         self.table_options_mut()
     }
+
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        self.task_ctx()
+    }
 }
 
 impl SessionState {

@@ -796,10 +796,34 @@ pub async fn fetch_statistics(
     statistics_from_parquet_meta_calc(&metadata, table_schema)
 }
 
-/// Convert statistics in  [`ParquetMetaData`] into [`Statistics`] using ['StatisticsConverter`]
+/// Convert statistics in [`ParquetMetaData`] into [`Statistics`] using [`StatisticsConverter`]
 ///
 /// The statistics are calculated for each column in the table schema
 /// using the row group statistics in the parquet metadata.
+///
+/// # Key behaviors:
+///
+/// 1. Extracts row counts and byte sizes from all row groups
+/// 2. Applies schema type coercions to align file schema with table schema
+/// 3. Collects and aggregates statistics across row groups when available
+///
+/// # When there are no statistics:
+///
+/// If the Parquet file doesn't contain any statistics (has_statistics is false), the function returns a Statistics object with:
+/// - Exact row count
+/// - Exact byte size
+/// - All column statistics marked as unknown via Statistics::unknown_column(&table_schema)
+/// # When only some columns have statistics:
+///
+/// For columns with statistics:
+/// - Min/max values are properly extracted and represented as Precision::Exact
+/// - Null counts are calculated by summing across row groups
+///
+/// For columns without statistics,
+/// - For min/max, there are two situations:
+///     1. The column isn't in arrow schema, then min/max values are set to Precision::Absent
+///     2. The column is in arrow schema, but not in parquet schema due to schema revolution, min/max values are set to Precision::Exact(null)
+/// - Null counts are set to Precision::Exact(num_rows) (conservatively assuming all values could be null)
 pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
@@ -815,9 +839,10 @@ pub fn statistics_from_parquet_meta_calc(
         total_byte_size += row_group_meta.total_byte_size() as usize;
 
         if !has_statistics {
-            row_group_meta.columns().iter().for_each(|column| {
-                has_statistics = column.statistics().is_some();
-            });
+            has_statistics = row_group_meta
+                .columns()
+                .iter()
+                .any(|column| column.statistics().is_some());
         }
     }
     statistics.num_rows = Precision::Exact(num_rows);
