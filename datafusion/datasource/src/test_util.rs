@@ -21,8 +21,9 @@ use crate::{
 
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{Result, Statistics};
+use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use object_store::ObjectStore;
 
@@ -80,4 +81,9 @@ impl FileSource for MockSource {
     fn file_type(&self) -> &str {
         "mock"
     }
+}
+
+/// Create a column expression
+pub(crate) fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(Column::new_with_schema(name, schema)?))
 }
