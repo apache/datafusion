@@ -955,7 +955,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     });
                 // TODO: support multiple tables in UPDATE SET FROM
                 if froms.as_ref().is_some_and(|f| f.len() > 1) {
-                    println!("---------------------------------------------");
                     plan_err!("Multiple tables in UPDATE SET FROM not yet supported")?;
                 }
                 let update_from = froms.and_then(|mut f| f.pop());
