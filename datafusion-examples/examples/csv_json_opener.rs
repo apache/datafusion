@@ -25,7 +25,7 @@ use datafusion::{
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
         physical_plan::{
-            CsvSource, FileScanConfig, FileSource, FileStream, JsonOpener, JsonSource,
+            CsvSource, FileSource, FileStream, JsonOpener, JsonSource,
         },
     },
     error::Result,
@@ -35,6 +35,7 @@ use datafusion::{
 
 use futures::StreamExt;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
+use datafusion::datasource::physical_plan::FileScanConfigBuilder;
 
 /// This example demonstrates using the low level [`FileStream`] / [`FileOpener`] APIs to directly
 /// read data from (CSV/JSON) into Arrow RecordBatches.
@@ -56,14 +57,15 @@ async fn csv_opener() -> Result<()> {
 
     let path = std::path::Path::new(&path).canonicalize()?;
 
-    let scan_config = FileScanConfig::new(
+    let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         Arc::clone(&schema),
         Arc::new(CsvSource::default()),
     )
     .with_projection(Some(vec![12, 0]))
     .with_limit(Some(5))
-    .with_file(PartitionedFile::new(path.display().to_string(), 10));
+    .with_file(PartitionedFile::new(path.display().to_string(), 10))
+        .build();
 
     let config = CsvSource::new(true, b',', b'"')
         .with_comment(Some(b'#'))
@@ -121,14 +123,15 @@ async fn json_opener() -> Result<()> {
         Arc::new(object_store),
     );
 
-    let scan_config = FileScanConfig::new(
+    let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         schema,
         Arc::new(JsonSource::default()),
     )
     .with_projection(Some(vec![1, 0]))
     .with_limit(Some(5))
-    .with_file(PartitionedFile::new(path.to_string(), 10));
+    .with_file(PartitionedFile::new(path.to_string(), 10))
+        .build();
 
     let mut stream = FileStream::new(
         &scan_config,

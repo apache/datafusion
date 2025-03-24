@@ -56,6 +56,7 @@ use object_store::local_unpartitioned_file;
 use xz2::write::XzEncoder;
 #[cfg(feature = "compression")]
 use zstd::Encoder as ZstdEncoder;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 
 pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let dual_schema = Arc::new(Schema::new(vec![
@@ -91,8 +92,9 @@ pub fn scan_partitioned_csv(
         work_dir,
     )?;
     let source = Arc::new(CsvSource::new(true, b'"', b'"'));
-    let config = partitioned_csv_config(schema, file_groups, source)
-        .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
+    let config = FileScanConfigBuilder::from(partitioned_csv_config(schema, file_groups, source))
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+        .build();
     Ok(Arc::new(DataSourceExec::new(Arc::new(config))))
 }
 

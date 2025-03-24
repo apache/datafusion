@@ -23,7 +23,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use datafusion::{
     datasource::{
         listing::PartitionedFile,
-        physical_plan::{FileScanConfig, ParquetSource},
+        physical_plan::ParquetSource,
     },
     prelude::*,
 };

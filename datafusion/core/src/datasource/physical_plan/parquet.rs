@@ -51,7 +51,7 @@ mod tests {
     };
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_meta::FileMeta;
-    use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::{FileRange, PartitionedFile};

@@ -32,9 +32,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaBuilder};
     use datafusion_common::{assert_batches_eq, test_util, Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::file_scan_config::{
-        FileScanConfig, FileScanConfigBuilder,
-    };
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::PartitionedFile;
     use datafusion_datasource_avro::source::AvroSource;
     use datafusion_datasource_avro::AvroFormat;
@@ -160,9 +158,10 @@ mod tests {
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
         let source = Arc::new(AvroSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file(meta.into())
-            .with_projection(projection);
+            .with_projection(projection)
+            .build();
 
         let source_exec = Arc::new(DataSourceExec::new(Arc::new(conf)));
         assert_eq!(

@@ -30,7 +30,7 @@ use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -222,7 +222,7 @@ fn csv_exec_multiple() -> Arc<DataSourceExec> {
 
 // Created a sorted parquet exec with multiple files
 fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> {
-    let config = FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema(),
         Arc::new(CsvSource::new(false, b',', b'"')),
@@ -231,7 +231,8 @@ fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSource
         vec![PartitionedFile::new("x".to_string(), 100)],
         vec![PartitionedFile::new("y".to_string(), 100)],
     ])
-    .with_output_ordering(output_ordering);
+    .with_output_ordering(output_ordering)
+        .build();
 
     Arc::new(DataSourceExec::new(Arc::new(config)))
 }

@@ -22,7 +22,7 @@ use arrow::array::{
     StringArray,
 };
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
 use datafusion::test::object_store::local_unpartitioned_file;
@@ -64,8 +64,8 @@ async fn multi_parquet_coercion() {
     ]));
     let source = Arc::new(ParquetSource::default());
     let conf =
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, source)
-            .with_file_group(file_group);
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_schema, source)
+            .with_file_group(file_group).build();
 
     let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(conf)));
 

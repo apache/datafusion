@@ -246,7 +246,7 @@ impl FileFormat for JsonFormat {
     async fn create_physical_plan(
         &self,
         _state: &dyn Session,
-        mut conf: FileScanConfig,
+        conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let source = Arc::new(JsonSource::new());

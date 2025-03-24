@@ -45,7 +45,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan, InputOrderMode};
-use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion_physical_optimizer::enforce_sorting::{EnforceSorting, PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort, parallelize_sorts, ensure_sorting};
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};

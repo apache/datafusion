@@ -72,7 +72,7 @@ use crate::{
 /// # use datafusion_common::Statistics;
 /// # use datafusion_datasource::file::FileSource;
 /// # use datafusion_datasource::PartitionedFile;
-/// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource::file_stream::FileOpener;
 /// # use datafusion_datasource::source::DataSourceExec;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
@@ -105,7 +105,7 @@ use crate::{
 /// // create FileScan config for reading parquet files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
 /// let file_source = Arc::new(ParquetSource::new());
-/// let config = FileScanConfig::new(object_store_url, file_schema, file_source)
+/// let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
 ///   .with_limit(Some(1000))            // read only the first 1000 records
 ///   .with_projection(Some(vec![2, 3])) // project columns 2 and 3
 ///    // Read /tmp/file1.parquet with known size of 1234 bytes in a single group
@@ -115,7 +115,7 @@ use crate::{
 ///   .with_file_group(vec![
 ///    PartitionedFile::new("file2.parquet", 56),
 ///    PartitionedFile::new("file3.parquet", 78),
-///   ]);
+///   ]).build();
 /// // create an execution plan from the config
 /// let plan: Arc<dyn ExecutionPlan> = Arc::new(DataSourceExec::new(Arc::new(config)));
 /// ```
@@ -550,7 +550,6 @@ impl FileScanConfig {
     /// # Parameters:
     /// * `object_store_url`: See [`Self::object_store_url`]
     /// * `file_schema`: See [`Self::file_schema`]
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
     #[allow(deprecated)] // `new` will be removed same time as `with_source`
     pub fn new(
         object_store_url: ObjectStoreUrl,
@@ -558,8 +557,8 @@ impl FileScanConfig {
         file_source: Arc<dyn FileSource>,
     ) -> Self {
         let statistics = Statistics::new_unknown(&file_schema);
-
-        let mut config = Self {
+        let file_source = file_source.with_statistics(statistics.clone());
+        Self {
             object_store_url,
             file_schema,
             file_groups: vec![],
@@ -573,10 +572,7 @@ impl FileScanConfig {
             new_lines_in_values: false,
             file_source: Arc::clone(&file_source),
             batch_size: None,
-        };
-
-        config = config.with_source(Arc::clone(&file_source));
-        config
+        }
     }
 
     /// Set the file source

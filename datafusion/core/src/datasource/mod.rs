@@ -60,7 +60,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::assert_batches_sorted_eq;
-    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
@@ -129,8 +129,9 @@ mod tests {
                 .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
         );
         let base_conf =
-            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
-                .with_file(partitioned_file);
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema, source)
+                .with_file(partitioned_file)
+                .build();
 
         let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(base_conf)));
 
