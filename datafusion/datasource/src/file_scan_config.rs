@@ -72,7 +72,7 @@ use crate::{
 /// # use object_store::ObjectStore;
 /// # use datafusion_common::Statistics;
 /// # use datafusion_datasource::file::FileSource;
-/// use datafusion_datasource::file_groups::FileGroup;
+/// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::file_scan_config::FileScanConfig;
 /// # use datafusion_datasource::file_stream::FileOpener;

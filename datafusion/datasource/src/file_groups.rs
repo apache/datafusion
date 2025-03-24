@@ -23,6 +23,7 @@ use itertools::Itertools;
 use std::cmp::min;
 use std::collections::BinaryHeap;
 use std::iter::repeat_with;
+use std::mem;
 use std::ops::{Index, IndexMut};
 
 /// Repartition input files into `target_partitions` partitions, if total file size exceed
@@ -406,6 +407,39 @@ impl FileGroup {
     /// Adds a file to the group
     pub fn push(&mut self, file: PartitionedFile) {
         self.files.push(file);
+    }
+
+    /// Partition the list of files into `n` groups
+    pub fn split_files(&mut self, n: usize) -> Vec<FileGroup> {
+        if self.is_empty() {
+            return vec![];
+        }
+
+        // ObjectStore::list does not guarantee any consistent order and for some
+        // implementations such as LocalFileSystem, it may be inconsistent. Thus
+        // Sort files by path to ensure consistent plans when run more than once.
+        self.files.sort_by(|a, b| a.path().cmp(b.path()));
+
+        // effectively this is div with rounding up instead of truncating
+        let chunk_size = self.len().div_ceil(n);
+        let mut chunks = Vec::with_capacity(n);
+        let mut current_chunk = Vec::with_capacity(chunk_size);
+        for file in self.files.drain(..) {
+            current_chunk.push(file);
+            if current_chunk.len() == chunk_size {
+                let full_chunk = FileGroup::new(mem::replace(
+                    &mut current_chunk,
+                    Vec::with_capacity(chunk_size),
+                ));
+                chunks.push(full_chunk);
+            }
+        }
+
+        if !current_chunk.is_empty() {
+            chunks.push(FileGroup::new(current_chunk))
+        }
+
+        chunks
     }
 }
 

@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::{any::Any, str::FromStr, sync::Arc};
 
-use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
+use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
 use super::{ListingTableUrl, PartitionedFile};
 
 use crate::datasource::{
@@ -1128,7 +1128,7 @@ impl ListingTable {
             .boxed()
             .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
-        let (files, statistics) = get_statistics_with_limit(
+        let (mut files, statistics) = get_statistics_with_limit(
             files,
             self.schema(),
             limit,
@@ -1137,7 +1137,7 @@ impl ListingTable {
         .await?;
 
         Ok((
-            split_files(files, self.options.target_partitions),
+            files.split_files(self.options.target_partitions),
             statistics,
         ))
     }

@@ -17,7 +17,6 @@
 
 //! Helper functions for the table implementation
 
-use std::mem;
 use std::sync::Arc;
 
 use datafusion_catalog::Session;
@@ -40,7 +39,6 @@ use log::{debug, trace};
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DataFusionError};
-use datafusion_datasource::file_groups::FileGroup;
 use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
@@ -121,39 +119,6 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
 
 /// The maximum number of concurrent listing requests
 const CONCURRENCY_LIMIT: usize = 100;
-
-/// Partition the list of files into `n` groups
-pub fn split_files(mut file_group: FileGroup, n: usize) -> Vec<FileGroup> {
-    if file_group.is_empty() {
-        return vec![];
-    }
-
-    // ObjectStore::list does not guarantee any consistent order and for some
-    // implementations such as LocalFileSystem, it may be inconsistent. Thus
-    // Sort files by path to ensure consistent plans when run more than once.
-    file_group.files.sort_by(|a, b| a.path().cmp(b.path()));
-
-    // effectively this is div with rounding up instead of truncating
-    let chunk_size = file_group.len().div_ceil(n);
-    let mut chunks = Vec::with_capacity(n);
-    let mut current_chunk = Vec::with_capacity(chunk_size);
-    for file in file_group.files.drain(..) {
-        current_chunk.push(file);
-        if current_chunk.len() == chunk_size {
-            let full_chunk = FileGroup::new(mem::replace(
-                &mut current_chunk,
-                Vec::with_capacity(chunk_size),
-            ));
-            chunks.push(full_chunk);
-        }
-    }
-
-    if !current_chunk.is_empty() {
-        chunks.push(FileGroup::new(current_chunk))
-    }
-
-    chunks
-}
 
 pub struct Partition {
     /// The path to the partition, including the table prefix
@@ -535,13 +500,13 @@ pub fn describe_partition(partition: &Partition) -> (&str, usize, Vec<&str>) {
 mod tests {
     use async_trait::async_trait;
     use datafusion_common::config::TableOptions;
+    use datafusion_datasource::file_groups::FileGroup;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::FutureExt;
     use object_store::memory::InMemory;
     use std::any::Any;
     use std::ops::Not;
-    // use futures::StreamExt;
 
     use super::*;
     use datafusion_expr::{
@@ -561,16 +526,16 @@ mod tests {
             new_partitioned_file("e"),
         ]);
 
-        let chunks = split_files(files.clone(), 1);
+        let chunks = files.clone().split_files(1);
         assert_eq!(1, chunks.len());
         assert_eq!(5, chunks[0].len());
 
-        let chunks = split_files(files.clone(), 2);
+        let chunks = files.clone().split_files(2);
         assert_eq!(2, chunks.len());
         assert_eq!(3, chunks[0].len());
         assert_eq!(2, chunks[1].len());
 
-        let chunks = split_files(files.clone(), 5);
+        let chunks = files.clone().split_files(5);
         assert_eq!(5, chunks.len());
         assert_eq!(1, chunks[0].len());
         assert_eq!(1, chunks[1].len());
@@ -578,7 +543,7 @@ mod tests {
         assert_eq!(1, chunks[3].len());
         assert_eq!(1, chunks[4].len());
 
-        let chunks = split_files(files, 123);
+        let chunks = files.clone().split_files(123);
         assert_eq!(5, chunks.len());
         assert_eq!(1, chunks[0].len());
         assert_eq!(1, chunks[1].len());
@@ -586,7 +551,8 @@ mod tests {
         assert_eq!(1, chunks[3].len());
         assert_eq!(1, chunks[4].len());
 
-        let chunks = split_files(FileGroup::default(), 2);
+        let mut empty_group = FileGroup::default();
+        let chunks = empty_group.split_files(2);
         assert_eq!(0, chunks.len());
     }
 
