@@ -15,16 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Shared state for query planning and execution.
+pub(crate) mod catalog;
+pub(crate) mod schema;
 
-pub mod context;
-pub mod session_state;
-pub use session_state::{SessionState, SessionStateBuilder};
-
-mod session_state_defaults;
-
-pub use session_state_defaults::SessionStateDefaults;
-
-// backwards compatibility
-pub use crate::datasource::file_format::options;
-pub use datafusion_execution::*;
+pub use catalog::*;
+pub use schema::*;

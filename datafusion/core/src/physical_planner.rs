@@ -39,7 +39,6 @@ use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
@@ -78,7 +77,7 @@ use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
     Analyze, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, RecursiveQuery, SkipType, SortExpr, StringifiedPlan, WindowFrame,
+    Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
@@ -1681,37 +1680,13 @@ pub fn create_aggregate_expr_and_maybe_filter(
     )
 }
 
-/// Create a physical sort expression from a logical expression
-pub fn create_physical_sort_expr(
-    e: &SortExpr,
-    input_dfschema: &DFSchema,
-    execution_props: &ExecutionProps,
-) -> Result<PhysicalSortExpr> {
-    let SortExpr {
-        expr,
-        asc,
-        nulls_first,
-    } = e;
-    Ok(PhysicalSortExpr {
-        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-        options: SortOptions {
-            descending: !asc,
-            nulls_first: *nulls_first,
-        },
-    })
-}
-
-/// Create vector of physical sort expression from a vector of logical expression
-pub fn create_physical_sort_exprs(
-    exprs: &[SortExpr],
-    input_dfschema: &DFSchema,
-    execution_props: &ExecutionProps,
-) -> Result<LexOrdering> {
-    exprs
-        .iter()
-        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<LexOrdering>>()
-}
+#[deprecated(
+    since = "47.0.0",
+    note = "use datafusion::{create_physical_sort_expr, create_physical_sort_exprs}"
+)]
+pub use datafusion_physical_expr::{
+    create_physical_sort_expr, create_physical_sort_exprs,
+};
 
 impl DefaultPhysicalPlanner {
     /// Handles capturing the various plans for EXPLAIN queries

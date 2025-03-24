@@ -162,15 +162,15 @@ recursive = "0.1.1"
 regex = "1.8"
 rstest = "0.24.0"
 serde_json = "1"
-sqlparser = { version = "0.54.0", features = ["visitor"] }
+sqlparser = { version = "0.55.0", features = ["visitor"] }
 tempfile = "3"
-tokio = { version = "1.43", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.44", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
 
 [profile.release]
 codegen-units = 1
 lto = true
-strip = true
+strip = true      # Eliminate debug information to minimize binary size
 
 # the release profile takes a long time to build so we can use this profile during development to save time
 # cargo build --profile release-nonlto
@@ -183,6 +183,7 @@ lto = false
 opt-level = 3
 overflow-checks = false
 rpath = false
+strip = false            # Retain debug info for flamegraphs
 
 [profile.ci]
 inherits = "dev"

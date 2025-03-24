@@ -129,6 +129,7 @@ impl RunOpt {
         self.register_hits(&ctx).await?;
 
         let iterations = self.common.iterations;
+        let mut millis = Vec::with_capacity(iterations);
         let mut benchmark_run = BenchmarkRun::new();
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
@@ -140,6 +141,7 @@ impl RunOpt {
                 let results = ctx.sql(sql).await?.collect().await?;
                 let elapsed = start.elapsed();
                 let ms = elapsed.as_secs_f64() * 1000.0;
+                millis.push(ms);
                 let row_count: usize = results.iter().map(|b| b.num_rows()).sum();
                 println!(
                     "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
@@ -149,6 +151,8 @@ impl RunOpt {
             if self.common.debug {
                 ctx.sql(sql).await?.explain(false, false)?.show().await?;
             }
+            let avg = millis.iter().sum::<f64>() / millis.len() as f64;
+            println!("Query {query_id} avg time: {avg:.2} ms");
         }
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
         Ok(())
