@@ -183,21 +183,12 @@ pub struct FileScanConfigBuilder {
     projection: Option<Vec<usize>>,
     table_partition_cols: Vec<Field>,
     constraints: Option<Constraints>,
-
     file_groups: Vec<Vec<PartitionedFile>>,
-
-    /// Estimated overall statistics of the files, taking `filters` into account.
-    /// Defaults to [`Statistics::new_unknown`].
     statistics: Option<Statistics>,
-
-    /// All equivalent lexicographical orderings that describe the schema.
     output_ordering: Vec<LexOrdering>,
-
     file_compression_type: Option<FileCompressionType>,
-
     new_lines_in_values: Option<bool>,
-
-    pub batch_size: Option<usize>,
+    batch_size: Option<usize>,
 }
 
 impl FileScanConfigBuilder {
