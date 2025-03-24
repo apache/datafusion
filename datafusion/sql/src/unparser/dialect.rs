@@ -20,6 +20,7 @@ use std::{collections::HashMap, sync::Arc};
 use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
 use arrow::datatypes::TimeUnit;
 use datafusion_common::Result;
+use datafusion_common::alias::AliasGenerator;
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
@@ -154,6 +155,14 @@ pub trait Dialect: Send + Sync {
         Ok(None)
     }
 
+    fn col_alias_overrides(
+        &self,
+        _unparser: &Unparser,
+        _alias: &str,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     /// Allows the dialect to choose to omit window frame in unparsing
     /// based on function name and window frame bound
     /// Returns false if specific function name / window frame bound indicates no window frame is needed in unparsing
@@ -253,7 +262,38 @@ impl Dialect for DefaultDialect {
         }
     }
 }
+#[derive(Default)]
+pub struct BigQueryDialect {
+    col_alias_generator: AliasGenerator,
+}
 
+impl Dialect for BigQueryDialect {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
+        Some('`')
+    }
+
+    fn col_alias_overrides(
+        &self,
+        _unparser: &Unparser,
+        alias: &str,
+    ) -> Result<Option<String>> {
+         // if alias has special characters, rewrite to alias from aliasGenerator
+         if alias.contains('*') {
+            Ok(Some(self.col_alias_generator.next("col")))
+        } else {
+            Ok(Some(alias.to_string()))
+        }
+    }
+}
+
+impl BigQueryDialect {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            col_alias_generator: AliasGenerator::new(),
+        }
+    }
+}
 pub struct PostgreSqlDialect {}
 
 impl Dialect for PostgreSqlDialect {

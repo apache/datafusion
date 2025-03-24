@@ -32,7 +32,7 @@ use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
     CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect, DefaultDialect,
-    Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect, SqliteDialect,
+    Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect, SqliteDialect, BigQueryDialect as UnparserBigqueryDialect
 };
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 use sqlparser::ast::Statement;
@@ -54,7 +54,7 @@ use datafusion_sql::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
     UserDefinedLogicalNodeUnparser,
 };
-use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
+use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect};
 use sqlparser::parser::Parser;
 
 #[test]
@@ -536,6 +536,12 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(SqliteDialect {}),
         },
+        TestStatementWithDialect {
+            sql: "select min(*) as \"min(*)\" from (select 1 as a)",
+            expected: "SELECT min(*) AS `col_1` FROM (SELECT 1 AS `a`)",
+            parser_dialect: Box::new(PostgreSqlDialect {}),
+            unparser_dialect: Box::new(UnparserBigqueryDialect::new()),
+        },  
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3])",
             expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
