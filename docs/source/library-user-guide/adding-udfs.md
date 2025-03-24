@@ -1197,7 +1197,7 @@ See example below:
 # // Define the custom planner
 # struct MyCustomPlanner;
 
-// Implement ExprPlanner for cutom operator logic
+// Implement ExprPlanner to add support for the `->` custom operator
 impl ExprPlanner for MyCustomPlanner {
     fn plan_binary_op(
         &self,
