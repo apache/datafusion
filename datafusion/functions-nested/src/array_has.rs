@@ -134,8 +134,10 @@ impl ScalarUDFImpl for ArrayHas {
         // if the haystack is a constant list, we can use an inlist expression which is more
         // efficient because the haystack is not varying per-row
         if let Expr::Literal(ScalarValue::List(array)) = haystack {
-            // TODO: support LargeList / FixedSizeList?
+            // TODO: support LargeList
             // (not supported by `convert_array_to_scalar_vec`)
+            // (FixedSizeList not supported either, but seems to have worked fine when attempting to
+            // build a reproducer)
 
             assert_eq!(array.len(), 1); // guarantee of ScalarValue
             if let Ok(scalar_values) =
