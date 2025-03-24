@@ -66,9 +66,9 @@ impl ProjectionMapping {
                             let idx = col.index();
                             let matching_input_field = input_schema.field(idx);
                             if col.name() != matching_input_field.name() {
-                                return internal_err!("Input field name {} does not match with the projection expression {}",
-                                    matching_input_field.name(),col.name())
-                                }
+                                let fixed_col = Column::new(matching_input_field.name(), idx);
+                                return Ok(Transformed::yes(Arc::new(fixed_col)))
+                            }
                             let matching_input_column =
                                 Column::new(matching_input_field.name(), idx);
                             Ok(Transformed::yes(Arc::new(matching_input_column)))

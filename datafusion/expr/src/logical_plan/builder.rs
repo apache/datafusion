@@ -1322,17 +1322,24 @@ impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
 
 pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
     let mut name_map = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
     fields
         .into_iter()
         .map(|field| {
-            let counter = name_map.entry(field.name().to_string()).or_insert(0);
-            *counter += 1;
-            if *counter > 1 {
-                let new_name = format!("{}:{}", field.name(), *counter - 1);
-                Field::new(new_name, field.data_type().clone(), field.is_nullable())
-            } else {
-                field.as_ref().clone()
+            let base_name = field.name();
+            let count = name_map.entry(base_name.clone()).or_insert(0);
+            let mut new_name = base_name.clone();
+
+            // Loop until we find a name that hasn't been used
+            while seen.contains(&new_name) {
+                *count += 1;
+                new_name = format!("{}:{}", base_name, count);
             }
+
+            seen.insert(new_name.clone());
+
+            Field::new(&new_name, field.data_type().clone(), field.is_nullable())
         })
         .collect()
 }
