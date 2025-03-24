@@ -651,7 +651,9 @@ impl ExternalSorter {
 
         for batch in std::mem::take(&mut self.in_mem_batches) {
             let batch_size = get_reserved_byte_for_record_batch(&batch);
-            if current_size + batch_size > self.sort_in_place_threshold_bytes && !current_batches.is_empty() {
+            if current_size + batch_size > self.sort_in_place_threshold_bytes
+                && !current_batches.is_empty()
+            {
                 let merged = concat_batches(&self.schema, &current_batches)?;
                 current_batches.clear();
                 self.reservation.try_shrink(current_size)?;
@@ -672,8 +674,8 @@ impl ExternalSorter {
             merged_batches.push(merged);
         }
 
-        
-        let streams = merged_batches.into_iter()
+        let streams = merged_batches
+            .into_iter()
             .map(|batch| {
                 let metrics = self.metrics.baseline.intermediate();
                 let reservation = self
