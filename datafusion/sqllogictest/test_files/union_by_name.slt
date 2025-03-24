@@ -336,10 +336,10 @@ a b c
 
 
 # FIXME: The following should pass without error, but currently it is failing
-# due to differing record batch schemas when the SLT runner collects results in
-# `normalize::convert_batches`.
+# due to differing record batch schemas when the SLT runner collects results.
+# This is due to the following issue: https://github.com/apache/datafusion/issues/15394#issue-2943811768
 #
-# More context can be found here: https://github.com/apache/datafusion/pull/15242#issuecomment-2730402547
+# More context can be found here: https://github.com/apache/datafusion/pull/15242#issuecomment-2746563234
 query error
 select x, y, z from t3 union all by name select z, y, x, 'd' as zz from t3;
 ----
