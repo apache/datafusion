@@ -27,7 +27,7 @@ use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::expr::InList;
+use datafusion_expr::expr::{InList, ScalarFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
@@ -36,6 +36,7 @@ use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
+use crate::make_array::make_array_udf;
 use crate::utils::make_scalar_function;
 
 use std::any::Any;
@@ -128,11 +129,14 @@ impl ScalarUDFImpl for ArrayHas {
         mut args: Vec<Expr>,
         _info: &dyn datafusion_expr::simplify::SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        let [haystack, _needle] = take_function_args(self.name(), &args)?;
+        let [haystack, needle] = take_function_args(self.name(), &mut args)?;
 
         // if the haystack is a constant list, we can use an inlist expression which is more
         // efficient because the haystack is not varying per-row
         if let Expr::Literal(ScalarValue::List(array)) = haystack {
+            // TODO: support LargeList / FixedSizeList?
+            // (not supported by `convert_array_to_scalar_vec`)
+
             assert_eq!(array.len(), 1); // guarantee of ScalarValue
             if let Ok(scalar_values) =
                 ScalarValue::convert_array_to_scalar_vec(array.as_ref())
@@ -144,18 +148,22 @@ impl ScalarUDFImpl for ArrayHas {
                     .map(Expr::Literal)
                     .collect();
 
-                // ok to pop here, we will not use args again
-                let needle = args.pop().unwrap();
                 return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
-                    expr: Box::new(needle),
+                    expr: Box::new(std::mem::take(needle)),
                     list,
                     negated: false,
                 })));
             }
+        } else if let Expr::ScalarFunction(ScalarFunction { func, args }) = haystack {
+            // make_array has a static set of arguments, so we can pull the arguments out from it
+            if func == &make_array_udf() {
+                return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
+                    expr: Box::new(std::mem::take(needle)),
+                    list: std::mem::take(args),
+                    negated: false,
+                })));
+            }
         }
-
-        // TODO: support LargeList / FixedSizeList?
-        // (not supported by `convert_array_to_scalar_vec`)
 
         Ok(ExprSimplifyResult::Original(args))
     }
