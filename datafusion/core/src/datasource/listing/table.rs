@@ -60,6 +60,8 @@ use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
 
+use crate::datasource::nested_schema_adapter::SchemaAdapterFactory;
+
 /// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
 pub struct ListingTableConfig {
@@ -70,6 +72,8 @@ pub struct ListingTableConfig {
     pub file_schema: Option<SchemaRef>,
     /// Optional `ListingOptions` for the to be created `ListingTable`.
     pub options: Option<ListingOptions>,
+    /// Optional schema adapter factory
+    pub schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl ListingTableConfig {
@@ -83,6 +87,7 @@ impl ListingTableConfig {
             table_paths,
             file_schema: None,
             options: None,
+            schema_adapter_factory: None,
         }
     }
 
@@ -188,6 +193,7 @@ impl ListingTableConfig {
             table_paths: self.table_paths,
             file_schema: self.file_schema,
             options: Some(listing_options),
+            schema_adapter_factory: self.schema_adapter_factory,
         })
     }
 
@@ -205,6 +211,7 @@ impl ListingTableConfig {
                     table_paths: self.table_paths,
                     file_schema: Some(schema),
                     options: Some(options),
+                    schema_adapter_factory: self.schema_adapter_factory,
                 })
             }
             None => internal_err!("No `ListingOptions` set for inferring schema"),
@@ -242,6 +249,7 @@ impl ListingTableConfig {
                     table_paths: self.table_paths,
                     file_schema: self.file_schema,
                     options: Some(options),
+                    schema_adapter_factory: self.schema_adapter_factory,
                 })
             }
             None => config_err!("No `ListingOptions` set for inferring schema"),
@@ -723,6 +731,8 @@ pub struct ListingTable {
     collected_statistics: FileStatisticsCache,
     constraints: Constraints,
     column_defaults: HashMap<String, Expr>,
+    /// Optional schema adapter factory
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl ListingTable {
@@ -766,6 +776,7 @@ impl ListingTable {
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
             constraints: Constraints::empty(),
             column_defaults: HashMap::new(),
+            schema_adapter_factory: config.schema_adapter_factory,
         };
 
         Ok(table)
@@ -936,25 +947,29 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
+        // Create file scan config with schema adapter factory if available
+        let mut config = FileScanConfig::new(
+            object_store_url,
+            Arc::clone(&self.file_schema),
+            self.options.format.file_source(),
+        )
+        .with_file_groups(partitioned_file_lists)
+        .with_constraints(self.constraints.clone())
+        .with_statistics(statistics)
+        .with_projection(projection.cloned())
+        .with_limit(limit)
+        .with_output_ordering(output_ordering)
+        .with_table_partition_cols(table_partition_cols);
+
+        // Add schema adapter factory if available
+        if let Some(adapter_factory) = &self.schema_adapter_factory {
+            config = config.with_schema_adapter_factory(Arc::clone(adapter_factory));
+        }
+
         // create the execution plan
         self.options
             .format
-            .create_physical_plan(
-                session_state,
-                FileScanConfig::new(
-                    object_store_url,
-                    Arc::clone(&self.file_schema),
-                    self.options.format.file_source(),
-                )
-                .with_file_groups(partitioned_file_lists)
-                .with_constraints(self.constraints.clone())
-                .with_statistics(statistics)
-                .with_projection(projection.cloned())
-                .with_limit(limit)
-                .with_output_ordering(output_ordering)
-                .with_table_partition_cols(table_partition_cols),
-                filters.as_ref(),
-            )
+            .create_physical_plan(session_state, config, filters.as_ref())
             .await
     }
 
@@ -1009,7 +1024,7 @@ impl TableProvider for ListingTable {
             .logically_equivalent_names_and_types(&input.schema())?;
 
         let table_path = &self.table_paths()[0];
-        if !table_path.is_collection() {
+        if (!table_path.is_collection()) {
             return plan_err!(
                 "Inserting into a ListingTable backed by a single file is not supported, URL is possibly missing a trailing `/`. \
                 To append to an existing file use StreamTable, e.g. by using CREATE UNBOUNDED EXTERNAL TABLE"
