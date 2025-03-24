@@ -22,20 +22,12 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     let schema2 = create_schema2();
 
     let batch1 = create_batch1(&schema1)?;
-    let adapter = NestedStructSchemaAdapterFactory::create_appropriate_adapter(
-        schema2.clone(),
-        schema2.clone(),
-    );
 
-    let (mapping, _) = adapter
-        .map_schema(&schema1.clone())
-        .expect("map schema failed");
-    let mapped_batch = mapping.map_batch(batch1)?;
-
+    // Instead of manually mapping batch1, write it directly
     let path1 = "test_data1.parquet";
     let _ = fs::remove_file(path1);
 
-    let df1 = ctx.read_batch(mapped_batch)?;
+    let df1 = ctx.read_batch(batch1)?;
     df1.write_parquet(
         path1,
         DataFrameWriteOptions::default()
@@ -62,13 +54,17 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
 
     let paths_str = vec![path1.to_string(), path2.to_string()];
 
+    // Create schema adapter factory
+    let adapter_factory = Arc::new(NestedStructSchemaAdapterFactory::default());
+
     let config = ListingTableConfig::new_with_multi_paths(
         paths_str
             .into_iter()
             .map(|p| ListingTableUrl::parse(&p))
             .collect::<Result<Vec<_>, _>>()?,
     )
-    .with_schema(schema2.as_ref().clone().into());
+    .with_schema(schema2.as_ref().clone().into())
+    .with_schema_adapter_factory(adapter_factory);
 
     let config = config.infer(&ctx.state()).await?;
 
@@ -107,10 +103,13 @@ async fn test_datafusion_schema_evolution_with_compaction() -> Result<(), Box<dy
     .await?;
 
     let new_ctx = SessionContext::new();
+    // Create schema adapter factory for the new context too
+    let adapter_factory = Arc::new(NestedStructSchemaAdapterFactory::default());
     let config = ListingTableConfig::new_with_multi_paths(vec![ListingTableUrl::parse(
         compacted_path,
     )?])
     .with_schema(schema2.as_ref().clone().into())
+    .with_schema_adapter_factory(adapter_factory)
     .infer(&new_ctx.state())
     .await?;
 
