@@ -59,9 +59,9 @@ use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use itertools::Itertools;
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 
 /// Mocked UDF
 #[derive(Debug)]

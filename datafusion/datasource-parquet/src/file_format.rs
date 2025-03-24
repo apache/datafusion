@@ -58,8 +58,11 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::Accumulator;
 
+use crate::can_expr_be_pushed_down_with_schemas;
+use crate::source::ParquetSource;
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use futures::future::BoxFuture;
@@ -82,9 +85,6 @@ use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use datafusion_datasource::source::DataSourceExec;
-use crate::can_expr_be_pushed_down_with_schemas;
-use crate::source::ParquetSource;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -420,7 +420,9 @@ impl FileFormat for ParquetFormat {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
 
-        let conf = FileScanConfigBuilder::from(conf).with_source(Arc::new(source)).build();
+        let conf = FileScanConfigBuilder::from(conf)
+            .with_source(Arc::new(source))
+            .build();
         Ok(Arc::new(DataSourceExec::new(Arc::new(conf))))
     }
 

@@ -26,6 +26,8 @@ use datafusion_common::{Result, Statistics};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 
+use crate::avro_to_arrow::read_avro_schema_from_reader;
+use crate::source::AvroSource;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
@@ -36,12 +38,10 @@ use datafusion_common::GetExt;
 use datafusion_common::DEFAULT_AVRO_EXTENSION;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
-use datafusion_datasource::source::DataSourceExec;
-use crate::avro_to_arrow::read_avro_schema_from_reader;
-use crate::source::AvroSource;
 
 #[derive(Default)]
 /// Factory struct used to create [`AvroFormat`]
@@ -151,7 +151,9 @@ impl FileFormat for AvroFormat {
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = FileScanConfigBuilder::from(conf).with_source(self.file_source()).build();
+        let config = FileScanConfigBuilder::from(conf)
+            .with_source(self.file_source())
+            .build();
         Ok(Arc::new(DataSourceExec::new(Arc::new(config))))
     }
 

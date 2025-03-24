@@ -51,16 +51,16 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
+use crate::source::CsvSource;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 use regex::Regex;
-use datafusion_datasource::source::DataSourceExec;
-use crate::source::CsvSource;
 
 #[derive(Default)]
 /// Factory used to create [`CsvFormat`]

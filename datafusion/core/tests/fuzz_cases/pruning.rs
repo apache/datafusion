@@ -21,13 +21,12 @@ use arrow::array::{Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use bytes::{BufMut, Bytes, BytesMut};
 use datafusion::{
-    datasource::{
-        listing::PartitionedFile,
-        physical_plan::ParquetSource,
-    },
+    datasource::{listing::PartitionedFile, physical_plan::ParquetSource},
     prelude::*,
 };
 use datafusion_common::DFSchema;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::{collect, filter::FilterExec, ExecutionPlan};
@@ -40,8 +39,6 @@ use parquet::{
 use rand::seq::SliceRandom;
 use tokio::sync::Mutex;
 use url::Url;
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_datasource::source::DataSourceExec;
 
 #[tokio::test]
 async fn test_utf8_eq() {
@@ -295,7 +292,8 @@ async fn execute_with_predicate(
                 PartitionedFile::new(test_file.path.clone(), test_file.size as u64)
             })
             .collect(),
-    ).build();
+    )
+    .build();
     let exec = Arc::new(DataSourceExec::new(Arc::new(config)));
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;

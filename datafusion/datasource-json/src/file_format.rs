@@ -54,12 +54,12 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
+use crate::source::JsonSource;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
-use datafusion_datasource::source::DataSourceExec;
-use crate::source::JsonSource;
 
 #[derive(Default)]
 /// Factory struct used to create [JsonFormat]
@@ -250,7 +250,12 @@ impl FileFormat for JsonFormat {
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfigBuilder::from(conf).with_file_compression_type(FileCompressionType::from(self.options.compression)).with_source(source).build();
+        let conf = FileScanConfigBuilder::from(conf)
+            .with_file_compression_type(FileCompressionType::from(
+                self.options.compression,
+            ))
+            .with_source(source)
+            .build();
         Ok(Arc::new(DataSourceExec::new(Arc::new(conf))))
     }
 

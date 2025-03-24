@@ -30,13 +30,13 @@ use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::Result;
 use datafusion_execution::object_store::ObjectStoreUrl;
 
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 use insta::assert_snapshot;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use tempfile::NamedTempFile;
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_datasource::source::DataSourceExec;
 
 /// Test for reading data from multiple parquet files with different schemas and coercing them into a single schema.
 #[tokio::test]
@@ -63,9 +63,13 @@ async fn multi_parquet_coercion() {
         Field::new("c3", DataType::Float64, true),
     ]));
     let source = Arc::new(ParquetSource::default());
-    let conf =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_schema, source)
-            .with_file_group(file_group).build();
+    let conf = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        file_schema,
+        source,
+    )
+    .with_file_group(file_group)
+    .build();
 
     let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(conf)));
 

@@ -25,10 +25,10 @@ pub mod source;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::{
     file::FileSource, file_scan_config::FileScanConfig, PartitionedFile,
 };
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 pub use file_format::*;
 
@@ -39,5 +39,6 @@ pub fn partitioned_csv_config(
     file_source: Arc<dyn FileSource>,
 ) -> FileScanConfig {
     FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema, file_source)
-        .with_file_groups(file_groups).build()
+        .with_file_groups(file_groups)
+        .build()
 }

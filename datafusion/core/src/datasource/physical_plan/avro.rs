@@ -39,13 +39,13 @@ mod tests {
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::ExecutionPlan;
 
+    use datafusion_datasource::source::DataSourceExec;
     use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
     use rstest::*;
     use url::Url;
-    use datafusion_datasource::source::DataSourceExec;
 
     #[tokio::test]
     async fn avro_exec_without_partition() -> Result<()> {

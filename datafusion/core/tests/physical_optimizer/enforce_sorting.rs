@@ -56,9 +56,9 @@ use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
 
-use rstest::rstest;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
+use rstest::rstest;
 
 /// Create a csv exec for tests
 fn csv_exec_ordered(
@@ -76,8 +76,7 @@ fn csv_exec_ordered(
     .with_output_ordering(vec![sort_exprs])
     .build();
 
-    Arc::new(
-        DataSourceExec::new(Arc::new(config)))
+    Arc::new(DataSourceExec::new(Arc::new(config)))
 }
 
 /// Created a sorted parquet exec

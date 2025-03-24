@@ -185,13 +185,13 @@ mod tests {
             )
             .with_file_group(file_group)
             .with_projection(projection)
-                .build();
+            .build();
 
             let session_ctx = SessionContext::new();
             let task_ctx = session_ctx.task_ctx();
 
-
-            let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(base_config.clone())));
+            let parquet_exec =
+                Arc::new(DataSourceExec::new(Arc::new(base_config.clone())));
             RoundTripResult {
                 batches: collect(parquet_exec.clone(), task_ctx).await,
                 parquet_exec,

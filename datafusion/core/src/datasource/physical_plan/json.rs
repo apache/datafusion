@@ -50,13 +50,13 @@ mod tests {
     use arrow::datatypes::SchemaRef;
     use arrow::datatypes::{Field, SchemaBuilder};
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_datasource::source::DataSourceExec;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
-    use datafusion_datasource::source::DataSourceExec;
 
     const TEST_DATA_BASE: &str = "tests/data";
 
@@ -169,7 +169,7 @@ mod tests {
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
-        
+
         use futures::StreamExt;
 
         let tmp_dir = TempDir::new()?;
@@ -234,7 +234,7 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         use arrow::datatypes::DataType;
-        
+
         use futures::StreamExt;
 
         let session_ctx = SessionContext::new();
@@ -285,7 +285,6 @@ mod tests {
     async fn nd_json_exec_file_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        
         use futures::StreamExt;
 
         let session_ctx = SessionContext::new();

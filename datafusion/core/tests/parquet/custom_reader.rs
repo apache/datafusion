@@ -36,6 +36,8 @@ use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::Result;
 
 use bytes::Bytes;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 use insta::assert_snapshot;
@@ -46,8 +48,6 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_datasource::source::DataSourceExec;
 
 const EXPECTED_USER_DEFINED_METADATA: &str = "some-user-defined-metadata";
 
@@ -91,7 +91,8 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
         file_schema,
         source,
     )
-    .with_file_group(file_group).build();
+    .with_file_group(file_group)
+    .build();
 
     let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(base_config)));
 

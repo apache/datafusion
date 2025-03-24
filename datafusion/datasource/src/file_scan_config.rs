@@ -198,7 +198,6 @@ pub struct FileScanConfigBuilder {
     new_lines_in_values: Option<bool>,
 
     pub batch_size: Option<usize>,
-
 }
 
 impl FileScanConfigBuilder {

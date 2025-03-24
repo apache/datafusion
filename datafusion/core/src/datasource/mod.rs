@@ -71,9 +71,9 @@ mod tests {
 
     use ::object_store::path::Path;
     use ::object_store::ObjectMeta;
+    use datafusion_datasource::source::DataSourceExec;
     use datafusion_physical_plan::collect;
     use tempfile::TempDir;
-    use datafusion_datasource::source::DataSourceExec;
 
     #[tokio::test]
     async fn can_override_schema_adapter() {
@@ -128,10 +128,13 @@ mod tests {
             ParquetSource::default()
                 .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
         );
-        let base_conf =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema, source)
-                .with_file(partitioned_file)
-                .build();
+        let base_conf = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            schema,
+            source,
+        )
+        .with_file(partitioned_file)
+        .build();
 
         let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(base_conf)));
 
