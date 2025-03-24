@@ -27,19 +27,19 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 
+use crate::variation_const::{
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
+    VIEW_CONTAINER_TYPE_VARIATION_REF,
+};
 use async_recursion::async_recursion;
 use chrono::DateTime;
+use datafusion::datasource::memory::DataSourceExec;
 use object_store::ObjectMeta;
 use substrait::proto::r#type::{Kind, Nullability};
 use substrait::proto::read_rel::local_files::file_or_files::PathType;
 use substrait::proto::Type;
 use substrait::proto::{
     expression::MaskExpression, read_rel::ReadType, rel::RelType, Rel,
-};
-use datafusion::datasource::memory::DataSourceExec;
-use crate::variation_const::{
-    DEFAULT_CONTAINER_TYPE_VARIATION_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 
 /// Convert Substrait Rel to DataFusion ExecutionPlan
@@ -152,7 +152,8 @@ pub async fn from_substrait_rel(
                         }
                     }
 
-                    Ok(Arc::new(DataSourceExec::new(Arc::new(base_config))) as Arc<dyn ExecutionPlan>)
+                    Ok(Arc::new(DataSourceExec::new(Arc::new(base_config)))
+                        as Arc<dyn ExecutionPlan>)
                 }
                 _ => not_impl_err!(
                     "Only LocalFile reads are supported when parsing physical"
