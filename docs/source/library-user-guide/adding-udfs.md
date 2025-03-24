@@ -1231,16 +1231,18 @@ async fn main() -> Result<()> {
     ctx.register_expr_planner(Arc::new(MyCustomPlanner))?;
     let results = ctx.sql("select 'foo'->'bar';").await?.collect().await?;
 
+    let expected = [
+         "+----------------------------+",
+         "| Utf8(\"foo\") || Utf8(\"bar\") |",
+         "+----------------------------+",
+         "| foobar                     |",
+         "+----------------------------+",
+     ];
+    assert_batches_eq!(&expected, &results);
+
     pretty::print_batches(&results)?;
     Ok(())
 }
-
-// "+----------------------------+",
-// "| Utf8(\"foo\") || Utf8(\"bar\") |",
-// "+----------------------------+",
-// "| foobar                     |",
-// "+----------------------------+",
-
 ```
 
 [1]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
