@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::file_groups::FileGroup;
 use crate::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
-use crate::{ListingTableUrl, PartitionedFile};
+use crate::ListingTableUrl;
 use arrow::datatypes::{DataType, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::Result;
@@ -90,8 +91,9 @@ pub struct FileSinkConfig {
     pub original_url: String,
     /// Object store URL, used to get an ObjectStore instance
     pub object_store_url: ObjectStoreUrl,
-    /// A vector of [`PartitionedFile`] structs, each representing a file partition
-    pub file_groups: Vec<PartitionedFile>,
+    /// A collection of files organized into groups.
+    /// Each FileGroup contains one or more PartitionedFile objects.
+    pub file_group: FileGroup,
     /// Vector of partition paths
     pub table_paths: Vec<ListingTableUrl>,
     /// The schema of the output file

@@ -40,7 +40,6 @@ mod tests {
     use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::PartitionedFile;
     use datafusion_datasource_json::JsonFormat;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::object_store::ObjectStoreUrl;
@@ -49,6 +48,7 @@ mod tests {
     use arrow::array::Array;
     use arrow::datatypes::SchemaRef;
     use arrow::datatypes::{Field, SchemaBuilder};
+    use datafusion_datasource::file_groups::FileGroup;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
@@ -62,7 +62,7 @@ mod tests {
         state: &SessionState,
         file_compression_type: FileCompressionType,
         work_dir: &Path,
-    ) -> (ObjectStoreUrl, Vec<Vec<PartitionedFile>>, SchemaRef) {
+    ) -> (ObjectStoreUrl, Vec<FileGroup>, SchemaRef) {
         let store_url = ObjectStoreUrl::local_filesystem();
         let store = state.runtime_env().object_store(&store_url).unwrap();
 
@@ -79,6 +79,7 @@ mod tests {
         let meta = file_groups
             .first()
             .unwrap()
+            .files
             .first()
             .unwrap()
             .clone()
@@ -113,6 +114,7 @@ mod tests {
         let path = file_groups
             .first()
             .unwrap()
+            .files
             .first()
             .unwrap()
             .object_meta
@@ -560,6 +562,7 @@ mod tests {
         let path = file_groups
             .first()
             .unwrap()
+            .files
             .first()
             .unwrap()
             .object_meta

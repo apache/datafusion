@@ -40,6 +40,7 @@ use log::{debug, trace};
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DataFusionError};
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
@@ -122,34 +123,33 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
 const CONCURRENCY_LIMIT: usize = 100;
 
 /// Partition the list of files into `n` groups
-pub fn split_files(
-    mut partitioned_files: Vec<PartitionedFile>,
-    n: usize,
-) -> Vec<Vec<PartitionedFile>> {
-    if partitioned_files.is_empty() {
+pub fn split_files(mut file_group: FileGroup, n: usize) -> Vec<FileGroup> {
+    if file_group.is_empty() {
         return vec![];
     }
 
     // ObjectStore::list does not guarantee any consistent order and for some
     // implementations such as LocalFileSystem, it may be inconsistent. Thus
     // Sort files by path to ensure consistent plans when run more than once.
-    partitioned_files.sort_by(|a, b| a.path().cmp(b.path()));
+    file_group.files.sort_by(|a, b| a.path().cmp(b.path()));
 
     // effectively this is div with rounding up instead of truncating
-    let chunk_size = partitioned_files.len().div_ceil(n);
+    let chunk_size = file_group.len().div_ceil(n);
     let mut chunks = Vec::with_capacity(n);
     let mut current_chunk = Vec::with_capacity(chunk_size);
-    for file in partitioned_files.drain(..) {
+    for file in file_group.files.drain(..) {
         current_chunk.push(file);
         if current_chunk.len() == chunk_size {
-            let full_chunk =
-                mem::replace(&mut current_chunk, Vec::with_capacity(chunk_size));
+            let full_chunk = FileGroup::new(mem::replace(
+                &mut current_chunk,
+                Vec::with_capacity(chunk_size),
+            ));
             chunks.push(full_chunk);
         }
     }
 
     if !current_chunk.is_empty() {
-        chunks.push(current_chunk)
+        chunks.push(FileGroup::new(current_chunk))
     }
 
     chunks
@@ -553,13 +553,13 @@ mod tests {
     #[test]
     fn test_split_files() {
         let new_partitioned_file = |path: &str| PartitionedFile::new(path.to_owned(), 10);
-        let files = vec![
+        let files = FileGroup::new(vec![
             new_partitioned_file("a"),
             new_partitioned_file("b"),
             new_partitioned_file("c"),
             new_partitioned_file("d"),
             new_partitioned_file("e"),
-        ];
+        ]);
 
         let chunks = split_files(files.clone(), 1);
         assert_eq!(1, chunks.len());
@@ -586,7 +586,7 @@ mod tests {
         assert_eq!(1, chunks[3].len());
         assert_eq!(1, chunks[4].len());
 
-        let chunks = split_files(vec![], 2);
+        let chunks = split_files(FileGroup::default(), 2);
         assert_eq!(0, chunks.len());
     }
 

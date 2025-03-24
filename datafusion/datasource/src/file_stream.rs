@@ -91,7 +91,7 @@ impl FileStream {
         let files = config.file_groups[partition].clone();
 
         Ok(Self {
-            file_iter: files.into(),
+            file_iter: files.iter().cloned().collect(),
             projected_schema,
             remain: config.limit,
             file_opener,
