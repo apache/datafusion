@@ -467,7 +467,5 @@ FROM t;
 ----
 [{foo: blarg}]
 
-
-
 statement ok
 drop table t
