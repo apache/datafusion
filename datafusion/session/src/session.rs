@@ -51,7 +51,7 @@ use std::sync::{Arc, Weak};
 /// the required information.
 ///
 /// ```
-/// # use datafusion_catalog::Session;
+/// # use datafusion_session::Session;
 /// # use datafusion_common::{Result, exec_datafusion_err};
 /// # struct SessionState {}
 /// // Given a `Session` reference, get the concrete `SessionState` reference
@@ -132,6 +132,9 @@ pub trait Session: Send + Sync {
 
     /// Returns a mutable reference to [`TableOptions`]
     fn table_options_mut(&mut self) -> &mut TableOptions;
+
+    /// Get a new TaskContext to run in this session
+    fn task_ctx(&self) -> Arc<TaskContext>;
 }
 
 /// Create a new task context instance from Session
