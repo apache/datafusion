@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod count_distinct;
-pub mod groups_accumulator;
-pub mod sum_distinct;
+//! Sum distinct accumulator implementations
+
+pub mod numeric;
+
+pub use numeric::DistinctSumAccumulator; 
