@@ -2593,7 +2593,10 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-sql",
  "getrandom 0.2.15",
+ "insta",
+ "object_store",
  "tokio",
+ "url",
  "wasm-bindgen",
  "wasm-bindgen-test",
 ]
