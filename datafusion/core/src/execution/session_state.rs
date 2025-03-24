@@ -1953,18 +1953,17 @@ pub(crate) struct PreparedPlan {
 #[cfg(test)]
 mod tests {
     use super::{SessionContextProvider, SessionStateBuilder};
+    use crate::common::assert_contains;
+    use crate::config::ConfigOptions;
+    use crate::datasource::empty::EmptyTable;
+    use crate::datasource::provider_as_source;
     use crate::datasource::MemTable;
     use crate::execution::context::SessionState;
-    use crate::{
-        common::assert_contains,
-        config::ConfigOptions,
-        datasource::{empty::EmptyTable, provider_as_source},
-        logical_expr::{
-            planner::ExprPlanner, AggregateUDF, ScalarUDF, TableSource, WindowUDF,
-        },
-        physical_plan::ExecutionPlan,
-        sql::{planner::ContextProvider, ResolvedTableReference, TableReference},
-    };
+    use crate::logical_expr::planner::ExprPlanner;
+    use crate::logical_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+    use crate::physical_plan::ExecutionPlan;
+    use crate::sql::planner::ContextProvider;
+    use crate::sql::{ResolvedTableReference, TableReference};
     use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_catalog::MemoryCatalogProviderList;
