@@ -48,16 +48,25 @@ make_udaf_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "General Functions"),
-    description = "Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.",
+    description = r#"Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.
+This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the argument expression."#,
     syntax_example = "array_agg(expression [ORDER BY expression])",
-    sql_example = r#"```sql
+    sql_example = r#"
+```sql
 > SELECT array_agg(column_name ORDER BY other_column) FROM table_name;
 +-----------------------------------------------+
 | array_agg(column_name ORDER BY other_column)  |
 +-----------------------------------------------+
 | [element1, element2, element3]                |
 +-----------------------------------------------+
-```"#,
+> SELECT array_agg(DISTINCT column_name ORDER BY column_name) FROM table_name;
++--------------------------------------------------------+
+| array_agg(DISTINCT column_name ORDER BY column_name)  |
++--------------------------------------------------------+
+| [element1, element2, element3]                         |
++--------------------------------------------------------+
+```
+"#,
     standard_argument(name = "expression",)
 )]
 #[derive(Debug)]
