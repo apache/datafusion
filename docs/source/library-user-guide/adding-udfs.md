@@ -1168,7 +1168,7 @@ DataFusion provides native support for common SQL operators by default such as `
 
 To extend DataFusion with support for custom operators not natively available, you need to:
 
-1. Implement the `ExprPlanner` trait: This allows you to define custom logic for planning expressions that DataFusion doesn't natively recognize. The trait provides the necessary interface to translate logical expressions into physical execution plans.
+1. Implement the `ExprPlanner` trait: This allows you to define custom logic for planning expressions that DataFusion doesn't natively recognize. The trait provides the necessary interface to translate SQL AST nodes into logical `Expr`.
 
    For detailed documentation please see: [Trait ExprPlanner](https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.ExprPlanner.html)
 
