@@ -132,6 +132,9 @@ pub trait Session: Send + Sync {
 
     /// Returns a mutable reference to [`TableOptions`]
     fn table_options_mut(&mut self) -> &mut TableOptions;
+
+    /// Get a new TaskContext to run in this session
+    fn task_ctx(&self) -> Arc<TaskContext>;
 }
 
 /// Create a new task context instance from Session
@@ -145,7 +148,7 @@ impl From<&dyn Session> for TaskContext {
             state.scalar_functions().clone(),
             state.aggregate_functions().clone(),
             state.window_functions().clone(),
-            state.runtime_env().clone(),
+            Arc::clone(state.runtime_env()),
         )
     }
 }

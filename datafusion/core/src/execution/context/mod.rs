@@ -25,10 +25,10 @@ use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
 use crate::{
+    catalog::listing_schema::ListingSchemaProvider,
     catalog::{
         CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
     },
-    catalog_common::listing_schema::ListingSchemaProvider,
     dataframe::DataFrame,
     datasource::listing::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -75,9 +75,12 @@ use chrono::{DateTime, Utc};
 use datafusion_catalog::{
     DynamicFileCatalog, SessionStore, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
+use datafusion_common::config::ConfigOptions;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
+use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use object_store::ObjectStore;
 use parking_lot::RwLock;
@@ -856,6 +859,16 @@ impl SessionContext {
         }
     }
 
+    /// Applies the `TypeCoercion` rewriter to the logical plan.
+    fn apply_type_coercion(logical_plan: LogicalPlan) -> Result<LogicalPlan> {
+        let options = ConfigOptions::default();
+        Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())]).execute_and_check(
+            logical_plan,
+            &options,
+            |_, _| {},
+        )
+    }
+
     async fn create_view(&self, cmd: CreateView) -> Result<DataFrame> {
         let CreateView {
             name,
@@ -874,13 +887,14 @@ impl SessionContext {
         match (or_replace, view) {
             (true, Ok(_)) => {
                 self.deregister_table(name.clone())?;
-                let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
-
+                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
-                let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
+                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
@@ -1814,7 +1828,6 @@ impl<'n> TreeNodeVisitor<'n> for BadPlanVisitor<'_> {
 #[cfg(test)]
 mod tests {
     use super::{super::options::CsvReadOptions, *};
-    use crate::assert_batches_eq;
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
@@ -1823,7 +1836,9 @@ mod tests {
     use std::error::Error;
     use std::path::PathBuf;
 
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common_runtime::SpawnedTask;
+    use insta::{allow_duplicates, assert_snapshot};
 
     use crate::catalog::SchemaProvider;
     use crate::execution::session_state::SessionStateBuilder;
@@ -1886,14 +1901,13 @@ mod tests {
             plan_and_collect(&ctx, "SELECT @@version, @name, @integer + 1 FROM dual")
                 .await?;
 
-        let expected = [
-            "+----------------------+------------------------+---------------------+",
-            "| @@version            | @name                  | @integer + Int64(1) |",
-            "+----------------------+------------------------+---------------------+",
-            "| system-var-@@version | user-defined-var-@name | 42                  |",
-            "+----------------------+------------------------+---------------------+",
-        ];
-        assert_batches_eq!(expected, &results);
+        assert_snapshot!(batches_to_string(&results), @r"
+        +----------------------+------------------------+---------------------+
+        | @@version            | @name                  | @integer + Int64(1) |
+        +----------------------+------------------------+---------------------+
+        | system-var-@@version | user-defined-var-@name | 42                  |
+        +----------------------+------------------------+---------------------+
+        ");
 
         Ok(())
     }
@@ -1974,14 +1988,15 @@ mod tests {
         let actual = arrow::util::pretty::pretty_format_batches(&result)
             .unwrap()
             .to_string();
-        let expected = r#"+--------------------+
-| c_name             |
-+--------------------+
-| Customer#000000002 |
-| Customer#000000003 |
-| Customer#000000004 |
-+--------------------+"#;
-        assert_eq!(actual, expected);
+        assert_snapshot!(actual, @r"
+        +--------------------+
+        | c_name             |
+        +--------------------+
+        | Customer#000000002 |
+        | Customer#000000003 |
+        | Customer#000000004 |
+        +--------------------+
+        ");
 
         Ok(())
     }
@@ -2006,14 +2021,15 @@ mod tests {
         let actual = arrow::util::pretty::pretty_format_batches(&result)
             .unwrap()
             .to_string();
-        let expected = r#"+--------------------+
-| c_name             |
-+--------------------+
-| Customer#000000002 |
-| Customer#000000003 |
-| Customer#000000004 |
-+--------------------+"#;
-        assert_eq!(actual, expected);
+        assert_snapshot!(actual, @r"
+        +--------------------+
+        | c_name             |
+        +--------------------+
+        | Customer#000000002 |
+        | Customer#000000003 |
+        | Customer#000000004 |
+        +--------------------+
+        ");
 
         Ok(())
     }
@@ -2096,6 +2112,8 @@ mod tests {
             .unwrap();
         ctx.register_catalog("my_catalog", Arc::new(catalog));
 
+        let mut results = Vec::new();
+
         for table_ref in &["my_catalog.my_schema.test", "my_schema.test", "test"] {
             let result = plan_and_collect(
                 &ctx,
@@ -2104,14 +2122,18 @@ mod tests {
             .await
             .unwrap();
 
-            let expected = [
-                "+-------+",
-                "| count |",
-                "+-------+",
-                "| 1     |",
-                "+-------+",
-            ];
-            assert_batches_eq!(expected, &result);
+            results.push(result);
+        }
+        allow_duplicates! {
+            for result in &results {
+                assert_snapshot!(batches_to_string(result), @r"
+                +-------+
+                | count |
+                +-------+
+                | 1     |
+                +-------+
+                ");
+            }
         }
     }
 
@@ -2146,15 +2168,14 @@ mod tests {
         )
         .await?;
 
-        let expected = [
-            "+-----+-------+",
-            "| cat | total |",
-            "+-----+-------+",
-            "| a   | 1     |",
-            "| b   | 3     |",
-            "+-----+-------+",
-        ];
-        assert_batches_eq!(expected, &result);
+        assert_snapshot!(batches_to_string(&result), @r"
+        +-----+-------+
+        | cat | total |
+        +-----+-------+
+        | a   | 1     |
+        | b   | 3     |
+        +-----+-------+
+        ");
 
         Ok(())
     }
@@ -2243,14 +2264,13 @@ mod tests {
             .await?
             .collect()
             .await?;
-        let expected = [
-            "+-----------------------------+",
-            "| Utf8(\"2021-01-01 00:00:00\") |",
-            "+-----------------------------+",
-            "| 2021-01-01T00:00:00         |",
-            "+-----------------------------+",
-        ];
-        assert_batches_eq!(expected, &result);
+        assert_snapshot!(batches_to_string(&result), @r#"
+        +-----------------------------+
+        | Utf8("2021-01-01 00:00:00") |
+        +-----------------------------+
+        | 2021-01-01T00:00:00         |
+        +-----------------------------+
+        "#);
         Ok(())
     }
     #[test]

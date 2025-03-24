@@ -25,9 +25,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::catalog::{TableProvider, TableProviderFactory};
-use crate::datasource::create_ordering;
-
+use crate::{Session, TableProvider, TableProviderFactory};
 use arrow::array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
@@ -35,13 +33,13 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
+use datafusion_physical_expr::create_ordering;
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use async_trait::async_trait;
-use datafusion_catalog::Session;
 use futures::StreamExt;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
@@ -292,7 +290,7 @@ impl StreamConfig {
 /// data stored in object storage, should instead consider [`ListingTable`].
 ///
 /// [Hadoop]: https://hadoop.apache.org/
-/// [`ListingTable`]: crate::datasource::listing::ListingTable
+/// [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 #[derive(Debug)]
 pub struct StreamTable(Arc<StreamConfig>);
 
@@ -400,8 +398,8 @@ impl PartitionStream for StreamRead {
 struct StreamWrite(Arc<StreamConfig>);
 
 impl DisplayAs for StreamWrite {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        self.0.source.stream_write_display(_t, f)
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        self.0.source.stream_write_display(t, f)
     }
 }
 

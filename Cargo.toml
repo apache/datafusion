@@ -74,7 +74,7 @@ repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
 rust-version = "1.82.0"
 # Define DataFusion version
-version = "46.0.0"
+version = "46.0.1"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -99,50 +99,50 @@ arrow-ipc = { version = "54.2.0", default-features = false, features = [
 ] }
 arrow-ord = { version = "54.1.0", default-features = false }
 arrow-schema = { version = "54.1.0", default-features = false }
-async-trait = "0.1.87"
+async-trait = "0.1.88"
 bigdecimal = "0.4.7"
 bytes = "1.10"
 chrono = { version = "0.4.38", default-features = false }
 criterion = "0.5.1"
 ctor = "0.2.9"
 dashmap = "6.0.1"
-datafusion = { path = "datafusion/core", version = "46.0.0", default-features = false }
-datafusion-catalog = { path = "datafusion/catalog", version = "46.0.0" }
-datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "46.0.0" }
-datafusion-common = { path = "datafusion/common", version = "46.0.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common-runtime", version = "46.0.0" }
-datafusion-datasource = { path = "datafusion/datasource", version = "46.0.0", default-features = false }
-datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "46.0.0", default-features = false }
-datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "46.0.0", default-features = false }
-datafusion-datasource-json = { path = "datafusion/datasource-json", version = "46.0.0", default-features = false }
-datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "46.0.0", default-features = false }
-datafusion-doc = { path = "datafusion/doc", version = "46.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "46.0.0" }
-datafusion-expr = { path = "datafusion/expr", version = "46.0.0" }
-datafusion-expr-common = { path = "datafusion/expr-common", version = "46.0.0" }
-datafusion-ffi = { path = "datafusion/ffi", version = "46.0.0" }
-datafusion-functions = { path = "datafusion/functions", version = "46.0.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "46.0.0" }
-datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "46.0.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "46.0.0" }
-datafusion-functions-table = { path = "datafusion/functions-table", version = "46.0.0" }
-datafusion-functions-window = { path = "datafusion/functions-window", version = "46.0.0" }
-datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "46.0.0" }
-datafusion-macros = { path = "datafusion/macros", version = "46.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "46.0.0", default-features = false }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "46.0.0", default-features = false }
-datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "46.0.0", default-features = false }
-datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "46.0.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "46.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "46.0.0" }
-datafusion-proto-common = { path = "datafusion/proto-common", version = "46.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "46.0.0" }
+datafusion = { path = "datafusion/core", version = "46.0.1", default-features = false }
+datafusion-catalog = { path = "datafusion/catalog", version = "46.0.1" }
+datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "46.0.1" }
+datafusion-common = { path = "datafusion/common", version = "46.0.1", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "46.0.1" }
+datafusion-datasource = { path = "datafusion/datasource", version = "46.0.1", default-features = false }
+datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "46.0.1", default-features = false }
+datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "46.0.1", default-features = false }
+datafusion-datasource-json = { path = "datafusion/datasource-json", version = "46.0.1", default-features = false }
+datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "46.0.1", default-features = false }
+datafusion-doc = { path = "datafusion/doc", version = "46.0.1" }
+datafusion-execution = { path = "datafusion/execution", version = "46.0.1" }
+datafusion-expr = { path = "datafusion/expr", version = "46.0.1" }
+datafusion-expr-common = { path = "datafusion/expr-common", version = "46.0.1" }
+datafusion-ffi = { path = "datafusion/ffi", version = "46.0.1" }
+datafusion-functions = { path = "datafusion/functions", version = "46.0.1" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "46.0.1" }
+datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "46.0.1" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "46.0.1" }
+datafusion-functions-table = { path = "datafusion/functions-table", version = "46.0.1" }
+datafusion-functions-window = { path = "datafusion/functions-window", version = "46.0.1" }
+datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "46.0.1" }
+datafusion-macros = { path = "datafusion/macros", version = "46.0.1" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "46.0.1", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "46.0.1", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "46.0.1", default-features = false }
+datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "46.0.1" }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "46.0.1" }
+datafusion-proto = { path = "datafusion/proto", version = "46.0.1" }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "46.0.1" }
+datafusion-sql = { path = "datafusion/sql", version = "46.0.1" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
-half = { version = "2.2.1", default-features = false }
+half = { version = "2.5.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
-indexmap = "2.7.1"
+indexmap = "2.8.0"
 itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.11.0", default-features = false }
@@ -155,21 +155,22 @@ parquet = { version = "54.2.1", default-features = false, features = [
 pbjson = { version = "0.7.0" }
 pbjson-types = "0.7"
 # Should match arrow-flight's version of prost.
+insta = { version = "1.41.1", features = ["glob", "filters"] }
 prost = "0.13.1"
 rand = "0.8.5"
 recursive = "0.1.1"
 regex = "1.8"
 rstest = "0.24.0"
 serde_json = "1"
-sqlparser = { version = "0.54.0", features = ["visitor"] }
+sqlparser = { version = "0.55.0", features = ["visitor"] }
 tempfile = "3"
-tokio = { version = "1.43", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.44", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
 
 [profile.release]
 codegen-units = 1
 lto = true
-strip = true
+strip = true      # Eliminate debug information to minimize binary size
 
 # the release profile takes a long time to build so we can use this profile during development to save time
 # cargo build --profile release-nonlto
@@ -182,6 +183,7 @@ lto = false
 opt-level = 3
 overflow-checks = false
 rpath = false
+strip = false            # Retain debug info for flamegraphs
 
 [profile.ci]
 inherits = "dev"
@@ -197,6 +199,7 @@ incremental = false
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"
+used_underscore_binding = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }

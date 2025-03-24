@@ -22,9 +22,9 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::catalog::{SchemaProvider, TableProvider, TableProviderFactory};
-use crate::execution::context::SessionState;
+use crate::{SchemaProvider, TableProvider, TableProviderFactory};
 
+use crate::Session;
 use datafusion_common::{
     Constraints, DFSchema, DataFusionError, HashMap, TableReference,
 };
@@ -88,7 +88,7 @@ impl ListingSchemaProvider {
     }
 
     /// Reload table information from ObjectStore
-    pub async fn refresh(&self, state: &SessionState) -> datafusion_common::Result<()> {
+    pub async fn refresh(&self, state: &dyn Session) -> datafusion_common::Result<()> {
         let entries: Vec<_> = self.store.list(Some(&self.path)).try_collect().await?;
         let base = Path::new(self.path.as_ref());
         let mut tables = HashSet::new();

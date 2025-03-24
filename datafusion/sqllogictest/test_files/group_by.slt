@@ -3468,7 +3468,7 @@ SELECT r.sn, SUM(l.amount), r.amount
 # to associate it with other fields, aggregate should contain all the composite columns
 # if any of the composite column is missing, we cannot use associated indices, inside select expression
 # below query should fail
-statement error DataFusion error: Error during planning: Projection references non\-aggregate values: Expression r\.amount could not be resolved from available columns: r\.sn, sum\(l\.amount\)
+statement error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "r\.amount" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "r\.sn, sum\(l\.amount\)" appears in the SELECT clause satisfies this requirement
 SELECT r.sn, SUM(l.amount), r.amount
   FROM sales_global_with_composite_pk AS l
   JOIN sales_global_with_composite_pk AS r
@@ -3496,7 +3496,7 @@ NULL NULL NULL
 # left join shouldn't propagate right side constraint,
 # if right side is a unique key (unique and can contain null)
 # Please note that, above query and this one is same except the constraint in the table.
-statement error DataFusion error: Error during planning: Projection references non\-aggregate values: Expression r\.amount could not be resolved from available columns: r\.sn, sum\(r\.amount\)
+statement error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "r\.amount" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "r\.sn, sum\(r\.amount\)" appears in the SELECT clause satisfies this requirement
 SELECT r.sn, r.amount, SUM(r.amount)
   FROM (SELECT *
     FROM sales_global_with_unique as l
@@ -3542,7 +3542,7 @@ SELECT column1, COUNT(*) as column2 FROM (VALUES (['a', 'b'], 1), (['c', 'd', 'e
 
 
 # primary key should be aware from which columns it is associated
-statement error DataFusion error: Error during planning: Projection references non\-aggregate values: Expression r\.sn could not be resolved from available columns: l\.sn, l\.zip_code, l\.country, l\.ts, l\.currency, l\.amount, sum\(l\.amount\)
+statement error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "r\.sn" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "l\.sn, l\.zip_code, l\.country, l\.ts, l\.currency, l\.amount, sum\(l\.amount\)" appears in the SELECT clause satisfies this requirement
 SELECT l.sn, r.sn, SUM(l.amount), r.amount
   FROM sales_global_with_pk AS l
   JOIN sales_global_with_pk AS r
@@ -3633,7 +3633,7 @@ ORDER BY r.sn
 4 100 2022-01-03T10:00:00
 
 # after join, new window expressions shouldn't be associated with primary keys
-statement error DataFusion error: Error during planning: Projection references non\-aggregate values: Expression rn1 could not be resolved from available columns: r\.sn, r\.ts, r\.amount, sum\(r\.amount\)
+statement error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "rn1" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "r\.sn, r\.ts, r\.amount, sum\(r\.amount\)" appears in the SELECT clause satisfies this requirement
 SELECT r.sn, SUM(r.amount), rn1
 FROM
   (SELECT r.ts, r.sn, r.amount,
@@ -5135,7 +5135,7 @@ statement ok
 CREATE TABLE test_case_expr(a INT, b TEXT) AS VALUES (1,'hello'), (2,'world')
 
 query T
-SELECT (CASE WHEN CONCAT(b, 'hello') = 'test' THEN 'good' ELSE 'bad' END) AS c 
+SELECT (CASE WHEN CONCAT(b, 'hello') = 'test' THEN 'good' ELSE 'bad' END) AS c
   FROM test_case_expr GROUP BY c;
 ----
 bad
@@ -5537,3 +5537,32 @@ drop view t
 
 statement ok
 drop table source;
+
+
+# test select_wildcard_with_groupby
+statement count 0
+create table t(a int, b int, c int, "😀" int);
+
+query TT
+explain select * from t group by a, b, c, "😀";
+----
+logical_plan
+01)Aggregate: groupBy=[[t.a, t.b, t.c, t.😀]], aggr=[[]]
+02)--TableScan: t projection=[a, b, c, 😀]
+physical_plan
+01)AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c, 😀@3 as 😀], aggr=[]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain select * from (select a, b from t) as c group by a, b;
+----
+logical_plan
+01)Aggregate: groupBy=[[c.a, c.b]], aggr=[[]]
+02)--SubqueryAlias: c
+03)----TableScan: t projection=[a, b]
+physical_plan
+01)AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+statement count 0
+drop table t;

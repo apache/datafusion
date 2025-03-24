@@ -79,7 +79,12 @@ recursive_protection = [
     "datafusion-physical-optimizer/recursive_protection",
     "datafusion-sql/recursive_protection",
 ]
-serde = ["dep:serde"]
+serde = [
+    "dep:serde",
+    # Enable `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+    # statements in `arrow-schema` crate
+    "arrow-schema/serde",
+]
 string_expressions = ["datafusion-functions/string_expressions"]
 unicode_expressions = [
     "datafusion-sql/unicode_expressions",
@@ -93,7 +98,7 @@ arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-bzip2 = { version = "0.5.1", optional = true }
+bzip2 = { version = "0.5.2", optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
@@ -133,13 +138,13 @@ sqlparser = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.15", features = ["v4", "js"] }
+uuid = { version = "1.16", features = ["v4", "js"] }
 xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-criterion = { workspace = true, features = ["async_tokio"] }
+criterion = { workspace = true, features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
 dashmap = "6.1.0"
 datafusion-doc = { workspace = true }
@@ -147,6 +152,7 @@ datafusion-functions-window-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
+insta = { workspace = true }
 paste = "^1.0"
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.4.3"

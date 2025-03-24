@@ -20,24 +20,18 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
+#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 
 //! Interfaces and default implementations of catalogs and schemas.
 //!
 //! Implementations
 //! * Information schema: [`information_schema`]
 //! * Simple memory based catalog: [`MemoryCatalogProviderList`], [`MemoryCatalogProvider`], [`MemorySchemaProvider`]
+//! * Listing schema: [`listing_schema`]
 
 pub mod memory;
-#[deprecated(
-    since = "46.0.0",
-    note = "use datafusion_sql::resolve::resolve_table_references"
-)]
-pub use datafusion_sql::resolve::resolve_table_references;
-#[deprecated(
-    since = "46.0.0",
-    note = "use datafusion_common::{ResolvedTableReference, TableReference}"
-)]
-pub use datafusion_sql::{ResolvedTableReference, TableReference};
 pub use memory::{
     MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
 };
@@ -45,6 +39,7 @@ mod r#async;
 mod catalog;
 mod dynamic_file;
 pub mod information_schema;
+pub mod listing_schema;
 mod schema;
 mod session;
 mod table;
@@ -54,4 +49,8 @@ pub use r#async::*;
 pub use schema::*;
 pub use session::*;
 pub use table::*;
+pub mod cte_worktable;
+pub mod default_table_source;
+pub mod stream;
 pub mod streaming;
+pub mod view;

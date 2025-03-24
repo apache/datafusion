@@ -1820,6 +1820,9 @@ query I
 select a from t;
 ----
 
+statement count 0
+drop table t;
+
 statement ok
 set datafusion.optimizer.max_passes=3;
 
@@ -1842,3 +1845,29 @@ SELECT t1.v1 FROM (SELECT 1 AS "t1.v1");
 # Test issue: https://github.com/apache/datafusion/issues/14124
 query error DataFusion error: Arrow error: Arithmetic overflow: Overflow happened on: 10000 \* 100000000000000000000000000000000000
 SELECT ('0.54321543215432154321543215432154321'::DECIMAL(35,35) + 10000)::VARCHAR
+
+# where_selection_with_ambiguous_column
+statement ok
+CREATE TABLE t(a int, b int, id int);
+
+query error DataFusion error: Schema error: Ambiguous reference to unqualified field id
+select * from t a, t b where id = id + 1;
+
+statement count 0
+drop table t;
+
+
+# test wildcard + other columns
+statement count 0
+create table t(a int) as values (1), (2), (3), (1);
+
+query II
+select *, count(*) over() as ta from t;
+----
+1 4
+2 4
+3 4
+1 4
+
+statement count 0
+drop table t;
