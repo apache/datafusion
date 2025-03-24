@@ -1170,7 +1170,7 @@ To extend DataFusion with support for custom operators not natively available, y
 
 1. Implement the `ExprPlanner` trait: This allows you to define custom logic for planning expressions that DataFusion doesn't natively recognize. The trait provides the necessary interface to translate logical expressions into physical execution plans.
 
-   For a detailed documentation please see: [Trait ExprPlanner](https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.ExprPlanner.html)
+   For detailed documentation please see: [Trait ExprPlanner](https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.ExprPlanner.html)
 
 2. Register your custom planner: Integrate your implementation with DataFusion's `SessionContext` to ensure your custom planning logic is invoked during the query optimization and execution planning phase.
 
