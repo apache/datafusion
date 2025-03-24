@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::expressions::Column;
-use crate::{LexRequirement, PhysicalExpr};
+use crate::PhysicalExpr;
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 
@@ -33,18 +33,6 @@ pub use projection::ProjectionMapping;
 pub use properties::{
     calculate_union, join_equivalence_properties, EquivalenceProperties,
 };
-
-/// This function constructs a duplicate-free `LexOrderingReq` by filtering out
-/// duplicate entries that have same physical expression inside. For example,
-/// `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a Some(ASC)]`.
-///
-/// It will also filter out entries that are ordered if the next entry is;
-/// for instance, `vec![floor(a) Some(ASC), a Some(ASC)]` will be collapsed to
-/// `vec![a Some(ASC)]`.
-#[deprecated(since = "45.0.0", note = "Use LexRequirement::collapse")]
-pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
-    input.collapse()
-}
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
 /// generally used during the update of the right table schema in join operations.
@@ -70,7 +58,7 @@ mod tests {
 
     use super::*;
     use crate::expressions::col;
-    use crate::PhysicalSortExpr;
+    use crate::{LexRequirement, PhysicalSortExpr};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};

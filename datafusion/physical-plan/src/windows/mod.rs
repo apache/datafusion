@@ -281,30 +281,36 @@ pub(crate) fn calc_requirements<
     partition_by_exprs: impl IntoIterator<Item = T>,
     orderby_sort_exprs: impl IntoIterator<Item = S>,
 ) -> Option<RequiredInputOrdering> {
-    let mut sort_reqs_with_partition = LexRequirement::new(
-        partition_by_exprs
-            .into_iter()
-            .map(|partition_by| {
-                PhysicalSortRequirement::new(Arc::clone(partition_by.borrow()), None)
-            })
-            .collect::<Vec<_>>(),
-    );
-    let mut sort_reqs = LexRequirement::new(vec![]);
+    let mut sort_reqs_with_partition = partition_by_exprs
+        .into_iter()
+        .map(|partition_by| {
+            PhysicalSortRequirement::new(Arc::clone(partition_by.borrow()), None)
+        })
+        .collect::<Vec<_>>();
+    let mut sort_reqs = vec![];
     for element in orderby_sort_exprs.into_iter() {
         let PhysicalSortExpr { expr, options } = element.borrow();
         let sort_req = PhysicalSortRequirement::new(Arc::clone(expr), Some(*options));
         if !sort_reqs_with_partition.iter().any(|e| e.expr.eq(expr)) {
             sort_reqs_with_partition.push(sort_req.clone());
         }
-        if !sort_reqs.iter().any(|e| e.expr.eq(expr)) {
+        if !sort_reqs
+            .iter()
+            .any(|e: &PhysicalSortRequirement| e.expr.eq(expr))
+        {
             sort_reqs.push(sort_req);
         }
     }
 
-    RequiredInputOrdering::new_with_alternatives(
-        vec![sort_reqs_with_partition, sort_reqs],
-        false,
-    )
+    let mut alternatives = vec![];
+    if !sort_reqs_with_partition.is_empty() {
+        alternatives.push(sort_reqs_with_partition.into());
+    }
+    if !sort_reqs.is_empty() {
+        alternatives.push(sort_reqs.into());
+    }
+
+    RequiredInputOrdering::new_with_alternatives(alternatives, false)
 }
 
 /// This function calculates the indices such that when partition by expressions reordered with the indices
@@ -592,31 +598,25 @@ pub fn get_window_mode(
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
-    vec![].extend(indices.iter().map(|&idx| PhysicalSortRequirement {
-        expr: Arc::clone(&partitionby_exprs[idx]),
-        options: None,
-    }));
-    let partition_by_reqs = LexRequirement::new(
-        indices
-            .iter()
-            .map(|&idx| PhysicalSortRequirement {
-                expr: Arc::clone(&partitionby_exprs[idx]),
-                options: None,
-            })
-            .collect(),
-    );
+    let partition_by_reqs = indices
+        .iter()
+        .map(|&idx| PhysicalSortRequirement {
+            expr: Arc::clone(&partitionby_exprs[idx]),
+            options: None,
+        })
+        .collect::<Vec<_>>();
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
-    let order_by_reqs = LexRequirement::from(orderby_keys.clone());
-    let reverse_order_by_reqs = LexRequirement::from(reverse_order_bys(orderby_keys));
-    for (should_swap, order_by_reqs) in
-        [(false, order_by_reqs), (true, reverse_order_by_reqs)]
+    let reverse_orderby_keys = reverse_order_bys(orderby_keys);
+    for (should_swap, orderbys) in [(false, orderby_keys), (true, &reverse_orderby_keys)]
     {
         let mut req = partition_by_reqs.clone();
-        req.extend(order_by_reqs.clone());
-        req = req.collapse();
-        if partition_by_eqs.ordering_satisfy_requirement(&req) {
+        req.extend(orderbys.iter().cloned().map(Into::into));
+        if req.is_empty()
+            || partition_by_eqs
+                .ordering_satisfy_requirement(&LexRequirement::new(req).collapse())
+        {
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {
                 InputOrderMode::Sorted
@@ -778,24 +778,20 @@ mod tests {
 
             let mut expected: Option<RequiredInputOrdering> = None;
             for expected_param in expected_params.clone() {
-                let mut lex_requirement = LexRequirement::new(vec![]);
+                let mut requirements = vec![];
                 for (col_name, reqs) in expected_param {
                     let options = reqs.map(|(descending, nulls_first)| SortOptions {
                         descending,
                         nulls_first,
                     });
                     let expr = col(col_name, &schema)?;
-                    let res = PhysicalSortRequirement::new(expr, options);
-                    lex_requirement.push(res);
+                    requirements.push(PhysicalSortRequirement::new(expr, options));
                 }
-                if !lex_requirement.is_empty() {
-                    expected = if let Some(expect) = expected {
-                        RequiredInputOrdering::new_with_alternatives(
-                            vec![expect.lex_requirement().clone(), lex_requirement],
-                            false,
-                        )
+                if !requirements.is_empty() {
+                    if let Some(alts) = expected.as_mut() {
+                        alts.add_alternative(requirements.into());
                     } else {
-                        RequiredInputOrdering::new(lex_requirement)
+                        expected = Some(RequiredInputOrdering::new(requirements.into()));
                     }
                 }
             }

@@ -190,6 +190,18 @@ impl PhysicalSortExpr {
                 opts.is_none_or(|opts| self.options.descending == opts.descending)
             }
     }
+
+    /// Checks whether this sort expression satisfies the given `sort_expr`.
+    pub fn satisfy_expr(&self, sort_expr: &PhysicalSortExpr, schema: &Schema) -> bool {
+        // If the column is not nullable, NULLS FIRST/LAST is not important.
+        let nullable = self.expr.nullable(schema).unwrap_or(true);
+        self.expr.eq(&sort_expr.expr)
+            && if nullable {
+                self.options == sort_expr.options
+            } else {
+                self.options.descending == sort_expr.options.descending
+            }
+    }
 }
 
 /// Represents sort requirement associated with a plan
@@ -410,21 +422,6 @@ impl LexOrdering {
         self
     }
 
-    /// Converts a `LexRequirement` into a `LexOrdering`.
-    ///
-    /// This function converts [`PhysicalSortRequirement`] to [`PhysicalSortExpr`]
-    /// for each entry in the input.
-    ///
-    /// If the required ordering is `None` for an entry in `requirement`, the
-    /// default ordering `ASC, NULLS LAST` is used (see
-    /// [`PhysicalSortExpr::from`]).
-    pub fn from_lex_requirement(requirement: LexRequirement) -> Self {
-        requirement
-            .into_iter()
-            .map(PhysicalSortExpr::from)
-            .collect()
-    }
-
     /// Collapse a `LexOrdering` into a new duplicate-free `LexOrdering` based on expression.
     ///
     /// This function filters  duplicate entries that have same physical
@@ -457,12 +454,6 @@ impl From<Vec<PhysicalSortExpr>> for LexOrdering {
     }
 }
 
-impl From<LexRequirement> for LexOrdering {
-    fn from(value: LexRequirement) -> Self {
-        value.into_iter().map(Into::into).collect()
-    }
-}
-
 /// Convert a `LexOrdering` into a `Arc[<PhysicalSortExpr>]` for fast copies
 impl From<LexOrdering> for Arc<[PhysicalSortExpr]> {
     fn from(value: LexOrdering) -> Self {
@@ -475,6 +466,12 @@ impl Deref for LexOrdering {
 
     fn deref(&self) -> &Self::Target {
         self.inner.as_slice()
+    }
+}
+
+impl DerefMut for LexOrdering {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.as_mut_slice()
     }
 }
 
@@ -495,9 +492,7 @@ impl Display for LexOrdering {
 
 impl FromIterator<PhysicalSortExpr> for LexOrdering {
     fn from_iter<T: IntoIterator<Item = PhysicalSortExpr>>(iter: T) -> Self {
-        let mut lex_ordering = Self::default();
-        lex_ordering.extend(iter);
-        lex_ordering
+        Self::new(iter.into_iter().collect())
     }
 }
 
@@ -542,15 +537,25 @@ impl IntoIterator for LexOrdering {
     }
 }
 
+impl<'a> IntoIterator for &'a LexOrdering {
+    type Item = &'a PhysicalSortExpr;
+    type IntoIter = std::slice::Iter<'a, PhysicalSortExpr>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.iter()
+    }
+}
+
 ///`LexRequirement` is an struct containing a `Vec<PhysicalSortRequirement>`, which
 /// represents a lexicographical ordering requirement.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LexRequirement {
     inner: Vec<PhysicalSortRequirement>,
 }
 
 impl LexRequirement {
     pub fn new(inner: Vec<PhysicalSortRequirement>) -> Self {
+        debug_assert!(!inner.is_empty());
         Self { inner }
     }
 
@@ -595,12 +600,6 @@ impl From<Vec<PhysicalSortRequirement>> for LexRequirement {
     }
 }
 
-impl From<LexOrdering> for LexRequirement {
-    fn from(value: LexOrdering) -> Self {
-        Self::new(value.into_iter().map(Into::into).collect())
-    }
-}
-
 impl Deref for LexRequirement {
     type Target = [PhysicalSortRequirement];
 
@@ -617,9 +616,7 @@ impl DerefMut for LexRequirement {
 
 impl FromIterator<PhysicalSortRequirement> for LexRequirement {
     fn from_iter<T: IntoIterator<Item = PhysicalSortRequirement>>(iter: T) -> Self {
-        let mut lex_requirement = Self::default();
-        lex_requirement.extend(iter);
-        lex_requirement
+        Self::new(iter.into_iter().collect())
     }
 }
 
@@ -632,11 +629,15 @@ impl IntoIterator for LexRequirement {
     }
 }
 
-impl<'a> IntoIterator for &'a LexOrdering {
-    type Item = &'a PhysicalSortExpr;
-    type IntoIter = std::slice::Iter<'a, PhysicalSortExpr>;
+// Cross-conversions utilities between `LexOrdering` and `LexRequirement`
+impl From<LexOrdering> for LexRequirement {
+    fn from(value: LexOrdering) -> Self {
+        Self::new(value.into_iter().map(Into::into).collect())
+    }
+}
 
-    fn into_iter(self) -> Self::IntoIter {
-        self.inner.iter()
+impl From<LexRequirement> for LexOrdering {
+    fn from(value: LexRequirement) -> Self {
+        value.into_iter().map(Into::into).collect()
     }
 }

@@ -499,12 +499,21 @@ impl EquivalenceProperties {
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
     fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
-        // Convert sort expressions to sort requirements:
-        let sort_reqs = LexRequirement::from(sort_exprs.clone());
-        // Normalize the requirements:
-        let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
-        // Convert sort requirements back to sort expressions:
-        LexOrdering::from(normalized_sort_reqs)
+        let normalized_sort_exprs = self.eq_group.normalize_sort_exprs(sort_exprs);
+        let mut constant_exprs = vec![];
+        constant_exprs.extend(
+            self.constants
+                .iter()
+                .map(|const_expr| Arc::clone(const_expr.expr())),
+        );
+        let constants_normalized = self.eq_group.normalize_exprs(constant_exprs);
+        // Prune redundant sections in the ordering:
+        normalized_sort_exprs
+            .iter()
+            .filter(|&order| !physical_exprs_contains(&constants_normalized, &order.expr))
+            .cloned()
+            .collect::<LexOrdering>()
+            .collapse()
     }
 
     /// Normalizes the given sort requirements (i.e. `sort_reqs`) using the
@@ -520,8 +529,11 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    fn normalize_sort_requirements(&self, sort_reqs: &LexRequirement) -> LexRequirement {
-        let normalized_sort_reqs = self.eq_group.normalize_sort_requirements(sort_reqs);
+    fn normalize_sort_requirements(
+        &self,
+        sort_reqs: &LexRequirement,
+    ) -> Option<LexRequirement> {
+        let normalized_reqs = self.eq_group.normalize_sort_requirements(sort_reqs)?;
         let mut constant_exprs = vec![];
         constant_exprs.extend(
             self.constants
@@ -530,37 +542,42 @@ impl EquivalenceProperties {
         );
         let constants_normalized = self.eq_group.normalize_exprs(constant_exprs);
         // Prune redundant sections in the requirement:
-        normalized_sort_reqs
-            .iter()
-            .filter(|&order| !physical_exprs_contains(&constants_normalized, &order.expr))
-            .cloned()
-            .collect::<LexRequirement>()
-            .collapse()
+        let reqs = normalized_reqs
+            .into_iter()
+            .filter(|order| !physical_exprs_contains(&constants_normalized, &order.expr))
+            .collect::<Vec<_>>();
+        (!reqs.is_empty()).then(|| LexRequirement::new(reqs).collapse())
     }
 
     /// Checks whether the given ordering is satisfied by any of the existing
     /// orderings.
     pub fn ordering_satisfy(&self, given: &LexOrdering) -> bool {
-        // Convert the given sort expressions to sort requirements:
-        let sort_requirements = LexRequirement::from(given.clone());
-        self.ordering_satisfy_requirement(&sort_requirements)
-    }
-
-    /// Checks whether the given sort requirements are satisfied by any of the
-    /// existing orderings.
-    pub fn ordering_satisfy_requirement(&self, reqs: &LexRequirement) -> bool {
-        let mut eq_properties = self.clone();
-        // First, standardize the given requirement:
-        let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
-
-        // Check whether given ordering is satisfied by constraints first
-        if self.satisfied_by_constraints(&normalized_reqs) {
+        // First, standardize the given ordering:
+        let normalized_ordering = self.normalize_sort_exprs(given);
+        // Check whether given ordering is satisfied by constraints first:
+        if self.satisfied_by_constraints_ordering(&normalized_ordering) {
             return true;
         }
-
-        for normalized_req in normalized_reqs {
-            // Check whether given ordering is satisfied
-            if !eq_properties.ordering_satisfy_single(&normalized_req) {
+        let schema = self.schema();
+        let mut eq_properties = self.clone();
+        for element in normalized_ordering {
+            // Check whether given ordering is satisfied:
+            let ExprProperties {
+                sort_properties, ..
+            } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
+            let satisfy = match sort_properties {
+                SortProperties::Ordered(options) => {
+                    let sort_expr = PhysicalSortExpr {
+                        expr: Arc::clone(&element.expr),
+                        options,
+                    };
+                    sort_expr.satisfy_expr(&element, schema)
+                }
+                // Singleton expressions satisfies any ordering.
+                SortProperties::Singleton => true,
+                SortProperties::Unordered => false,
+            };
+            if !satisfy {
                 return false;
             }
             // Treat satisfied keys as constants in subsequent iterations. We
@@ -576,9 +593,111 @@ impl EquivalenceProperties {
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
             eq_properties = eq_properties
-                .with_constants(std::iter::once(ConstExpr::from(normalized_req.expr)));
+                .with_constants(std::iter::once(ConstExpr::from(element.expr)));
         }
         true
+    }
+
+    /// Checks whether the given sort requirements are satisfied by any of the
+    /// existing orderings.
+    pub fn ordering_satisfy_requirement(&self, given: &LexRequirement) -> bool {
+        // First, standardize the given requirement:
+        let Some(normalized_reqs) = self.normalize_sort_requirements(given) else {
+            // If the requirement vanishes after normalization, it is satisfied
+            // by any ordering.
+            return true;
+        };
+        // Check whether given requirement is satisfied by constraints first:
+        if self.satisfied_by_constraints(&normalized_reqs) {
+            return true;
+        }
+        let schema = self.schema();
+        let mut eq_properties = self.clone();
+        for element in normalized_reqs {
+            // Check whether given requirement is satisfied:
+            let ExprProperties {
+                sort_properties, ..
+            } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
+            let satisfy = match sort_properties {
+                SortProperties::Ordered(options) => {
+                    let sort_expr = PhysicalSortExpr {
+                        expr: Arc::clone(&element.expr),
+                        options,
+                    };
+                    sort_expr.satisfy(&element, schema)
+                }
+                // Singleton expressions satisfies any requirement.
+                SortProperties::Singleton => true,
+                SortProperties::Unordered => false,
+            };
+            if !satisfy {
+                return false;
+            }
+            // Treat satisfied keys as constants in subsequent iterations. We
+            // can do this because the "next" key only matters in a lexicographical
+            // ordering when the keys to its left have the same values.
+            //
+            // Note that these expressions are not properly "constants". This is just
+            // an implementation strategy confined to this function.
+            //
+            // For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
+            // and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
+            // From the analysis above, we know that `[a ASC]` is satisfied. Then,
+            // we add column `a` as constant to the algorithm state. This enables us
+            // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
+            eq_properties = eq_properties
+                .with_constants(std::iter::once(ConstExpr::from(element.expr)));
+        }
+        true
+    }
+
+    fn satisfied_by_constraints_ordering(
+        &self,
+        normalized_exprs: &[PhysicalSortExpr],
+    ) -> bool {
+        self.constraints.iter().any(|constraint| match constraint {
+            Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
+                let check_null = matches!(constraint, Constraint::Unique(_));
+                indices.len() <= normalized_exprs.len()
+                    && self.oeq_class.iter().any(|ordering| {
+                        if indices.len() > ordering.len() {
+                            return false;
+                        }
+                        // Build a map of column positions in the ordering:
+                        let mut col_positions = HashMap::with_capacity(ordering.len());
+                        for (pos, req) in ordering.iter().enumerate() {
+                            if let Some(col) = req.expr.as_any().downcast_ref::<Column>()
+                            {
+                                let nullable = col.nullable(&self.schema).unwrap_or(true);
+                                col_positions.insert(col.index(), (pos, nullable));
+                            }
+                        }
+                        // Check if all constraint indices appear in valid positions:
+                        if !indices.iter().all(|&idx| {
+                            col_positions
+                                .get(&idx)
+                                .map(|&(pos, nullable)| {
+                                    // For unique constraints, verify column is not nullable if it's first/last:
+                                    !check_null
+                                        || !nullable
+                                        || (pos != 0 && pos != ordering.len() - 1)
+                                })
+                                .unwrap_or(false)
+                        }) {
+                            return false;
+                        }
+                        // Check if this ordering matches the prefix:
+                        let ordering_len = ordering.len();
+                        normalized_exprs.len() >= ordering_len
+                            && normalized_exprs[..ordering_len].iter().zip(ordering).all(
+                                |(req, existing)| {
+                                    req.expr.eq(&existing.expr)
+                                        && req.options == existing.options
+                                },
+                            )
+                    })
+            }
+        })
     }
 
     /// Checks if the sort requirements are satisfied by any of the table constraints (primary key or unique).
@@ -617,7 +736,7 @@ impl EquivalenceProperties {
                 return false;
             }
 
-            // Build a map of column positions in the ordering
+            // Build a map of column positions in the requirement
             let mut col_positions = HashMap::with_capacity(ordering.len());
             for (pos, req) in ordering.iter().enumerate() {
                 if let Some(col) = req.expr.as_any().downcast_ref::<Column>() {
@@ -643,7 +762,7 @@ impl EquivalenceProperties {
                 return false;
             }
 
-            // Check if this ordering matches requirements prefix
+            // Check if this ordering matches the prefix
             let ordering_len = ordering.len();
             normalized_reqs.len() >= ordering_len
                 && normalized_reqs[..ordering_len].iter().zip(ordering).all(
@@ -657,36 +776,6 @@ impl EquivalenceProperties {
         })
     }
 
-    /// Determines whether the ordering specified by the given sort requirement
-    /// is satisfied based on the orderings within, equivalence classes, and
-    /// constant expressions.
-    ///
-    /// # Parameters
-    ///
-    /// - `req`: A reference to a `PhysicalSortRequirement` for which the ordering
-    ///   satisfaction check will be done.
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if the specified ordering is satisfied, `false` otherwise.
-    fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
-        let ExprProperties {
-            sort_properties, ..
-        } = self.get_expr_properties(Arc::clone(&req.expr));
-        match sort_properties {
-            SortProperties::Ordered(options) => {
-                let sort_expr = PhysicalSortExpr {
-                    expr: Arc::clone(&req.expr),
-                    options,
-                };
-                sort_expr.satisfy(req, self.schema())
-            }
-            // Singleton expressions satisfies any ordering.
-            SortProperties::Singleton => true,
-            SortProperties::Unordered => false,
-        }
-    }
-
     /// Checks whether the `given` sort requirements are equal or more specific
     /// than the `reference` sort requirements.
     pub fn requirements_compatible(
@@ -694,8 +783,13 @@ impl EquivalenceProperties {
         given: &LexRequirement,
         reference: &LexRequirement,
     ) -> bool {
-        let normalized_given = self.normalize_sort_requirements(given);
-        let normalized_reference = self.normalize_sort_requirements(reference);
+        let Some(normalized_given) = self.normalize_sort_requirements(given) else {
+            return true;
+        };
+        let Some(normalized_reference) = self.normalize_sort_requirements(reference)
+        else {
+            return true;
+        };
 
         (normalized_reference.len() <= normalized_given.len())
             && normalized_reference
@@ -717,12 +811,12 @@ impl EquivalenceProperties {
         lhs: &LexOrdering,
         rhs: &LexOrdering,
     ) -> Option<LexOrdering> {
-        // Convert the given sort expressions to sort requirements:
-        let lhs = LexRequirement::from(lhs.clone());
-        let rhs = LexRequirement::from(rhs.clone());
-        let finer = self.get_finer_requirement(&lhs, &rhs);
-        // Convert the chosen sort requirements back to sort expressions:
-        finer.map(LexOrdering::from)
+        let mut lhs = self.normalize_sort_exprs(lhs);
+        let mut rhs = self.normalize_sort_exprs(rhs);
+        lhs.iter_mut()
+            .zip(rhs.iter_mut())
+            .all(|(lhs, rhs)| lhs.expr.eq(&rhs.expr) && lhs.options == rhs.options)
+            .then_some(if lhs.len() >= rhs.len() { lhs } else { rhs })
     }
 
     /// Returns the finer ordering among the requirements `lhs` and `rhs`,
@@ -735,11 +829,15 @@ impl EquivalenceProperties {
     /// is the latter.
     pub fn get_finer_requirement(
         &self,
-        req1: &LexRequirement,
-        req2: &LexRequirement,
+        lhs: &LexRequirement,
+        rhs: &LexRequirement,
     ) -> Option<LexRequirement> {
-        let mut lhs = self.normalize_sort_requirements(req1);
-        let mut rhs = self.normalize_sort_requirements(req2);
+        let Some(mut rhs) = self.normalize_sort_requirements(rhs) else {
+            return self.normalize_sort_requirements(lhs);
+        };
+        let Some(mut lhs) = self.normalize_sort_requirements(lhs) else {
+            return Some(rhs);
+        };
         lhs.iter_mut()
             .zip(rhs.iter_mut())
             .all(|(lhs, rhs)| {

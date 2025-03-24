@@ -478,15 +478,13 @@ impl AggregateExec {
         // prefix requirements with this section. In this case, aggregation will
         // work more efficiently.
         let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
-        let mut new_requirement = LexRequirement::new(
-            indices
-                .iter()
-                .map(|&idx| PhysicalSortRequirement {
-                    expr: Arc::clone(&groupby_exprs[idx]),
-                    options: None,
-                })
-                .collect::<Vec<_>>(),
-        );
+        let mut new_requirements = indices
+            .iter()
+            .map(|&idx| PhysicalSortRequirement {
+                expr: Arc::clone(&groupby_exprs[idx]),
+                options: None,
+            })
+            .collect::<Vec<_>>();
 
         let req = get_finer_aggregate_exprs_requirement(
             &mut aggr_expr,
@@ -494,8 +492,14 @@ impl AggregateExec {
             input_eq_properties,
             &mode,
         )?;
-        new_requirement.extend(req);
-        new_requirement = new_requirement.collapse();
+        new_requirements.extend(req);
+
+        let required_input_ordering = if new_requirements.is_empty() {
+            None
+        } else {
+            let reqs = LexRequirement::from(new_requirements).collapse();
+            RequiredInputOrdering::new_with_alternatives(vec![reqs], true)
+        };
 
         // If our aggregation has grouping sets then our base grouping exprs will
         // be expanded based on the flags in `group_by.groups` where for each
@@ -521,9 +525,6 @@ impl AggregateExec {
         // construct a map from the input expression to the output expression of the Aggregation group by
         let group_expr_mapping =
             ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
-
-        let required_input_ordering =
-            RequiredInputOrdering::new_with_alternatives(vec![new_requirement], true);
 
         let cache = Self::compute_properties(
             &input,
@@ -1118,14 +1119,15 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 ///
 /// # Returns
 ///
-/// A `LexRequirement` instance, which is the requirement that satisfies all the
-/// aggregate requirements. Returns an error in case of conflicting requirements.
+/// A `Result<Vec<PhysicalSortRequirement>>` instance, which is the requirement
+/// that satisfies all the aggregate requirements. Returns an error in case of
+/// conflicting requirements.
 pub fn get_finer_aggregate_exprs_requirement(
     aggr_exprs: &mut [Arc<AggregateFunctionExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
-) -> Result<LexRequirement> {
+) -> Result<Vec<PhysicalSortRequirement>> {
     let mut requirement = LexOrdering::default();
     for aggr_expr in aggr_exprs.iter_mut() {
         if let Some(finer_ordering) =
@@ -1186,7 +1188,7 @@ pub fn get_finer_aggregate_exprs_requirement(
         );
     }
 
-    Ok(LexRequirement::from(requirement))
+    Ok(requirement.into_iter().map(Into::into).collect())
 }
 
 /// Returns physical expressions for arguments to evaluate against a batch.
@@ -2418,7 +2420,7 @@ mod tests {
             &eq_properties,
             &AggregateMode::Partial,
         )?;
-        let res = LexOrdering::from(res);
+        let res = LexOrdering::from_iter(res.into_iter().map(Into::into));
         assert_eq!(res, common_requirement);
         Ok(())
     }

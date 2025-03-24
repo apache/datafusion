@@ -178,7 +178,7 @@ fn try_convert_aggregate_if_better(
                     aggr_expr.with_beneficial_ordering(true)?.map(Arc::new)
                 } else if eq_properties.ordering_satisfy_requirement(
                     &LexRequirement::new(concat_slices(
-                        &LexRequirement::from_iter(prefix_requirement.iter().cloned()),
+                        prefix_requirement,
                         &LexRequirement::from(reverse_order_bys(order_bys)),
                     )),
                 ) {

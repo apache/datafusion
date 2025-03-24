@@ -354,7 +354,7 @@ impl TableProvider for StreamTable {
         let schema = self.0.source.schema();
         let orders = create_ordering(schema, &self.0.order)?;
         // It is sufficient to pass only one of the equivalent orderings:
-        let order_requirements = orders.first().and_then(|ordering| {
+        let order_requirements = orders.first().map(|ordering| {
             let reqs = ordering.iter().cloned().map(Into::into).collect();
             RequiredInputOrdering::new(reqs)
         });

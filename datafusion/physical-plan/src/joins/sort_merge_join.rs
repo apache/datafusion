@@ -418,8 +418,8 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
         vec![
-            RequiredInputOrdering::from(self.left_sort_exprs.clone()),
-            RequiredInputOrdering::from(self.right_sort_exprs.clone()),
+            Some(RequiredInputOrdering::from(self.left_sort_exprs.clone())),
+            Some(RequiredInputOrdering::from(self.right_sort_exprs.clone())),
         ]
     }
 

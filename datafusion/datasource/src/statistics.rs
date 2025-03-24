@@ -115,7 +115,7 @@ impl MinMaxStatistics {
             projected_schema
                 .project(&(sort_columns.iter().map(|c| c.index()).collect::<Vec<_>>()))?,
         );
-        let min_max_sort_order = LexOrdering::from(
+        let min_max_sort_order = LexOrdering::from_iter(
             sort_columns
                 .iter()
                 .zip(projected_sort_order.iter())
@@ -123,8 +123,7 @@ impl MinMaxStatistics {
                 .map(|(i, (col, sort))| PhysicalSortExpr {
                     expr: Arc::new(Column::new(col.name(), i)),
                     options: sort.options,
-                })
-                .collect::<Vec<_>>(),
+                }),
         );
 
         let (min_values, max_values): (Vec<_>, Vec<_>) = sort_columns

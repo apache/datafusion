@@ -30,7 +30,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_expr::{Distribution, PhysicalSortRequirement};
 use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::projection::{
     make_with_child, update_expr, ProjectionExec,
@@ -213,7 +213,7 @@ impl ExecutionPlan for OutputRequirementExec {
             return Ok(None);
         }
 
-        let mut updated_sort_reqs = LexRequirement::new(vec![]);
+        let mut updated_sort_reqs = vec![];
         // None or empty_vec can be treated in the same way.
         if let Some(reqs) = &self.required_input_ordering()[0] {
             for req in reqs.lex_requirement().iter() {
@@ -247,7 +247,7 @@ impl ExecutionPlan for OutputRequirementExec {
             .map(|input| {
                 OutputRequirementExec::new(
                     input,
-                    RequiredInputOrdering::new(updated_sort_reqs),
+                    Some(RequiredInputOrdering::new(updated_sort_reqs.into())),
                     dist_req,
                 )
             })
@@ -320,7 +320,7 @@ fn require_top_ordering_helper(
         let req_dist = sort_exec.required_input_distribution()[0].clone();
         let reqs = RequiredInputOrdering::from(req_ordering.clone());
         Ok((
-            Arc::new(OutputRequirementExec::new(plan, reqs, req_dist)) as _,
+            Arc::new(OutputRequirementExec::new(plan, Some(reqs), req_dist)) as _,
             true,
         ))
     } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
@@ -328,7 +328,7 @@ fn require_top_ordering_helper(
         Ok((
             Arc::new(OutputRequirementExec::new(
                 plan,
-                reqs,
+                Some(reqs),
                 Distribution::SinglePartition,
             )) as _,
             true,

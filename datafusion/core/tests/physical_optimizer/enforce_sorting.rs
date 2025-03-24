@@ -1008,8 +1008,8 @@ async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_
     let output_requirements: Arc<dyn ExecutionPlan> =
         Arc::new(OutputRequirementExec::new(
             bounded_window2,
-            RequiredInputOrdering::new(LexRequirement::from(LexOrdering::from(
-                sort_exprs2,
+            Some(RequiredInputOrdering::new(LexRequirement::from(
+                LexOrdering::from(sort_exprs2),
             ))),
             Distribution::SinglePartition,
         ));

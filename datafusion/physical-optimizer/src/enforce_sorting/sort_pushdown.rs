@@ -104,7 +104,7 @@ fn pushdown_sorts_helper(
             return internal_err!("SortExec should have output ordering");
         };
         let current_plan_ordering_as_req =
-            RequiredInputOrdering::from(current_plan_ordering.clone()).unwrap();
+            RequiredInputOrdering::from(current_plan_ordering.clone());
 
         let parent_is_stricter = parent_reqs.as_ref().is_some_and(|parent_req| {
             plan.equivalence_properties().requirements_compatible(
@@ -246,17 +246,15 @@ fn pushdown_requirement_to_children(
                 .cloned()
                 .unwrap_or(LexOrdering::default()),
         );
-        Ok(sort_req
-            .filter(|req| {
-                sort_exec
-                    .properties()
-                    .eq_properties
-                    .requirements_compatible(
-                        parent_required.lex_requirement(),
-                        req.lex_requirement(),
-                    )
-            })
-            .map(|_| vec![Some(parent_required.clone())]))
+        sort_exec
+            .properties()
+            .eq_properties
+            .requirements_compatible(
+                parent_required.lex_requirement(),
+                sort_req.lex_requirement(),
+            )
+            .then(|| Ok(vec![Some(parent_required.clone())]))
+            .transpose()
     } else if plan.fetch().is_some()
         && plan.supports_limit_pushdown()
         && plan
@@ -264,15 +262,13 @@ fn pushdown_requirement_to_children(
             .iter()
             .all(|maintain| *maintain)
     {
-        let output_req = LexRequirement::from(
-            plan.properties()
-                .output_ordering()
-                .cloned()
-                .unwrap_or(LexOrdering::default()),
-        );
         // Push down through operator with fetch when:
         // - requirement is aligned with output ordering
         // - it preserves ordering during execution
+        let Some(ordering) = plan.properties().output_ordering() else {
+            return Ok(Some(vec![Some(parent_required.clone())]));
+        };
+        let output_req = LexRequirement::from(ordering.clone());
         if plan
             .properties()
             .eq_properties
@@ -475,7 +471,7 @@ fn try_pushdown_requirements_to_join(
     let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required);
     Ok(should_pushdown.then(|| {
         let mut required_input_ordering = smj.required_input_ordering();
-        let new_req = RequiredInputOrdering::from(sort_expr.clone());
+        let new_req = Some(RequiredInputOrdering::from(sort_expr.clone()));
         match push_side {
             JoinSide::Left => {
                 required_input_ordering[0] = new_req;
@@ -658,11 +654,9 @@ fn handle_custom_pushdown(
         let result = maintains_input_order
             .iter()
             .map(|&maintains_order| {
-                if maintains_order {
+                maintains_order.then(|| {
                     RequiredInputOrdering::new(updated_parent_req.clone().into())
-                } else {
-                    None
-                }
+                })
             })
             .collect();
 
@@ -737,7 +731,7 @@ fn handle_hash_join(
         // Populating with the updated requirements for children that maintain order
         Ok(Some(vec![
             None,
-            RequiredInputOrdering::new(updated_parent_req.into()),
+            Some(RequiredInputOrdering::new(updated_parent_req.into())),
         ]))
     } else {
         Ok(None)

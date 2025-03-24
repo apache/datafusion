@@ -138,7 +138,7 @@ impl ExecutionPlan for SortRequiredExec {
 
     // model that it requires the output ordering of its input
     fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
-        vec![RequiredInputOrdering::from(self.expr.clone())]
+        vec![Some(RequiredInputOrdering::from(self.expr.clone()))]
     }
 
     fn with_new_children(

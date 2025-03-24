@@ -1043,7 +1043,7 @@ mod tests {
             let expected_normalized = convert_to_sort_reqs(&expected_normalized);
 
             assert_eq!(
-                eq_properties.normalize_sort_requirements(&req),
+                eq_properties.normalize_sort_requirements(&req).unwrap(),
                 expected_normalized
             );
         }
@@ -1077,7 +1077,7 @@ mod tests {
             let reqs = convert_to_sort_reqs(&reqs);
             let expected = convert_to_sort_reqs(&expected);
 
-            let normalized = eq_properties.normalize_sort_requirements(&reqs);
+            let normalized = eq_properties.normalize_sort_requirements(&reqs).unwrap();
             assert!(
                 expected.eq(&normalized),
                 "error in test: reqs: {reqs:?}, expected: {expected:?}, normalized: {normalized:?}"
@@ -1353,23 +1353,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ordering_equivalence_with_empty_requirements() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
-
-        let col_a = col("a", &schema)?;
-
-        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        assert!(eq_properties.ordering_satisfy_requirement(&LexRequirement::default()));
-
-        eq_properties.add_new_ordering(LexOrdering::from(vec![
-            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
-        ]));
-        assert!(eq_properties.ordering_satisfy_requirement(&LexRequirement::default()));
-
-        Ok(())
-    }
-
-    #[test]
     fn test_requirements_compatible() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
@@ -1381,7 +1364,6 @@ mod tests {
         let col_c = col("c", &schema)?;
 
         let eq_properties = EquivalenceProperties::new(schema);
-        let default_lex = LexRequirement::default();
         let lex_a = LexRequirement::new(vec![PhysicalSortRequirement {
             expr: Arc::clone(&col_a),
             options: None,
@@ -1400,15 +1382,6 @@ mod tests {
             expr: col_c,
             options: None,
         }]);
-
-        let res = eq_properties.requirements_compatible(&default_lex, &default_lex);
-        assert!(res);
-
-        let res = eq_properties.requirements_compatible(&lex_a, &default_lex);
-        assert!(res);
-
-        let res = eq_properties.requirements_compatible(&default_lex, &lex_a);
-        assert!(!res);
 
         let res = eq_properties.requirements_compatible(&lex_a, &lex_a);
         assert!(res);

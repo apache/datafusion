@@ -1086,31 +1086,39 @@ impl RequiredInputOrdering {
     /// empty requirements are not allowed inside this type,
     /// if given [`None`] will be returned
     pub fn new_with_alternatives(
-        lex_requirements: Vec<LexRequirement>,
+        alternatives: Vec<LexRequirement>,
         soft: bool,
     ) -> Option<Self> {
-        (!(lex_requirements.is_empty() || lex_requirements[0].is_empty())).then(|| {
+        (!(alternatives.is_empty() || alternatives[0].is_empty())).then(|| {
             if soft {
-                Self::Soft(lex_requirements)
+                Self::Soft(alternatives)
             } else {
-                Self::Hard(lex_requirements)
+                Self::Hard(alternatives)
             }
         })
     }
 
-    pub fn new(requirement: LexRequirement) -> Option<Self> {
-        (!requirement.is_empty()).then(|| Self::Hard(vec![requirement]))
+    pub fn new(requirement: LexRequirement) -> Self {
+        debug_assert!(!requirement.is_empty());
+        Self::Hard(vec![requirement])
     }
 
-    pub fn from(ordering: LexOrdering) -> Option<Self> {
+    pub fn from(ordering: LexOrdering) -> Self {
         Self::new(LexRequirement::from(ordering))
+    }
+
+    pub fn add_alternative(&mut self, requirement: LexRequirement) {
+        match self {
+            Self::Hard(alts) => alts.push(requirement),
+            Self::Soft(alts) => alts.push(requirement),
+        }
     }
 
     /// Returns the first (i.e. most preferred) among alternative requirements.
     pub fn lex_requirement(&self) -> &LexRequirement {
         match self {
-            Self::Hard(lex) => &lex[0],
-            Self::Soft(lex) => &lex[0],
+            Self::Hard(alts) => &alts[0],
+            Self::Soft(alts) => &alts[0],
         }
     }
 

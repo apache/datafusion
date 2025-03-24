@@ -390,9 +390,9 @@ impl ExecutionPlan for RequirementsTestExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
-        vec![RequiredInputOrdering::from(
+        vec![Some(RequiredInputOrdering::from(
             self.required_input_ordering.clone(),
-        )]
+        ))]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

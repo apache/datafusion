@@ -1044,7 +1044,7 @@ impl TableProvider for ListingTable {
 
         let orderings = self.try_create_output_ordering()?;
         // It is sufficient to pass only one of the equivalent orderings:
-        let order_requirements = orderings.first().and_then(|ordering| {
+        let order_requirements = orderings.first().map(|ordering| {
             let reqs = ordering.iter().cloned().map(Into::into).collect();
             RequiredInputOrdering::new(reqs)
         });

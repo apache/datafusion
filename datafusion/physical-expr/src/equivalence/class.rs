@@ -513,12 +513,13 @@ impl EquivalenceGroup {
     /// expressions in `sort_exprs` and returns the corresponding normalized
     /// sort expressions.
     pub fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
-        // Convert sort expressions to sort requirements:
-        let sort_reqs = LexRequirement::from(sort_exprs.clone());
-        // Normalize the requirements:
-        let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
-        // Convert sort requirements back to sort expressions:
-        LexOrdering::from(normalized_sort_reqs)
+        LexOrdering::new(
+            sort_exprs
+                .iter()
+                .map(|sort_expr| self.normalize_sort_expr(sort_expr.clone()))
+                .collect(),
+        )
+        .collapse()
     }
 
     /// This function applies the `normalize_sort_requirement` function for all
@@ -527,14 +528,12 @@ impl EquivalenceGroup {
     pub fn normalize_sort_requirements(
         &self,
         sort_reqs: &LexRequirement,
-    ) -> LexRequirement {
-        LexRequirement::new(
-            sort_reqs
-                .iter()
-                .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
-                .collect(),
-        )
-        .collapse()
+    ) -> Option<LexRequirement> {
+        let reqs = sort_reqs
+            .iter()
+            .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
+            .collect::<Vec<_>>();
+        (!reqs.is_empty()).then(|| LexRequirement::new(reqs).collapse())
     }
 
     /// Projects `expr` according to the given projection mapping.
