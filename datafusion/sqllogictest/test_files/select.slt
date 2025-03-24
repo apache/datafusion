@@ -1855,3 +1855,19 @@ select * from t a, t b where id = id + 1;
 
 statement count 0
 drop table t;
+
+
+# test wildcard + other columns
+statement count 0
+create table t(a int) as values (1), (2), (3), (1);
+
+query II
+select *, count(*) over() as ta from t;
+----
+1 4
+2 4
+3 4
+1 4
+
+statement count 0
+drop table t;

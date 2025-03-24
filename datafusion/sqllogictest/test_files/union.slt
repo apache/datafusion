@@ -226,7 +226,7 @@ query TT
 EXPLAIN SELECT name FROM t1 UNION (SELECT name from t2 UNION SELECT name || '_new' from t2)
 ----
 logical_plan
-01)Aggregate: groupBy=[[t1.name]], aggr=[[]]
+01)Aggregate: groupBy=[[name]], aggr=[[]]
 02)--Union
 03)----TableScan: t1 projection=[name]
 04)----TableScan: t2 projection=[name]
@@ -411,7 +411,7 @@ query TT
 explain SELECT c1, c9 FROM aggregate_test_100 UNION ALL SELECT c1, c3 FROM aggregate_test_100 ORDER BY c9 DESC LIMIT 5
 ----
 logical_plan
-01)Sort: aggregate_test_100.c9 DESC NULLS FIRST, fetch=5
+01)Sort: c9 DESC NULLS FIRST, fetch=5
 02)--Union
 03)----Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c9 AS Decimal128(20, 0)) AS c9
 04)------TableScan: aggregate_test_100 projection=[c1, c9]
@@ -449,7 +449,7 @@ SELECT count(*) FROM (
 ----
 logical_plan
 01)Projection: count(Int64(1)) AS count(*)
-02)--Aggregate: groupBy=[[t1.name]], aggr=[[count(Int64(1))]]
+02)--Aggregate: groupBy=[[name]], aggr=[[count(Int64(1))]]
 03)----Union
 04)------Aggregate: groupBy=[[t1.name]], aggr=[[]]
 05)--------TableScan: t1 projection=[name]
@@ -601,7 +601,7 @@ UNION ALL
 ORDER BY c1
 ----
 logical_plan
-01)Sort: t1.c1 ASC NULLS LAST
+01)Sort: c1 ASC NULLS LAST
 02)--Union
 03)----TableScan: t1 projection=[c1]
 04)----Projection: t2.c1a AS c1
@@ -709,6 +709,25 @@ SELECT t1.v2, t1.v0 FROM t2 NATURAL JOIN t1
 SELECT t1.v2, t1.v0 FROM t2 NATURAL JOIN t1 WHERE (t1.v2 IS NULL);
 ----
 
+query IR
+SELECT t1.v0, t2.v0 FROM t1,t2
+    UNION ALL
+SELECT t1.v0, t2.v0 FROM t1,t2
+ORDER BY v0;
+----
+-1493773377 0.280145772929
+-1493773377 0.280145772929
+-1229445667 0.280145772929
+-1229445667 0.280145772929
+1541512604 0.280145772929
+1541512604 0.280145772929
+NULL 0.280145772929
+NULL 0.280145772929
+NULL 0.280145772929
+NULL 0.280145772929
+NULL 0.280145772929
+NULL 0.280145772929
+
 statement ok
 CREATE TABLE t3 (
   id INT
@@ -814,7 +833,7 @@ UNION ALL
 ORDER BY c1
 ----
 logical_plan
-01)Sort: aggregate_test_100.c1 ASC NULLS LAST
+01)Sort: c1 ASC NULLS LAST
 02)--Union
 03)----Filter: aggregate_test_100.c1 = Utf8("a")
 04)------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], partial_filters=[aggregate_test_100.c1 = Utf8("a")]
@@ -860,3 +879,84 @@ FROM (
 GROUP BY combined
 ----
 AB
+
+
+# Test union in view
+statement ok
+CREATE TABLE u1 (x INT, y INT);
+
+statement ok
+INSERT INTO u1 VALUES (3, 3), (3, 3), (1, 1);
+
+statement ok
+CREATE TABLE u2 (y BIGINT, z BIGINT);
+
+statement ok
+INSERT INTO u2 VALUES (20, 20), (40, 40);
+
+statement ok
+CREATE VIEW v1 AS
+SELECT y FROM u1 UNION ALL SELECT y FROM u2 ORDER BY y;
+
+query I rowsort
+SELECT * FROM (SELECT y FROM u1 UNION ALL SELECT y FROM u2) ORDER BY y;
+----
+1
+20
+3
+3
+40
+
+query TT
+explain SELECT * FROM (SELECT y FROM u1 UNION ALL SELECT y FROM u2) ORDER BY y;
+----
+logical_plan
+01)Sort: y ASC NULLS LAST
+02)--Union
+03)----Projection: CAST(u1.y AS Int64) AS y
+04)------TableScan: u1 projection=[y]
+05)----TableScan: u2 projection=[y]
+physical_plan
+01)SortPreservingMergeExec: [y@0 ASC NULLS LAST]
+02)--UnionExec
+03)----SortExec: expr=[y@0 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[CAST(y@0 AS Int64) as y]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----SortExec: expr=[y@0 ASC NULLS LAST], preserve_partitioning=[false]
+08)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# optimize_subquery_sort in create_relation removes Sort so the result is not sorted.
+query I
+SELECT * FROM v1;
+----
+20
+40
+3
+3
+1
+
+query TT
+explain SELECT * FROM v1;
+----
+logical_plan
+01)SubqueryAlias: v1
+02)--Union
+03)----Projection: CAST(u1.y AS Int64) AS y
+04)------TableScan: u1 projection=[y]
+05)----TableScan: u2 projection=[y]
+physical_plan
+01)UnionExec
+02)--ProjectionExec: expr=[CAST(y@0 AS Int64) as y]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement count 0
+drop view v1;
+
+statement count 0
+drop table u1;
+
+statement count 0
+drop table u2;

@@ -544,7 +544,8 @@ pub fn parse_protobuf_file_scan_config(
         .with_projection(projection)
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_table_partition_cols(table_partition_cols)
-        .with_output_ordering(output_ordering);
+        .with_output_ordering(output_ordering)
+        .with_batch_size(proto.batch_size.map(|s| s as usize));
     Ok(config)
 }
 
@@ -657,6 +658,7 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             protobuf::InsertOp::Replace => InsertOp::Replace,
         };
         Ok(Self {
+            original_url: String::default(),
             object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
             file_groups,
             table_paths,

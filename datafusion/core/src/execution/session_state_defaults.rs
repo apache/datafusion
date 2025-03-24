@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::catalog::{CatalogProvider, TableProviderFactory};
-use crate::catalog_common::listing_schema::ListingSchemaProvider;
 use crate::datasource::file_format::arrow::ArrowFormatFactory;
 #[cfg(feature = "avro")]
 use crate::datasource::file_format::avro::AvroFormatFactory;

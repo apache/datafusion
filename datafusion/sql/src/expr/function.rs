@@ -22,16 +22,15 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Diagnostic, Result, Span,
 };
-use datafusion_expr::expr::{ScalarFunction, Unnest};
+use datafusion_expr::expr::{ScalarFunction, Unnest, WildcardOptions};
 use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
 use datafusion_expr::{
-    expr, qualified_wildcard, wildcard, Expr, ExprFunctionExt, ExprSchemable,
-    WindowFrame, WindowFunctionDefinition,
+    expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
-    NullTreatment, ObjectName, OrderByExpr, WindowType,
+    NullTreatment, ObjectName, OrderByExpr, Spanned, WindowType,
 };
 
 /// Suggest a valid function based on an invalid input function name
@@ -217,13 +216,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // it shouldn't have ordering requirement as function argument
         // required ordering should be defined in OVER clause.
         let is_function_window = over.is_some();
-        let sql_parser_span = name.0[0].span;
+        let sql_parser_span = name.0[0].span();
         let name = if name.0.len() > 1 {
             // DF doesn't handle compound identifiers
             // (e.g. "foo.bar") for function names yet
             name.to_string()
         } else {
-            crate::utils::normalize_ident(name.0[0].clone())
+            match name.0[0].as_ident() {
+                Some(ident) => crate::utils::normalize_ident(ident.clone()),
+                None => {
+                    return plan_err!(
+                        "Expected an identifier in function name, but found {:?}",
+                        name.0[0]
+                    )
+                }
+            }
         };
 
         if name.eq("make_map") {
@@ -473,11 +480,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name: _,
                 arg: FunctionArgExpr::Wildcard,
                 operator: _,
-            } => Ok(wildcard()),
+            } => {
+                #[expect(deprecated)]
+                let expr = Expr::Wildcard {
+                    qualifier: None,
+                    options: Box::new(WildcardOptions::default()),
+                };
+
+                Ok(expr)
+            }
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
-            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(wildcard()),
+            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
+                #[expect(deprecated)]
+                let expr = Expr::Wildcard {
+                    qualifier: None,
+                    options: Box::new(WildcardOptions::default()),
+                };
+
+                Ok(expr)
+            }
             FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 // Sanity check on qualifier with schema
@@ -485,7 +508,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if qualified_indices.is_empty() {
                     return plan_err!("Invalid qualifier {qualifier}");
                 }
-                Ok(qualified_wildcard(qualifier))
+
+                #[expect(deprecated)]
+                let expr = Expr::Wildcard {
+                    qualifier: qualifier.into(),
+                    options: Box::new(WildcardOptions::default()),
+                };
+
+                Ok(expr)
             }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }

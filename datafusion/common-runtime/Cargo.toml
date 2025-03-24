@@ -38,8 +38,9 @@ workspace = true
 name = "datafusion_common_runtime"
 
 [dependencies]
+futures = { workspace = true }
 log = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1.36", features = ["rt", "rt-multi-thread", "time"] }
+tokio = { version = "1.44", features = ["rt", "rt-multi-thread", "time"] }
