@@ -40,6 +40,8 @@ use parquet::{
 use rand::seq::SliceRandom;
 use tokio::sync::Mutex;
 use url::Url;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 
 #[tokio::test]
 async fn test_utf8_eq() {
@@ -281,7 +283,7 @@ async fn execute_with_predicate(
     } else {
         ParquetSource::default()
     };
-    let scan = FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("memory://").unwrap(),
         schema.clone(),
         Arc::new(parquet_source),
@@ -293,8 +295,8 @@ async fn execute_with_predicate(
                 PartitionedFile::new(test_file.path.clone(), test_file.size as u64)
             })
             .collect(),
-    );
-    let exec = scan.build();
+    ).build();
+    let exec = Arc::new(DataSourceExec::new(Arc::new(config)));
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;
 

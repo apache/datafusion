@@ -783,7 +783,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
             )])
             .with_newlines_in_values(false);
 
-    roundtrip_test(scan_config.build())
+    roundtrip_test(Arc::new(DataSourceExec::new(Arc::new(scan_config))))
 }
 
 #[test]
@@ -927,7 +927,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         }
     }
 
-    let exec_plan = scan_config.build();
+    let exec_plan = Arc::new(DataSourceExec::new(Arc::new(scan_config)));
 
     let ctx = SessionContext::new();
     roundtrip_test_and_return(exec_plan, &ctx, &CustomPhysicalExtensionCodec {})?;
@@ -1629,7 +1629,7 @@ async fn roundtrip_projection_source() -> Result<()> {
     let filter = Arc::new(
         FilterExec::try_new(
             Arc::new(BinaryExpr::new(col("c", &schema)?, Operator::Eq, lit(1))),
-            scan_config.build(),
+            Arc::new(DataSourceExec::new(Arc::new(scan_config))),
         )?
         .with_projection(Some(vec![0, 1]))?,
     );

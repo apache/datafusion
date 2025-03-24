@@ -46,6 +46,8 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 
 const EXPECTED_USER_DEFINED_METADATA: &str = "some-user-defined-metadata";
 
@@ -83,15 +85,15 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
                 InMemoryParquetFileReaderFactory(Arc::clone(&in_memory_object_store)),
             )),
     );
-    let base_config = FileScanConfig::new(
+    let base_config = FileScanConfigBuilder::new(
         // just any url that doesn't point to in memory object store
         ObjectStoreUrl::local_filesystem(),
         file_schema,
         source,
     )
-    .with_file_group(file_group);
+    .with_file_group(file_group).build();
 
-    let parquet_exec = base_config.build();
+    let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(base_config)));
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();

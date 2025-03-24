@@ -93,9 +93,9 @@ use object_store::ObjectStore;
 ///     .with_predicate(Arc::clone(&file_schema), predicate)
 /// );
 /// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
-/// let file_scan_config = FileScanConfig::new(object_store_url, file_schema, source)
+/// let config = FileScanConfig::new(object_store_url, file_schema, source)
 ///    .with_file(PartitionedFile::new("file1.parquet", 100*1024*1024));
-/// let exec = file_scan_config.build();
+/// let exec = Arc::new(DataSourceExec::new(Arc::new(config)));
 /// ```
 ///
 /// # Features
@@ -177,7 +177,7 @@ use object_store::ObjectStore;
 ///         .clone()
 ///        .with_file_groups(vec![file_group.clone()]);
 ///
-///     new_config.build()
+///     Arc::new(DataSourceExec::new(Arc::new(new_config)))
 ///   })
 ///   .collect::<Vec<_>>();
 /// ```
@@ -216,11 +216,11 @@ use object_store::ObjectStore;
 /// let partitioned_file = PartitionedFile::new("my_file.parquet", 1234)
 ///   .with_extensions(Arc::new(access_plan));
 /// // create a FileScanConfig to scan this file
-/// let file_scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema(), Arc::new(ParquetSource::default()))
+/// let config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema(), Arc::new(ParquetSource::default()))
 ///     .with_file(partitioned_file);
 /// // this parquet DataSourceExec will not even try to read row groups 2 and 4. Additional
 /// // pruning based on predicates may also happen
-/// let exec = file_scan_config.build();
+/// let exec = Arc::new(DataSourceExec::new(Arc::new(config)));
 /// ```
 ///
 /// For a complete example, see the [`advanced_parquet_index` example]).

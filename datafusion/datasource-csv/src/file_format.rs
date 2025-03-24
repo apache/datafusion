@@ -59,7 +59,7 @@ use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 use regex::Regex;
-
+use datafusion_datasource::source::DataSourceExec;
 use crate::source::CsvSource;
 
 #[derive(Default)]
@@ -432,7 +432,7 @@ impl FileFormat for CsvFormat {
 
         let config = conf_builder.with_source(source).build();
 
-        Ok(config.build())
+        Ok(Arc::new(DataSourceExec::new(Arc::new(config))))
     }
 
     async fn create_writer_physical_plan(

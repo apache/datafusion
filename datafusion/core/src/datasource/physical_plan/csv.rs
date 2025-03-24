@@ -54,6 +54,7 @@ mod tests {
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
+    use datafusion_datasource::source::DataSourceExec;
 
     fn aggr_test_schema() -> SchemaRef {
         let mut f1 = Field::new("c1", DataType::Utf8, false);
@@ -113,7 +114,7 @@ mod tests {
             .with_projection(Some(vec![0, 2, 4]));
 
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = config.build();
+        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
 
         assert_eq!(3, csv.schema().fields().len());
 
@@ -175,7 +176,7 @@ mod tests {
             .with_file_compression_type(file_compression_type.to_owned())
             .with_projection(Some(vec![4, 0, 2]));
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = config.build();
+        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
         assert_eq!(3, csv.schema().fields().len());
 
         let mut stream = csv.execute(0, task_ctx)?;
@@ -238,7 +239,7 @@ mod tests {
             .with_file_compression_type(file_compression_type.to_owned())
             .with_limit(Some(5));
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = config.build();
+        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
         assert_eq!(13, csv.schema().fields().len());
 
         let mut it = csv.execute(0, task_ctx)?;
@@ -296,7 +297,7 @@ mod tests {
             .with_file_compression_type(file_compression_type.to_owned())
             .with_limit(Some(5));
         assert_eq!(14, config.file_schema.fields().len());
-        let csv = config.build();
+        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
         assert_eq!(14, csv.schema().fields().len());
 
         // errors due to https://github.com/apache/datafusion/issues/4918
@@ -357,7 +358,7 @@ mod tests {
         // partitions are resolved during scan anyway
 
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = config.build();
+        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
         assert_eq!(2, csv.schema().fields().len());
 
         let mut it = csv.execute(0, task_ctx)?;
@@ -446,7 +447,7 @@ mod tests {
         let config = partitioned_csv_config(file_schema, file_groups, source)
             .with_newlines_in_values(false)
             .with_file_compression_type(file_compression_type.to_owned());
-        let csv = config.build();
+        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
 
         let it = csv.execute(0, task_ctx).unwrap();
         let batches: Vec<_> = it.try_collect().await.unwrap();

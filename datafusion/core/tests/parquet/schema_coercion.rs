@@ -35,6 +35,8 @@ use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use tempfile::NamedTempFile;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 
 /// Test for reading data from multiple parquet files with different schemas and coercing them into a single schema.
 #[tokio::test]
@@ -65,7 +67,7 @@ async fn multi_parquet_coercion() {
         FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, source)
             .with_file_group(file_group);
 
-    let parquet_exec = conf.build();
+    let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(conf)));
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
@@ -114,7 +116,7 @@ async fn multi_parquet_coercion_projection() {
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::Float64, true),
     ]));
-    let parquet_exec = FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         file_schema,
         Arc::new(ParquetSource::default()),
@@ -122,6 +124,8 @@ async fn multi_parquet_coercion_projection() {
     .with_file_group(file_group)
     .with_projection(Some(vec![1, 0, 2]))
     .build();
+
+    let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(config)));
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();

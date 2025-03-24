@@ -57,6 +57,8 @@ use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
 
 use rstest::rstest;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 
 /// Create a csv exec for tests
 fn csv_exec_ordered(
@@ -65,14 +67,17 @@ fn csv_exec_ordered(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         Arc::new(CsvSource::new(true, 0, b'"')),
     )
     .with_file(PartitionedFile::new("file_path".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .build()
+    .build();
+
+    Arc::new(
+        DataSourceExec::new(Arc::new(config)))
 }
 
 /// Created a sorted parquet exec
@@ -83,14 +88,16 @@ pub fn parquet_exec_sorted(
     let sort_exprs = sort_exprs.into_iter().collect();
 
     let source = Arc::new(ParquetSource::default());
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         source,
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .build()
+    .build();
+
+    Arc::new(DataSourceExec::new(Arc::new(config)))
 }
 
 /// Create a sorted Csv exec
@@ -100,14 +107,16 @@ fn csv_exec_sorted(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         Arc::new(CsvSource::new(false, 0, 0)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .build()
+    .build();
+
+    Arc::new(DataSourceExec::new(Arc::new(config)))
 }
 
 /// Runs the sort enforcement optimizer and asserts the plan

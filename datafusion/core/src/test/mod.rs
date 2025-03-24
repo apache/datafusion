@@ -93,7 +93,7 @@ pub fn scan_partitioned_csv(
     let source = Arc::new(CsvSource::new(true, b'"', b'"'));
     let config = partitioned_csv_config(schema, file_groups, source)
         .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
-    Ok(config.build())
+    Ok(Arc::new(DataSourceExec::new(Arc::new(config))))
 }
 
 /// Returns file groups [`Vec<Vec<PartitionedFile>>`] for scanning `partitions` of `filename`

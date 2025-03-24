@@ -52,6 +52,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
+use datafusion::datasource::memory::DataSourceExec;
 
 /// This example demonstrates building a secondary index over multiple Parquet
 /// files and using that index during query to skip ("prune") files that do not
@@ -259,7 +260,7 @@ impl TableProvider for IndexTableProvider {
                 file_size,
             ));
         }
-        Ok(file_scan_config.build())
+        Ok(Arc::new(DataSourceExec::new(Arc::new(file_scan_config))))
     }
 
     /// Tell DataFusion to push filters down to the scan method

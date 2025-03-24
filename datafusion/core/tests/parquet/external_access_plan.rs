@@ -40,6 +40,7 @@ use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use tempfile::NamedTempFile;
+use datafusion_datasource::source::DataSourceExec;
 
 #[tokio::test]
 async fn none() {
@@ -351,7 +352,7 @@ impl TestFull {
         let config = FileScanConfig::new(object_store_url, schema.clone(), source)
             .with_file(partitioned_file);
 
-        let plan: Arc<dyn ExecutionPlan> = config.build();
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(DataSourceExec::new(Arc::new(config)));
 
         // run the DataSourceExec and collect the results
         let results =

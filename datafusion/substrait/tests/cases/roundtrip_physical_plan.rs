@@ -29,6 +29,7 @@ use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_substrait::physical_plan::{consumer, producer};
 
 use substrait::proto::extensions;
+use datafusion::datasource::memory::DataSourceExec;
 
 #[tokio::test]
 async fn parquet_exec() -> Result<()> {
@@ -49,7 +50,7 @@ async fn parquet_exec() -> Result<()> {
             123,
         )],
     ]);
-    let parquet_exec: Arc<dyn ExecutionPlan> = scan_config.build();
+    let parquet_exec: Arc<dyn ExecutionPlan> = Arc::new(DataSourceExec::new(Arc::new(scan_config)));
 
     let mut extension_info: (
         Vec<extensions::SimpleExtensionDeclaration>,

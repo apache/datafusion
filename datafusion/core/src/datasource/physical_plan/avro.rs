@@ -47,6 +47,7 @@ mod tests {
     use object_store::ObjectStore;
     use rstest::*;
     use url::Url;
+    use datafusion_datasource::source::DataSourceExec;
 
     #[tokio::test]
     async fn avro_exec_without_partition() -> Result<()> {
@@ -90,7 +91,7 @@ mod tests {
         .with_projection(Some(vec![0, 1, 2]))
         .build();
 
-        let source_exec = conf.build();
+        let source_exec = Arc::new(DataSourceExec::new(Arc::new(conf)));
         assert_eq!(
             source_exec
                 .properties()
@@ -163,7 +164,7 @@ mod tests {
             .with_file(meta.into())
             .with_projection(projection);
 
-        let source_exec = conf.build();
+        let source_exec = Arc::new(DataSourceExec::new(Arc::new(conf)));
         assert_eq!(
             source_exec
                 .properties()
@@ -230,14 +231,15 @@ mod tests {
 
         let projection = Some(vec![0, 1, file_schema.fields().len(), 2]);
         let source = Arc::new(AvroSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             // select specific columns of the files as well as the partitioning
             // column which is supposed to be the last column in the table schema.
             .with_projection(projection)
             .with_file(partitioned_file)
-            .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)]);
+            .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
+            .build();
 
-        let source_exec = conf.build();
+        let source_exec = Arc::new(DataSourceExec::new(Arc::new(conf)));
 
         assert_eq!(
             source_exec

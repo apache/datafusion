@@ -43,7 +43,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
     FileFormat, FileFormatFactory, DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
@@ -58,7 +58,7 @@ use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
-
+use datafusion_datasource::source::DataSourceExec;
 use crate::source::JsonSource;
 
 #[derive(Default)]
@@ -250,8 +250,8 @@ impl FileFormat for JsonFormat {
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let source = Arc::new(JsonSource::new());
-        conf.file_compression_type = FileCompressionType::from(self.options.compression);
-        Ok(conf.with_source(source).build())
+        let conf = FileScanConfigBuilder::from(conf).with_file_compression_type(FileCompressionType::from(self.options.compression)).with_source(source).build();
+        Ok(Arc::new(DataSourceExec::new(Arc::new(conf))))
     }
 
     async fn create_writer_physical_plan(

@@ -36,7 +36,7 @@ use substrait::proto::Type;
 use substrait::proto::{
     expression::MaskExpression, read_rel::ReadType, rel::RelType, Rel,
 };
-
+use datafusion::datasource::memory::DataSourceExec;
 use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
@@ -152,7 +152,7 @@ pub async fn from_substrait_rel(
                         }
                     }
 
-                    Ok(base_config.build() as Arc<dyn ExecutionPlan>)
+                    Ok(Arc::new(DataSourceExec::new(Arc::new(base_config))) as Arc<dyn ExecutionPlan>)
                 }
                 _ => not_impl_err!(
                     "Only LocalFile reads are supported when parsing physical"

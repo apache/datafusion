@@ -74,6 +74,7 @@ use crate::{
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::file_scan_config::FileScanConfig;
 /// # use datafusion_datasource::file_stream::FileOpener;
+/// # use datafusion_datasource::source::DataSourceExec;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_plan::ExecutionPlan;
 /// # use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -116,7 +117,7 @@ use crate::{
 ///    PartitionedFile::new("file3.parquet", 78),
 ///   ]);
 /// // create an execution plan from the config
-/// let plan: Arc<dyn ExecutionPlan> = config.build();
+/// let plan: Arc<dyn ExecutionPlan> = Arc::new(DataSourceExec::new(Arc::new(config)));
 /// ```
 #[derive(Clone)]
 pub struct FileScanConfig {
@@ -549,6 +550,8 @@ impl FileScanConfig {
     /// # Parameters:
     /// * `object_store_url`: See [`Self::object_store_url`]
     /// * `file_schema`: See [`Self::file_schema`]
+    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
+    #[allow(deprecated)] // `new` will be removed same time as `with_source`
     pub fn new(
         object_store_url: ObjectStoreUrl,
         file_schema: SchemaRef,
