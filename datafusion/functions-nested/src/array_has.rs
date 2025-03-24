@@ -594,6 +594,8 @@ mod tests {
         ScalarUDFImpl,
     };
 
+    use crate::expr_fn::make_array;
+
     use super::ArrayHas;
 
     #[test]
@@ -603,6 +605,30 @@ mod tests {
             [1, 2, 3]
         ))
         .build_list_scalar());
+        let needle = col("c");
+
+        let props = ExecutionProps::new();
+        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+
+        let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
+            ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
+        else {
+            panic!("Expected simplified expression");
+        };
+
+        assert_eq!(
+            in_list,
+            datafusion_expr::expr::InList {
+                expr: Box::new(needle),
+                list: vec![lit(1), lit(2), lit(3)],
+                negated: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_simplify_array_has_with_make_array_to_in_list() {
+        let haystack = make_array(vec![lit(1), lit(2), lit(3)]);
         let needle = col("c");
 
         let props = ExecutionProps::new();
