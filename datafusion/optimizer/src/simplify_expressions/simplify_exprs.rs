@@ -765,4 +765,51 @@ mod tests {
 
         assert_optimized_plan_eq(plan, expected)
     }
+
+    #[test]
+    fn test_simplify_regex_special_cases() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        // Test `= ".*"` transforms to true (except for empty strings)
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(col("a"), Operator::RegexMatch, lit(".*")))?
+            .build()?;
+        let expected = "Filter: test.a IS NOT NULL\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(plan, expected)?;
+
+        // Test `!= ".*"` transforms to checking if the column is empty
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(col("a"), Operator::RegexNotMatch, lit(".*")))?
+            .build()?;
+        let expected = "Filter: test.a = Utf8(\"\")\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(plan, expected)?;
+
+        // Test case-insensitive versions
+
+        // Test `=~ ".*"` (case-insensitive) transforms to true (except for empty strings)
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(col("b"), Operator::RegexIMatch, lit(".*")))?
+            .build()?;
+        let expected = "Filter: Boolean(true)\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(plan, expected)?;
+
+        // Test `!~ ".*"` (case-insensitive) transforms to checking if the column is empty
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(binary_expr(col("a"), Operator::RegexNotIMatch, lit(".*")))?
+            .build()?;
+        let expected = "Filter: test.a = Utf8(\"\")\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(plan, expected)
+    }
 }

@@ -439,6 +439,13 @@ fn array_has_all_and_any_dispatch<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let haystack = as_generic_list_array::<O>(haystack)?;
     let needle = as_generic_list_array::<O>(needle)?;
+    if needle.values().len() == 0 {
+        let buffer = match comparison_type {
+            ComparisonType::All => BooleanBuffer::new_set(haystack.len()),
+            ComparisonType::Any => BooleanBuffer::new_unset(haystack.len()),
+        };
+        return Ok(Arc::new(BooleanArray::from(buffer)));
+    }
     match needle.data_type() {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
             array_has_all_and_any_string_internal::<O>(haystack, needle, comparison_type)

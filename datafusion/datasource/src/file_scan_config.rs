@@ -167,6 +167,9 @@ pub struct FileScanConfig {
     pub new_lines_in_values: bool,
     /// File source such as `ParquetSource`, `CsvSource`, `JsonSource`, etc.
     pub file_source: Arc<dyn FileSource>,
+    /// Batch size while creating new batches
+    /// Defaults to [`datafusion_common::config::ExecutionOptions`] batch_size.
+    pub batch_size: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -192,6 +195,9 @@ pub struct FileScanConfigBuilder {
     file_compression_type: Option<FileCompressionType>,
 
     new_lines_in_values: Option<bool>,
+
+    pub batch_size: Option<usize>,
+
 }
 
 impl FileScanConfigBuilder {
@@ -219,6 +225,7 @@ impl FileScanConfigBuilder {
             projection: None,
             table_partition_cols: vec![],
             constraints: None,
+            batch_size: None,
         }
     }
 
@@ -314,6 +321,12 @@ impl FileScanConfigBuilder {
         self
     }
 
+    /// Set the batch_size property
+    pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
     /// Build the final [`FileScanConfig`] with all the configured settings.
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
@@ -332,6 +345,7 @@ impl FileScanConfigBuilder {
             output_ordering,
             file_compression_type,
             new_lines_in_values,
+            batch_size,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -356,6 +370,7 @@ impl FileScanConfigBuilder {
             output_ordering,
             file_compression_type,
             new_lines_in_values,
+            batch_size,
         }
     }
 }
@@ -375,6 +390,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             projection: config.projection,
             table_partition_cols: config.table_partition_cols,
             constraints: Some(config.constraints),
+            batch_size: config.batch_size,
         }
     }
 }
@@ -386,10 +402,13 @@ impl DataSource for FileScanConfig {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let object_store = context.runtime_env().object_store(&self.object_store_url)?;
+        let batch_size = self
+            .batch_size
+            .unwrap_or_else(|| context.session_config().batch_size());
 
         let source = self
             .file_source
-            .with_batch_size(context.session_config().batch_size())
+            .with_batch_size(batch_size)
             .with_schema(Arc::clone(&self.file_schema))
             .with_projection(self);
 
@@ -550,6 +569,7 @@ impl FileScanConfig {
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             new_lines_in_values: false,
             file_source: Arc::clone(&file_source),
+            batch_size: None,
         };
 
         config = config.with_source(Arc::clone(&file_source));
@@ -706,6 +726,13 @@ impl FileScanConfig {
     #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
     pub fn with_newlines_in_values(mut self, new_lines_in_values: bool) -> Self {
         self.new_lines_in_values = new_lines_in_values;
+        self
+    }
+
+    /// Set the batch_size property
+    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
+    pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
+        self.batch_size = batch_size;
         self
     }
 

@@ -5780,6 +5780,9 @@ impl serde::Serialize for FileScanExecConf {
         if self.constraints.is_some() {
             len += 1;
         }
+        if self.batch_size.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileScanExecConf", len)?;
         if !self.file_groups.is_empty() {
             struct_ser.serialize_field("fileGroups", &self.file_groups)?;
@@ -5808,6 +5811,11 @@ impl serde::Serialize for FileScanExecConf {
         if let Some(v) = self.constraints.as_ref() {
             struct_ser.serialize_field("constraints", v)?;
         }
+        if let Some(v) = self.batch_size.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("batchSize", ToString::to_string(&v).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -5831,6 +5839,8 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             "output_ordering",
             "outputOrdering",
             "constraints",
+            "batch_size",
+            "batchSize",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5844,6 +5854,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             ObjectStoreUrl,
             OutputOrdering,
             Constraints,
+            BatchSize,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5874,6 +5885,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             "objectStoreUrl" | "object_store_url" => Ok(GeneratedField::ObjectStoreUrl),
                             "outputOrdering" | "output_ordering" => Ok(GeneratedField::OutputOrdering),
                             "constraints" => Ok(GeneratedField::Constraints),
+                            "batchSize" | "batch_size" => Ok(GeneratedField::BatchSize),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5902,6 +5914,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                 let mut object_store_url__ = None;
                 let mut output_ordering__ = None;
                 let mut constraints__ = None;
+                let mut batch_size__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::FileGroups => {
@@ -5961,6 +5974,14 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             }
                             constraints__ = map_.next_value()?;
                         }
+                        GeneratedField::BatchSize => {
+                            if batch_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("batchSize"));
+                            }
+                            batch_size__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(FileScanExecConf {
@@ -5973,6 +5994,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                     object_store_url: object_store_url__.unwrap_or_default(),
                     output_ordering: output_ordering__.unwrap_or_default(),
                     constraints: constraints__,
+                    batch_size: batch_size__,
                 })
             }
         }

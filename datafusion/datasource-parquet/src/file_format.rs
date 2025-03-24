@@ -839,9 +839,10 @@ pub fn statistics_from_parquet_meta_calc(
         total_byte_size += row_group_meta.total_byte_size() as usize;
 
         if !has_statistics {
-            row_group_meta.columns().iter().for_each(|column| {
-                has_statistics = column.statistics().is_some();
-            });
+            has_statistics = row_group_meta
+                .columns()
+                .iter()
+                .any(|column| column.statistics().is_some());
         }
     }
     statistics.num_rows = Precision::Exact(num_rows);
