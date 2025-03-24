@@ -27,13 +27,14 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
-use arrow::json;
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
+use arrow::json::{self, ReaderBuilder};
 use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{
-    not_impl_err, GetExt, Result, Statistics, DEFAULT_JSON_EXTENSION,
+    arrow_datafusion_err, not_impl_err, GetExt, Result, Statistics,
+    DEFAULT_JSON_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::decoder::Decoder;
@@ -47,7 +48,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
-use datafusion_datasource::write::BatchSerializer;
+use datafusion_datasource::write::{BatchSerializer, ReaderBuilderConfig};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
@@ -300,6 +301,41 @@ impl BatchSerializer for JsonSerializer {
         writer.write(&batch)?;
         Ok(Bytes::from(buffer))
     }
+
+    fn deserialize(
+        &self,
+        config: ReaderBuilderConfig,
+        schema: SchemaRef,
+        bytes: &[u8],
+    ) -> Result<RecordBatch> {
+        let mut builder = ReaderBuilder::new(Arc::clone(&schema));
+
+        if let Some(batch_size) = config.batch_size {
+            builder = builder.with_batch_size(batch_size);
+        }
+
+        if let Some(coerce_primitive) = config.coerce_primitive {
+            builder = builder.with_coerce_primitive(coerce_primitive);
+        }
+
+        if let Some(strict_mode) = config.strict_mode {
+            builder = builder.with_strict_mode(strict_mode);
+        }
+
+        let reader = builder.build(bytes).map_err(|e| arrow_datafusion_err!(e))?;
+
+        let mut all_batches = vec![];
+        for batch in reader {
+            all_batches.push(batch?);
+        }
+
+        if all_batches.is_empty() {
+            return Ok(RecordBatch::new_empty(schema));
+        }
+
+        arrow::compute::concat_batches(&schema, &all_batches)
+            .map_err(|e| arrow_datafusion_err!(e))
+    }
 }
 
 /// Implements [`DataSink`] for writing to a Json file.
@@ -414,5 +450,31 @@ impl Decoder for JsonDecoder {
 
     fn can_flush_early(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow::array::{Int64Array, RecordBatch};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::Result;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn roundtrip_serialize() -> Result<()> {
+        let serializer = JsonSerializer::new();
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
+            as SchemaRef;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )?;
+        let bytes = serializer.serialize(batch.clone(), true)?;
+        let deserialized =
+            serializer.deserialize(ReaderBuilderConfig::default(), schema, &bytes)?;
+        assert_eq!(&batch, &deserialized);
+        Ok(())
     }
 }

@@ -26,8 +26,9 @@ use crate::file_sink_config::FileSinkConfig;
 use datafusion_common::error::Result;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Schema, SchemaRef};
 use bytes::Bytes;
+use datafusion_common::not_impl_err;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::ObjectStore;
@@ -67,12 +68,28 @@ impl Write for SharedBuffer {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ReaderBuilderConfig {
+    pub strict_mode: Option<bool>,
+    pub coerce_primitive: Option<bool>,
+    pub batch_size: Option<usize>,
+}
+
 /// A trait that defines the methods required for a RecordBatch serializer.
 pub trait BatchSerializer: Sync + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
     /// Parameter `initial` signals whether the given batch is the first batch.
     /// This distinction is important for certain serializers (like CSV).
     fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes>;
+
+    fn deserialize(
+        &self,
+        config: ReaderBuilderConfig,
+        schema: SchemaRef,
+        bytes: &[u8],
+    ) -> Result<RecordBatch> {
+        not_impl_err!("deserialize")
+    }
 }
 
 /// Returns an [`AsyncWrite`] which writes to the given object store location
