@@ -366,9 +366,9 @@ impl FileGroupPartitioner {
 #[derive(Debug, Clone)]
 pub struct FileGroup {
     /// The files in this group
-    pub files: Vec<PartitionedFile>,
-    /// Optional statistics for all files in the group
-    pub statistics: Option<Statistics>,
+    files: Vec<PartitionedFile>,
+    /// Optional statistics for the data across all files in the group
+    statistics: Option<Statistics>,
 }
 
 impl FileGroup {
@@ -391,8 +391,17 @@ impl FileGroup {
         self
     }
 
+    /// Returns a slice of the files in this group
+    pub fn files(&self) -> &[PartitionedFile] {
+        &self.files
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &PartitionedFile> {
         self.files.iter()
+    }
+
+    pub fn into_inner(self) -> Vec<PartitionedFile> {
+        self.files
     }
 
     pub fn is_empty(&self) -> bool {
@@ -410,7 +419,7 @@ impl FileGroup {
     }
 
     /// Partition the list of files into `n` groups
-    pub fn split_files(&mut self, n: usize) -> Vec<FileGroup> {
+    pub fn split_files(mut self, n: usize) -> Vec<FileGroup> {
         if self.is_empty() {
             return vec![];
         }
@@ -460,6 +469,12 @@ impl IndexMut<usize> for FileGroup {
 impl FromIterator<PartitionedFile> for FileGroup {
     fn from_iter<I: IntoIterator<Item = PartitionedFile>>(iter: I) -> Self {
         let files = iter.into_iter().collect();
+        FileGroup::new(files)
+    }
+}
+
+impl From<Vec<PartitionedFile>> for FileGroup {
+    fn from(files: Vec<PartitionedFile>) -> Self {
         FileGroup::new(files)
     }
 }

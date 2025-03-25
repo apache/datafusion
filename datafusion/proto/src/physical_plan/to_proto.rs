@@ -485,7 +485,7 @@ pub fn serialize_file_scan_config(
     let file_groups = conf
         .file_groups
         .iter()
-        .map(|p| p.files.as_slice().try_into())
+        .map(|p| p.files().try_into())
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut output_orderings = vec![];

@@ -68,7 +68,7 @@ impl DisplayAs for FileGroupDisplay<'_> {
             DisplayFormatType::Default | DisplayFormatType::TreeRender => {
                 // To avoid showing too many files
                 let max_files = 5;
-                fmt_up_to_n_elements(&self.0.files, max_files, f, |pf, f| {
+                fmt_up_to_n_elements(self.0.files(), max_files, f, |pf, f| {
                     write!(f, "{}", pf.object_meta.location.as_ref())?;
                     if let Some(range) = pf.range.as_ref() {
                         write!(f, ":{}..{}", range.start, range.end)?;

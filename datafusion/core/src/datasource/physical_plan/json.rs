@@ -79,7 +79,7 @@ mod tests {
         let meta = file_groups
             .first()
             .unwrap()
-            .files
+            .files()
             .first()
             .unwrap()
             .clone()
@@ -114,7 +114,7 @@ mod tests {
         let path = file_groups
             .first()
             .unwrap()
-            .files
+            .files()
             .first()
             .unwrap()
             .object_meta
@@ -562,7 +562,7 @@ mod tests {
         let path = file_groups
             .first()
             .unwrap()
-            .files
+            .files()
             .first()
             .unwrap()
             .object_meta

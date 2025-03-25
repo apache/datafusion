@@ -1032,7 +1032,7 @@ impl TableProvider for ListingTable {
         )
         .await?;
 
-        let file_group = FileGroup::new(file_list_stream.try_collect::<Vec<_>>().await?);
+        let file_group = file_list_stream.try_collect::<Vec<_>>().await?.into();
         let keep_partition_by_columns =
             state.config_options().execution.keep_partition_by_columns;
 
@@ -1128,7 +1128,7 @@ impl ListingTable {
             .boxed()
             .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
-        let (mut files, statistics) = get_statistics_with_limit(
+        let (files, statistics) = get_statistics_with_limit(
             files,
             self.schema(),
             limit,

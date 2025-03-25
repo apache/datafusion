@@ -40,7 +40,6 @@ pub(crate) mod test_util {
 
     use datafusion_catalog::Session;
     use datafusion_common::Result;
-    use datafusion_datasource::file_groups::FileGroup;
     use datafusion_datasource::{
         file_format::FileFormat, file_scan_config::FileScanConfig, PartitionedFile,
     };
@@ -67,14 +66,15 @@ pub(crate) mod test_util {
             .infer_stats(state, &store, file_schema.clone(), &meta)
             .await?;
 
-        let file_groups = vec![FileGroup::new(vec![PartitionedFile {
+        let file_groups = vec![vec![PartitionedFile {
             object_meta: meta,
             partition_values: vec![],
             range: None,
             statistics: None,
             extensions: None,
             metadata_size_hint: None,
-        }])];
+        }]
+        .into()];
 
         let exec = format
             .create_physical_plan(
