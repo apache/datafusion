@@ -343,8 +343,8 @@ fn push_down_filter_groupby_expr_contains_alias() {
     format!("{plan}"),
     @r#"
         Projection: test.col_int32 + test.col_uint32 AS c, count(Int64(1)) AS count(*)
-          Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(Int64(1))]]
-            Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)
+          Aggregate: groupBy=[[CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64)]], aggr=[[count(Int64(1))]]
+            Filter: CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64) > Int64(3)
               TableScan: test projection=[col_int32, col_uint32]
         "#
     );
