@@ -16,24 +16,17 @@
 // under the License.
 
 use ahash::RandomState;
-use arrow::array::{
-    ArrowPrimitiveType, BinaryArray, BinaryViewArray, GenericByteArray,
-    GenericByteViewArray, OffsetSizeTrait, StringArray, StringViewArray, UInt64Array,
-};
-use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
+use arrow::array::UInt64Array;
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_expr::expr::WindowFunction;
-use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::hash::Hash;
-use std::marker::PhantomData;
 use std::mem::{size_of, size_of_val};
 use std::ops::BitAnd;
 use std::sync::Arc;
@@ -41,14 +34,7 @@ use std::sync::Arc;
 use arrow::{
     array::{ArrayRef, AsArray},
     compute,
-    datatypes::{
-        DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-        Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-        Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
-        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-        UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-    },
+    datatypes::{DataType, Field, Int64Type},
 };
 
 use arrow::{
@@ -66,17 +52,12 @@ use datafusion_expr::{
 use datafusion_expr::{
     Expr, ReversedUDAF, StatisticsArgs, TypeSignature, WindowFunctionDefinition,
 };
-use datafusion_functions_aggregate_common::aggregate::count_distinct::{
-    BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
-    PrimitiveDistinctCountAccumulator,
-};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
-use datafusion_physical_expr_common::binary_map::OutputType;
 
-use arrow::datatypes::{ByteArrayType, GenericStringType};
-use datafusion_common::cast::{as_list_array, as_primitive_array};
+use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
-use std::convert::TryFrom;
+
+type HashValueType = u64;
 
 make_udaf_expr_and_func!(
     Count,
@@ -272,10 +253,7 @@ impl AggregateUDFImpl for Count {
                 return not_impl_err!("COUNT DISTINCT with multiple arguments");
             }
 
-            let data_type = &args.exprs[0].data_type(args.schema)?;
-            Ok(Box::new(DistinctCountGroupsAccumulator::new(
-                data_type.clone(),
-            )))
+            Ok(Box::new(DistinctCountGroupsAccumulator::new()))
         } else {
             Ok(Box::new(CountGroupsAccumulator::new()))
         }
@@ -575,9 +553,9 @@ fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
 /// [`BytesDistinctCountAccumulator`]
 #[derive(Debug)]
 struct DistinctCountAccumulator {
-    values: HashSet<u64, RandomState>,
+    values: HashSet<HashValueType, RandomState>,
     random_state: RandomState,
-    batch_hashes: Vec<u64>,
+    batch_hashes: Vec<HashValueType>,
 }
 
 impl DistinctCountAccumulator {
@@ -586,26 +564,13 @@ impl DistinctCountAccumulator {
     // not suitable for variable length values like strings or complex types
     fn fixed_size(&self) -> usize {
         size_of_val(self)
-            + (size_of::<u64>() * self.values.capacity())
+            + (size_of::<HashValueType>() * self.values.capacity())
             + self
                 .values
                 .iter()
                 .next()
-                .map(|vals| 8 - size_of_val(vals))
+                .map(|vals| size_of::<HashValueType>() - size_of_val(vals))
                 .unwrap_or(0)
-            + size_of::<DataType>()
-    }
-
-    // calculates the size as accurately as possible. Note that calling this
-    // method is expensive
-    fn full_size(&self) -> usize {
-        size_of_val(self)
-            + (size_of::<u64>() * self.values.capacity())
-            + self
-                .values
-                .iter()
-                .map(|vals| 8 - size_of_val(vals))
-                .sum::<usize>()
             + size_of::<DataType>()
     }
 }
@@ -638,8 +603,11 @@ impl Accumulator for DistinctCountAccumulator {
         // })
         self.batch_hashes.clear();
         self.batch_hashes.resize(arr.len(), 0);
-        let hashes =
-            create_hashes(&[arr.clone()], &self.random_state, &mut self.batch_hashes)?;
+        let hashes = create_hashes(
+            &[ArrayRef::clone(arr)],
+            &self.random_state,
+            &mut self.batch_hashes,
+        )?;
         for hash in hashes.as_slice() {
             self.values.insert(*hash);
         }
@@ -686,17 +654,21 @@ impl Accumulator for DistinctCountAccumulator {
 #[derive(Debug)]
 pub struct DistinctCountGroupsAccumulator {
     /// One HashSet per group to track distinct values
-    distinct_sets: Vec<HashSet<u64, RandomState>>,
+    distinct_sets: Vec<HashSet<HashValueType, RandomState>>,
     random_state: RandomState,
-    data_type: DataType,
-    batch_hashes: Vec<u64>,
+    batch_hashes: Vec<HashValueType>,
+}
+
+impl Default for DistinctCountGroupsAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DistinctCountGroupsAccumulator {
-    pub fn new(data_type: DataType) -> Self {
+    pub fn new() -> Self {
         Self {
             distinct_sets: vec![],
-            data_type,
             random_state: RandomState::with_seeds(1, 2, 3, 4),
             batch_hashes: vec![],
         }
@@ -724,8 +696,11 @@ impl GroupsAccumulator for DistinctCountGroupsAccumulator {
         let array = &values[0];
         self.batch_hashes.clear();
         self.batch_hashes.resize(array.len(), 0);
-        let hashes =
-            create_hashes(&[array.clone()], &self.random_state, &mut self.batch_hashes)?;
+        let hashes = create_hashes(
+            &[ArrayRef::clone(array)],
+            &self.random_state,
+            &mut self.batch_hashes,
+        )?;
 
         // Use a pattern similar to accumulate_indices to process rows
         // that are not null and pass the filter
@@ -735,9 +710,6 @@ impl GroupsAccumulator for DistinctCountGroupsAccumulator {
             (None, None) => {
                 // No nulls, no filter - process all rows
                 for (row_idx, &group_idx) in group_indices.iter().enumerate() {
-                    // if let Ok(scalar) = ScalarValue::try_from_array(array, row_idx) {
-                    //     self.distinct_sets[group_idx].insert(scalar);
-                    // }
                     self.distinct_sets[group_idx].insert(hashes[row_idx]);
                 }
             }
@@ -747,9 +719,6 @@ impl GroupsAccumulator for DistinctCountGroupsAccumulator {
                     group_indices.iter().zip(nulls.iter()).enumerate()
                 {
                     if is_valid {
-                        // if let Ok(scalar) = ScalarValue::try_from_array(array, row_idx) {
-                        //     self.distinct_sets[group_idx].insert(scalar);
-                        // }
                         self.distinct_sets[group_idx].insert(hashes[row_idx]);
                     }
                 }
@@ -760,9 +729,6 @@ impl GroupsAccumulator for DistinctCountGroupsAccumulator {
                     group_indices.iter().zip(filter.iter()).enumerate()
                 {
                     if let Some(true) = filter_value {
-                        // if let Ok(scalar) = ScalarValue::try_from_array(array, row_idx) {
-                        //     self.distinct_sets[group_idx].insert(scalar);
-                        // }
                         self.distinct_sets[group_idx].insert(hashes[row_idx]);
                     }
                 }
@@ -777,9 +743,6 @@ impl GroupsAccumulator for DistinctCountGroupsAccumulator {
 
                 for (row_idx, ((filter_value, &group_idx), is_valid)) in iter {
                     if is_valid && filter_value == Some(true) {
-                        // if let Ok(scalar) = ScalarValue::try_from_array(array, row_idx) {
-                        //     self.distinct_sets[group_idx].insert(scalar);
-                        // }
                         self.distinct_sets[group_idx].insert(hashes[row_idx]);
                     }
                 }
@@ -854,16 +817,13 @@ impl GroupsAccumulator for DistinctCountGroupsAccumulator {
             })
             .peekable();
         let data_array: ArrayRef = if value_iter.peek().is_none() {
-            // arrow::array::new_empty_array(&self.data_type) as _
             arrow::array::new_empty_array(&DataType::UInt64) as _
         } else {
-            // Arc::new(ScalarValue::iter_to_array(value_iter)?) as _
             Arc::new(UInt64Array::from_iter_values(value_iter))
         };
         let offset_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets));
 
         let list_array = ListArray::new(
-            // Arc::new(Field::new_list_field(self.data_type.clone(), true)),
             Arc::new(Field::new_list_field(DataType::UInt64, true)),
             offset_buffer,
             data_array,
@@ -905,30 +865,16 @@ impl GroupsAccumulator for DistinctCountGroupsAccumulator {
         let mut size = size_of::<Self>();
 
         // Size of the vector holding the HashSets
-        size += size_of::<Vec<HashSet<u64, RandomState>>>()
-            + self.distinct_sets.capacity() * size_of::<HashSet<u64, RandomState>>();
+        size += size_of::<Vec<HashSet<HashValueType, RandomState>>>()
+            + self.distinct_sets.capacity()
+                * size_of::<HashSet<HashValueType, RandomState>>();
 
         // Estimate HashSet contents size more efficiently
         // Instead of iterating through all values which is expensive, use an approximation
         for set in &self.distinct_sets {
             // Base size of the HashSet
-            size += set.capacity() * size_of::<(u64, ())>();
-
-            // Estimate ScalarValue size using sample-based approach
-            // Only look at up to 10 items as a sample
-            // let sample_size = 10.min(set.len());
-            // if sample_size > 0 {
-            //     let avg_size = set
-            //         .iter()
-            //         .take(sample_size)
-            //         .map(|v| v.size())
-            //         .sum::<usize>()
-            //         / sample_size;
-
-            // Extrapolate to the full set
-            // size += avg_size * (set.len() - sample_size);
-            size += size_of::<u64>() * set.len();
-            // }
+            size += set.capacity() * size_of::<(HashValueType, ())>();
+            size += size_of::<HashValueType>() * set.len();
         }
 
         size
@@ -950,7 +896,7 @@ mod tests {
 
     #[test]
     fn test_distinct_count_groups_basic() -> Result<()> {
-        let mut accumulator = DistinctCountGroupsAccumulator::new(DataType::Int32);
+        let mut accumulator = DistinctCountGroupsAccumulator::new();
         let values = vec![Arc::new(Int32Array::from(vec![1, 2, 1, 3, 2, 1])) as ArrayRef];
 
         // 3 groups
@@ -972,7 +918,7 @@ mod tests {
 
     #[test]
     fn test_distinct_count_groups_with_filter() -> Result<()> {
-        let mut accumulator = DistinctCountGroupsAccumulator::new(DataType::Utf8);
+        let mut accumulator = DistinctCountGroupsAccumulator::new();
         let values = vec![
             Arc::new(StringArray::from(vec!["a", "b", "a", "c", "b", "d"])) as ArrayRef,
         ];
