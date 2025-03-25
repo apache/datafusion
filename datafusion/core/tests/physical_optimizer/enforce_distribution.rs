@@ -3519,23 +3519,22 @@ async fn test_distribute_sort_memtable() -> Result<()> {
     );
 
     let mem_table = create_memtable()?;
-    let session_config = SessionConfig::new().with_repartition_file_min_size(1000);
+    let session_config = SessionConfig::new()
+        .with_repartition_file_min_size(1000)
+        .with_target_partitions(3);
     let ctx = SessionContext::new_with_config(session_config);
     ctx.register_table("users", Arc::new(mem_table))?;
 
     let dataframe = ctx.sql("SELECT * FROM users order by id;").await?;
     let physical_plan = dataframe.create_physical_plan().await?;
 
-    // prior to optimization, this is the starting plan
+    // this is the final, optimized plan
     let expected = &[
-        "SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]",
-        "  DataSourceExec: partitions=1, partition_sizes=[100]",
+        "SortPreservingMergeExec: [id@0 ASC NULLS LAST]",
+        "  SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]",
+        "    DataSourceExec: partitions=3, partition_sizes=[34, 33, 33]",
     ];
-    plans_matches_expected!(expected, physical_plan.clone());
-
-    // This sort query won't get repartitioned
-    test_config.run(expected, physical_plan.clone(), &DISTRIB_DISTRIB_SORT)?;
-    test_config.run(expected, physical_plan, &SORT_DISTRIB_DISTRIB)?;
+    plans_matches_expected!(expected, physical_plan);
 
     Ok(())
 }
