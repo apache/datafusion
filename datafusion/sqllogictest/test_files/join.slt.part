@@ -625,6 +625,28 @@ FROM t1
 ----
 11 11 11
 
+# join condition is required
+# TODO: query error join condition should not be empty
+# related to: https://github.com/apache/datafusion/issues/13486
+statement ok
+SELECT * FROM t1 JOIN t2
+
+# join condition is required
+query error join condition should not be empty
+SELECT * FROM t1 LEFT JOIN t2
+
+# join condition is required
+query error join condition should not be empty
+SELECT * FROM t1 RIGHT JOIN t2
+
+# join condition is required
+query error join condition should not be empty
+SELECT * FROM t1 FULL JOIN t2
+
+# cross join no need for join condition
+statement ok
+SELECT * FROM t1 CROSS JOIN t2
+
 # multiple inner joins with mixed ON clause and filter
 query III rowsort
 SELECT t1.t1_id, t2.t2_id, t3.t3_id
