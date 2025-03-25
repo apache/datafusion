@@ -25,6 +25,7 @@ use crate::file_compression_type::FileCompressionType;
 use crate::file_sink_config::FileSinkConfig;
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
+use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_common::error::Result;
 use object_store::buffered::BufWriter;
@@ -142,16 +143,17 @@ impl ReaderBuilderConfig {
 ///     }
 /// }
 /// ```
+#[async_trait]
 pub trait BatchSerializer: Sync + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
     /// Parameter `initial` signals whether the given batch is the first batch.
     /// This distinction is important for certain serializers (like CSV).
-    fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes>;
+    async fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes>;
 
-    fn deserialize(
+    async fn deserialize(
         &self,
         config: ReaderBuilderConfig,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         bytes: &[u8],
     ) -> Result<RecordBatch>;
 }

@@ -632,8 +632,9 @@ impl CsvSerializer {
     }
 }
 
+#[async_trait]
 impl BatchSerializer for CsvSerializer {
-    fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes> {
+    async fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes> {
         let mut buffer = Vec::with_capacity(4096);
         let builder = self.builder.clone();
         let header = self.header && initial;
@@ -643,13 +644,13 @@ impl BatchSerializer for CsvSerializer {
         Ok(Bytes::from(buffer))
     }
 
-    fn deserialize(
+    async fn deserialize(
         &self,
         config: ReaderBuilderConfig,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         bytes: &[u8],
     ) -> Result<RecordBatch> {
-        let mut builder = ReaderBuilder::new(Arc::clone(&schema));
+        let mut builder = ReaderBuilder::new(Arc::clone(schema));
 
         if let Some(has_header) = config.has_header {
             builder = builder.with_header(has_header);
@@ -668,10 +669,10 @@ impl BatchSerializer for CsvSerializer {
         }
 
         if all_batches.is_empty() {
-            return Ok(RecordBatch::new_empty(Arc::clone(&schema)));
+            return Ok(RecordBatch::new_empty(Arc::clone(schema)));
         }
 
-        arrow::compute::concat_batches(&schema, &all_batches)
+        arrow::compute::concat_batches(schema, &all_batches)
             .map_err(|e| arrow_datafusion_err!(e))
     }
 }
@@ -791,12 +792,14 @@ mod tests {
             vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
         )?;
 
-        let bytes = serializer.serialize(batch.clone(), true)?;
-        let deserialized = serializer.deserialize(
-            ReaderBuilderConfig::new().with_has_header(false),
-            schema,
-            &bytes,
-        )?;
+        let bytes = serializer.serialize(batch.clone(), true).await?;
+        let deserialized = serializer
+            .deserialize(
+                ReaderBuilderConfig::new().with_has_header(false),
+                &schema,
+                &bytes,
+            )
+            .await?;
 
         assert_eq!(&batch, &deserialized);
 
@@ -808,12 +811,14 @@ mod tests {
             vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
         )?;
 
-        let bytes = serializer.serialize(batch.clone(), true)?;
-        let deserialized = serializer.deserialize(
-            ReaderBuilderConfig::new().with_has_header(true),
-            schema,
-            &bytes,
-        )?;
+        let bytes = serializer.serialize(batch.clone(), true).await?;
+        let deserialized = serializer
+            .deserialize(
+                ReaderBuilderConfig::new().with_has_header(true),
+                &schema,
+                &bytes,
+            )
+            .await?;
 
         assert_eq!(&batch, &deserialized);
         Ok(())

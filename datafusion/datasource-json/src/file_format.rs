@@ -294,21 +294,22 @@ impl JsonSerializer {
     }
 }
 
+#[async_trait]
 impl BatchSerializer for JsonSerializer {
-    fn serialize(&self, batch: RecordBatch, _initial: bool) -> Result<Bytes> {
+    async fn serialize(&self, batch: RecordBatch, _initial: bool) -> Result<Bytes> {
         let mut buffer = Vec::with_capacity(4096);
         let mut writer = json::LineDelimitedWriter::new(&mut buffer);
         writer.write(&batch)?;
         Ok(Bytes::from(buffer))
     }
 
-    fn deserialize(
+    async fn deserialize(
         &self,
         config: ReaderBuilderConfig,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         bytes: &[u8],
     ) -> Result<RecordBatch> {
-        let mut builder = ReaderBuilder::new(Arc::clone(&schema));
+        let mut builder = ReaderBuilder::new(Arc::clone(schema));
 
         if let Some(batch_size) = config.batch_size {
             builder = builder.with_batch_size(batch_size);
@@ -330,10 +331,10 @@ impl BatchSerializer for JsonSerializer {
         }
 
         if all_batches.is_empty() {
-            return Ok(RecordBatch::new_empty(schema));
+            return Ok(RecordBatch::new_empty(Arc::clone(schema)));
         }
 
-        arrow::compute::concat_batches(&schema, &all_batches)
+        arrow::compute::concat_batches(schema, &all_batches)
             .map_err(|e| arrow_datafusion_err!(e))
     }
 }
@@ -464,18 +465,18 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip_serialize() -> Result<()> {
-        let serializer = JsonSerializer::new();
+        let serializer = Arc::new(JsonSerializer::new()) as Arc<dyn BatchSerializer>;
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
             as SchemaRef;
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
         )?;
-        let bytes = serializer.serialize(batch.clone(), true)?;
-        let deserialized =
-            serializer.deserialize(ReaderBuilderConfig::default(), schema, &bytes)?;
+        let bytes = serializer.serialize(batch.clone(), true).await?;
+        let deserialized = serializer
+            .deserialize(ReaderBuilderConfig::default(), &schema, &bytes)
+            .await?;
 
-        println!("deserialized: {:?}", deserialized);
         assert_eq!(&batch, &deserialized);
         Ok(())
     }
