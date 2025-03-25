@@ -21,7 +21,7 @@ use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
-use datafusion_common::types::logical_string;
+use datafusion_common::types::{logical_null, logical_string, NativeType};
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_err, plan_err, DataFusionError, Result,
     ScalarValue,
@@ -84,12 +84,28 @@ impl RegexpLikeFunc {
             signature: Signature::one_of(
                 vec![
                     TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_string()),
+                            vec![TypeSignatureClass::Native(logical_null())],
+                            NativeType::String,
+                        ),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_string()),
+                            vec![TypeSignatureClass::Native(logical_null())],
+                            NativeType::String,
+                        ),
                     ]),
                     TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_string()),
+                            vec![TypeSignatureClass::Native(logical_null())],
+                            NativeType::String,
+                        ),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_string()),
+                            vec![TypeSignatureClass::Native(logical_null())],
+                            NativeType::String,
+                        ),
                         Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
                     ]),
                 ],

@@ -23,7 +23,7 @@ use arrow::array::{
     ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray, StringArrayType,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
-use datafusion_common::types::logical_string;
+use datafusion_common::types::{logical_null, logical_string, NativeType};
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
@@ -64,8 +64,16 @@ impl StrposFunc {
         Self {
             signature: Signature::coercible(
                 vec![
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Native(logical_null())],
+                        NativeType::String,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Native(logical_null())],
+                        NativeType::String,
+                    ),
                 ],
                 Volatility::Immutable,
             ),

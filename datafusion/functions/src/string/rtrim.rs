@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::string::common::*;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
-use datafusion_common::types::logical_string;
+use datafusion_common::types::{logical_null, logical_string, NativeType};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
@@ -88,11 +88,21 @@ impl RtrimFunc {
             signature: Signature::one_of(
                 vec![
                     TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_string()),
+                            vec![TypeSignatureClass::Native(logical_null())],
+                            NativeType::String,
+                        ),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_string()),
+                            vec![TypeSignatureClass::Native(logical_null())],
+                            NativeType::String,
+                        ),
                     ]),
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
                         TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Native(logical_null())],
+                        NativeType::String,
                     )]),
                 ],
                 Volatility::Immutable,

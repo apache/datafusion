@@ -26,7 +26,7 @@ use datafusion_expr::type_coercion::binary::{
 };
 
 use crate::utils::make_scalar_function;
-use datafusion_common::types::logical_string;
+use datafusion_common::types::{logical_null, logical_string, NativeType};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::{
     cast, Coercion, ColumnarValue, Documentation, Expr, Like, ScalarFunctionArgs,
@@ -90,8 +90,16 @@ impl StartsWithFunc {
         Self {
             signature: Signature::coercible(
                 vec![
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Native(logical_null())],
+                        NativeType::String,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Native(logical_null())],
+                        NativeType::String,
+                    ),
                 ],
                 Volatility::Immutable,
             ),

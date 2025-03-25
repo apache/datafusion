@@ -20,7 +20,7 @@ use arrow::datatypes::DataType;
 use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
-use datafusion_common::types::logical_string;
+use datafusion_common::types::{logical_null, logical_string, NativeType};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
@@ -60,9 +60,11 @@ impl BitLengthFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Native(
-                    logical_string(),
-                ))],
+                vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_string()),
+                    vec![TypeSignatureClass::Native(logical_null())],
+                    NativeType::String,
+                )],
                 Volatility::Immutable,
             ),
         }

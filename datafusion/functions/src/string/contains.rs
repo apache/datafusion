@@ -20,7 +20,7 @@ use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::compute::contains as arrow_contains;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
-use datafusion_common::types::logical_string;
+use datafusion_common::types::{logical_null, logical_string, NativeType};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
 use datafusion_expr::{
@@ -63,7 +63,11 @@ impl ContainsFunc {
             signature: Signature::coercible(
                 vec![
                     Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Native(logical_null())],
+                        NativeType::String,
+                    ),
                 ],
                 Volatility::Immutable,
             ),

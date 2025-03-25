@@ -18,7 +18,7 @@
 use crate::string::common::to_upper;
 use crate::utils::utf8_to_str_type;
 use arrow::datatypes::DataType;
-use datafusion_common::types::logical_string;
+use datafusion_common::types::{logical_null, logical_string, NativeType};
 use datafusion_common::Result;
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -58,9 +58,11 @@ impl UpperFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Native(
-                    logical_string(),
-                ))],
+                vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_string()),
+                    vec![TypeSignatureClass::Native(logical_null())],
+                    NativeType::String,
+                )],
                 Volatility::Immutable,
             ),
         }
