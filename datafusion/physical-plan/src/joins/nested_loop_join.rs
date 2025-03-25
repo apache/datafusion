@@ -492,7 +492,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 .register(context.memory_pool());
 
         let inner_table = Arc::clone(&self.inner_table)
-            .init(collect_left_input(
+            .get_or_init(collect_left_input(
                 Arc::clone(&self.left),
                 Arc::clone(&context),
                 join_metrics.clone(),

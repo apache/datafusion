@@ -664,7 +664,7 @@ impl<T> Debug for SharedResultOnceCell<T> {
 }
 
 impl<T> SharedResultOnceCell<T> {
-    pub(crate) async fn init<Fut>(self: Arc<Self>, f: Fut) -> Result<Arc<T>>
+    pub(crate) async fn get_or_init<Fut>(self: Arc<Self>, f: Fut) -> Result<Arc<T>>
     where
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
@@ -2693,8 +2693,8 @@ mod tests {
         let cell1 = Arc::new(SharedResultOnceCell::<usize>::default());
         let cell2 = Arc::clone(&cell1);
 
-        let fut1 = cell1.init(async { Ok(1) });
-        let fut2 = cell2.init(async { Ok(2) });
+        let fut1 = cell1.get_or_init(async { Ok(1) });
+        let fut2 = cell2.get_or_init(async { Ok(2) });
 
         let val1 = fut1.await.unwrap();
         assert_eq!(val1, Arc::new(1));

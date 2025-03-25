@@ -89,7 +89,7 @@ pub struct CrossJoinExec {
     ///
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the left side loading.
-    left_fut: Arc<SharedResultOnceCell<JoinLeftData>>,
+    left_once_cell: Arc<SharedResultOnceCell<JoinLeftData>>,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
     /// Properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -122,7 +122,7 @@ impl CrossJoinExec {
             left,
             right,
             schema,
-            left_fut: Default::default(),
+            left_once_cell: Default::default(),
             metrics: ExecutionPlanMetricsSet::default(),
             cache,
         }
@@ -303,8 +303,8 @@ impl ExecutionPlan for CrossJoinExec {
         let enforce_batch_size_in_joins =
             context.session_config().enforce_batch_size_in_joins();
 
-        let left_fut = Arc::clone(&self.left_fut)
-            .init(load_left_input(
+        let left_fut = Arc::clone(&self.left_once_cell)
+            .get_or_init(load_left_input(
                 Arc::clone(&self.left),
                 context,
                 join_metrics.clone(),

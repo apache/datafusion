@@ -336,7 +336,7 @@ pub struct HashJoinExec {
     ///
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
-    left_fut: Arc<SharedResultOnceCell<JoinLeftData>>,
+    left_once_cell: Arc<SharedResultOnceCell<JoinLeftData>>,
     /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Partitioning mode to use
@@ -407,7 +407,7 @@ impl HashJoinExec {
             filter,
             join_type: *join_type,
             join_schema,
-            left_fut: Default::default(),
+            left_once_cell: Default::default(),
             random_state,
             mode: partition_mode,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -799,7 +799,7 @@ impl ExecutionPlan for HashJoinExec {
                 let join_metrics = join_metrics.clone();
                 let join_type = self.join_type;
 
-                let fut = Arc::clone(&self.left_fut).init(async move {
+                let fut = Arc::clone(&self.left_once_cell).get_or_init(async move {
                     // We create the reservation inside this closure to ensure it is only created once
                     let reservation =
                         MemoryConsumer::new("HashJoinInput").register(&memory_pool);
