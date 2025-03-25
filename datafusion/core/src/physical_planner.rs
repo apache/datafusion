@@ -693,10 +693,13 @@ impl DefaultPhysicalPlanner {
                             differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
                         }
                     }
-                    return internal_err!("Physical input schema should be the same as the one converted from logical input schema. Differences: {}", differences
-                        .iter()
-                        .map(|s| format!("\n\t- {}", s))
-                        .join(""));
+
+                    if !differences.is_empty() {
+                        return internal_err!("Physical input schema should be the same as the one converted from logical input schema. Differences: {}", differences
+                            .iter()
+                            .map(|s| format!("\n\t- {}", s))
+                            .join(""));
+                    }
                 }
 
                 let groups = self.create_grouping_physical_expr(
