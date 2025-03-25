@@ -317,14 +317,14 @@ fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef>
                 // For each field in the target schema
                 for target_child_field in target_fields {
                     // Create Arc<Field> directly (not Arc<Arc<Field>>)
-                    let field_arc = target_child_field.clone();
+                    let field_arc = Arc::clone(target_child_field);
 
                     // Try to find corresponding field in source
                     match struct_array.column_by_name(target_child_field.name()) {
                         Some(source_child_col) => {
                             // Field exists in source, adapt it
                             let adapted_child =
-                                self.adapt_column(&source_child_col, target_child_field)?;
+                                adapt_column(source_child_col, target_child_field)?;
                             children.push((field_arc, adapted_child));
                         }
                         None => {
