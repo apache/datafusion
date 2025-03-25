@@ -34,6 +34,7 @@ use crate::datasource::{
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
+use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource_parquet::source::ParquetSource;
