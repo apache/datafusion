@@ -1,11 +1,12 @@
 ---
-source: tests/cli_integration.rs
+source: datafusion-cli/tests/cli_integration.rs
 info:
   program: datafusion-cli
   args:
     - "--file"
     - tests/sql/select.sql
     - "-q"
+snapshot_kind: text
 ---
 success: true
 exit_code: 0

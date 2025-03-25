@@ -1,5 +1,5 @@
 ---
-source: tests/cli_integration.rs
+source: datafusion-cli/tests/cli_integration.rs
 info:
   program: datafusion-cli
   args:
@@ -8,6 +8,7 @@ info:
     - "-q"
     - "-b"
     - "1"
+snapshot_kind: text
 ---
 success: true
 exit_code: 0
