@@ -15,10 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Session definition for Catalog (Table) and Datasource (File)
-//! This trait provides access to the information needed to plan and execute
-//! queries, such as configuration, functions, and runtime environment. For
-//! Catalog and Datasource
+//! Session management for DataFusion query execution environment
+//!
+//! This module provides the core session management functionality for DataFusion,
+//! handling both Catalog (Table) and Datasource (File) configurations. It defines
+//! the fundamental interfaces and implementations for maintaining query execution
+//! state and configurations.
+//!
+//! Key components:
+//! * [`Session`] - Manages query execution context, including configurations,
+//!   catalogs, and runtime state
+//! * [`SessionStore`] - Handles session persistence and retrieval
+//!
+//! The session system enables:
+//! * Configuration management for query execution
+//! * Catalog and schema management
+//! * Function registry access
+//! * Runtime environment configuration
+//! * Query state persistence
 
 pub mod session;
 
