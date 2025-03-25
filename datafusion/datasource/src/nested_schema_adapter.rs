@@ -289,7 +289,7 @@ impl SchemaMapper for NestedStructSchemaMapping {
                     // If field doesn't exist in file, return null array
                     || Ok(new_null_array(field.data_type(), batch_rows)),
                     // If field exists, handle potential nested struct adaptation
-                    |batch_idx| self.adapt_column(&batch_cols[batch_idx], field),
+                    |batch_idx| adapt_column(&batch_cols[batch_idx], field),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -303,62 +303,50 @@ impl SchemaMapper for NestedStructSchemaMapping {
 }
 
 // Helper methods for the NestedStructSchemaMapping
-impl NestedStructSchemaMapping {
-    /// Adapt a column to match the target field type, handling nested structs specially
-    fn adapt_column(
-        &self,
-        source_col: &ArrayRef,
-        target_field: &Field,
-    ) -> Result<ArrayRef> {
-        match target_field.data_type() {
-            DataType::Struct(target_fields) => {
-                // For struct arrays, we need to handle them specially
-                if let Some(struct_array) =
-                    source_col.as_any().downcast_ref::<StructArray>()
-                {
-                    // Create a vector to store field-array pairs with the correct type
-                    let mut children: Vec<(Arc<Field>, Arc<dyn Array>)> = Vec::new();
-                    let num_rows = source_col.len();
+/// Adapt a column to match the target field type, handling nested structs specially
+fn adapt_column(source_col: &ArrayRef, target_field: &Field) -> Result<ArrayRef> {
+    match target_field.data_type() {
+        DataType::Struct(target_fields) => {
+            // For struct arrays, we need to handle them specially
+            if let Some(struct_array) = source_col.as_any().downcast_ref::<StructArray>()
+            {
+                // Create a vector to store field-array pairs with the correct type
+                let mut children: Vec<(Arc<Field>, Arc<dyn Array>)> = Vec::new();
+                let num_rows = source_col.len();
 
-                    // For each field in the target schema
-                    for target_child_field in target_fields {
-                        // Create Arc<Field> directly (not Arc<Arc<Field>>)
-                        let field_arc = target_child_field.clone();
+                // For each field in the target schema
+                for target_child_field in target_fields {
+                    // Create Arc<Field> directly (not Arc<Arc<Field>>)
+                    let field_arc = target_child_field.clone();
 
-                        // Try to find corresponding field in source
-                        match struct_array.column_by_name(target_child_field.name()) {
-                            Some(source_child_col) => {
-                                // Field exists in source, adapt it
-                                let adapted_child = self.adapt_column(
-                                    &source_child_col,
-                                    target_child_field,
-                                )?;
-                                children.push((field_arc, adapted_child));
-                            }
-                            None => {
-                                // Field doesn't exist in source, add null array
-                                children.push((
-                                    field_arc,
-                                    new_null_array(
-                                        target_child_field.data_type(),
-                                        num_rows,
-                                    ),
-                                ));
-                            }
+                    // Try to find corresponding field in source
+                    match struct_array.column_by_name(target_child_field.name()) {
+                        Some(source_child_col) => {
+                            // Field exists in source, adapt it
+                            let adapted_child =
+                                self.adapt_column(&source_child_col, target_child_field)?;
+                            children.push((field_arc, adapted_child));
+                        }
+                        None => {
+                            // Field doesn't exist in source, add null array
+                            children.push((
+                                field_arc,
+                                new_null_array(target_child_field.data_type(), num_rows),
+                            ));
                         }
                     }
-
-                    // Create new struct array with all target fields
-                    let struct_array = StructArray::from(children);
-                    Ok(Arc::new(struct_array))
-                } else {
-                    // Not a struct array, but target expects struct - return nulls
-                    Ok(new_null_array(target_field.data_type(), source_col.len()))
                 }
+
+                // Create new struct array with all target fields
+                let struct_array = StructArray::from(children);
+                Ok(Arc::new(struct_array))
+            } else {
+                // Not a struct array, but target expects struct - return nulls
+                Ok(new_null_array(target_field.data_type(), source_col.len()))
             }
-            // For non-struct types, just cast
-            _ => Ok(cast(source_col, target_field.data_type())?),
         }
+        // For non-struct types, just cast
+        _ => Ok(cast(source_col, target_field.data_type())?),
     }
 }
 
