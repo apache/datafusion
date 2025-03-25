@@ -19,7 +19,7 @@ use std::process::Command;
 
 use rstest::rstest;
 
-use insta::{assert_snapshot, glob, Settings};
+use insta::{glob, Settings};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::{env, fs};
 
@@ -59,7 +59,6 @@ fn init() {
     "batch_size",
     ["--command", "show datafusion.execution.batch_size", "-q", "-b", "1"],
 )]
-
 #[test]
 fn cli_quick_test<'a>(
     #[case] snapshot_name: &'a str,

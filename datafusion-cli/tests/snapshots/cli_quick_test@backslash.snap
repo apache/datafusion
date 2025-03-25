@@ -8,7 +8,6 @@ info:
     - "--format"
     - json
     - "-q"
-snapshot_kind: text
 ---
 success: true
 exit_code: 0

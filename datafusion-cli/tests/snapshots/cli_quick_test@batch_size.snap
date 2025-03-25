@@ -8,7 +8,6 @@ info:
     - "-q"
     - "-b"
     - "1"
-snapshot_kind: text
 ---
 success: true
 exit_code: 0
