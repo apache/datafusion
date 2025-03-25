@@ -1898,10 +1898,10 @@ fn union_by_name_different_columns() {
     let expected = "\
         Distinct:\
         \n  Union\
-        \n    Projection: NULL AS Int64(1), order_id\
+        \n    Projection: order_id, NULL AS Int64(1)\
         \n      Projection: orders.order_id\
         \n        TableScan: orders\
-        \n    Projection: Int64(1), order_id\
+        \n    Projection: order_id, Int64(1)\
         \n      Projection: orders.order_id, Int64(1)\
         \n        TableScan: orders";
     quick_test(sql, expected);
@@ -1937,10 +1937,10 @@ fn union_all_by_name_different_columns() {
         "SELECT order_id from orders UNION ALL BY NAME SELECT order_id, 1 FROM orders";
     let expected = "\
         Union\
-        \n  Projection: NULL AS Int64(1), order_id\
+        \n  Projection: order_id, NULL AS Int64(1)\
         \n    Projection: orders.order_id\
         \n      TableScan: orders\
-        \n  Projection: Int64(1), order_id\
+        \n  Projection: order_id, Int64(1)\
         \n    Projection: orders.order_id, Int64(1)\
         \n      TableScan: orders";
     quick_test(sql, expected);

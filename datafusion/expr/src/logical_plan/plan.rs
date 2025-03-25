@@ -18,7 +18,7 @@
 //! Logical plan types
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
@@ -2741,35 +2741,34 @@ impl Union {
     ) -> Result<DFSchemaRef> {
         type FieldData<'a> =
             (&'a DataType, bool, Vec<&'a HashMap<String, String>>, usize);
-        // Prefer `BTreeMap` as it produces items in order by key when iterated over
-        let mut cols: BTreeMap<&str, FieldData> = BTreeMap::new();
+        let mut cols: Vec<(&str, FieldData)> = Vec::new();
         for input in inputs.iter() {
             for field in input.schema().fields() {
-                match cols.entry(field.name()) {
-                    std::collections::btree_map::Entry::Occupied(mut occupied) => {
-                        let (data_type, is_nullable, metadata, occurrences) =
-                            occupied.get_mut();
-                        if !loose_types && *data_type != field.data_type() {
-                            return plan_err!(
-                                "Found different types for field {}",
-                                field.name()
-                            );
-                        }
-
-                        metadata.push(field.metadata());
-                        // If the field is nullable in any one of the inputs,
-                        // then the field in the final schema is also nullable.
-                        *is_nullable |= field.is_nullable();
-                        *occurrences += 1;
+                if let Some((_, (data_type, is_nullable, metadata, occurrences))) =
+                    cols.iter_mut().find(|(name, _)| name == field.name())
+                {
+                    if !loose_types && *data_type != field.data_type() {
+                        return plan_err!(
+                            "Found different types for field {}",
+                            field.name()
+                        );
                     }
-                    std::collections::btree_map::Entry::Vacant(vacant) => {
-                        vacant.insert((
+
+                    metadata.push(field.metadata());
+                    // If the field is nullable in any one of the inputs,
+                    // then the field in the final schema is also nullable.
+                    *is_nullable |= field.is_nullable();
+                    *occurrences += 1;
+                } else {
+                    cols.push((
+                        field.name(),
+                        (
                             field.data_type(),
                             field.is_nullable(),
                             vec![field.metadata()],
                             1,
-                        ));
-                    }
+                        ),
+                    ));
                 }
             }
         }
