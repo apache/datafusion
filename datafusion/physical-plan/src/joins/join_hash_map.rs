@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! This file contains the implementation of the `JoinHashMap` struct, which
+//! is used to store the mapping between hash values based on the build side
+//! ["on" values] to a list of indices with this key's value.
+
 use std::fmt::{self, Debug};
 use std::ops::IndexMut;
 
