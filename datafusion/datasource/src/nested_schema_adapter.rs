@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`NestedSchemaAdapter`] and [`NestedSchemaAdapterFactory`] to adapt file-level record batches to a table schema.
+//! [`NestedStructSchemaAdapter`] and [`NestedStructSchemaAdapterFactory`] to adapt file-level record batches to a table schema.
 //!
 //! Adapter provides a method of translating the RecordBatches that come out of the
 //! physical format into how they should be used by DataFusion.  For instance, a schema
