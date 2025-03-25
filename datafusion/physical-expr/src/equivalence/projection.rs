@@ -66,7 +66,7 @@ impl ProjectionMapping {
                             let idx = col.index();
                             let matching_input_field = input_schema.field(idx);
                             if col.name() != matching_input_field.name() {
-                                let fixed_col = Column::new(matching_input_field.name(), idx);
+                                let fixed_col = Column::new(col.name(), idx);
                                 return Ok(Transformed::yes(Arc::new(fixed_col)))
                             }
                             let matching_input_column =
