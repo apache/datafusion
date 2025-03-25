@@ -23,12 +23,10 @@ use std::sync::Arc;
 
 use crate::file_compression_type::FileCompressionType;
 use crate::file_sink_config::FileSinkConfig;
-use datafusion_common::error::Result;
-
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
 use bytes::Bytes;
-use datafusion_common::not_impl_err;
+use datafusion_common::error::Result;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::ObjectStore;
@@ -70,12 +68,80 @@ impl Write for SharedBuffer {
 
 #[derive(Debug, Clone, Default)]
 pub struct ReaderBuilderConfig {
+    // common
+    pub batch_size: Option<usize>,
+
+    // json
     pub strict_mode: Option<bool>,
     pub coerce_primitive: Option<bool>,
-    pub batch_size: Option<usize>,
+
+    // csv
+    pub has_header: Option<bool>,
 }
 
-/// A trait that defines the methods required for a RecordBatch serializer.
+impl ReaderBuilderConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = Some(batch_size);
+        self
+    }
+
+    pub fn with_strict_mode(mut self, strict_mode: bool) -> Self {
+        self.strict_mode = Some(strict_mode);
+        self
+    }
+
+    pub fn with_coerce_primitive(mut self, coerce_primitive: bool) -> Self {
+        self.coerce_primitive = Some(coerce_primitive);
+        self
+    }
+
+    pub fn with_has_header(mut self, has_header: bool) -> Self {
+        self.has_header = Some(has_header);
+        self
+    }
+}
+
+/// A trait for serializing and deserializing record batches.
+///
+/// This trait provides methods to convert [`RecordBatch`]es to and from bytes,
+/// which is useful for various data storage and transmission scenarios.
+///
+/// Implementors of this trait must be both [`Send`] and [`Sync`] to ensure
+/// thread-safety in concurrent contexts.
+///
+/// # Methods
+///
+/// * `serialize`: Converts a [`RecordBatch`] into bytes
+/// * `deserialize`: Reconstructs a [`RecordBatch`] from bytes
+///
+/// # Example
+///
+/// ```
+/// use datafusion_common::Result;
+/// use datafusion_datasource::write::ReaderBuilderConfig;
+/// use datafusion_datasource::write::BatchSerializer;
+/// use arrow::record_batch::RecordBatch;
+/// use arrow::datatypes::SchemaRef;
+/// use bytes::Bytes;
+///
+/// struct MySerializer;
+///
+/// impl BatchSerializer for MySerializer {
+///     fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes> {
+///         // Implementation details...
+///         todo!("");
+///     }
+///
+///     fn deserialize(&self, config: ReaderBuilderConfig, schema: SchemaRef, bytes: &[u8]) -> Result<RecordBatch> {
+///         // Implementation details...
+///         todo!("");
+///     }
+/// }
+/// ```
 pub trait BatchSerializer: Sync + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
     /// Parameter `initial` signals whether the given batch is the first batch.
@@ -87,9 +153,7 @@ pub trait BatchSerializer: Sync + Send {
         config: ReaderBuilderConfig,
         schema: SchemaRef,
         bytes: &[u8],
-    ) -> Result<RecordBatch> {
-        not_impl_err!("deserialize")
-    }
+    ) -> Result<RecordBatch>;
 }
 
 /// Returns an [`AsyncWrite`] which writes to the given object store location

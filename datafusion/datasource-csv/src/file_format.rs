@@ -23,15 +23,15 @@ use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::csv::WriterBuilder;
+use arrow::csv::{ReaderBuilder, WriterBuilder};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::error::ArrowError;
 use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
-    exec_err, not_impl_err, DataFusionError, GetExt, Result, Statistics,
-    DEFAULT_CSV_EXTENSION,
+    arrow_datafusion_err, exec_err, not_impl_err, DataFusionError, GetExt, Result,
+    Statistics, DEFAULT_CSV_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::decoder::Decoder;
@@ -45,7 +45,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
-use datafusion_datasource::write::BatchSerializer;
+use datafusion_datasource::write::{BatchSerializer, ReaderBuilderConfig};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
@@ -642,6 +642,38 @@ impl BatchSerializer for CsvSerializer {
         drop(writer);
         Ok(Bytes::from(buffer))
     }
+
+    fn deserialize(
+        &self,
+        config: ReaderBuilderConfig,
+        schema: SchemaRef,
+        bytes: &[u8],
+    ) -> Result<RecordBatch> {
+        let mut builder = ReaderBuilder::new(Arc::clone(&schema));
+
+        if let Some(has_header) = config.has_header {
+            builder = builder.with_header(has_header);
+        }
+
+        if let Some(batch_size) = config.batch_size {
+            builder = builder.with_batch_size(batch_size);
+        }
+
+        let reader = builder
+            .build_buffered(bytes)
+            .map_err(|e| arrow_datafusion_err!(e))?;
+        let mut all_batches = vec![];
+        for batch in reader {
+            all_batches.push(batch?);
+        }
+
+        if all_batches.is_empty() {
+            return Ok(RecordBatch::new_empty(Arc::clone(&schema)));
+        }
+
+        arrow::compute::concat_batches(&schema, &all_batches)
+            .map_err(|e| arrow_datafusion_err!(e))
+    }
 }
 
 /// Implements [`DataSink`] for writing to a CSV file.
@@ -736,5 +768,54 @@ impl DataSink for CsvSink {
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         FileSink::write_all(self, data, context).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow::array::{Int64Array, RecordBatch};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::Result;
+    use datafusion_datasource::write::ReaderBuilderConfig;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn roundtrip_serialize() -> Result<()> {
+        let serializer = CsvSerializer::new().with_header(false);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
+            as SchemaRef;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let bytes = serializer.serialize(batch.clone(), true)?;
+        let deserialized = serializer.deserialize(
+            ReaderBuilderConfig::new().with_has_header(false),
+            schema,
+            &bytes,
+        )?;
+
+        assert_eq!(&batch, &deserialized);
+
+        let serializer = CsvSerializer::new().with_header(true);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
+            as SchemaRef;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let bytes = serializer.serialize(batch.clone(), true)?;
+        let deserialized = serializer.deserialize(
+            ReaderBuilderConfig::new().with_has_header(true),
+            schema,
+            &bytes,
+        )?;
+
+        assert_eq!(&batch, &deserialized);
+        Ok(())
     }
 }

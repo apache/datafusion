@@ -33,7 +33,7 @@ use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{
-    arrow_datafusion_err, not_impl_err, GetExt, Result, Statistics,
+    arrow_datafusion_err, not_impl_err, DataFusionError, GetExt, Result, Statistics,
     DEFAULT_JSON_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
@@ -474,6 +474,8 @@ mod tests {
         let bytes = serializer.serialize(batch.clone(), true)?;
         let deserialized =
             serializer.deserialize(ReaderBuilderConfig::default(), schema, &bytes)?;
+
+        println!("deserialized: {:?}", deserialized);
         assert_eq!(&batch, &deserialized);
         Ok(())
     }
