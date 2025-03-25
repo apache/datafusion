@@ -40,3 +40,4 @@ pub fn partitioned_csv_config(
     FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, file_source)
         .with_file_groups(file_groups)
 }
+// just a test
