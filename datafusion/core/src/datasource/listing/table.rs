@@ -72,7 +72,7 @@ pub struct ListingTableConfig {
     pub file_schema: Option<SchemaRef>,
     /// Optional `ListingOptions` for the to be created `ListingTable`.
     pub options: Option<ListingOptions>,
-    /// Optional schema adapter factory
+    /// schema_adapter to handle schema evolution of fields over time
     pub schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
@@ -747,7 +747,7 @@ pub struct ListingTable {
     collected_statistics: FileStatisticsCache,
     constraints: Constraints,
     column_defaults: HashMap<String, Expr>,
-    /// Optional schema adapter factory
+    /// schema_adapter to  handle schema evolution of fields over time
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
@@ -965,6 +965,15 @@ impl TableProvider for ListingTable {
 
         let mut source = self.options.format.file_source();
 
+        // Apply schema adapter to the source if it's a ParquetSource
+        // This handles the special case for ParquetSource which supports schema evolution
+        // through the schema_adapter_factory
+        //
+        // TODO: This approach requires explicit downcasts for each file format that supports
+        // schema evolution. Consider introducing a trait like `SchemaEvolutionSupport` that file
+        // sources could implement, allowing this logic to be generalized without requiring
+        // format-specific downcasts. This would make it easier to add schema evolution support
+        // to other file formats in the future.
         if let (Some(parquet_source), Some(schema_adapter_factory)) = (
             source.as_any().downcast_ref::<ParquetSource>(),
             self.schema_adapter_factory.clone(),
