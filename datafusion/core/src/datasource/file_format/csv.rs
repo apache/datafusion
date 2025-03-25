@@ -674,11 +674,7 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        println!("csv basic:{}", batches_to_string(&query_result));
-
-        #[rustfmt::skip]
-
-        insta::allow_duplicates!{assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
         +--------------+
         | sum(aggr.c2) |
         +--------------+
@@ -717,8 +713,6 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        println!("csv compressed:{}", batches_to_string(&query_result));
-
         insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
         +--------------+
         | sum(aggr.c3) |
@@ -756,14 +750,7 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        println!(
-            "csv newlines in values:{}",
-            batches_to_string(&query_result)
-        );
-
-        #[rustfmt::skip]
-
-        insta::allow_duplicates!{assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
         +--------------+
         | sum(aggr.c3) |
         +--------------+

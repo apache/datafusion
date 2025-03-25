@@ -610,7 +610,7 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_string(&read),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
             +-----+----+----+
             | c1  | c2 | c3 |
             +-----+----+----+
@@ -645,7 +645,7 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_string(&read),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
             +-----+----+----+
             | c1  | c3 | c2 |
             +-----+----+----+
