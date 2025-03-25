@@ -277,31 +277,6 @@ impl SchemaMapper for NestedStructSchemaMapping {
         let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
         Ok(record_batch)
     }
-
-    fn map_partial_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let batch_cols = batch.columns().to_vec();
-        let schema = batch.schema();
-
-        // For each field in the file schema, try to map to the table schema
-        let mut cols = Vec::new();
-        let mut fields = Vec::new();
-
-        for (_field_idx, (field, col)) in
-            schema.fields().iter().zip(batch_cols.iter()).enumerate()
-        {
-            // Just include the field as-is for partial batch
-            cols.push(col.clone());
-            fields.push(field.clone());
-        }
-
-        // Create record batch with adapted columns
-        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-        let adapted_schema =
-            Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
-        let record_batch =
-            RecordBatch::try_new_with_options(adapted_schema, cols, &options)?;
-        Ok(record_batch)
-    }
 }
 
 // Helper methods for the NestedStructSchemaMapping
@@ -369,7 +344,6 @@ mod tests {
     use super::*;
     use arrow::array::{
         Array, Int32Array, StringBuilder, StructArray, TimestampMillisecondArray,
-        UInt8Array,
     };
     use arrow::datatypes::{DataType, TimeUnit};
 
@@ -795,113 +769,6 @@ mod tests {
         let status_col = mapped_batch.column(2);
         assert_eq!(status_col.len(), 1);
         assert!(status_col.is_null(0), "Status should be null");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_nested_struct_schema_mapping_map_partial_batch() -> Result<()> {
-        // Create source schema with extra fields
-        let source_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("extra_field", DataType::UInt8, true), // Extra field in source
-            Field::new(
-                "metadata",
-                DataType::Struct(
-                    vec![
-                        Field::new("created", DataType::Utf8, true),
-                        Field::new("extra_nested", DataType::UInt8, true), // Extra nested field
-                    ]
-                    .into(),
-                ),
-                true,
-            ),
-        ]));
-
-        // Create target schema
-        let target_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new(
-                "metadata",
-                DataType::Struct(
-                    vec![
-                        Field::new("created", DataType::Utf8, true),
-                        Field::new("version", DataType::Int64, true), // Different field in target
-                    ]
-                    .into(),
-                ),
-                true,
-            ),
-        ]));
-
-        // Create a record batch with the source schema
-        let mut created_builder = StringBuilder::new();
-        created_builder.append_value("2023-01-01");
-
-        // Create struct array for metadata
-        let metadata = StructArray::from(vec![
-            (
-                Arc::new(Field::new("created", DataType::Utf8, true)),
-                Arc::new(created_builder.finish()) as Arc<dyn Array>,
-            ),
-            (
-                Arc::new(Field::new("extra_nested", DataType::UInt8, true)),
-                Arc::new(UInt8Array::from(vec![123])) as Arc<dyn Array>,
-            ),
-        ]);
-
-        let batch = RecordBatch::try_new(
-            source_schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![1])),
-                Arc::new(UInt8Array::from(vec![42])),
-                Arc::new(metadata),
-            ],
-        )?;
-
-        // Create the mapper
-        let mapping = NestedStructSchemaMapping::new(
-            target_schema.clone(),
-            vec![Some(0), Some(2)], // id, metadata
-        );
-
-        // Test map_partial_batch
-        let mapped_batch = mapping.map_partial_batch(batch.clone())?;
-
-        // Verify mapped_batch has the fields we expect
-        let mapped_schema = mapped_batch.schema();
-
-        // Should include id, extra_field, and metadata
-        // (map_partial_batch preserves fields from source)
-        assert_eq!(mapped_batch.num_columns(), 3);
-
-        // Verify field names in the result schema
-        let field_names: Vec<&str> = mapped_schema
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect();
-
-        // Should contain all source fields (including extra ones)
-        assert!(field_names.contains(&"id"));
-        assert!(field_names.contains(&"extra_field"));
-        assert!(field_names.contains(&"metadata"));
-
-        // Check metadata structure
-        let metadata_idx = mapped_schema.index_of("metadata").unwrap();
-        let metadata_field = mapped_schema.field(metadata_idx);
-
-        if let DataType::Struct(fields) = metadata_field.data_type() {
-            assert_eq!(fields.len(), 2); // Should preserve both nested fields
-
-            let nested_field_names: Vec<&str> =
-                fields.iter().map(|f| f.name().as_str()).collect();
-
-            assert!(nested_field_names.contains(&"created"));
-            assert!(nested_field_names.contains(&"extra_nested"));
-        } else {
-            panic!("Expected struct type for metadata field");
-        }
 
         Ok(())
     }

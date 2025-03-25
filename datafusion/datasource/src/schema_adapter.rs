@@ -305,16 +305,13 @@ impl SchemaMapping {
     ///
     /// * `projected_table_schema` - The schema expected for query results
     /// * `field_mappings` - Mapping from field index in projected_table_schema to index in file schema
-    /// * `table_schema` - The full table schema (may contain columns not in projection)
     pub fn new(
         projected_table_schema: SchemaRef,
         field_mappings: Vec<Option<usize>>,
-        table_schema: SchemaRef,
     ) -> Self {
         Self {
             projected_table_schema,
             field_mappings,
-            table_schema,
         }
     }
 }
