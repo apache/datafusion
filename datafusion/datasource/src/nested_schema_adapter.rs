@@ -106,6 +106,10 @@ pub struct NestedStructSchemaAdapter {
 
 /// Adapt the source schema fields to match the target schema while preserving
 /// nested struct fields and handling field additions/removals
+///
+/// The helper function adapt_fields creates a HashMap from the source fields for each call.
+/// If this function is called frequently or on large schemas, consider whether the
+/// performance overhead is acceptable or if caching/optimizing the lookup could be beneficial.
 fn adapt_fields(source_fields: &Fields, target_fields: &Fields) -> Vec<Field> {
     let mut adapted_fields = Vec::new();
     let source_map: HashMap<_, _> = source_fields
