@@ -39,7 +39,9 @@ use datafusion_expr::{
     ReversedUDAF, Signature,
 };
 
-use datafusion_functions_aggregate_common::aggregate::avg_distinct::Float64DistinctAvgAccumulator;
+use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
+    DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
+};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
