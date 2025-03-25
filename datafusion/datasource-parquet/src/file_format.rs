@@ -413,20 +413,8 @@ impl FileFormat for ParquetFormat {
 
         let mut source = ParquetSource::new(self.options.clone());
 
-        // Check if the FileScanConfig already has a ParquetSource with a schema_adapter_factory.
-        // If it does, we need to preserve that factory when creating a new source.
-        // This is important for schema evolution, allowing the source to map between
-        // different file schemas and the target schema (handling missing columns,
-        // different data types, or nested structures).
-        if let Some(schema_adapter_factory) = conf
-            .file_source()
-            .as_any()
-            .downcast_ref::<ParquetSource>()
-            .and_then(|parquet_source| parquet_source.schema_adapter_factory())
-        {
-            source =
-                source.with_schema_adapter_factory(Arc::clone(schema_adapter_factory));
-        }
+        // Preserve any existing schema adapter factory
+        preserve_schema_adapter_factory(&conf, &mut source);
 
         if let Some(predicate) = predicate {
             source = source.with_predicate(Arc::clone(&conf.file_schema), predicate);
@@ -1547,4 +1535,24 @@ fn create_max_min_accs(
         })
         .collect();
     (max_values, min_values)
+}
+
+/// Helper function to preserve schema adapter factory when creating a new ParquetSource
+///
+/// If the FileScanConfig already has a ParquetSource with a schema_adapter_factory,
+/// we need to preserve that factory when creating a new source.
+/// This is important for schema evolution, allowing the source to map between
+/// different file schemas and the target schema (handling missing columns,
+/// different data types, or nested structures).
+fn preserve_schema_adapter_factory(conf: &FileScanConfig, source: &mut ParquetSource) {
+    if let Some(schema_adapter_factory) = conf
+        .file_source()
+        .as_any()
+        .downcast_ref::<ParquetSource>()
+        .and_then(|parquet_source| parquet_source.schema_adapter_factory())
+    {
+        *source = source
+            .clone()
+            .with_schema_adapter_factory(Arc::clone(schema_adapter_factory));
+    }
 }
