@@ -254,6 +254,11 @@ b [4, 5, 6]
 w [9, 5, 2]
 
 query ?
+select array_agg(DISTINCT column2 order by column2) from array_agg_order_list_table;
+----
+[1, 2]
+
+query ?
 select array_agg(DISTINCT column2 order by column2 desc) from array_agg_order_list_table;
 ----
 [2, 1]
@@ -262,6 +267,15 @@ query ?
 select array_agg(DISTINCT column2 + 1 order by column2 + 1 desc) from array_agg_order_list_table;
 ----
 [3, 2]
+
+query ?
+select array_agg(DISTINCT column2 order by column2) from array_agg_order_list_table GROUP BY column1;
+----
+[1, 2]
+[1, 2]
+
+statement error In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
+select array_agg(DISTINCT column2 order by column1) from array_agg_order_list_table;
 
 statement ok
 drop table array_agg_order_list_table;
