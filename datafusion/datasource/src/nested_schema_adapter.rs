@@ -255,6 +255,25 @@ impl NestedStructSchemaMapping {
     }
 }
 
+/// Maps a `RecordBatch` to a new `RecordBatch` according to the schema mapping defined in `NestedStructSchemaMapping`.
+///
+/// # Arguments
+///
+/// * `batch` - The input `RecordBatch` to be mapped.
+///
+/// # Returns
+///
+/// A `Result` containing the new `RecordBatch` with columns adapted according to the schema mapping, or an error if the mapping fails.
+///
+/// # Behavior
+///
+/// - For each field in the projected table schema, the corresponding column in the input batch is adapted.
+/// - If a field does not exist in the input batch, a null array of the appropriate data type and length is created and used in the output batch.
+/// - If a field exists in the input batch, the column is adapted to handle potential nested struct adaptation.
+///
+/// # Errors
+///
+/// Returns an error if the column adaptation fails or if the new `RecordBatch` cannot be created.
 impl SchemaMapper for NestedStructSchemaMapping {
     fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
         let batch_rows = batch.num_rows();
