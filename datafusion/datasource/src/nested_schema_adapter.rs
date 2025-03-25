@@ -10,12 +10,12 @@
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS
-// OF ANY KIND, either express or implied.  See the License for the
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`SchemaAdapter`] and [`SchemaAdapterFactory`] to adapt file-level record batches to a table schema.
+//! [`NestedSchemaAdapter`] and [`NestedSchemaAdapterFactory`] to adapt file-level record batches to a table schema.
 //!
 //! Adapter provides a method of translating the RecordBatches that come out of the
 //! physical format into how they should be used by DataFusion.  For instance, a schema
