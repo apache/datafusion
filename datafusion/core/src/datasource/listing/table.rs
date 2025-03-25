@@ -695,7 +695,7 @@ impl ListingOptions {
 /// # use datafusion::error::Result;
 /// # use std::sync::Arc;
 /// # use datafusion::datasource::{
-/// #   listing:{
+/// #   listing::{
 /// #      ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 /// #   },
 /// #   file_format::parquet::ParquetFormat,

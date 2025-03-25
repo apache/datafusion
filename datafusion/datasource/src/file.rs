@@ -64,6 +64,7 @@ pub trait FileSource: Send + Sync {
     fn fmt_extra(&self, _t: DisplayFormatType, _f: &mut Formatter) -> fmt::Result {
         Ok(())
     }
+
     /// If supported by the [`FileSource`], redistribute files across partitions according to their size.
     /// Allows custom file formats to implement their own repartitioning logic.
     ///
