@@ -648,7 +648,8 @@ pub fn build_join_schema(
 }
 
 /// A [`SharedResultOnceCell`] is a [`OnceCell`] that holds a [`SharedResult`].
-/// It wraps the result of the initializing computation in [`Arc`] to make it cheaply cloneable.
+/// It wraps the result of the initializing computation in [`Arc`] to allow the
+/// consumers to cheaply clone it out of this cell.
 pub(crate) struct SharedResultOnceCell<T>(OnceCell<SharedResult<Arc<T>>>);
 
 impl<T> Default for SharedResultOnceCell<T> {

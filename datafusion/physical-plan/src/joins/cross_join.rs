@@ -72,8 +72,9 @@ struct JoinLeftData {
 ///
 /// # Clone / Shared State
 ///
-/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
-/// loading of the left side with the processing in each output stream.
+/// Note this structure includes a shared [`SharedResultOnceCell`] that is
+/// used to coordinate the loading of the left side with the processing in
+/// each output stream.
 /// Therefore it can not be [`Clone`]
 #[derive(Debug)]
 pub struct CrossJoinExec {
