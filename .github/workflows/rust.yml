@@ -235,9 +235,6 @@ jobs:
       #
       - name: Check datafusion-functions (no-default-features)
         run: cargo check --profile ci --no-default-features -p datafusion-functions
-      # Fails due https://github.com/apache/datafusion/issues/15207
-      #- name: Check datafusion-functions (core_expressions)
-      #  run: cargo check --profile ci --no-default-features -p datafusion-functions --features=core_expressions
       - name: Check datafusion-functions (crypto_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion-functions --features=crypto_expressions
       - name: Check datafusion-functions (datetime_expressions)

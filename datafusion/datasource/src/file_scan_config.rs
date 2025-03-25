@@ -167,6 +167,9 @@ pub struct FileScanConfig {
     pub new_lines_in_values: bool,
     /// File source such as `ParquetSource`, `CsvSource`, `JsonSource`, etc.
     pub file_source: Arc<dyn FileSource>,
+    /// Batch size while creating new batches
+    /// Defaults to [`datafusion_common::config::ExecutionOptions`] batch_size.
+    pub batch_size: Option<usize>,
 }
 
 impl DataSource for FileScanConfig {
@@ -176,10 +179,13 @@ impl DataSource for FileScanConfig {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let object_store = context.runtime_env().object_store(&self.object_store_url)?;
+        let batch_size = self
+            .batch_size
+            .unwrap_or_else(|| context.session_config().batch_size());
 
         let source = self
             .file_source
-            .with_batch_size(context.session_config().batch_size())
+            .with_batch_size(batch_size)
             .with_schema(Arc::clone(&self.file_schema))
             .with_projection(self);
 
@@ -338,6 +344,7 @@ impl FileScanConfig {
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             new_lines_in_values: false,
             file_source: Arc::clone(&file_source),
+            batch_size: None,
         };
 
         config = config.with_source(Arc::clone(&file_source));
@@ -489,6 +496,12 @@ impl FileScanConfig {
     /// Set the new_lines_in_values property
     pub fn with_newlines_in_values(mut self, new_lines_in_values: bool) -> Self {
         self.new_lines_in_values = new_lines_in_values;
+        self
+    }
+
+    /// Set the batch_size property
+    pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
+        self.batch_size = batch_size;
         self
     }
 
