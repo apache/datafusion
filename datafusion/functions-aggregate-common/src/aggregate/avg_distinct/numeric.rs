@@ -18,7 +18,7 @@
 use std::fmt::Debug;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::Float64Type;
+use arrow::datatypes::{DataType, Float64Type};
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 
@@ -36,7 +36,7 @@ impl Float64DistinctAvgAccumulator {
     pub fn new() -> datafusion_common::Result<Self> {
         Ok(Self {
             sum_accumulator: DistinctSumAccumulator::<Float64Type>::try_new(
-                &arrow::datatypes::DataType::Float64,
+                &DataType::Float64,
             )?,
         })
     }
