@@ -572,7 +572,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3])",
-            expected: r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))) FROM UNNEST([1, 2, 3])"#,
+            expected: r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))) FROM UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3)))"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
@@ -590,7 +590,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3]), j1",
-            expected: r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))), j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) CROSS JOIN j1"#,
+            expected: r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))), j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3))) CROSS JOIN j1"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
@@ -608,7 +608,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         },
         TestStatementWithDialect {
             sql: "SELECT UNNEST([1,2,3])",
-            expected: r#"SELECT * FROM UNNEST([1, 2, 3])"#,
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3)))"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
@@ -626,7 +626,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
-            expected: r#"SELECT u.array_col, u.struct_col, UNNEST(outer_ref(u.array_col)) FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col)"#,
+            expected: r#"SELECT u.array_col, u.struct_col, UNNEST(outer_ref(u.array_col)) FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col) AS UNNEST(outer_ref(u.array_col))"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
@@ -638,7 +638,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         },
         TestStatementWithDialect {
             sql: "SELECT unnest([1, 2, 3, 4]) from unnest([1, 2, 3]);",
-            expected: r#"SELECT UNNEST([1, 2, 3, 4]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3),Int64(4))) FROM UNNEST([1, 2, 3])"#,
+            expected: r#"SELECT UNNEST([1, 2, 3, 4]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3),Int64(4))) FROM UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3)))"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
