@@ -413,8 +413,8 @@ impl FileFormat for ParquetFormat {
 
         let mut source = ParquetSource::new(self.options.clone());
 
-        // Preserve any existing schema adapter factory
-        preserve_schema_adapter_factory(&conf, &mut source);
+        // preserve conf schema adapter factory in source
+        preserve_conf_schema_adapter_factory(&conf, &mut source);
 
         if let Some(predicate) = predicate {
             source = source.with_predicate(Arc::clone(&conf.file_schema), predicate);
@@ -1544,7 +1544,10 @@ fn create_max_min_accs(
 /// This is important for schema evolution, allowing the source to map between
 /// different file schemas and the target schema (handling missing columns,
 /// different data types, or nested structures).
-fn preserve_schema_adapter_factory(conf: &FileScanConfig, source: &mut ParquetSource) {
+fn preserve_conf_schema_adapter_factory(
+    conf: &FileScanConfig,
+    source: &mut ParquetSource,
+) {
     if let Some(schema_adapter_factory) = conf
         .file_source()
         .as_any()
