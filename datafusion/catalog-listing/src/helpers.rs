@@ -587,7 +587,7 @@ mod tests {
         assert_eq!(1, chunks[3].len());
         assert_eq!(1, chunks[4].len());
 
-        let mut empty_group = FileGroup::default();
+        let empty_group = FileGroup::default();
         let chunks = empty_group.split_files(2);
         assert_eq!(0, chunks.len());
     }
