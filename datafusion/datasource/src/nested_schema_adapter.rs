@@ -28,7 +28,6 @@ use std::sync::Arc;
 
 use crate::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
-    SchemaMapping,
 };
 use arrow::array::{Array, ArrayRef, StructArray};
 use arrow::compute::cast;
@@ -196,8 +195,6 @@ impl NestedStructSchemaAdapter {
         let mapping = NestedStructSchemaMapping::new(
             Arc::new(target_schema.clone()), // projected_table_schema
             field_mappings,                  // field_mappings
-            Arc::new(target_schema.clone()), // full table_schema
-            Arc::new(source_schema.clone()), // original file_schema
         );
 
         Ok(Arc::new(mapping))
@@ -239,10 +236,6 @@ struct NestedStructSchemaMapping {
     projected_table_schema: SchemaRef,
     /// Field mappings from projected table to file schema
     field_mappings: Vec<Option<usize>>,
-    /// The entire table schema (with nested structure intact)
-    table_schema: SchemaRef,
-    /// Original file schema
-    file_schema: SchemaRef,
 }
 
 impl NestedStructSchemaMapping {
@@ -250,14 +243,10 @@ impl NestedStructSchemaMapping {
     pub fn new(
         projected_table_schema: SchemaRef,
         field_mappings: Vec<Option<usize>>,
-        table_schema: SchemaRef,
-        file_schema: SchemaRef,
     ) -> Self {
         Self {
             projected_table_schema,
             field_mappings,
-            table_schema,
-            file_schema,
         }
     }
 }
@@ -297,7 +286,7 @@ impl SchemaMapper for NestedStructSchemaMapping {
         let mut cols = Vec::new();
         let mut fields = Vec::new();
 
-        for (field_idx, (field, col)) in
+        for (_field_idx, (field, col)) in
             schema.fields().iter().zip(batch_cols.iter()).enumerate()
         {
             // Just include the field as-is for partial batch
@@ -379,8 +368,8 @@ impl NestedStructSchemaMapping {
 mod tests {
     use super::*;
     use arrow::array::{
-        Array, Int32Array, Int64Array, StringBuilder, StructArray,
-        TimestampMillisecondArray, UInt8Array,
+        Array, Int32Array, StringBuilder, StructArray, TimestampMillisecondArray,
+        UInt8Array,
     };
     use arrow::datatypes::{DataType, TimeUnit};
 
@@ -778,12 +767,8 @@ mod tests {
 
         // Create the mapper and map the batch
         let field_mappings = vec![Some(0), Some(1), None]; // id, metadata, status (missing)
-        let mapping = NestedStructSchemaMapping::new(
-            target_schema.clone(),
-            field_mappings,
-            target_schema.clone(),
-            source_schema.clone(),
-        );
+        let mapping =
+            NestedStructSchemaMapping::new(target_schema.clone(), field_mappings);
 
         // Test map_batch
         let mapped_batch = mapping.map_batch(batch.clone())?;
@@ -792,8 +777,6 @@ mod tests {
         assert_eq!(mapped_batch.schema(), target_schema);
         assert_eq!(mapped_batch.num_columns(), 3); // id, metadata, status
 
-        // Verify metadata is a struct with both fields (created, version)
-        let metadata_col = mapped_batch.column(1);
         if let DataType::Struct(fields) = mapped_batch.schema().field(1).data_type() {
             assert_eq!(
                 fields.len(),
@@ -880,8 +863,6 @@ mod tests {
         let mapping = NestedStructSchemaMapping::new(
             target_schema.clone(),
             vec![Some(0), Some(2)], // id, metadata
-            target_schema.clone(),
-            source_schema.clone(),
         );
 
         // Test map_partial_batch

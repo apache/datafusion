@@ -53,7 +53,6 @@ use crate::{
     file::FileSource,
     file_compression_type::FileCompressionType,
     file_stream::FileStream,
-    schema_adapter::SchemaAdapterFactory,
     source::{DataSource, DataSourceExec},
     statistics::MinMaxStatistics,
     PartitionedFile,

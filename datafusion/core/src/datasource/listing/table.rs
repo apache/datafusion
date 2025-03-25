@@ -123,6 +123,7 @@ impl ListingTableConfig {
         }
     }
 
+    /// Add `schema_adapter_factory` to [`ListingTableConfig`]
     pub fn with_schema_adapter_factory(
         self,
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
