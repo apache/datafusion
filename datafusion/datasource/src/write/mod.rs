@@ -122,6 +122,7 @@ impl ReaderBuilderConfig {
 /// # Example
 ///
 /// ```
+/// use async_trait::async_trait;
 /// use datafusion_common::Result;
 /// use datafusion_datasource::write::ReaderBuilderConfig;
 /// use datafusion_datasource::write::BatchSerializer;
@@ -131,13 +132,14 @@ impl ReaderBuilderConfig {
 ///
 /// struct MySerializer;
 ///
+/// #[async_trait]
 /// impl BatchSerializer for MySerializer {
-///     fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes> {
+///     async fn serialize(&self, batch: RecordBatch, initial: bool) -> Result<Bytes> {
 ///         // Implementation details...
 ///         todo!("");
 ///     }
 ///
-///     fn deserialize(&self, config: ReaderBuilderConfig, schema: SchemaRef, bytes: &[u8]) -> Result<RecordBatch> {
+///     async fn deserialize(&self, config: ReaderBuilderConfig, schema: &SchemaRef, bytes: &[u8]) -> Result<RecordBatch> {
 ///         // Implementation details...
 ///         todo!("");
 ///     }
