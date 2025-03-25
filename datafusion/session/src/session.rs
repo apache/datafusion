@@ -29,7 +29,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-/// Interface for accessing [`SessionState`] from the catalog.
+/// Interface for accessing [`SessionState`] from the catalog and data source.
 ///
 /// This trait provides access to the information needed to plan and execute
 /// queries, such as configuration, functions, and runtime environment. See the
