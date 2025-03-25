@@ -789,15 +789,26 @@ impl MemorySourceConfig {
             for rep in to_repartition {
                 max_heap.push(rep);
             }
+            let mut cannot_split_further = Vec::with_capacity(target_partitions);
             for _ in 0..cnt_to_repartition {
-                let Some(to_split) = max_heap.pop() else {
-                    unreachable!()
-                };
-                for new_partition in to_split.split() {
-                    max_heap.push(new_partition);
+                loop {
+                    let Some(to_split) = max_heap.pop() else {
+                        break;
+                    };
+
+                    let mut new_partitions = to_split.split();
+                    if new_partitions.len() > 1 {
+                        for new_partition in new_partitions {
+                            max_heap.push(new_partition);
+                        }
+                        break;
+                    } else {
+                        cannot_split_further.push(new_partitions.remove(0));
+                    }
                 }
             }
             let mut partitions = max_heap.drain().collect_vec();
+            partitions.extend(cannot_split_further);
             partitions.sort_by_key(|p| p.idx);
             let partitions = partitions.into_iter().map(|rep| rep.batches).collect_vec();
 
@@ -862,7 +873,13 @@ struct RePartition {
 
 impl RePartition {
     /// Split [`RePartition`] into 2 pieces, consuming self.
+    ///
+    /// Returns only 1 partition if cannot be split further.
     fn split(self) -> Vec<Self> {
+        if self.batches.len() == 1 {
+            return vec![self];
+        }
+
         let new_0 = RePartition {
             idx: self.idx,
             row_count: 0,
