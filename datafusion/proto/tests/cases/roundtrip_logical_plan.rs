@@ -957,6 +957,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         functions_window::nth_value::last_value(lit(1)),
         functions_window::nth_value::nth_value(lit(1), 1),
         avg(lit(1.5)),
+        avg(lit(1.5)).distinct().build().unwrap(),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
         corr(lit(1.5), lit(2.2)),
