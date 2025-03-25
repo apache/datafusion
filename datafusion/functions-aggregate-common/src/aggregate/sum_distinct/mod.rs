@@ -19,4 +19,4 @@
 
 pub mod numeric;
 
-pub use numeric::DistinctSumAccumulator; 
+pub use numeric::DistinctSumAccumulator;

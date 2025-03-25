@@ -23,9 +23,9 @@ use std::mem::{size_of, size_of_val};
 
 use ahash::RandomState;
 use arrow::array::Array;
+use arrow::array::ArrayRef;
 use arrow::array::ArrowNativeTypeOp;
 use arrow::array::ArrowPrimitiveType;
-use arrow::array::ArrayRef;
 use arrow::array::AsArray;
 use arrow::datatypes::ArrowNativeType;
 use arrow::datatypes::DataType;
@@ -120,4 +120,4 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
     fn size(&self) -> usize {
         size_of_val(self) + self.values.capacity() * size_of::<T::Native>()
     }
-} 
+}
