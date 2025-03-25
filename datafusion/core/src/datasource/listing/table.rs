@@ -983,7 +983,7 @@ impl TableProvider for ListingTable {
         // create the execution plan
         self.options
             .format
-            .create_physical_plan(session_state, config.clone(), filters.as_ref())
+            .create_physical_plan(session_state, config, filters.as_ref())
             .await
     }
 
