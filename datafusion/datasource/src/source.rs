@@ -29,6 +29,7 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 
+use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -229,5 +230,19 @@ impl DataSourceExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+    }
+
+    /// Downcast the `DataSourceExec` to a specific file source
+    pub fn downcast_to_source<T: 'static>(&self) -> Option<(&FileScanConfig, &T)> {
+        self.data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .and_then(|file_scan_conf| {
+                file_scan_conf
+                    .file_source()
+                    .as_any()
+                    .downcast_ref::<T>()
+                    .map(|source| (file_scan_conf, source))
+            })
     }
 }
