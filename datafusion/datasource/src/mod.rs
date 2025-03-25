@@ -41,7 +41,7 @@ pub mod memory;
 pub mod schema_adapter;
 pub mod source;
 mod statistics;
-// lzo test
+
 #[cfg(test)]
 mod test_util;
 
