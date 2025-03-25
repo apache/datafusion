@@ -46,7 +46,7 @@ physical-plan:
 
 catalog:
   - changed-files:
-      - any-glob-to-any-file: ['datafusion/catalog/**/*']
+      - any-glob-to-any-file: ['datafusion/catalog/**/*', 'datafusion/catalog-listing/**/*']
 
 common:
   - changed-files:
@@ -62,7 +62,7 @@ datasource:
 
 functions:
   - changed-files:
-      - any-glob-to-any-file: ['datafusion/functions/**/*', 'datafusion/functions-aggregate/**/*', 'datafusion/functions-aggregate-common', 'datafusion/functions-nested']
+      - any-glob-to-any-file: ['datafusion/functions/**/*', 'datafusion/functions-aggregate/**/*', 'datafusion/functions-aggregate-common', 'datafusion/functions-nested', 'datafusion/functions-table/**/*', 'datafusion/functions-window/**/*', 'datafusion/functions-window-common/**/*']
 
 
 optimizer:
