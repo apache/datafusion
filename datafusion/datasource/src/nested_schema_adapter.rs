@@ -76,7 +76,7 @@ impl NestedStructSchemaAdapterFactory {
     /// Create an appropriate schema adapter based on schema characteristics.
     /// Returns a NestedStructSchemaAdapter if the projected schema contains nested structs,
     /// otherwise returns a DefaultSchemaAdapter.
-    pub fn create_appropriate_adapter(
+    pub fn create_adapter(
         projected_table_schema: SchemaRef,
         table_schema: SchemaRef,
     ) -> Box<dyn SchemaAdapter> {
@@ -577,11 +577,10 @@ mod tests {
         assert!(nested_adapter.map_schema(&source_schema).is_ok());
 
         // Test factory selects appropriate adapter based on schema
-        let complex_adapter =
-            NestedStructSchemaAdapterFactory::create_appropriate_adapter(
-                nested_schema.clone(),
-                nested_schema.clone(),
-            );
+        let complex_adapter = NestedStructSchemaAdapterFactory::create_adapter(
+            nested_schema.clone(),
+            nested_schema.clone(),
+        );
 
         // Verify complex_adapter can handle schema evolution
         assert!(
