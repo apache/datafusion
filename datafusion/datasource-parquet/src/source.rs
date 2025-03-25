@@ -29,7 +29,7 @@ use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
@@ -480,6 +480,18 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
+        let coerce_int96: Option<TimeUnit> =
+            match &self.table_parquet_options.global.coerce_int96 {
+                None => None,
+                Some(time_unit) => match time_unit.as_str() {
+                    "ns" => Some(TimeUnit::Nanosecond),
+                    "us" => Some(TimeUnit::Microsecond),
+                    "ms" => Some(TimeUnit::Millisecond),
+                    "s" => Some(TimeUnit::Second),
+                    _ => None,
+                },
+            };
+
         Arc::new(ParquetOpener {
             partition_index: partition,
             projection: Arc::from(projection),
@@ -499,6 +511,7 @@ impl FileSource for ParquetSource {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             schema_adapter_factory,
+            coerce_int96,
         })
     }
 

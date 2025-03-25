@@ -280,6 +280,15 @@ impl ParquetFormat {
         self.options.global.binary_as_string = binary_as_string;
         self
     }
+
+    pub fn coerce_int96(&self) -> Option<String> {
+        self.options.global.coerce_int96.clone()
+    }
+
+    pub fn with_coerce_int96(mut self, time_unit: Option<String>) -> Self {
+        self.options.global.coerce_int96 = time_unit;
+        self
+    }
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator

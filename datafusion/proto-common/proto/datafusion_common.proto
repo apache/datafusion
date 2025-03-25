@@ -545,6 +545,10 @@ message ParquetOptions {
   uint64 max_row_group_size = 15;
 
   string created_by = 16;
+
+  oneof coerce_int96_opt {
+    string coerce_int96 = 32;
+  }
 }
 
 enum JoinSide {

@@ -117,6 +117,7 @@ impl FileOpener for ParquetOpener {
         let table_schema = Arc::clone(&self.table_schema);
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
+        let coerce_int96 = self.coerce_int96;
         let enable_page_index = should_enable_page_index(
             self.enable_page_index,
             &self.page_pruning_predicate,
@@ -138,11 +139,11 @@ impl FileOpener for ParquetOpener {
                 schema = Arc::new(merged);
             }
 
-            if self.coerce_int96.is_some() {
+            if coerce_int96.is_some() {
                 if let Some(merged) = coerce_int96_to_resolution(
                     metadata.parquet_schema(),
                     &schema,
-                    &(self.coerce_int96.unwrap()),
+                    &(coerce_int96.unwrap()),
                 ) {
                     schema = Arc::new(merged);
                 }
