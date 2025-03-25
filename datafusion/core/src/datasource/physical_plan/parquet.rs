@@ -610,18 +610,18 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
-            +-----+----+----+
-            | c1  | c2 | c3 |
-            +-----+----+----+
-            | Foo | 1  | 10 |
-            |     | 2  | 20 |
-            | bar |    |    |
-            | Foo | 1  | 10 |
-            |     | 2  | 20 |
-            | bar |    |    |
-            +-----+----+----+
-        "###);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+----+
+        | c1  | c2 | c3 |
+        +-----+----+----+
+        |     | 2  | 20 |
+        |     | 2  | 20 |
+        | Foo | 1  | 10 |
+        | Foo | 1  | 10 |
+        | bar |    |    |
+        | bar |    |    |
+        +-----+----+----+
+        ");
     }
 
     #[tokio::test]
@@ -645,18 +645,18 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
-            +-----+----+----+
-            | c1  | c3 | c2 |
-            +-----+----+----+
-            | Foo | 10 |    |
-            |     | 20 |    |
-            | bar |    |    |
-            |     | 10 | 1  |
-            |     | 20 | 2  |
-            |     |    |    |
-            +-----+----+----+
-        "###);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+----+
+        | c1  | c3 | c2 |
+        +-----+----+----+
+        |     |    |    |
+        |     | 10 | 1  |
+        |     | 20 |    |
+        |     | 20 | 2  |
+        | Foo | 10 |    |
+        | bar |    |    |
+        +-----+----+----+
+        ");
     }
 
     #[tokio::test]
