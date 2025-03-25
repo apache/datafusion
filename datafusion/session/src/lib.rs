@@ -17,7 +17,7 @@
 
 //! Session definition for Catalog (Table) and Datasource (File)
 //! This trait provides access to the information needed to plan and execute
-//! queries, such as configuration, functions, and runtime environment. For 
+//! queries, such as configuration, functions, and runtime environment. For
 //! Catalog and Datasource
 
 pub mod session;

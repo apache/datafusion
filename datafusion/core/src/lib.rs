@@ -649,7 +649,7 @@
 //!
 //! * [datafusion_common]: Common traits and types
 //! * [datafusion_catalog]: Catalog APIs such as [`SchemaProvider`] and [`CatalogProvider`]
-//! * [datafusion_datasource]: File and Data IO such as [`FileSource`] and [`DataSink`] 
+//! * [datafusion_datasource]: File and Data IO such as [`FileSource`] and [`DataSink`]
 //! * [datafusion_session]: [`Session`] and related structures
 //! * [datafusion_execution]: State and structures needed for execution
 //! * [datafusion_expr]: [`LogicalPlan`], [`Expr`] and related logical planning structure
