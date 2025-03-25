@@ -27,8 +27,9 @@ use std::{any::Any, vec};
 use super::utils::{
     asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
     reorder_output_after_swap, swap_join_projection, SharedResultOnceCell,
+    SharedResultPending,
 };
-use super::{utils::OnceFut, PartitionMode, SharedBitmapBuilder};
+use super::{PartitionMode, SharedBitmapBuilder};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
@@ -80,7 +81,7 @@ use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
 /// HashTable and input data for the left (build side) of a join
@@ -816,14 +817,15 @@ impl ExecutionPlan for HashJoinExec {
                     )
                     .await
                 });
-                OnceFut::new_from_shared(fut)
+
+                fut.boxed()
             }
             PartitionMode::Partitioned => {
                 let reservation =
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
 
-                OnceFut::new(collect_left_input(
+                collect_left_input(
                     Some(partition),
                     self.random_state.clone(),
                     Arc::clone(&self.left),
@@ -833,7 +835,9 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
-                ))
+                )
+                .map(|res| res.map(Arc::new))
+                .boxed()
             }
             PartitionMode::Auto => {
                 return plan_err!(
@@ -1109,7 +1113,7 @@ enum BuildSide {
 /// Container for BuildSide::Initial related data
 struct BuildSideInitialState {
     /// Future for building hash table from build-side input
-    left_fut: OnceFut<JoinLeftData>,
+    left_fut: SharedResultPending<JoinLeftData>,
 }
 
 /// Container for BuildSide::Ready related data
@@ -1433,7 +1437,8 @@ impl HashJoinStream {
             .build_side
             .try_as_initial_mut()?
             .left_fut
-            .get_shared(cx))?;
+            .poll_unpin(cx))?;
+
         build_timer.done();
 
         self.state = HashJoinStreamState::FetchProbeBatch;

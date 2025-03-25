@@ -21,7 +21,9 @@
 use std::{any::Any, sync::Arc, task::Poll};
 
 use super::utils::{
-    adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter, BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceFut, SharedResultOnceCell, StatefulStreamResult
+    adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter,
+    BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, SharedResultOnceCell,
+    SharedResultPending, StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
@@ -46,7 +48,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, Stream, StreamExt, TryStreamExt};
 
 /// Data of the left side that is buffered into memory
 #[derive(Debug)]
@@ -301,15 +303,14 @@ impl ExecutionPlan for CrossJoinExec {
         let enforce_batch_size_in_joins =
             context.session_config().enforce_batch_size_in_joins();
 
-        let left_fut = Arc::clone(&self.left_fut).init(
-            load_left_input(
+        let left_fut = Arc::clone(&self.left_fut)
+            .init(load_left_input(
                 Arc::clone(&self.left),
                 context,
                 join_metrics.clone(),
                 reservation,
-            )
-        );
-        let left_fut = OnceFut::new_from_shared(left_fut);
+            ))
+            .boxed();
 
         if enforce_batch_size_in_joins {
             Ok(Box::pin(CrossJoinStream {
@@ -458,7 +459,7 @@ struct CrossJoinStream<T> {
     /// Input schema
     schema: Arc<Schema>,
     /// Future for data from left side
-    left_fut: OnceFut<JoinLeftData>,
+    left_fut: SharedResultPending<JoinLeftData>,
     /// Right side stream
     right: SendableRecordBatchStream,
     /// Current value on the left
@@ -567,10 +568,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
-        let left_data = match ready!(self.left_fut.get(cx)) {
-            Ok(left_data) => left_data,
-            Err(e) => return Poll::Ready(Err(e)),
-        };
+        let left_data = ready!(self.left_fut.poll_unpin(cx))?;
         build_timer.done();
 
         let left_data = left_data.merged_batch.clone();

@@ -24,7 +24,10 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::utils::{
-    asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap, need_produce_result_in_final, reorder_output_after_swap, swap_join_projection, BatchSplitter, BatchTransformer, NoopBatchTransformer, SharedResultOnceCell, StatefulStreamResult
+    asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
+    need_produce_result_in_final, reorder_output_after_swap, swap_join_projection,
+    BatchSplitter, BatchTransformer, NoopBatchTransformer, SharedResultOnceCell,
+    SharedResultPending, StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::common::can_project;
@@ -32,7 +35,7 @@ use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
-    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceFut,
+    BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
 };
 use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -60,7 +63,7 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
 /// Left (build-side) data
@@ -488,17 +491,16 @@ impl ExecutionPlan for NestedLoopJoinExec {
             MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
                 .register(context.memory_pool());
 
-        let inner_table = Arc::clone(&self.inner_table).init(
-            collect_left_input(
+        let inner_table = Arc::clone(&self.inner_table)
+            .init(collect_left_input(
                 Arc::clone(&self.left),
                 Arc::clone(&context),
                 join_metrics.clone(),
                 load_reservation,
                 need_produce_result_in_final(self.join_type),
                 self.right().output_partitioning().partition_count(),
-            )
-        );
-        let inner_table = OnceFut::new_from_shared(inner_table);
+            ))
+            .boxed();
 
         let batch_size = context.session_config().batch_size();
         let enforce_batch_size_in_joins =
@@ -707,7 +709,7 @@ struct NestedLoopJoinStream<T> {
     /// the outer table data of the nested loop join
     outer_table: SendableRecordBatchStream,
     /// the inner table data of the nested loop join
-    inner_table: OnceFut<JoinLeftData>,
+    inner_table: SharedResultPending<JoinLeftData>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     // TODO: support null aware equal
@@ -832,7 +834,7 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
         // build hash table from left (build) side, if not yet done
-        self.left_data = Some(ready!(self.inner_table.get_shared(cx))?);
+        self.left_data = Some(ready!(self.inner_table.poll_unpin(cx))?);
         build_timer.done();
 
         self.state = NestedLoopJoinStreamState::FetchProbeBatch;
