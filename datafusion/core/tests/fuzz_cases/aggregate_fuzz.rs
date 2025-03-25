@@ -520,7 +520,9 @@ async fn group_by_string_test(
     let expected = compute_counts(&input, column_name);
 
     let schema = input[0].schema();
-    let session_config = SessionConfig::new().with_batch_size(50);
+    let session_config = SessionConfig::new()
+        .with_batch_size(50)
+        .with_repartition_file_scans(false);
     let ctx = SessionContext::new_with_config(session_config);
 
     let provider = MemTable::try_new(schema.clone(), vec![input]).unwrap();

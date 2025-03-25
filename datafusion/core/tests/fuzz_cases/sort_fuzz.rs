@@ -248,7 +248,7 @@ impl SortTest {
         let exec = MemorySourceConfig::try_new_exec(&input, schema, None).unwrap();
         let sort = Arc::new(SortExec::new(sort_ordering, exec));
 
-        let session_config = SessionConfig::new();
+        let session_config = SessionConfig::new().with_repartition_file_scans(false);
         let session_ctx = if let Some(pool_size) = self.pool_size {
             // Make sure there is enough space for the initial spill
             // reservation
