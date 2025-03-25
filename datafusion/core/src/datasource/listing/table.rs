@@ -965,24 +965,8 @@ impl TableProvider for ListingTable {
 
         let mut source = self.options.format.file_source();
 
-        // Apply schema adapter to the source if it's a ParquetSource
-        // This handles the special case for ParquetSource which supports schema evolution
-        // through the schema_adapter_factory
-        //
-        // TODO: This approach requires explicit downcasts for each file format that supports
-        // schema evolution. Consider introducing a trait like `SchemaEvolutionSupport` that file
-        // sources could implement, allowing this logic to be generalized without requiring
-        // format-specific downcasts. This would make it easier to add schema evolution support
-        // to other file formats in the future.
-        if let (Some(parquet_source), Some(schema_adapter_factory)) = (
-            source.as_any().downcast_ref::<ParquetSource>(),
-            self.schema_adapter_factory.clone(),
-        ) {
-            let updated_source = parquet_source
-                .clone()
-                .with_schema_adapter_factory(schema_adapter_factory);
-            source = Arc::new(updated_source);
-        }
+        // Apply schema adapter to source if available
+        apply_schema_adapter_to_source(&mut source, self.schema_adapter_factory.clone());
 
         // Create file scan config with schema adapter factory if available
         let config =
@@ -1221,6 +1205,36 @@ impl ListingTable {
                 Ok(statistics)
             }
         }
+    }
+}
+
+/// Apply schema adapter to a file source if the adapter is available and compatible
+/// with the source type.
+///
+/// Currently only tested with ParquetSource schema adaptation for nested fields.
+/// In the future, this could be generalized to support other file formats
+/// through a trait-based mechanism.
+fn apply_schema_adapter_to_source(
+    source: &mut Arc<dyn FileSource>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+) {
+    // Apply schema adapter to the source if it's a ParquetSource
+    // This handles the special case for ParquetSource which supports schema evolution
+    // through the schema_adapter_factory
+    //
+    // TODO: This approach requires explicit downcasts for each file format that supports
+    // schema evolution. Consider introducing a trait like `SchemaEvolutionSupport` that file
+    // sources could implement, allowing this logic to be generalized without requiring
+    // format-specific downcasts. This would make it easier to add schema evolution support
+    // to other file formats in the future.
+    if let (Some(parquet_source), Some(schema_adapter_factory)) = (
+        source.as_any().downcast_ref::<ParquetSource>(),
+        schema_adapter_factory,
+    ) {
+        let updated_source = parquet_source
+            .clone()
+            .with_schema_adapter_factory(schema_adapter_factory);
+        *source = Arc::new(updated_source);
     }
 }
 
