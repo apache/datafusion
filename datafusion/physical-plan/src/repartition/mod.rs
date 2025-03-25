@@ -40,9 +40,13 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
+use arrow::array::{
+    ArrayRef, BooleanArray, Int32Array, Int64Array, PrimitiveArray, RecordBatch,
+    RecordBatchOptions, UInt64Array,
+};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
+use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
@@ -197,6 +201,12 @@ enum BatchPartitionerState {
         num_partitions: usize,
         next_idx: usize,
     },
+    HashSelectVector {
+        random_state: ahash::RandomState,
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        num_partitions: usize,
+        hash_buffer: Vec<u64>,
+    },
 }
 
 impl BatchPartitioner {
@@ -322,6 +332,71 @@ impl BatchPartitioner {
 
                     Box::new(it)
                 }
+                BatchPartitionerState::HashSelectVector {
+                    random_state,
+                    exprs,
+                    num_partitions,
+                    hash_buffer,
+                } => {
+                    let timer = self.timer.timer();
+                    let arrays = exprs
+                        .iter()
+                        .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
+                        .collect::<Result<Vec<_>>>()?;
+
+                    create_hashes(&arrays, random_state, hash_buffer)?;
+
+                    let hash_vector = hash_buffer
+                        .iter()
+                        .map(|hash| *hash % *num_partitions as u64)
+                        .collect::<Vec<_>>();
+                    let mut fields = batch
+                        .schema()
+                        .fields()
+                        .iter()
+                        .map(|f| Arc::clone(f))
+                        .collect::<Vec<_>>();
+                    fields.push(Arc::new(Field::new(
+                        "selection",
+                        DataType::Boolean,
+                        false,
+                    )));
+                    // Finished building index-arrays for output partitions
+                    timer.done();
+
+                    // Borrowing partitioner timer to prevent moving `self` to closure
+                    let partitioner_timer = &self.timer;
+
+                    let it = (0..*num_partitions).into_iter().map(move |partition| {
+                        // Tracking time required for repartitioned batches construction
+                        let _timer = partitioner_timer.timer();
+                        let select_vector = hash_vector
+                            .iter()
+                            .map(|&hash| hash == partition as u64)
+                            .collect::<Vec<_>>();
+                        let new_col: ArrayRef =
+                            Arc::new(BooleanArray::from(select_vector)) as ArrayRef;
+                        let mut columns = batch
+                            .columns()
+                            .iter()
+                            .map(|c| c.clone())
+                            .collect::<Vec<_>>();
+                        columns.push(new_col);
+
+                        let mut options = RecordBatchOptions::new();
+                        options = options.with_row_count(Some(batch.num_rows()));
+                        let batch = RecordBatch::try_new_with_options(
+                            batch.schema(),
+                            columns,
+                            &options,
+                        )
+                        .unwrap();
+
+                        Ok((partition, batch))
+                    });
+
+                    Box::new(it)
+                }
             };
 
         Ok(it)
@@ -332,6 +407,9 @@ impl BatchPartitioner {
         match self.state {
             BatchPartitionerState::RoundRobin { num_partitions, .. } => num_partitions,
             BatchPartitionerState::Hash { num_partitions, .. } => num_partitions,
+            BatchPartitionerState::HashSelectVector { num_partitions, .. } => {
+                num_partitions
+            }
         }
     }
 }
