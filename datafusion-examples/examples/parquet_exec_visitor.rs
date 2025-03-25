@@ -99,7 +99,7 @@ impl ExecutionPlanVisitor for ParquetExecVisitor {
         // If needed match on a specific `ExecutionPlan` node type
         if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
             if let Some((file_config, _)) =
-                data_source_exec.downcast_to_source::<ParquetSource>()
+                data_source_exec.downcast_to_file_source::<ParquetSource>()
             {
                 self.file_groups = Some(file_config.file_groups.clone());
 

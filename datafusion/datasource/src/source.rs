@@ -233,7 +233,7 @@ impl DataSourceExec {
     }
 
     /// Downcast the `DataSourceExec` to a specific file source
-    pub fn downcast_to_source<T: 'static>(&self) -> Option<(&FileScanConfig, &T)> {
+    pub fn downcast_to_file_source<T: 'static>(&self) -> Option<(&FileScanConfig, &T)> {
         self.data_source()
             .as_any()
             .downcast_ref::<FileScanConfig>()

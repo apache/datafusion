@@ -1716,7 +1716,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         #[cfg(feature = "parquet")]
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
             if let Some((maybe_parquet, conf)) =
-                exec.downcast_to_source::<ParquetSource>()
+                exec.downcast_to_file_source::<ParquetSource>()
             {
                 let predicate = conf
                     .predicate()

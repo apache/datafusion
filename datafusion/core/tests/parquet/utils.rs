@@ -49,7 +49,7 @@ impl ExecutionPlanVisitor for MetricsFinder {
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
             if data_source_exec
-                .downcast_to_source::<ParquetSource>()
+                .downcast_to_file_source::<ParquetSource>()
                 .is_some()
             {
                 self.metrics = data_source_exec.metrics();

@@ -202,7 +202,7 @@ impl TestParquetFile {
     pub fn parquet_metrics(plan: &Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
         if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
             if data_source_exec
-                .downcast_to_source::<ParquetSource>()
+                .downcast_to_file_source::<ParquetSource>()
                 .is_some()
             {
                 return data_source_exec.metrics();

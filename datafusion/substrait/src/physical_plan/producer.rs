@@ -52,28 +52,21 @@ pub fn to_substrait_rel(
     ),
 ) -> Result<Box<Rel>> {
     if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-        let data_source = data_source_exec.data_source();
-        if let Some(file_config) = data_source.as_any().downcast_ref::<FileScanConfig>() {
-            let is_parquet = file_config
-                .file_source()
-                .as_any()
-                .downcast_ref::<ParquetSource>()
-                .is_some();
-            if is_parquet {
-                let mut substrait_files = vec![];
-                for (partition_index, files) in file_config.file_groups.iter().enumerate()
-                {
-                    for file in files.iter() {
-                        substrait_files.push(FileOrFiles {
-                            partition_index: partition_index.try_into().unwrap(),
-                            start: 0,
-                            length: file.object_meta.size as u64,
-                            path_type: Some(PathType::UriPath(
-                                file.object_meta.location.as_ref().to_string(),
-                            )),
-                            file_format: Some(FileFormat::Parquet(ParquetReadOptions {})),
-                        });
-                    }
+        if let Some((file_config, _)) =
+            data_source_exec.downcast_to_file_source::<ParquetSource>()
+        {
+            let mut substrait_files = vec![];
+            for (partition_index, files) in file_config.file_groups.iter().enumerate() {
+                for file in files {
+                    substrait_files.push(FileOrFiles {
+                        partition_index: partition_index.try_into().unwrap(),
+                        start: 0,
+                        length: file.object_meta.size as u64,
+                        path_type: Some(PathType::UriPath(
+                            file.object_meta.location.as_ref().to_string(),
+                        )),
+                        file_format: Some(FileFormat::Parquet(ParquetReadOptions {})),
+                    });
                 }
             }
 
