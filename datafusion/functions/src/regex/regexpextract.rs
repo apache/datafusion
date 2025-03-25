@@ -37,7 +37,7 @@ use regex::Regex;
 
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
-    description = "Extract a specific group matched by [regular expression](https://docs.rs/regex/latest/regex/#syntax). If the regex did not match, or the specified group did not match, an empty string is returned..",
+    description = "Extract a specific group matched by [regular expression](https://docs.rs/regex/latest/regex/#syntax). If the regex did not match, or the specified group did not match, an empty string is returned.",
     syntax_example = "regexp_extract(str, regexp, idx)",
     sql_example = r#"```sql
             > select regexp_extract('100-200', '(\d+)-(\d+)', 1);
@@ -78,11 +78,6 @@ impl RegexpExtractFunc {
                         DataType::LargeUtf8,
                         DataType::Int64,
                     ]),
-                    TypeSignature::Exact(vec![
-                        DataType::Utf8View,
-                        DataType::Utf8View,
-                        DataType::Int64,
-                    ]),
                 ],
                 Volatility::Immutable,
             ),
@@ -108,8 +103,6 @@ impl ScalarUDFImpl for RegexpExtractFunc {
         Ok(match &arg_types[0] {
             LargeUtf8 => LargeUtf8,
             Utf8 => Utf8,
-            Utf8View => Utf8View,
-            Null => Null,
             other => {
                 return plan_err!(
                     "The regexp_extract function can only accept strings. Got {other}"
@@ -150,12 +143,6 @@ fn regexp_extract_func(args: &[ArrayRef; 3]) -> Result<ArrayRef> {
             let pattern = as_generic_string_array::<i64>(&args[1])?;
             let idx = args[2].as_primitive::<Int64Type>();
             regexp_extract::<i64>(target, pattern, idx)
-        }
-        DataType::Utf8View => {
-            let target = args[0].as_string_view();
-            let pattern = args[1].as_string_view();
-            let idx = args[2].as_primitive::<Int64Type>();
-            regexp_extract::<i32>(target, pattern, idx)
         }
         other => {
             internal_err!("Unsupported data type {other:?} for function regexp_extract")
