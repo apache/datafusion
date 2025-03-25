@@ -833,9 +833,14 @@ impl MemorySourceConfig {
             if partitions[next_idx].is_empty() {
                 partitions[next_idx].push(batch);
             } else {
+                // have at least 1 batch per partition
                 let idx =
                     std::cmp::min(next_idx + 1, curr_row_count / target_partition_size);
-                partitions[idx].push(batch);
+                if let Some(partition) = partitions.get_mut(idx) {
+                    partition.push(batch);
+                } else {
+                    partitions[target_partitions - 1].push(batch);
+                }
                 next_idx = idx;
             }
 
