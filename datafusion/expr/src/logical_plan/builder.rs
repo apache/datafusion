@@ -467,9 +467,7 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
-        TableScan::try_new(table_name, table_source, projection, filters, None)
-            .map(LogicalPlan::TableScan)
-            .map(Self::new)
+        Self::scan_with_filters_inner(table_name, table_source, projection, filters, None)
     }
 
     /// Convert a table provider into a builder with a TableScan with filter and fetch
@@ -480,15 +478,43 @@ impl LogicalPlanBuilder {
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        TableScan::try_new(table_name, table_source, projection, filters, fetch)
-            .map(LogicalPlan::TableScan)
-            .map(Self::new)
+        Self::scan_with_filters_inner(
+            table_name,
+            table_source,
+            projection,
+            filters,
+            fetch,
+        )
+    }
+
+    fn scan_with_filters_inner(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<Expr>,
+        fetch: Option<usize>,
+    ) -> Result<Self> {
+        let table_scan =
+            TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
+
+        // Inline TableScan
+        if table_scan.filters.is_empty() {
+            if let Some(p) = table_scan.source.get_logical_plan() {
+                let sub_plan = p.into_owned();
+                // Ensures that the reference to the inlined table remains the
+                // same, meaning we don't have to change any of the parent nodes
+                // that reference this table.
+                return Self::new(sub_plan).alias(table_scan.table_name);
+            }
+        }
+
+        Ok(Self::new(LogicalPlan::TableScan(table_scan)))
     }
 
     /// Wrap a plan in a window
     pub fn window_plan(
         input: LogicalPlan,
-        window_exprs: Vec<Expr>,
+        window_exprs: impl IntoIterator<Item = Expr>,
     ) -> Result<LogicalPlan> {
         let mut plan = input;
         let mut groups = group_window_expr_by_sort_keys(window_exprs)?;

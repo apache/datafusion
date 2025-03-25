@@ -68,6 +68,7 @@ tokio = { workspace = true }
 criterion = { workspace = true, features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
+insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"

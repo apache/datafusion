@@ -33,7 +33,7 @@ use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
@@ -168,9 +168,12 @@ fn boolean_op(
 macro_rules! binary_string_array_flag_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
         match $LEFT.data_type() {
-            DataType::Utf8View | DataType::Utf8 => {
+            DataType::Utf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
             },
+            DataType::Utf8View => {
+                compute_utf8view_flag_op!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
+            }
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             },
@@ -207,14 +210,42 @@ macro_rules! compute_utf8_flag_op {
     }};
 }
 
+/// Invoke a compute kernel on a pair of binary data arrays with flags
+macro_rules! compute_utf8view_flag_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("compute_utf8view_flag_op failed to downcast array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("compute_utf8view_flag_op failed to downcast array");
+
+        let flag = if $FLAG {
+            Some($ARRAYTYPE::from(vec!["i"; ll.len()]))
+        } else {
+            None
+        };
+        let mut array = $OP(ll, rr, flag.as_ref())?;
+        if $NOT {
+            array = not(&array).unwrap();
+        }
+        Ok(Arc::new(array))
+    }};
+}
+
 macro_rules! binary_string_array_flag_op_scalar {
     ($LEFT:ident, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
         // This macro is slightly different from binary_string_array_flag_op because, when comparing with a scalar value,
         // the query can be optimized in such a way that operands will be dicts, so we need to support it here
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Utf8View | DataType::Utf8 => {
+            DataType::Utf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
             },
+            DataType::Utf8View => {
+                compute_utf8view_flag_op_scalar!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
+            }
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             },
@@ -222,7 +253,8 @@ macro_rules! binary_string_array_flag_op_scalar {
                 let values = $LEFT.as_any_dictionary().values();
 
                 match values.data_type() {
-                    DataType::Utf8View | DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::Utf8View => compute_utf8view_flag_op_scalar!(values, $RIGHT, $OP, StringViewArray, $NOT, $FLAG),
                     DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
                     other => internal_err!(
                         "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
@@ -261,6 +293,34 @@ macro_rules! compute_utf8_flag_op_scalar {
             // null literal or non string
             _ => return internal_err!(
                         "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
+                        $RIGHT, stringify!($OP)
+                    )
+        };
+
+        let flag = $FLAG.then_some("i");
+        let mut array =
+            paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
+        if $NOT {
+            array = not(&array).unwrap();
+        }
+
+        Ok(Arc::new(array))
+    }};
+}
+
+/// Invoke a compute kernel on a data array and a scalar value with flag
+macro_rules! compute_utf8view_flag_op_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("compute_utf8view_flag_op_scalar failed to downcast array");
+
+        let string_value = match $RIGHT.try_as_str() {
+            Some(Some(string_value)) => string_value,
+            // null literal or non string
+            _ => return internal_err!(
+                        "compute_utf8view_flag_op_scalar failed to cast literal value {} for operation '{}'",
                         $RIGHT, stringify!($OP)
                     )
         };
@@ -733,8 +793,13 @@ impl BinaryExpr {
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
             StringConcat => concat_elements(left, right),
-            AtArrow | ArrowAt => {
-                unreachable!("ArrowAt and AtArrow should be rewritten to function")
+            AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
+            | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
+            | IntegerDivide => {
+                not_impl_err!(
+                    "Binary operator '{:?}' is not supported in the physical expr",
+                    self.op
+                )
             }
         }
     }

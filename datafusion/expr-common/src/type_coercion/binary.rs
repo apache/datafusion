@@ -30,8 +30,8 @@ use arrow::datatypes::{
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, Diagnostic, Result, Span,
-    Spans,
+    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Diagnostic,
+    Result, Span, Spans,
 };
 use itertools::Itertools;
 
@@ -182,16 +182,23 @@ impl<'a> BinaryTypeCoercer<'a> {
             })
         }
         AtArrow | ArrowAt => {
-            // ArrowAt and AtArrow check for whether one array is contained in another.
-            // The result type is boolean. Signature::comparison defines this signature.
-            // Operation has nothing to do with comparison
-            array_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            // Array contains or search (similar to LIKE) operation
+            array_coercion(self.lhs, self.rhs)
+                .or_else(|| like_coercion(self.lhs, self.rhs)).map(Signature::comparison).ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Cannot infer common argument type for operation {} {} {}", self.lhs, self.op, self.rhs
+                    )
+                })
+        }
+        AtAt => {
+            // text search has similar signature to LIKE
+            like_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
-                    "Cannot infer common array type for arrow operation {} {} {}", self.lhs, self.op, self.rhs
+                    "Cannot infer common argument type for AtAt operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
-        Plus | Minus | Multiply | Divide | Modulo =>  {
+        Plus | Minus | Multiply | Divide | Modulo  =>  {
             let get_result = |lhs, rhs| {
                 use arrow::compute::kernels::numeric::*;
                 let l = new_empty_array(lhs);
@@ -248,6 +255,10 @@ impl<'a> BinaryTypeCoercer<'a> {
                     "Cannot coerce arithmetic expression {} {} {} to valid types", self.lhs, self.op, self.rhs
                 )
             }
+        },
+        IntegerDivide | Arrow | LongArrow | HashArrow | HashLongArrow
+        | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe => {
+            not_impl_err!("Operator {} is not yet supported", self.op)
         }
     };
         result.map_err(|err| {
@@ -1177,26 +1188,6 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
     }
 }
 
-/// This will be deprecated when binary operators native support
-/// for Utf8View (use `string_coercion` instead).
-fn regex_comparison_string_coercion(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
-    match (lhs_type, rhs_type) {
-        // If Utf8View is in any side, we coerce to Utf8.
-        (Utf8View, Utf8View | Utf8 | LargeUtf8) | (Utf8 | LargeUtf8, Utf8View) => {
-            Some(Utf8)
-        }
-        // Then, if LargeUtf8 is in any side, we coerce to LargeUtf8.
-        (LargeUtf8, Utf8 | LargeUtf8) | (Utf8, LargeUtf8) => Some(LargeUtf8),
-        // Utf8 coerces to Utf8
-        (Utf8, Utf8) => Some(Utf8),
-        _ => None,
-    }
-}
-
 fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
@@ -1327,7 +1318,7 @@ fn regex_null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 /// Coercion rules for regular expression comparison operations.
 /// This is a union of string coercion rules and dictionary coercion rules
 pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    regex_comparison_string_coercion(lhs_type, rhs_type)
+    string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, false))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
 }
@@ -1804,15 +1795,69 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
+            DataType::Utf8View,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8View,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
             DataType::Utf8,
             Operator::RegexNotMatch,
             DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Utf8View,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8View,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
             DataType::Utf8,
             Operator::RegexNotIMatch,
             DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Utf8View,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8View,
+            DataType::Utf8View,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
         );
         test_coercion_binary_rule!(
             DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
@@ -1822,9 +1867,45 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8View,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8View,
+            Operator::RegexMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
             DataType::Utf8,
             Operator::RegexIMatch,
             DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8,
+            Operator::RegexIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8View,
+            Operator::RegexIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8View,
+            Operator::RegexIMatch,
+            DataType::Utf8View
         );
         test_coercion_binary_rule!(
             DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
@@ -1834,9 +1915,45 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8View,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8View,
+            Operator::RegexNotMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
             DataType::Utf8,
             Operator::RegexNotIMatch,
             DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8View,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
+            DataType::Utf8View,
+            Operator::RegexNotIMatch,
+            DataType::Utf8View
         );
         test_coercion_binary_rule!(
             DataType::Int16,

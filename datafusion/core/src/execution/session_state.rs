@@ -266,6 +266,10 @@ impl Session for SessionState {
     fn table_options_mut(&mut self) -> &mut TableOptions {
         self.table_options_mut()
     }
+
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        self.task_ctx()
+    }
 }
 
 impl SessionState {
@@ -1415,10 +1419,14 @@ impl SessionStateBuilder {
                 &state.runtime_env,
             );
 
-            state.catalog_list.register_catalog(
+            let existing_default_catalog = state.catalog_list.register_catalog(
                 state.config.options().catalog.default_catalog.clone(),
                 Arc::new(default_catalog),
             );
+
+            if existing_default_catalog.is_some() {
+                debug!("Overwrote the default catalog");
+            }
         }
 
         if let Some(analyzer_rules) = analyzer_rules {
