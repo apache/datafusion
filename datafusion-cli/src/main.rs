@@ -155,6 +155,8 @@ async fn main_inner() -> Result<()> {
     if let Some(batch_size) = args.batch_size {
         session_config = session_config.with_batch_size(batch_size);
     };
+    // use easier to understand "tree" mode by default
+    session_config.options_mut().explain.format = String::from("tree");
 
     let mut rt_builder = RuntimeEnvBuilder::new();
     // set memory pool size
@@ -437,4 +439,5 @@ mod tests {
 
         Ok(())
     }
+
 }
