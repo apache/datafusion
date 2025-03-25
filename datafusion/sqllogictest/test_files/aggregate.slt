@@ -4962,8 +4962,10 @@ select avg(distinct x_dict) from value_dict;
 ----
 3
 
-query error
+query RR
 select avg(x_dict), avg(distinct x_dict) from value_dict;
+----
+2.625 3
 
 query I
 select min(x_dict) from value_dict;
@@ -6686,3 +6688,35 @@ SELECT a, median(b), arrow_typeof(median(b)) FROM group_median_all_nulls GROUP B
 ----
 group0 NULL Int32
 group1 NULL Int32
+
+statement ok
+create table t_decimal (c decimal(10, 4)) as values (100.00), (125.00), (175.00), (200.00), (200.00), (300.00), (null), (null);
+
+# Test avg_distinct for Decimal128
+query RT
+select avg(distinct c), arrow_typeof(avg(distinct c)) from t_decimal;
+----
+180 Decimal128(14, 8)
+
+statement ok
+drop table t_decimal;
+
+# Test avg_distinct for Decimal256
+statement ok
+create table t_decimal256 (c decimal(50, 2)) as values
+  (100.00),
+  (125.00),
+  (175.00),
+  (200.00),
+  (200.00),
+  (300.00),
+  (null),
+  (null);
+
+query RT
+select avg(distinct c), arrow_typeof(avg(distinct c)) from t_decimal256;
+----
+180 Decimal256(54, 6)
+
+statement ok
+drop table t_decimal256;

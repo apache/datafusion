@@ -39,6 +39,7 @@ use datafusion_expr::{
     ReversedUDAF, Signature,
 };
 
+use datafusion_functions_aggregate_common::aggregate::avg_distinct::Float64DistinctAvgAccumulator;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
@@ -113,43 +114,49 @@ impl AggregateUDFImpl for Avg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if acc_args.is_distinct {
-            return exec_err!("avg(DISTINCT) aggregations are not available");
-        }
+        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
         use DataType::*;
 
-        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
-        // instantiate specialized accumulator based for the type
-        match (&data_type, acc_args.return_type) {
-            (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
-            (
-                Decimal128(sum_precision, sum_scale),
-                Decimal128(target_precision, target_scale),
-            ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal128Type> {
-                sum: None,
-                count: 0,
-                sum_scale: *sum_scale,
-                sum_precision: *sum_precision,
-                target_precision: *target_precision,
-                target_scale: *target_scale,
-            })),
+        if acc_args.is_distinct {
+            // instantiate specialized accumulator based for the type
+            match &data_type {
+                // Numeric types are converted to Float64 via `coerce_avg_type` during logical plan creation
+                Float64 => Ok(Box::new(Float64DistinctAvgAccumulator::new()?)),
+                _ => exec_err!("AVG(DISTINCT) for {} not supported", data_type),
+            }
+        } else {
+            // instantiate specialized accumulator based for the type
+            match (&data_type, acc_args.return_type) {
+                (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
+                (
+                    Decimal128(sum_precision, sum_scale),
+                    Decimal128(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal128Type> {
+                    sum: None,
+                    count: 0,
+                    sum_scale: *sum_scale,
+                    sum_precision: *sum_precision,
+                    target_precision: *target_precision,
+                    target_scale: *target_scale,
+                })),
 
-            (
-                Decimal256(sum_precision, sum_scale),
-                Decimal256(target_precision, target_scale),
-            ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal256Type> {
-                sum: None,
-                count: 0,
-                sum_scale: *sum_scale,
-                sum_precision: *sum_precision,
-                target_precision: *target_precision,
-                target_scale: *target_scale,
-            })),
-            _ => exec_err!(
-                "AvgAccumulator for ({} --> {})",
-                &data_type,
-                acc_args.return_type
-            ),
+                (
+                    Decimal256(sum_precision, sum_scale),
+                    Decimal256(target_precision, target_scale),
+                ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal256Type> {
+                    sum: None,
+                    count: 0,
+                    sum_scale: *sum_scale,
+                    sum_precision: *sum_precision,
+                    target_precision: *target_precision,
+                    target_scale: *target_scale,
+                })),
+                _ => exec_err!(
+                    "AvgAccumulator for ({} --> {})",
+                    &data_type,
+                    acc_args.return_type
+                ),
+            }
         }
     }
 
