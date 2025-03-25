@@ -21,9 +21,7 @@
 use std::{any::Any, sync::Arc, task::Poll};
 
 use super::utils::{
-    adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter,
-    BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
-    StatefulStreamResult,
+    adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter, BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceFut, SharedResultOnceCell, StatefulStreamResult
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
@@ -89,7 +87,7 @@ pub struct CrossJoinExec {
     ///
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the left side loading.
-    left_fut: OnceAsync<JoinLeftData>,
+    left_fut: Arc<SharedResultOnceCell<JoinLeftData>>,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
     /// Properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -303,14 +301,15 @@ impl ExecutionPlan for CrossJoinExec {
         let enforce_batch_size_in_joins =
             context.session_config().enforce_batch_size_in_joins();
 
-        let left_fut = self.left_fut.once(|| {
+        let left_fut = Arc::clone(&self.left_fut).init(
             load_left_input(
                 Arc::clone(&self.left),
                 context,
                 join_metrics.clone(),
                 reservation,
             )
-        });
+        );
+        let left_fut = OnceFut::new_from_shared(left_fut);
 
         if enforce_batch_size_in_joins {
             Ok(Box::pin(CrossJoinStream {

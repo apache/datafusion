@@ -56,6 +56,7 @@ use datafusion_physical_expr::{
 };
 use hashbrown::hash_table::Entry::{Occupied, Vacant};
 use hashbrown::HashTable;
+use tokio::sync::OnceCell;
 
 use crate::joins::SharedBitmapBuilder;
 use crate::projection::ProjectionExec;
@@ -649,6 +650,34 @@ pub fn build_join_schema(
     (fields.finish().with_metadata(metadata), column_indices)
 }
 
+/// A [`SharedResultOnceCell`] is a [`OnceCell`] that holds a [`SharedResult`].
+/// It wraps the result of the initializing computation in [`Arc`] to make it cheaply cloneable.
+pub(crate) struct SharedResultOnceCell<T>(OnceCell<SharedResult<Arc<T>>>);
+
+impl<T> Default for SharedResultOnceCell<T> {
+    fn default() -> Self {
+        Self(OnceCell::new())
+    }
+}
+
+impl<T> Debug for SharedResultOnceCell<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SharedResultOnceCell")
+    }
+}
+
+impl<T> SharedResultOnceCell<T> {
+    pub(crate) async fn init<Fut>(self: Arc<Self>, f: Fut) -> SharedResult<Arc<T>>
+    where
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        self.0
+            .get_or_init(|| async { f.await.map(Arc::new).map_err(Arc::new) })
+            .await
+            .clone()
+    }
+}
+
 /// A [`OnceAsync`] runs an `async` closure once, where multiple calls to
 /// [`OnceAsync::once`] return a [`OnceFut`] that resolves to the result of the
 /// same computation.
@@ -1058,12 +1087,16 @@ impl<T: 'static> OnceFut<T> {
     where
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
+        Self::new_from_shared(fut.map(|res| res.map(Arc::new).map_err(Arc::new)))
+    }
+
+    /// Create a new [`OnceFut`] from a [`Future`] that returns a SharedResult<Arc<T>
+    pub(crate) fn new_from_shared<Fut>(fut: Fut) -> Self
+    where
+        Fut: Future<Output = SharedResult<Arc<T>>> + Send + 'static,
+    {
         Self {
-            state: OnceFutState::Pending(
-                fut.map(|res| res.map(Arc::new).map_err(Arc::new))
-                    .boxed()
-                    .shared(),
-            ),
+            state: OnceFutState::Pending(fut.boxed().shared()),
         }
     }
 

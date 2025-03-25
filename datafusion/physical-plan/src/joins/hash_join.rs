@@ -26,12 +26,9 @@ use std::{any::Any, vec};
 
 use super::utils::{
     asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
-    reorder_output_after_swap, swap_join_projection,
+    reorder_output_after_swap, swap_join_projection, SharedResultOnceCell,
 };
-use super::{
-    utils::{OnceAsync, OnceFut},
-    PartitionMode, SharedBitmapBuilder,
-};
+use super::{utils::OnceFut, PartitionMode, SharedBitmapBuilder};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
@@ -338,7 +335,7 @@ pub struct HashJoinExec {
     ///
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
-    left_fut: OnceAsync<JoinLeftData>,
+    left_fut: Arc<SharedResultOnceCell<JoinLeftData>>,
     /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Partitioning mode to use
@@ -793,21 +790,34 @@ impl ExecutionPlan for HashJoinExec {
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
-            PartitionMode::CollectLeft => self.left_fut.once(|| {
-                let reservation =
-                    MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
-                collect_left_input(
-                    None,
-                    self.random_state.clone(),
-                    Arc::clone(&self.left),
-                    on_left.clone(),
-                    Arc::clone(&context),
-                    join_metrics.clone(),
-                    reservation,
-                    need_produce_result_in_final(self.join_type),
-                    self.right().output_partitioning().partition_count(),
-                )
-            }),
+            PartitionMode::CollectLeft => {
+                let memory_pool = Arc::clone(context.memory_pool());
+                let random_state = self.random_state.clone();
+                let left = Arc::clone(&self.left);
+                let context = Arc::clone(&context);
+                let join_metrics = join_metrics.clone();
+                let join_type = self.join_type;
+
+                let fut = Arc::clone(&self.left_fut).init(async move {
+                    // We create the reservation inside this closure to ensure it is only created once
+                    let reservation =
+                        MemoryConsumer::new("HashJoinInput").register(&memory_pool);
+
+                    collect_left_input(
+                        None,
+                        random_state,
+                        left,
+                        on_left,
+                        context,
+                        join_metrics,
+                        reservation,
+                        need_produce_result_in_final(join_type),
+                        right_partitions,
+                    )
+                    .await
+                });
+                OnceFut::new_from_shared(fut)
+            }
             PartitionMode::Partitioned => {
                 let reservation =
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))

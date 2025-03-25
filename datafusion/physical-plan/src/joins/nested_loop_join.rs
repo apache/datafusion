@@ -24,9 +24,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::utils::{
-    asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
-    need_produce_result_in_final, reorder_output_after_swap, swap_join_projection,
-    BatchSplitter, BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
+    asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap, need_produce_result_in_final, reorder_output_after_swap, swap_join_projection, BatchSplitter, BatchTransformer, NoopBatchTransformer, SharedResultOnceCell, StatefulStreamResult
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::common::can_project;
@@ -34,7 +32,7 @@ use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
-    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
+    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceFut,
 };
 use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -169,7 +167,7 @@ pub struct NestedLoopJoinExec {
     ///
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
-    inner_table: OnceAsync<JoinLeftData>,
+    inner_table: Arc<SharedResultOnceCell<JoinLeftData>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Projection to apply to the output of the join
@@ -490,7 +488,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
                 .register(context.memory_pool());
 
-        let inner_table = self.inner_table.once(|| {
+        let inner_table = Arc::clone(&self.inner_table).init(
             collect_left_input(
                 Arc::clone(&self.left),
                 Arc::clone(&context),
@@ -499,7 +497,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 need_produce_result_in_final(self.join_type),
                 self.right().output_partitioning().partition_count(),
             )
-        });
+        );
+        let inner_table = OnceFut::new_from_shared(inner_table);
 
         let batch_size = context.session_config().batch_size();
         let enforce_batch_size_in_joins =
