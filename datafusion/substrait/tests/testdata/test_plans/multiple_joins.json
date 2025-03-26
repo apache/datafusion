@@ -1,4 +1,24 @@
 {
+  "extensionUris": [{
+    "extensionUriAnchor": 1,
+    "uri": "/functions_aggregate_generic.yaml"
+  }, {
+    "extensionUriAnchor": 2,
+    "uri": "/functions_comparison.yaml"
+  }],
+  "extensions": [{
+    "extensionFunction": {
+      "extensionUriReference": 1,
+      "functionAnchor": 0,
+      "name": "count:"
+    }
+  }, {
+    "extensionFunction": {
+      "extensionUriReference": 2,
+      "functionAnchor": 1,
+      "name": "equal:any_any"
+    }
+  }],
   "relations": [{
     "root": {
       "input": {
@@ -506,5 +526,11 @@
       "names": ["count_first", "category", "count_second", "count_third"]
     }
   }],
-  "expectedTypeUrls": []
+  "expectedTypeUrls": [],
+  "version": {
+    "majorNumber": 0,
+    "minorNumber": 52,
+    "patchNumber": 0,
+    "gitHash": ""
+  }
 }
