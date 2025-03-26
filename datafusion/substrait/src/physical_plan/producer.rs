@@ -57,7 +57,7 @@ pub fn to_substrait_rel(
         {
             let mut substrait_files = vec![];
             for (partition_index, files) in file_config.file_groups.iter().enumerate() {
-                for file in files {
+                for file in files.iter() {
                     substrait_files.push(FileOrFiles {
                         partition_index: partition_index.try_into().unwrap(),
                         start: 0,
