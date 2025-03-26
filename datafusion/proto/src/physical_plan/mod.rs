@@ -256,6 +256,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let scan_conf = parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
+                    config_options,
                     extension_codec,
                     Arc::new(JsonSource::new()),
                 )?;

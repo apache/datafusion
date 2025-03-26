@@ -63,6 +63,7 @@ pub fn physical_exprs_bag_equal(
 use crate::{expressions, LexOrdering, PhysicalSortExpr};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::plan_err;
 use datafusion_common::Result;
 use datafusion_expr::{Expr, SortExpr};
@@ -153,6 +154,7 @@ pub fn create_physical_sort_expr(
     e: &SortExpr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<PhysicalSortExpr> {
     let SortExpr {
         expr,
@@ -160,7 +162,12 @@ pub fn create_physical_sort_expr(
         nulls_first,
     } = e;
     Ok(PhysicalSortExpr {
-        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+        expr: create_physical_expr(
+            expr,
+            input_dfschema,
+            execution_props,
+            config_options,
+        )?,
         options: SortOptions {
             descending: !asc,
             nulls_first: *nulls_first,
@@ -173,10 +180,18 @@ pub fn create_physical_sort_exprs(
     exprs: &[SortExpr],
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<LexOrdering> {
     exprs
         .iter()
-        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
+        .map(|expr| {
+            create_physical_sort_expr(
+                expr,
+                input_dfschema,
+                execution_props,
+                config_options,
+            )
+        })
         .collect::<Result<LexOrdering>>()
 }
 
