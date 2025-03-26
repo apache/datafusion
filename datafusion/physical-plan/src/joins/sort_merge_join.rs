@@ -41,12 +41,14 @@ use crate::joins::utils::{
     reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
     JoinOnRef,
 };
-use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use crate::metrics::{
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics,
+};
 use crate::projection::{
     join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_on, ProjectionExec,
 };
-use crate::spill::spill_record_batches;
+use crate::spill::spill_manager::SpillManager;
 use crate::{
     metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
@@ -596,12 +598,8 @@ struct SortMergeJoinMetrics {
     /// Peak memory used for buffered data.
     /// Calculated as sum of peak memory values across partitions
     peak_mem_used: metrics::Gauge,
-    /// count of spills during the execution of the operator
-    spill_count: Count,
-    /// total spilled bytes during the execution of the operator
-    spilled_bytes: Count,
-    /// total spilled rows during the execution of the operator
-    spilled_rows: Count,
+    /// Metrics related to spilling
+    spill_metrics: SpillMetrics,
 }
 
 impl SortMergeJoinMetrics {
@@ -615,9 +613,7 @@ impl SortMergeJoinMetrics {
             MetricBuilder::new(metrics).counter("output_batches", partition);
         let output_rows = MetricBuilder::new(metrics).output_rows(partition);
         let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
-        let spill_count = MetricBuilder::new(metrics).spill_count(partition);
-        let spilled_bytes = MetricBuilder::new(metrics).spilled_bytes(partition);
-        let spilled_rows = MetricBuilder::new(metrics).spilled_rows(partition);
+        let spill_metrics = SpillMetrics::new(metrics, partition);
 
         Self {
             join_time,
@@ -626,9 +622,7 @@ impl SortMergeJoinMetrics {
             output_batches,
             output_rows,
             peak_mem_used,
-            spill_count,
-            spilled_bytes,
-            spilled_rows,
+            spill_metrics,
         }
     }
 }
@@ -884,6 +878,8 @@ struct SortMergeJoinStream {
     pub reservation: MemoryReservation,
     /// Runtime env
     pub runtime_env: Arc<RuntimeEnv>,
+    /// Manages the process of spilling and reading back intermediate data
+    pub spill_manager: SpillManager,
     /// A unique number for each batch
     pub streamed_batch_counter: AtomicUsize,
 }
@@ -1301,6 +1297,11 @@ impl SortMergeJoinStream {
     ) -> Result<Self> {
         let streamed_schema = streamed.schema();
         let buffered_schema = buffered.schema();
+        let spill_manager = SpillManager::new(
+            Arc::clone(&runtime_env),
+            join_metrics.spill_metrics.clone(),
+            Arc::clone(&buffered_schema),
+        );
         Ok(Self {
             state: SortMergeJoinState::Init,
             sort_options,
@@ -1333,6 +1334,7 @@ impl SortMergeJoinStream {
             join_metrics,
             reservation,
             runtime_env,
+            spill_manager,
             streamed_batch_counter: AtomicUsize::new(0),
         })
     }
@@ -1402,27 +1404,19 @@ impl SortMergeJoinStream {
                 Ok(())
             }
             Err(_) if self.runtime_env.disk_manager.tmp_files_enabled() => {
-                // spill buffered batch to disk
-                let spill_file = self
-                    .runtime_env
-                    .disk_manager
-                    .create_tmp_file("sort_merge_join_buffered_spill")?;
-
+                // Spill buffered batch to disk
                 if let Some(batch) = buffered_batch.batch {
-                    spill_record_batches(
-                        &[batch],
-                        spill_file.path().into(),
-                        Arc::clone(&self.buffered_schema),
-                    )?;
+                    let spill_file = self
+                        .spill_manager
+                        .spill_record_batch_and_finish(
+                            &[batch],
+                            "sort_merge_join_buffered_spill",
+                        )?
+                        .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
+
                     buffered_batch.spill_file = Some(spill_file);
                     buffered_batch.batch = None;
 
-                    // update metrics to register spill
-                    self.join_metrics.spill_count.add(1);
-                    self.join_metrics
-                        .spilled_bytes
-                        .add(buffered_batch.size_estimation);
-                    self.join_metrics.spilled_rows.add(buffered_batch.num_rows);
                     Ok(())
                 } else {
                     internal_err!("Buffered batch has empty body")
