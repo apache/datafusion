@@ -1,0 +1,14 @@
+---
+source: datafusion/substrait/tests/cases/consumer_integration.rs
+expression: plan_str
+---
+Projection: count(ORDERS.O_ORDERKEY) AS C_COUNT, count(Int64(1)) AS CUSTDIST
+  Sort: count(Int64(1)) DESC NULLS FIRST, count(ORDERS.O_ORDERKEY) DESC NULLS FIRST
+    Projection: count(ORDERS.O_ORDERKEY), count(Int64(1))
+      Aggregate: groupBy=[[count(ORDERS.O_ORDERKEY)]], aggr=[[count(Int64(1))]]
+        Projection: count(ORDERS.O_ORDERKEY)
+          Aggregate: groupBy=[[CUSTOMER.C_CUSTKEY]], aggr=[[count(ORDERS.O_ORDERKEY)]]
+            Projection: CUSTOMER.C_CUSTKEY, ORDERS.O_ORDERKEY
+              Left Join: CUSTOMER.C_CUSTKEY = ORDERS.O_CUSTKEY Filter: NOT ORDERS.O_COMMENT LIKE CAST(Utf8("%special%requests%") AS Utf8)
+                TableScan: CUSTOMER
+                TableScan: ORDERS

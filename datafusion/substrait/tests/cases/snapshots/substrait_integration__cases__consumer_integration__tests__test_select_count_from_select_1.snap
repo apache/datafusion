@@ -1,0 +1,6 @@
+---
+source: datafusion/substrait/tests/cases/consumer_integration.rs
+expression: plan_str
+---
+Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+  Values: (Int64(0))
