@@ -29,14 +29,14 @@ use crate::file_scan_config::FileScanConfig;
 use crate::file_sink_config::FileSinkConfig;
 
 use arrow::datatypes::{Schema, SchemaRef};
-use async_trait::async_trait;
-use datafusion_catalog::Session;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt, Result, Statistics};
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_session::Session;
 
+use async_trait::async_trait;
 use object_store::{ObjectMeta, ObjectStore};
 
 /// Default max records to scan to infer the schema
@@ -46,7 +46,7 @@ pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
 /// from the [`TableProvider`]. This helps code re-utilization across
 /// providers that support the same file formats.
 ///
-/// [`TableProvider`]: datafusion_catalog::TableProvider
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 #[async_trait]
 pub trait FileFormat: Send + Sync + fmt::Debug {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be

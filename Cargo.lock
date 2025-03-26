@@ -1362,9 +1362,9 @@ dependencies = [
 
 [[package]]
 name = "chrono-tz"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "350e47081e7261af42fc634dfea5be88662523cc5acd9fe51da3fe44ba058669"
+checksum = "efdce149c370f133a071ca8ef6ea340b7b88748ab0810097a9e2976eaa34b4f3"
 dependencies = [
  "chrono",
  "chrono-tz-build",
@@ -1830,6 +1830,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "datafusion-physical-optimizer",
  "datafusion-physical-plan",
+ "datafusion-session",
  "datafusion-sql",
  "doc-comment",
  "env_logger",
@@ -1893,10 +1894,12 @@ dependencies = [
  "dashmap",
  "datafusion-common",
  "datafusion-common-runtime",
+ "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
+ "datafusion-session",
  "datafusion-sql",
  "futures",
  "itertools 0.14.0",
@@ -1920,6 +1923,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-session",
  "futures",
  "log",
  "object_store",
@@ -2002,7 +2006,6 @@ dependencies = [
  "bytes",
  "bzip2 0.5.2",
  "chrono",
- "datafusion-catalog",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-execution",
@@ -2010,6 +2013,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-session",
  "flate2",
  "futures",
  "glob",
@@ -2042,6 +2046,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-session",
  "futures",
  "num-traits",
  "object_store",
@@ -2066,6 +2071,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-session",
  "futures",
  "object_store",
  "regex",
@@ -2088,6 +2094,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-session",
  "futures",
  "object_store",
  "serde_json",
@@ -2113,6 +2120,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "datafusion-physical-optimizer",
  "datafusion-physical-plan",
+ "datafusion-session",
  "futures",
  "itertools 0.14.0",
  "log",
@@ -2503,6 +2511,28 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "datafusion-session"
+version = "46.0.1"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "dashmap",
+ "datafusion-common",
+ "datafusion-common-runtime",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-expr",
+ "datafusion-physical-plan",
+ "datafusion-sql",
+ "futures",
+ "itertools 0.14.0",
+ "log",
+ "object_store",
+ "parking_lot",
+ "tokio",
 ]
 
 [[package]]
@@ -3945,9 +3975,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.26"
+version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30bde2b3dc3671ae49d8e2e9f044c7c005836e7a023ee57cffa25ab82764bb9e"
+checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
 
 [[package]]
 name = "lz4_flex"
