@@ -48,8 +48,8 @@ mod tests {
     use arrow::array::Array;
     use arrow::datatypes::SchemaRef;
     use arrow::datatypes::{Field, SchemaBuilder};
-    use insta::assert_snapshot;
     use datafusion_datasource::file_groups::FileGroup;
+    use insta::assert_snapshot;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
