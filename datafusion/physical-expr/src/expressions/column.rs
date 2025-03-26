@@ -139,6 +139,10 @@ impl PhysicalExpr for Column {
         Ok(self)
     }
 
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+
     fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
         if let Ok(field) = schema.field_with_name(self.name()) {
             is_supported_datatype_for_bounds_eval(field.data_type())

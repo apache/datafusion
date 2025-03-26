@@ -25,21 +25,18 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::datasource::data_source::FileSource;
 use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::FileFormat;
-use crate::datasource::listing::PartitionedFile;
-use crate::datasource::object_store::ObjectStoreUrl;
-use crate::datasource::physical_plan::{CsvSource, FileScanConfig};
+
+use crate::datasource::physical_plan::CsvSource;
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::logical_expr::LogicalPlan;
-use crate::test::object_store::local_unpartitioned_file;
 use crate::test_util::{aggr_test_schema, arrow_test_data};
 
 use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::DataFusionError;
 use datafusion_datasource::source::DataSourceExec;
@@ -48,10 +45,13 @@ use datafusion_datasource::source::DataSourceExec;
 use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource_csv::partitioned_csv_config;
 #[cfg(feature = "compression")]
 use flate2::write::GzEncoder;
 #[cfg(feature = "compression")]
 use flate2::Compression as GzCompression;
+use object_store::local_unpartitioned_file;
 #[cfg(feature = "compression")]
 use xz2::write::XzEncoder;
 #[cfg(feature = "compression")]
@@ -96,7 +96,7 @@ pub fn scan_partitioned_csv(
     Ok(config.build())
 }
 
-/// Returns file groups [`Vec<Vec<PartitionedFile>>`] for scanning `partitions` of `filename`
+/// Returns file groups [`Vec<FileGroup>`] for scanning `partitions` of `filename`
 pub fn partitioned_file_groups(
     path: &str,
     filename: &str,
@@ -104,7 +104,7 @@ pub fn partitioned_file_groups(
     file_format: Arc<dyn FileFormat>,
     file_compression_type: FileCompressionType,
     work_dir: &Path,
-) -> Result<Vec<Vec<PartitionedFile>>> {
+) -> Result<Vec<FileGroup>> {
     let path = format!("{path}/{filename}");
 
     let mut writers = vec![];
@@ -181,18 +181,8 @@ pub fn partitioned_file_groups(
 
     Ok(files
         .into_iter()
-        .map(|f| vec![local_unpartitioned_file(f).into()])
+        .map(|f| FileGroup::new(vec![local_unpartitioned_file(f).into()]))
         .collect::<Vec<_>>())
-}
-
-/// Returns a [`FileScanConfig`] for given `file_groups`
-pub fn partitioned_csv_config(
-    schema: SchemaRef,
-    file_groups: Vec<Vec<PartitionedFile>>,
-    source: Arc<dyn FileSource>,
-) -> FileScanConfig {
-    FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
-        .with_file_groups(file_groups)
 }
 
 pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {

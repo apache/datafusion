@@ -247,7 +247,7 @@ impl MemoryExec {
 
     fn memory_source_config(&self) -> MemorySourceConfig {
         self.inner
-            .source()
+            .data_source()
             .as_any()
             .downcast_ref::<MemorySourceConfig>()
             .unwrap()
@@ -346,7 +346,7 @@ impl MemoryExec {
 }
 
 /// Data source configuration for reading in-memory batches of data
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemorySourceConfig {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
@@ -412,10 +412,10 @@ impl DataSource for MemorySourceConfig {
                     .map_or(String::new(), |limit| format!(", fetch={}", limit));
                 if self.show_sizes {
                     write!(
-                        f,
-                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                        partition_sizes.len(),
-                    )
+                                f,
+                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                                partition_sizes.len(),
+                            )
                 } else {
                     write!(
                         f,
@@ -423,6 +423,19 @@ impl DataSource for MemorySourceConfig {
                         partition_sizes.len(),
                     )
                 }
+            }
+            DisplayFormatType::TreeRender => {
+                let total_rows = self.partitions.iter().map(|b| b.len()).sum::<usize>();
+                let total_bytes: usize = self
+                    .partitions
+                    .iter()
+                    .flatten()
+                    .map(|batch| batch.get_array_memory_size())
+                    .sum();
+                writeln!(f, "format=memory")?;
+                writeln!(f, "rows={total_rows}")?;
+                writeln!(f, "bytes={total_bytes}")?;
+                Ok(())
             }
         }
     }
@@ -765,27 +778,16 @@ mod memory_source_tests {
 
 #[cfg(test)]
 mod tests {
+    use crate::tests::{aggr_test_schema, make_partition};
+
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array};
+
     use datafusion_physical_plan::expressions::lit;
-    use std::collections::HashMap;
 
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::assert_batches_eq;
     use datafusion_common::stats::{ColumnStatistics, Precision};
     use futures::StreamExt;
-
-    // Return a RecordBatch with a single Int32 array with values (0..sz) in a field named "i"
-    pub fn make_partition(sz: i32) -> RecordBatch {
-        let seq_start = 0;
-        let seq_end = sz;
-        let values = (seq_start..seq_end).collect::<Vec<_>>();
-        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-        let arr = Arc::new(Int32Array::from(values));
-        let arr = arr as ArrayRef;
-
-        RecordBatch::try_new(schema, vec![arr]).unwrap()
-    }
 
     #[tokio::test]
     async fn exec_with_limit() -> Result<()> {
@@ -811,29 +813,6 @@ mod tests {
         ];
         assert_batches_eq!(expected, &results);
         Ok(())
-    }
-
-    /// Get the schema for the aggregate_test_* csv files
-    pub fn aggr_test_schema() -> SchemaRef {
-        let mut f1 = Field::new("c1", DataType::Utf8, false);
-        f1.set_metadata(HashMap::from_iter(vec![("testing".into(), "test".into())]));
-        let schema = Schema::new(vec![
-            f1,
-            Field::new("c2", DataType::UInt32, false),
-            Field::new("c3", DataType::Int8, false),
-            Field::new("c4", DataType::Int16, false),
-            Field::new("c5", DataType::Int32, false),
-            Field::new("c6", DataType::Int64, false),
-            Field::new("c7", DataType::UInt8, false),
-            Field::new("c8", DataType::UInt16, false),
-            Field::new("c9", DataType::UInt32, false),
-            Field::new("c10", DataType::UInt64, false),
-            Field::new("c11", DataType::Float32, false),
-            Field::new("c12", DataType::Float64, false),
-            Field::new("c13", DataType::Utf8, false),
-        ]);
-
-        Arc::new(schema)
     }
 
     #[tokio::test]

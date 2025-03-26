@@ -1160,6 +1160,91 @@ async fn main() -> Result<()> {
 // +---+
 ```
 
+## Custom Expression Planning
+
+DataFusion provides native support for common SQL operators by default such as `+`, `-`, `||`. However it does not provide support for other operators such as `@>`. To override DataFusion's default handling or support unsupported operators, developers can extend DataFusion by implementing custom expression planning, a core feature of DataFusion
+
+### Implementing Custom Expression Planning
+
+To extend DataFusion with support for custom operators not natively available, you need to:
+
+1. Implement the `ExprPlanner` trait: This allows you to define custom logic for planning expressions that DataFusion doesn't natively recognize. The trait provides the necessary interface to translate SQL AST nodes into logical `Expr`.
+
+   For detailed documentation please see: [Trait ExprPlanner](https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.ExprPlanner.html)
+
+2. Register your custom planner: Integrate your implementation with DataFusion's `SessionContext` to ensure your custom planning logic is invoked during the query optimization and execution planning phase.
+
+   For a detailed documentation see: [fn register_expr_planner](https://docs.rs/datafusion/latest/datafusion/execution/trait.FunctionRegistry.html#method.register_expr_planner)
+
+See example below:
+
+```rust
+# use arrow::array::RecordBatch;
+# use std::sync::Arc;
+
+# use datafusion::common::{assert_batches_eq, DFSchema};
+# use datafusion::error::Result;
+# use datafusion::execution::FunctionRegistry;
+# use datafusion::logical_expr::Operator;
+# use datafusion::prelude::*;
+# use datafusion::sql::sqlparser::ast::BinaryOperator;
+# use datafusion_common::ScalarValue;
+# use datafusion_expr::expr::Alias;
+# use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
+# use datafusion_expr::BinaryExpr;
+
+# #[derive(Debug)]
+# // Define the custom planner
+# struct MyCustomPlanner;
+
+// Implement ExprPlanner to add support for the `->` custom operator
+impl ExprPlanner for MyCustomPlanner {
+    fn plan_binary_op(
+        &self,
+        expr: RawBinaryExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<RawBinaryExpr>> {
+        match &expr.op {
+            // Map `->` to string concatenation
+            BinaryOperator::Arrow => {
+                // Rewrite `->` as a string concatenation operation
+                // - `left` and `right` are the operands (e.g., 'hello' and 'world')
+                // - `Operator::StringConcat` tells DataFusion to concatenate them
+                Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(expr.left.clone()),
+                    right: Box::new(expr.right.clone()),
+                    op: Operator::StringConcat,
+                })))
+            }
+            _ => Ok(PlannerResult::Original(expr)),
+        }
+    }
+}
+
+use datafusion::execution::context::SessionContext;
+use datafusion::arrow::util::pretty;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let config = SessionConfig::new().set_str("datafusion.sql_parser.dialect", "postgres");
+    let mut ctx = SessionContext::new_with_config(config);
+    ctx.register_expr_planner(Arc::new(MyCustomPlanner))?;
+    let results = ctx.sql("select 'foo'->'bar';").await?.collect().await?;
+
+    let expected = [
+         "+----------------------------+",
+         "| Utf8(\"foo\") || Utf8(\"bar\") |",
+         "+----------------------------+",
+         "| foobar                     |",
+         "+----------------------------+",
+     ];
+    assert_batches_eq!(&expected, &results);
+
+    pretty::print_batches(&results)?;
+    Ok(())
+}
+```
+
 [1]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
 [2]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
 [3]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs

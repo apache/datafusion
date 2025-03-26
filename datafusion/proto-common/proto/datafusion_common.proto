@@ -522,6 +522,10 @@ message ParquetOptions {
     uint64 column_index_truncate_length = 17;
   }
 
+  oneof statistics_truncate_length_opt {
+    uint64 statistics_truncate_length = 31;
+  }
+
   oneof encoding_opt {
     string encoding = 19;
   }

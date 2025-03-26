@@ -51,9 +51,9 @@ pub fn to_substrait_rel(
         HashMap<String, u32>,
     ),
 ) -> Result<Box<Rel>> {
-    if let Some(data_source) = plan.as_any().downcast_ref::<DataSourceExec>() {
-        let source = data_source.source();
-        if let Some(file_config) = source.as_any().downcast_ref::<FileScanConfig>() {
+    if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+        let data_source = data_source_exec.data_source();
+        if let Some(file_config) = data_source.as_any().downcast_ref::<FileScanConfig>() {
             let is_parquet = file_config
                 .file_source()
                 .as_any()
@@ -63,7 +63,7 @@ pub fn to_substrait_rel(
                 let mut substrait_files = vec![];
                 for (partition_index, files) in file_config.file_groups.iter().enumerate()
                 {
-                    for file in files {
+                    for file in files.iter() {
                         substrait_files.push(FileOrFiles {
                             partition_index: partition_index.try_into().unwrap(),
                             start: 0,

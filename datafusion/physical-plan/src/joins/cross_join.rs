@@ -240,6 +240,10 @@ impl DisplayAs for CrossJoinExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "CrossJoinExec")
             }
+            DisplayFormatType::TreeRender => {
+                // no extra info to display
+                Ok(())
+            }
         }
     }
 }
@@ -641,8 +645,9 @@ mod tests {
     use crate::common;
     use crate::test::build_table_scan_i32;
 
-    use datafusion_common::{assert_batches_sorted_eq, assert_contains};
+    use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use insta::assert_snapshot;
 
     async fn join_collect(
         left: Arc<dyn ExecutionPlan>,
@@ -825,20 +830,19 @@ mod tests {
         let (columns, batches) = join_collect(left, right, task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 12 | 14 |",
-            "| 1  | 4  | 7  | 11 | 13 | 15 |",
-            "| 2  | 5  | 8  | 10 | 12 | 14 |",
-            "| 2  | 5  | 8  | 11 | 13 | 15 |",
-            "| 3  | 6  | 9  | 10 | 12 | 14 |",
-            "| 3  | 6  | 9  | 11 | 13 | 15 |",
-            "+----+----+----+----+----+----+",
-        ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 12 | 14 |
+            | 1  | 4  | 7  | 11 | 13 | 15 |
+            | 2  | 5  | 8  | 10 | 12 | 14 |
+            | 2  | 5  | 8  | 11 | 13 | 15 |
+            | 3  | 6  | 9  | 10 | 12 | 14 |
+            | 3  | 6  | 9  | 11 | 13 | 15 |
+            +----+----+----+----+----+----+
+            "#);
 
         Ok(())
     }

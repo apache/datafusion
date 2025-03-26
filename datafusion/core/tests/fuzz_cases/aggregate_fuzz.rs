@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::str;
 use std::sync::Arc;
 
 use crate::fuzz_cases::aggregation_fuzzer::{
@@ -41,6 +40,7 @@ use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::HashMap;
+use datafusion_common_runtime::JoinSet;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -50,7 +50,6 @@ use test_utils::{add_empty_batches, StringBatchGenerator};
 
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, SeedableRng};
-use tokio::task::JoinSet;
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]
@@ -78,6 +77,32 @@ async fn test_min() {
         .with_table_name("fuzz_table")
         .with_aggregate_function("min")
         // min works on all column types
+        .with_aggregate_arguments(data_gen_config.all_columns())
+        .set_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_first_val() {
+    let mut data_gen_config: DatasetGeneratorConfig = baseline_config();
+
+    for i in 0..data_gen_config.columns.len() {
+        if data_gen_config.columns[i].get_max_num_distinct().is_none() {
+            data_gen_config.columns[i] = data_gen_config.columns[i]
+                .clone()
+                // Minimize the chance of identical values in the order by columns to make the test more stable
+                .with_max_num_distinct(usize::MAX);
+        }
+    }
+
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("first_value")
         .with_aggregate_arguments(data_gen_config.all_columns())
         .set_group_by_columns(data_gen_config.all_columns());
 

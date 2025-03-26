@@ -3807,6 +3807,52 @@ SELECT MIN(value), MAX(value) FROM timestampmicrosecond
 statement ok
 DROP TABLE timestampmicrosecond;
 
+# min_duration, max_duration
+statement ok
+create table d
+as values
+  (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)'),  arrow_cast(3, 'Duration(Microsecond)'),  arrow_cast(4, 'Duration(Nanosecond)'), 1),
+  (arrow_cast(11, 'Duration(Second)'),arrow_cast(22, 'Duration(Millisecond)'), arrow_cast(33, 'Duration(Microsecond)'), arrow_cast(44, 'Duration(Nanosecond)'), 1);
+
+query ????
+SELECT min(column1), min(column2), min(column3), min(column4) FROM d;
+----
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.002 secs 0 days 0 hours 0 mins 0.000003 secs 0 days 0 hours 0 mins 0.000000004 secs
+
+query ????
+SELECT max(column1), max(column2), max(column3), max(column4) FROM d;
+----
+0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs
+
+# GROUP BY follows a different code path
+query ????I
+SELECT min(column1), min(column2), min(column3), min(column4), column5 FROM d GROUP BY column5;
+----
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.002 secs 0 days 0 hours 0 mins 0.000003 secs 0 days 0 hours 0 mins 0.000000004 secs 1
+
+query ????I
+SELECT max(column1), max(column2), max(column3), max(column4), column5 FROM d GROUP BY column5;
+----
+0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs 1
+
+statement ok
+INSERT INTO d VALUES
+  (arrow_cast(3, 'Duration(Second)'), arrow_cast(1, 'Duration(Millisecond)'), arrow_cast(7, 'Duration(Microsecond)'), arrow_cast(2, 'Duration(Nanosecond)'), 1),
+  (arrow_cast(0, 'Duration(Second)'), arrow_cast(9, 'Duration(Millisecond)'), arrow_cast(5, 'Duration(Microsecond)'), arrow_cast(8, 'Duration(Nanosecond)'), 1);
+
+query ????I
+SELECT max(column1), max(column2), max(column3), max(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
+----
+0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs 1
+
+query ????I
+SELECT min(column1), min(column2), min(column3), min(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
+----
+0 days 0 hours 0 mins 0 secs 0 days 0 hours 0 mins 0.001 secs 0 days 0 hours 0 mins 0.000003 secs 0 days 0 hours 0 mins 0.000000002 secs 1
+
+statement ok
+drop table d;
+
 # max_bool
 statement ok
 CREATE TABLE max_bool (value BOOLEAN);
@@ -6276,6 +6322,9 @@ physical_plan
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5], file_type=csv, has_header=true
 
+statement count 0
+drop table aggregate_test_100;
+
 # test count(null) case (null with type)
 
 statement count 0
@@ -6295,6 +6344,143 @@ logical_plan
 physical_plan
 01)AggregateExec: mode=Single, gby=[], aggr=[count(NULL)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement count 0
+drop table t;
+
+# test duplicated shema name issue
+
+statement count 0
+create table t (a int) as values (1), (2);
+
+query I
+select count() from t;
+----
+2
+
+query III
+select count(1), count(2), count(1) * count(2) from t;
+----
+2 2 4
+
+query III
+select count(1), count(*), count(1) * count(*) from t;
+----
+2 2 4
+
+query II
+select count(*), count(*) * count(*) from t;
+----
+2 4
+
+query II
+select count(1), count(1) * count(1) from t;
+----
+2 4
+
+query II
+select count(2), count(2) * count(2) from t;
+----
+2 4
+
+query II
+select count(), count() * count() from t;
+----
+2 4
+
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\)\)" at position 0 and "count\(Int64\(1\)\)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
+select count(1), count(1) from t;
+
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\)\)" at position 0 and "count\(Int64\(1\)\)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
+explain select count(1), count(1) from t;
+
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\) AS \)" at position 0 and "count\(Int64\(1\) AS \)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
+select count(), count() from t;
+
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\) AS \)" at position 0 and "count\(Int64\(1\) AS \)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
+explain select count(), count() from t;
+
+query II
+select count(1), count(2) from t;
+----
+2 2
+
+query TT
+explain select count(1), count(2) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
+02)--TableScan: t projection=[]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+select count(1), count() from t;
+----
+2 2
+
+query TT
+explain select count(1), count() from t;
+----
+logical_plan
+01)Projection: count(Int64(1)), count(Int64(1)) AS count()
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count()]
+02)--PlaceholderRowExec
+
+query II
+select count(1), count(*) from t;
+----
+2 2
+
+query TT
+explain select count(1), count(*) from t;
+----
+logical_plan
+01)Projection: count(Int64(1)), count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(*)]
+02)--PlaceholderRowExec
+
+query II
+select count(), count(*) from t;
+----
+2 2
+
+query TT
+explain select count(), count(*) from t;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(), count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[2 as count(), 2 as count(*)]
+02)--PlaceholderRowExec
+
+query TT
+explain select count(1) * count(2) from t;
+----
+logical_plan
+01)Projection: count(Int64(1)) * count(Int64(2))
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
+03)----TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 * count(Int64(2))@1 as count(Int64(1)) * count(Int64(2))]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement count 0
+drop table t;
 
 #######
 # Group median test

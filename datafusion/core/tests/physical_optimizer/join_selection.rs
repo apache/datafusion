@@ -923,6 +923,10 @@ impl DisplayAs for UnboundedExec {
                     self.batch_produce.is_none(),
                 )
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -1017,6 +1021,11 @@ impl DisplayAs for StatisticsExec {
                     self.schema.fields().len(),
                     self.stats.num_rows,
                 )
+            }
+
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

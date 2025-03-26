@@ -19,8 +19,8 @@
 
 use datafusion_common::Result;
 use datafusion_expr::{
-    expr::AggregateFunction,
-    lit,
+    expr::{AggregateFunction, AggregateFunctionParams},
+    expr_rewriter::NamePreserver,
     planner::{ExprPlanner, PlannerResult, RawAggregateExpr},
     utils::COUNT_STAR_EXPANSION,
     Expr,
@@ -32,11 +32,62 @@ pub struct AggregateFunctionPlanner;
 impl ExprPlanner for AggregateFunctionPlanner {
     fn plan_aggregate(
         &self,
-        expr: RawAggregateExpr,
+        raw_expr: RawAggregateExpr,
     ) -> Result<PlannerResult<RawAggregateExpr>> {
-        if expr.func.name() == "count"
-            && (expr.args.len() == 1 && matches!(expr.args[0], Expr::Wildcard { .. })
-                || expr.args.is_empty())
+        let RawAggregateExpr {
+            func,
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        } = raw_expr;
+
+        let origin_expr = Expr::AggregateFunction(AggregateFunction {
+            func,
+            params: AggregateFunctionParams {
+                args,
+                distinct,
+                filter,
+                order_by,
+                null_treatment,
+            },
+        });
+
+        let saved_name = NamePreserver::new_for_projection().save(&origin_expr);
+
+        let Expr::AggregateFunction(AggregateFunction {
+            func,
+            params:
+                AggregateFunctionParams {
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                },
+        }) = origin_expr
+        else {
+            unreachable!("")
+        };
+        let raw_expr = RawAggregateExpr {
+            func,
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        };
+
+        // handle count() and count(*) case
+        // convert to count(1) as "count()"
+        // or         count(1) as "count(*)"
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
+        if raw_expr.func.name() == "count"
+            && (raw_expr.args.len() == 1
+                && matches!(raw_expr.args[0], Expr::Wildcard { .. })
+                || raw_expr.args.is_empty())
         {
             let RawAggregateExpr {
                 func,
@@ -45,19 +96,21 @@ impl ExprPlanner for AggregateFunctionPlanner {
                 filter,
                 order_by,
                 null_treatment,
-            } = expr;
-            return Ok(PlannerResult::Planned(Expr::AggregateFunction(
-                AggregateFunction::new_udf(
-                    func,
-                    vec![lit(COUNT_STAR_EXPANSION)],
-                    distinct,
-                    filter,
-                    order_by,
-                    null_treatment,
-                ),
-            )));
+            } = raw_expr;
+
+            let new_expr = Expr::AggregateFunction(AggregateFunction::new_udf(
+                func,
+                vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                distinct,
+                filter,
+                order_by,
+                null_treatment,
+            ));
+
+            let new_expr = saved_name.restore(new_expr);
+            return Ok(PlannerResult::Planned(new_expr));
         }
 
-        Ok(PlannerResult::Original(expr))
+        Ok(PlannerResult::Original(raw_expr))
     }
 }

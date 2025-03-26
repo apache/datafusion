@@ -74,6 +74,7 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use ahash::RandomState;
@@ -379,6 +380,22 @@ impl DisplayAs for SymmetricHashJoinExec {
                     "SymmetricHashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}",
                     self.mode, self.join_type, on, display_filter
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                let on = self
+                    .on
+                    .iter()
+                    .map(|(c1, c2)| {
+                        format!("({} = {})", fmt_sql(c1.as_ref()), fmt_sql(c2.as_ref()))
+                    })
+                    .collect::<Vec<String>>()
+                    .join(", ");
+
+                writeln!(f, "mode={:?}", self.mode)?;
+                if *self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)?;
+                }
+                writeln!(f, "on={}", on)
             }
         }
     }

@@ -29,11 +29,20 @@ sql:
 
 logical-expr:
 - changed-files:
-  - any-glob-to-any-file: ['datafusion/expr/**/*']
+  - any-glob-to-any-file: ['datafusion/expr/**/*', 'datafusion/expr-common/**/*']
+
+ffi:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/ffi/**/*']
 
 physical-expr:
 - changed-files:
-  - any-glob-to-any-file: ['datafusion/physical-expr/**/*', 'datafusion/physical-expr-common/**/*', 'datafusion/physical-expr-aggregate/**/*', 'datafusion/physical-plan/**/*']
+  - any-glob-to-any-file: ['datafusion/physical-expr/**/*', 'datafusion/physical-expr-common/**/*', 'datafusion/physical-expr-aggregate/**/*']
+
+physical-plan:
+  - changed-files:
+      - any-glob-to-any-file: [datafusion/physical-plan/**/*']
+
 
 catalog:
   - changed-files:
@@ -46,6 +55,10 @@ common:
 execution:
   - changed-files:
       - any-glob-to-any-file: ['datafusion/execution/**/*']
+
+datasource:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/datasource/**/*']
 
 functions:
   - changed-files:

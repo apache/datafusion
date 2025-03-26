@@ -157,6 +157,7 @@ impl DisplayAs for UnionExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "UnionExec")
             }
+            DisplayFormatType::TreeRender => Ok(()),
         }
     }
 }
@@ -387,6 +388,7 @@ impl DisplayAs for InterleaveExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "InterleaveExec")
             }
+            DisplayFormatType::TreeRender => Ok(()),
         }
     }
 }
