@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::{ListingOptions, PartitionedFile};
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::listing::ListingOptions;
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionContext;
@@ -85,7 +85,7 @@ async fn main() {
 /// and `file_groups` from the FileScanConfig.
 #[derive(Debug)]
 struct ParquetExecVisitor {
-    file_groups: Option<Vec<Vec<PartitionedFile>>>,
+    file_groups: Option<Vec<FileGroup>>,
     bytes_scanned: Option<MetricValue>,
 }
 

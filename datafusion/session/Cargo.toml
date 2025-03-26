@@ -16,8 +16,8 @@
 # under the License.
 
 [package]
-name = "datafusion-datasource-avro"
-description = "datafusion-datasource-avro"
+name = "datafusion-session"
+description = "datafusion-session"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -31,31 +31,22 @@ version.workspace = true
 all-features = true
 
 [dependencies]
-apache-avro = { workspace = true }
 arrow = { workspace = true }
 async-trait = { workspace = true }
-bytes = { workspace = true }
-chrono = { workspace = true }
-datafusion-catalog = { workspace = true }
-datafusion-common = { workspace = true, features = ["object_store", "avro"] }
-datafusion-datasource = { workspace = true }
+dashmap = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
+datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
-datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
-datafusion-session = { workspace = true }
+datafusion-sql = { workspace = true }
 futures = { workspace = true }
-num-traits = { version = "0.2" }
+itertools = { workspace = true }
+log = { workspace = true }
 object_store = { workspace = true }
+parking_lot = { workspace = true }
 tokio = { workspace = true }
-
-[dev-dependencies]
-rstest = { workspace = true }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true
-
-[lib]
-name = "datafusion_datasource_avro"
-path = "src/mod.rs"

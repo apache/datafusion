@@ -20,14 +20,16 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use datafusion_catalog::{SessionStore, UrlTableFactory};
-use datafusion_common::plan_datafusion_err;
-
 use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
 use crate::datasource::TableProvider;
 use crate::error::Result;
 use crate::execution::context::SessionState;
+
+use datafusion_catalog::UrlTableFactory;
+use datafusion_common::plan_datafusion_err;
+use datafusion_session::SessionStore;
+
+use async_trait::async_trait;
 
 /// [DynamicListTableFactory] is a factory that can create a [ListingTable] from the given url.
 #[derive(Default, Debug)]
