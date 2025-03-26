@@ -20,18 +20,17 @@
 use std::sync::Arc;
 use std::{any::Any, borrow::Cow};
 
+use crate::Session;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_catalog::Session;
 use datafusion_physical_plan::work_table::WorkTableExec;
 
-use crate::{
-    error::Result,
-    logical_expr::{Expr, LogicalPlan, TableProviderFilterPushDown},
-    physical_plan::ExecutionPlan,
-};
+use datafusion_physical_plan::ExecutionPlan;
 
-use crate::datasource::{TableProvider, TableType};
+use datafusion_common::error::Result;
+use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
+
+use crate::TableProvider;
 
 /// The temporary working table where the previous iteration of a recursive query is stored
 /// Naming is based on PostgreSQL's implementation.

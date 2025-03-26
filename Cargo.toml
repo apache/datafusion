@@ -47,6 +47,7 @@ members = [
     "datafusion/proto/gen",
     "datafusion/proto-common",
     "datafusion/proto-common/gen",
+    "datafusion/session",
     "datafusion/sql",
     "datafusion/sqllogictest",
     "datafusion/substrait",
@@ -136,13 +137,14 @@ datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", versio
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "46.0.1" }
 datafusion-proto = { path = "datafusion/proto", version = "46.0.1" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "46.0.1" }
+datafusion-session = { path = "datafusion/session", version = "46.0.1" }
 datafusion-sql = { path = "datafusion/sql", version = "46.0.1" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
-half = { version = "2.2.1", default-features = false }
+half = { version = "2.5.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
-indexmap = "2.7.1"
+indexmap = "2.8.0"
 itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.11.0", default-features = false }
@@ -162,15 +164,15 @@ recursive = "0.1.1"
 regex = "1.8"
 rstest = "0.24.0"
 serde_json = "1"
-sqlparser = { version = "0.54.0", features = ["visitor"] }
+sqlparser = { version = "0.55.0", features = ["visitor"] }
 tempfile = "3"
-tokio = { version = "1.43", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.44", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
 
 [profile.release]
 codegen-units = 1
 lto = true
-strip = true
+strip = true      # Eliminate debug information to minimize binary size
 
 # the release profile takes a long time to build so we can use this profile during development to save time
 # cargo build --profile release-nonlto
@@ -183,6 +185,7 @@ lto = false
 opt-level = 3
 overflow-checks = false
 rpath = false
+strip = false            # Retain debug info for flamegraphs
 
 [profile.ci]
 inherits = "dev"

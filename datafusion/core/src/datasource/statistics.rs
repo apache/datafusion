@@ -20,12 +20,12 @@ use std::sync::Arc;
 
 use futures::{Stream, StreamExt};
 
-use datafusion_common::stats::Precision;
-use datafusion_common::ScalarValue;
-
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
 use crate::physical_plan::{ColumnStatistics, Statistics};
+use datafusion_common::stats::Precision;
+use datafusion_common::ScalarValue;
+use datafusion_datasource::file_groups::FileGroup;
 
 use super::listing::PartitionedFile;
 
@@ -39,8 +39,8 @@ pub async fn get_statistics_with_limit(
     file_schema: SchemaRef,
     limit: Option<usize>,
     collect_stats: bool,
-) -> Result<(Vec<PartitionedFile>, Statistics)> {
-    let mut result_files = vec![];
+) -> Result<(FileGroup, Statistics)> {
+    let mut result_files = FileGroup::default();
     // These statistics can be calculated as long as at least one file provides
     // useful information. If none of the files provides any information, then
     // they will end up having `Precision::Absent` values. Throughout calculations,

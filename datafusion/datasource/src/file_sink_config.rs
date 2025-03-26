@@ -15,18 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use crate::file_groups::FileGroup;
+use crate::sink::DataSink;
 use crate::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
-use crate::{ListingTableUrl, PartitionedFile};
+use crate::ListingTableUrl;
+
 use arrow::datatypes::{DataType, SchemaRef};
-use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_physical_plan::insert::DataSink;
+
+use async_trait::async_trait;
 use object_store::ObjectStore;
-use std::sync::Arc;
 
 /// General behaviors for files that do `DataSink` operations
 #[async_trait]
@@ -90,8 +94,9 @@ pub struct FileSinkConfig {
     pub original_url: String,
     /// Object store URL, used to get an ObjectStore instance
     pub object_store_url: ObjectStoreUrl,
-    /// A vector of [`PartitionedFile`] structs, each representing a file partition
-    pub file_groups: Vec<PartitionedFile>,
+    /// A collection of files organized into groups.
+    /// Each FileGroup contains one or more PartitionedFile objects.
+    pub file_group: FileGroup,
     /// Vector of partition paths
     pub table_paths: Vec<ListingTableUrl>,
     /// The schema of the output file

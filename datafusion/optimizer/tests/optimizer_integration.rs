@@ -78,8 +78,8 @@ fn subquery_filter_with_cast() -> Result<()> {
     \n    SubqueryAlias: __scalar_sq_1\
     \n      Aggregate: groupBy=[[]], aggr=[[avg(CAST(test.col_int32 AS Float64))]]\
     \n        Projection: test.col_int32\
-    \n          Filter: __common_expr_5 >= Date32(\"2002-05-08\") AND __common_expr_5 <= Date32(\"2002-05-13\")\
-    \n            Projection: CAST(test.col_utf8 AS Date32) AS __common_expr_5, test.col_int32\
+    \n          Filter: __common_expr_4 >= Date32(\"2002-05-08\") AND __common_expr_4 <= Date32(\"2002-05-13\")\
+    \n            Projection: CAST(test.col_utf8 AS Date32) AS __common_expr_4, test.col_int32\
     \n              TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan}"));
     Ok(())
@@ -267,8 +267,8 @@ fn push_down_filter_groupby_expr_contains_alias() {
     let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
     let plan = test_sql(sql).unwrap();
     let expected = "Projection: test.col_int32 + test.col_uint32 AS c, count(Int64(1)) AS count(*)\
-    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(Int64(1))]]\
-    \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
+    \n  Aggregate: groupBy=[[CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64)]], aggr=[[count(Int64(1))]]\
+    \n    Filter: CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64) > Int64(3)\
     \n      TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan}"));
 }
