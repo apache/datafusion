@@ -150,9 +150,9 @@ impl JoinLeftData {
 /// # Clone / Shared State
 ///
 /// Note this structure includes a shared [`SharedResultOnceCell`] that is
-/// used to coordinate the loading of the left side with the processing in
+/// used to coordinate the loading of the inner table with the processing in
 /// each output stream.
-/// Therefore it can not be [`Clone`]
+/// Therefore it does not implement [`Clone`].
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
     /// left side
@@ -165,12 +165,10 @@ pub struct NestedLoopJoinExec {
     pub(crate) join_type: JoinType,
     /// The schema once the join is applied
     join_schema: SchemaRef,
-    /// Future that consumes left input and buffers it in memory
+    /// Shared OnceCell coordinating the loading of the inner table
     ///
-    /// This structure is *shared* across all output streams.
-    ///
-    /// Each output stream waits on the `OnceAsync` to signal the completion of
-    /// the hash table creation.
+    /// All output streams share this cell to ensure the inner table is loaded exactly once,
+    /// with the first accessing stream handling the initialization.
     inner_table: Arc<SharedResultOnceCell<JoinLeftData>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,

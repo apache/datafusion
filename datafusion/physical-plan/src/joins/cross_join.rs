@@ -75,7 +75,7 @@ struct JoinLeftData {
 /// Note this structure includes a shared [`SharedResultOnceCell`] that is
 /// used to coordinate the loading of the left side with the processing in
 /// each output stream.
-/// Therefore it can not be [`Clone`]
+/// Therefore it does not implement [`Clone`].
 #[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory
@@ -84,12 +84,10 @@ pub struct CrossJoinExec {
     pub right: Arc<dyn ExecutionPlan>,
     /// The schema once the join is applied
     schema: SchemaRef,
-    /// Buffered copy of left (build) side in memory.
-    ///
-    /// This structure is *shared* across all output streams.
-    ///
-    /// Each output stream waits on the `OnceAsync` to signal the completion of
-    /// the left side loading.
+    /// Shared thread-safe OnceCell coordinating the loading of the left (build) side.
+    /// 
+    /// All output streams share this cell to ensure the left side data is loaded exactly once,
+    /// with the first accessing stream handling the initialization.
     left_once_cell: Arc<SharedResultOnceCell<JoinLeftData>>,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,

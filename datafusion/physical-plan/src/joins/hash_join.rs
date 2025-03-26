@@ -315,7 +315,7 @@ impl JoinLeftData {
 /// Note this structure includes a shared [`SharedResultOnceCell`] that is
 /// used to coordinate the loading of the left side with the processing in
 /// each output stream.
-/// Therefore it can not be [`Clone`]
+/// Therefore it does not implement [`Clone`].
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
@@ -331,12 +331,11 @@ pub struct HashJoinExec {
     /// The schema after join. Please be careful when using this schema,
     /// if there is a projection, the schema isn't the same as the output schema.
     join_schema: SchemaRef,
-    /// Future that consumes left input and builds the hash table
+    /// Shared OnceCell coordinating the loading of the left (build) side.
     ///
-    /// For CollectLeft partition mode, this structure is *shared* across all output streams.
-    ///
-    /// Each output stream waits on the `OnceAsync` to signal the completion of
-    /// the hash table creation.
+    /// For CollectLeft partition mode, all output streams share this cell to
+    /// ensure the build side is computed exactly once, with the first accessing
+    /// stream handling the initialization.
     left_once_cell: Arc<SharedResultOnceCell<JoinLeftData>>,
     /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,

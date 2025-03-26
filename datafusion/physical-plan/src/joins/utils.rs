@@ -647,9 +647,14 @@ pub fn build_join_schema(
     (fields.finish().with_metadata(metadata), column_indices)
 }
 
-/// A [`SharedResultOnceCell`] is a [`OnceCell`] that holds a [`SharedResult`].
-/// It wraps the result of the initializing computation in [`Arc`] to allow the
-/// consumers to cheaply clone it out of this cell.
+/// A [`SharedResultOnceCell`] is specialized a [`OnceCell`] that stores the result of
+/// the initialization as a [`SharedResult`] wrapped in [`Arc`].
+/// 
+/// It ensures the computation happens exactly once, caching the result for all callers.
+/// This type is primarily used for lazy initialization of fallible operations 
+/// where multiple consumers need access to the same result.
+/// 
+/// See [`OnceCell`] for more details.
 pub(crate) struct SharedResultOnceCell<T>(OnceCell<SharedResult<Arc<T>>>);
 
 impl<T> Default for SharedResultOnceCell<T> {
@@ -665,6 +670,17 @@ impl<T> Debug for SharedResultOnceCell<T> {
 }
 
 impl<T> SharedResultOnceCell<T> {
+    /// Gets a reference to the contained value, initializing it if necessary.
+    /// 
+    /// See [`OnceCell::get_or_init`] for more details.
+    ///
+    /// # Parameters
+    /// - `self`: Must be wrapped in an `Arc` to avoid lifetime issues
+    /// - `f`: Async function that returns `Result<T>` to be cached
+    ///
+    /// # Returns
+    /// - `Ok(Arc<T>)`: Success result wrapped in `Arc`
+    /// - `Err(DataFusionError::Shared)`: Original error from `f`, appropriately wrapped
     pub(crate) async fn get_or_init<Fut>(self: Arc<Self>, f: Fut) -> Result<Arc<T>>
     where
         Fut: Future<Output = Result<T>> + Send + 'static,
@@ -677,6 +693,7 @@ impl<T> SharedResultOnceCell<T> {
     }
 }
 
+/// Type alias for a boxed future that resolves to a shared result.
 pub(crate) type SharedResultPending<T> = BoxFuture<'static, Result<Arc<T>>>;
 
 /// A shared state between statistic aggregators for a join
