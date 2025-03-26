@@ -141,6 +141,7 @@ pub async fn create_context_sampled_data(
 }
 
 fn criterion_benchmark_limited_distinct_sampled(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
     let limit = 10;
     let partitions = 100;
     let samples = 100_000;
@@ -149,7 +150,6 @@ fn criterion_benchmark_limited_distinct_sampled(c: &mut Criterion) {
     c.bench_function(
         format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
         |b| b.iter(|| {
-            let rt = Runtime::new().unwrap();
             let (plan, ctx) = rt.block_on(
                 create_context_sampled_data(sql.as_str(), partitions, samples)
             ).unwrap();
@@ -164,7 +164,6 @@ fn criterion_benchmark_limited_distinct_sampled(c: &mut Criterion) {
     c.bench_function(
         format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
         |b| b.iter(|| {
-            let rt = Runtime::new().unwrap();
             let (plan, ctx) = rt.block_on(
                 create_context_sampled_data(sql.as_str(), partitions, samples)
             ).unwrap();
@@ -179,7 +178,6 @@ fn criterion_benchmark_limited_distinct_sampled(c: &mut Criterion) {
     c.bench_function(
         format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
         |b| b.iter(|| {
-            let rt = Runtime::new().unwrap();
             let (plan, ctx) = rt.block_on(
                 create_context_sampled_data(sql.as_str(), partitions, samples)
             ).unwrap();
