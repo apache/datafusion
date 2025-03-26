@@ -19,7 +19,7 @@
 use super::basic::{sha256, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    types::{logical_binary, logical_string},
+    types::{logical_binary, logical_string, NativeType},
     Result,
 };
 use datafusion_expr::{
@@ -59,11 +59,15 @@ impl SHA256Func {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
-                        TypeSignatureClass::Native(logical_string()),
-                    )]),
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
                         TypeSignatureClass::Native(logical_binary()),
+                        vec![TypeSignatureClass::Native(logical_string())],
+                        NativeType::String,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_binary()),
+                        vec![TypeSignatureClass::Native(logical_binary())],
+                        NativeType::Binary,
                     )]),
                 ],
                 Volatility::Immutable,

@@ -20,7 +20,7 @@ use crate::crypto::basic::md5;
 use arrow::datatypes::DataType;
 use datafusion_common::{
     plan_err,
-    types::{logical_binary, logical_string},
+    types::{logical_binary, logical_string, NativeType},
     Result,
 };
 use datafusion_expr::{
@@ -60,11 +60,15 @@ impl Md5Func {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
-                        TypeSignatureClass::Native(logical_string()),
-                    )]),
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
                         TypeSignatureClass::Native(logical_binary()),
+                        vec![TypeSignatureClass::Native(logical_string())],
+                        NativeType::String,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_binary()),
+                        vec![TypeSignatureClass::Native(logical_binary())],
+                        NativeType::Binary,
                     )]),
                 ],
                 Volatility::Immutable,
