@@ -1487,7 +1487,9 @@ pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
 
             seen.insert(new_name.clone());
 
-            Field::new(&new_name, field.data_type().clone(), field.is_nullable())
+            let mut modified_field = Field::new(&new_name, field.data_type().clone(), field.is_nullable());
+            modified_field.set_metadata(field.metadata().clone());
+            modified_field
         })
         .collect()
 }
