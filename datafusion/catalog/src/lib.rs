@@ -31,26 +31,32 @@
 //! * Simple memory based catalog: [`MemoryCatalogProviderList`], [`MemoryCatalogProvider`], [`MemorySchemaProvider`]
 //! * Listing schema: [`listing_schema`]
 
-pub mod memory;
-pub use memory::{
-    MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
-};
-mod r#async;
-mod catalog;
-mod dynamic_file;
-pub mod information_schema;
-pub mod listing_schema;
-mod schema;
-mod session;
-mod table;
-pub use catalog::*;
-pub use dynamic_file::catalog::*;
-pub use r#async::*;
-pub use schema::*;
-pub use session::*;
-pub use table::*;
 pub mod cte_worktable;
 pub mod default_table_source;
+pub mod information_schema;
+pub mod listing_schema;
+pub mod memory;
 pub mod stream;
 pub mod streaming;
 pub mod view;
+
+mod r#async;
+mod catalog;
+mod dynamic_file;
+mod schema;
+mod table;
+
+pub use catalog::*;
+pub use datafusion_session::Session;
+pub use dynamic_file::catalog::*;
+pub use memory::{
+    MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
+};
+pub use r#async::*;
+pub use schema::*;
+pub use table::*;
+
+// For backwards compatibility,
+mod session {
+    pub use datafusion_session::Session;
+}
