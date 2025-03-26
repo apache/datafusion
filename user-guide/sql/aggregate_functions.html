@@ -1413,7 +1413,8 @@ dev/update_function_docs.sh file for updating surrounding text.
 </ul>
 <section id="array-agg">
 <h3><code class="docutils literal notranslate"><span class="pre">array_agg</span></code><a class="headerlink" href="#array-agg" title="Link to this heading">¶</a></h3>
-<p>Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.</p>
+<p>Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.
+This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the argument expression.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_agg</span><span class="p">(</span><span class="n">expression</span><span class="w"> </span><span class="p">[</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">])</span>
 </pre></div>
 </div>
@@ -1431,6 +1432,12 @@ dev/update_function_docs.sh file for updating surrounding text.
 <span class="o">+</span><span class="c1">-----------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="n">element1</span><span class="p">,</span><span class="w"> </span><span class="n">element2</span><span class="p">,</span><span class="w"> </span><span class="n">element3</span><span class="p">]</span><span class="w">                </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-----------------------------------------------+</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">array_agg</span><span class="p">(</span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">column_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">column_name</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_agg</span><span class="p">(</span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">column_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">column_name</span><span class="p">)</span><span class="w">  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="n">element1</span><span class="p">,</span><span class="w"> </span><span class="n">element2</span><span class="p">,</span><span class="w"> </span><span class="n">element3</span><span class="p">]</span><span class="w">                         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
