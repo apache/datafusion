@@ -1272,8 +1272,12 @@ pub fn ensure_distribution(
                     }
                     // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
-                        child =
-                            add_hash_on_top(child, exprs.to_vec(), target_partitions, config.optimizer.prefer_hash_selection_vector_partitioning)?;
+                        child = add_hash_on_top(
+                            child,
+                            exprs.to_vec(),
+                            target_partitions,
+                            config.optimizer.prefer_hash_selection_vector_partitioning,
+                        )?;
                     }
                 }
                 Distribution::UnspecifiedDistribution => {

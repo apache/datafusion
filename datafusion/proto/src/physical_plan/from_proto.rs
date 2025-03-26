@@ -464,7 +464,6 @@ pub fn parse_protobuf_hash_selection_vector_partitioning(
     }
 }
 
-
 pub fn parse_protobuf_partitioning(
     partitioning: Option<&protobuf::Partitioning>,
     registry: &dyn FunctionRegistry,
@@ -485,15 +484,15 @@ pub fn parse_protobuf_partitioning(
                     input_schema,
                     codec,
                 )
-            },
-            Some(protobuf::partitioning::PartitionMethod::HashSelectionVector(hash_repartition)) => {
-                parse_protobuf_hash_selection_vector_partitioning(
-                    Some(hash_repartition),
-                    registry,
-                    input_schema,
-                    codec,
-                )
             }
+            Some(protobuf::partitioning::PartitionMethod::HashSelectionVector(
+                hash_repartition,
+            )) => parse_protobuf_hash_selection_vector_partitioning(
+                Some(hash_repartition),
+                registry,
+                input_schema,
+                codec,
+            ),
             Some(protobuf::partitioning::PartitionMethod::Unknown(partition_count)) => {
                 Ok(Some(Partitioning::UnknownPartitioning(
                     *partition_count as usize,

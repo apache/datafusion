@@ -804,10 +804,13 @@ impl DefaultPhysicalPlanner {
                                 )
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        if session_state.config_options().optimizer.prefer_hash_selection_vector_partitioning {
+                        if session_state
+                            .config_options()
+                            .optimizer
+                            .prefer_hash_selection_vector_partitioning
+                        {
                             Partitioning::HashSelectionVector(runtime_expr, *n)
-                        }
-                        else {
+                        } else {
                             Partitioning::Hash(runtime_expr, *n)
                         }
                     }

@@ -119,8 +119,8 @@ pub enum Partitioning {
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Allocate rows based on a hash of one of more expressions and the specified number
     /// of partitions with a selection vecotr column.
-    /// 
-    /// The column is a boolean column called `selection` that is used to filter out rows 
+    ///
+    /// The column is a boolean column called `selection` that is used to filter out rows
     /// that should not be included in the partition. `true` means the row should be included
     /// and `false` means the row should be excluded.
     HashSelectionVector(Vec<Arc<dyn PhysicalExpr>>, usize),
@@ -183,7 +183,8 @@ impl Partitioning {
                     // Here we do not check the partition count for hash partitioning and assumes the partition count
                     // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
                     // then we need to have the partition count and hash functions validation.
-                    Partitioning::Hash(partition_exprs, _) | Partitioning::HashSelectionVector(partition_exprs, _ ) => {
+                    Partitioning::Hash(partition_exprs, _)
+                    | Partitioning::HashSelectionVector(partition_exprs, _) => {
                         let fast_match =
                             physical_exprs_equal(required_exprs, partition_exprs);
                         // If the required exprs do not match, need to leverage the eq_properties provided by the child
@@ -270,7 +271,11 @@ pub enum Distribution {
 
 impl Distribution {
     /// Creates a `Partitioning` that satisfies this `Distribution`
-    pub fn create_partitioning(self, partition_count: usize, prefer_selection_vector: bool) -> Partitioning {
+    pub fn create_partitioning(
+        self,
+        partition_count: usize,
+        prefer_selection_vector: bool,
+    ) -> Partitioning {
         match self {
             Distribution::UnspecifiedDistribution => {
                 Partitioning::UnknownPartitioning(partition_count)

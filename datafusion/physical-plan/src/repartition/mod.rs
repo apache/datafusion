@@ -389,11 +389,8 @@ impl BatchPartitioner {
                             .collect::<Vec<_>>();
                         let new_col: ArrayRef =
                             Arc::new(BooleanArray::from(select_vector)) as ArrayRef;
-                        let mut columns = batch
-                            .columns()
-                            .iter()
-                            .map(Arc::clone)
-                            .collect::<Vec<_>>();
+                        let mut columns =
+                            batch.columns().iter().map(Arc::clone).collect::<Vec<_>>();
                         columns.push(new_col);
                         let mut options = RecordBatchOptions::new();
                         options = options.with_row_count(Some(batch.num_rows()));
