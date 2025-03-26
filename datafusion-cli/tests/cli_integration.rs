@@ -59,6 +59,16 @@ fn init() {
     "batch_size",
     ["--command", "show datafusion.execution.batch_size", "-q", "-b", "1"],
 )]
+#[case::default_explain_plan(
+    "default_explain_plan",
+    // default explain format should be tree
+    ["--command", "EXPLAIN SELECT 123"],
+)]
+#[case::can_see_indent_format(
+    "can_see_indent_format",
+    // can choose the old explain format too
+    ["--command", "EXPLAIN FORMAT indent SELECT 123"],
+)]
 #[test]
 fn cli_quick_test<'a>(
     #[case] snapshot_name: &'a str,
@@ -74,31 +84,6 @@ fn cli_quick_test<'a>(
     assert_cmd_snapshot!(cmd);
 }
 
-#[rstest]
-#[case::default_explain_plan(
-    "batch_size",
-    // default explain format should be tree
-    ["--command", "EXPLAIN SELECT 123"],
-)]
-#[case::can_see_indent_format(
-    "batch_size",
-    // can choose the old explain format too
-    ["--command", "EXPLAIN FORMAT indent SELECT 123"],
-)]
-#[test]
-fn cli_quick_test_explain<'a>(
-    #[case] snapshot_name: &'a str,
-    #[case] args: impl IntoIterator<Item = &'a str>,
-) {
-    let mut settings = make_settings();
-    settings.set_snapshot_suffix(snapshot_name);
-    let _bound = settings.bind_to_scope();
-
-    let mut cmd = cli();
-    cmd.args(args);
-
-    assert_cmd_snapshot!(cmd);
-}
 #[rstest]
 #[case("csv")]
 #[case("tsv")]
