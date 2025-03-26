@@ -90,6 +90,7 @@ use datafusion_physical_plan::unnest::ListUnnest;
 
 use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
+use datafusion_datasource::file_groups::FileGroup;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
@@ -532,7 +533,7 @@ impl DefaultPhysicalPlanner {
                     original_url,
                     object_store_url,
                     table_paths: vec![parsed_url],
-                    file_groups: vec![],
+                    file_group: FileGroup::default(),
                     output_schema: Arc::new(schema),
                     table_partition_cols,
                     insert_op: InsertOp::Append,
