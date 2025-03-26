@@ -1804,8 +1804,7 @@ fn requalify_sides_if_needed(
         })
     }) {
         // These names have no connection to the original plan, but they'll make the columns
-        // (mostly) unique. There may be cases where this still causes duplicates, if either left
-        // or right side itself contains duplicate names with different qualifiers.
+        // (mostly) unique.
         Ok((
             left.alias(TableReference::bare("left"))?,
             right.alias(TableReference::bare("right"))?,
