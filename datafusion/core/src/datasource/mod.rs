@@ -46,7 +46,6 @@ pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::source;
 pub use datafusion_execution::object_store;
 pub use datafusion_physical_expr::create_ordering;
-pub use statistics::get_statistics_with_limit;
 
 #[cfg(all(test, feature = "parquet"))]
 mod tests {

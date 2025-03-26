@@ -418,6 +418,11 @@ impl FileGroup {
         self.files.push(file);
     }
 
+    /// Get the statistics for this group
+    pub fn statistics(&self) -> Option<&Statistics> {
+        self.statistics.as_ref()
+    }
+
     /// Partition the list of files into `n` groups
     pub fn split_files(mut self, n: usize) -> Vec<FileGroup> {
         if self.is_empty() {
