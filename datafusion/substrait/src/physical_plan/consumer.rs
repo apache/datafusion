@@ -22,7 +22,9 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::{not_impl_err, substrait_err};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{
+    FileGroup, FileScanConfigBuilder, ParquetSource,
+};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -49,7 +51,7 @@ pub async fn from_substrait_rel(
     rel: &Rel,
     _extensions: &HashMap<u32, &String>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let mut base_config;
+    let mut base_config_builder;
 
     let source = Arc::new(ParquetSource::default());
     match &rel.rel_type {
@@ -78,7 +80,7 @@ pub async fn from_substrait_rel(
                 .collect::<Result<Vec<Field>>>()
             {
                 Ok(fields) => {
-                    base_config = FileScanConfig::new(
+                    base_config_builder = FileScanConfigBuilder::new(
                         ObjectStoreUrl::local_filesystem(),
                         Arc::new(Schema::new(fields)),
                         source,
@@ -134,12 +136,13 @@ pub async fn from_substrait_rel(
 
                         let part_index = file.partition_index as usize;
                         while part_index >= file_groups.len() {
-                            file_groups.push(vec![]);
+                            file_groups.push(FileGroup::default());
                         }
                         file_groups[part_index].push(partitioned_file)
                     }
 
-                    base_config = base_config.with_file_groups(file_groups);
+                    base_config_builder =
+                        base_config_builder.with_file_groups(file_groups);
 
                     if let Some(MaskExpression { select, .. }) = &read.projection {
                         if let Some(projection) = &select.as_ref() {
@@ -148,12 +151,14 @@ pub async fn from_substrait_rel(
                                 .iter()
                                 .map(|item| item.field as usize)
                                 .collect();
-                            base_config.projection = Some(column_indices);
+                            base_config_builder =
+                                base_config_builder.with_projection(Some(column_indices));
                         }
                     }
 
-                    Ok(Arc::new(DataSourceExec::new(Arc::new(base_config)))
-                        as Arc<dyn ExecutionPlan>)
+                    Ok(Arc::new(DataSourceExec::new(Arc::new(
+                        base_config_builder.build(),
+                    ))) as Arc<dyn ExecutionPlan>)
                 }
                 _ => not_impl_err!(
                     "Only LocalFile reads are supported when parsing physical"

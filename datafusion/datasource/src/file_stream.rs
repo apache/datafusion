@@ -88,10 +88,10 @@ impl FileStream {
                 .collect::<Vec<_>>(),
         );
 
-        let files = config.file_groups[partition].clone();
+        let file_group = config.file_groups[partition].clone();
 
         Ok(Self {
-            file_iter: files.into(),
+            file_iter: file_group.into_inner().into_iter().collect(),
             projected_schema,
             remain: config.limit,
             file_opener,

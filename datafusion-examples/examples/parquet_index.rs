@@ -244,23 +244,23 @@ impl TableProvider for IndexTableProvider {
         let object_store_url = ObjectStoreUrl::parse("file://")?;
         let source =
             Arc::new(ParquetSource::default().with_predicate(self.schema(), predicate));
-        let mut file_scan_config =
+        let mut file_scan_config_builder =
             FileScanConfigBuilder::new(object_store_url, self.schema(), source)
                 .with_projection(projection.cloned())
-                .with_limit(limit)
-                .build();
+                .with_limit(limit);
 
         // Transform to the format needed to pass to DataSourceExec
         // Create one file group per file (default to scanning them all in parallel)
         for (file_name, file_size) in files {
             let path = self.dir.join(file_name);
             let canonical_path = fs::canonicalize(path)?;
-            file_scan_config = file_scan_config.with_file(PartitionedFile::new(
-                canonical_path.display().to_string(),
-                file_size,
-            ));
+            file_scan_config_builder = file_scan_config_builder.with_file(
+                PartitionedFile::new(canonical_path.display().to_string(), file_size),
+            );
         }
-        Ok(Arc::new(DataSourceExec::new(Arc::new(file_scan_config))))
+        Ok(Arc::new(DataSourceExec::new(Arc::new(
+            file_scan_config_builder.build(),
+        ))))
     }
 
     /// Tell DataFusion to push filters down to the scan method

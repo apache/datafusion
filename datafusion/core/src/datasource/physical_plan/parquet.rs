@@ -67,6 +67,7 @@ mod tests {
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use chrono::{TimeZone, Utc};
+    use datafusion_datasource::file_groups::FileGroup;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -1126,7 +1127,7 @@ mod tests {
 
         async fn assert_parquet_read(
             state: &SessionState,
-            file_groups: Vec<Vec<PartitionedFile>>,
+            file_groups: Vec<FileGroup>,
             expected_row_num: Option<usize>,
             file_schema: SchemaRef,
         ) -> Result<()> {
@@ -1171,12 +1172,12 @@ mod tests {
             .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
-        let group_empty = vec![vec![file_range(&meta, 0, 2)]];
-        let group_contain = vec![vec![file_range(&meta, 2, i64::MAX)]];
-        let group_all = vec![vec![
+        let group_empty = vec![FileGroup::new(vec![file_range(&meta, 0, 2)])];
+        let group_contain = vec![FileGroup::new(vec![file_range(&meta, 2, i64::MAX)])];
+        let group_all = vec![FileGroup::new(vec![
             file_range(&meta, 0, 2),
             file_range(&meta, 2, i64::MAX),
-        ]];
+        ])];
 
         assert_parquet_read(&state, group_empty, None, file_schema.clone()).await?;
         assert_parquet_read(&state, group_contain, Some(8), file_schema.clone()).await?;

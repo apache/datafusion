@@ -53,6 +53,7 @@ pub use csv::{CsvExec, CsvExecBuilder};
 
 pub use csv::{CsvOpener, CsvSource};
 pub use datafusion_datasource::file::FileSource;
+pub use datafusion_datasource::file_groups::FileGroup;
 pub use datafusion_datasource::file_groups::FileGroupPartitioner;
 pub use datafusion_datasource::file_meta::FileMeta;
 pub use datafusion_datasource::file_scan_config::{

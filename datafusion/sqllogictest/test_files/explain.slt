@@ -187,7 +187,6 @@ logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
 logical_plan after eliminate_duplicated_expr SAME TEXT AS ABOVE
 logical_plan after eliminate_filter SAME TEXT AS ABOVE
 logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
-logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after eliminate_limit SAME TEXT AS ABOVE
 logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
 logical_plan after eliminate_one_union SAME TEXT AS ABOVE
@@ -196,9 +195,8 @@ logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
 logical_plan after push_down_limit SAME TEXT AS ABOVE
 logical_plan after push_down_filter SAME TEXT AS ABOVE
 logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
-logical_plan after simplify_expressions SAME TEXT AS ABOVE
-logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after eliminate_group_by_constant SAME TEXT AS ABOVE
+logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after optimize_projections TableScan: simple_explain_test projection=[a, b, c]
 logical_plan after eliminate_nested_union SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
@@ -210,7 +208,6 @@ logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
 logical_plan after eliminate_duplicated_expr SAME TEXT AS ABOVE
 logical_plan after eliminate_filter SAME TEXT AS ABOVE
 logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
-logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after eliminate_limit SAME TEXT AS ABOVE
 logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
 logical_plan after eliminate_one_union SAME TEXT AS ABOVE
@@ -219,9 +216,8 @@ logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
 logical_plan after push_down_limit SAME TEXT AS ABOVE
 logical_plan after push_down_filter SAME TEXT AS ABOVE
 logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
-logical_plan after simplify_expressions SAME TEXT AS ABOVE
-logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after eliminate_group_by_constant SAME TEXT AS ABOVE
+logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after optimize_projections SAME TEXT AS ABOVE
 logical_plan TableScan: simple_explain_test projection=[a, b, c]
 initial_physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true

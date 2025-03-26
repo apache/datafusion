@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::{any::Any, str::FromStr, sync::Arc};
 
-use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
+use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
 use super::{ListingTableUrl, PartitionedFile};
 
 use crate::datasource::{
@@ -55,6 +55,7 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -1032,7 +1033,7 @@ impl TableProvider for ListingTable {
         )
         .await?;
 
-        let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
+        let file_group = file_list_stream.try_collect::<Vec<_>>().await?.into();
         let keep_partition_by_columns =
             state.config_options().execution.keep_partition_by_columns;
 
@@ -1041,7 +1042,7 @@ impl TableProvider for ListingTable {
             original_url: String::default(),
             object_store_url: self.table_paths()[0].object_store(),
             table_paths: self.table_paths().clone(),
-            file_groups,
+            file_group,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             insert_op,
@@ -1089,7 +1090,7 @@ impl ListingTable {
         ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
+    ) -> Result<(Vec<FileGroup>, Statistics)> {
         let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
@@ -1137,7 +1138,7 @@ impl ListingTable {
         .await?;
 
         Ok((
-            split_files(files, self.options.target_partitions),
+            files.split_files(self.options.target_partitions),
             statistics,
         ))
     }

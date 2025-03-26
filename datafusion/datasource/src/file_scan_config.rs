@@ -48,6 +48,7 @@ use datafusion_physical_plan::{
 };
 use log::{debug, warn};
 
+use crate::file_groups::FileGroup;
 use crate::{
     display::FileGroupsDisplay,
     file::FileSource,
@@ -71,6 +72,7 @@ use crate::{
 /// # use object_store::ObjectStore;
 /// # use datafusion_common::Statistics;
 /// # use datafusion_datasource::file::FileSource;
+/// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource::file_stream::FileOpener;
@@ -112,10 +114,10 @@ use crate::{
 ///   .with_file(PartitionedFile::new("file1.parquet", 1234))
 ///   // Read /tmp/file2.parquet 56 bytes and /tmp/file3.parquet 78 bytes
 ///   // in a  single row group
-///   .with_file_group(vec![
+///   .with_file_group(FileGroup::new(vec![
 ///    PartitionedFile::new("file2.parquet", 56),
 ///    PartitionedFile::new("file3.parquet", 78),
-///   ]).build();
+///   ])).build();
 /// // create an execution plan from the config
 /// let plan: Arc<dyn ExecutionPlan> = Arc::new(DataSourceExec::new(Arc::new(config)));
 /// ```
@@ -146,7 +148,7 @@ pub struct FileScanConfig {
     /// DataFusion may attempt to read each partition of files
     /// concurrently, however files *within* a partition will be read
     /// sequentially, one after the next.
-    pub file_groups: Vec<Vec<PartitionedFile>>,
+    pub file_groups: Vec<FileGroup>,
     /// Table constraints
     pub constraints: Constraints,
     /// Estimated overall statistics of the files, taking `filters` into account.
@@ -183,7 +185,7 @@ pub struct FileScanConfigBuilder {
     projection: Option<Vec<usize>>,
     table_partition_cols: Vec<Field>,
     constraints: Option<Constraints>,
-    file_groups: Vec<Vec<PartitionedFile>>,
+    file_groups: Vec<FileGroup>,
     statistics: Option<Statistics>,
     output_ordering: Vec<LexOrdering>,
     file_compression_type: Option<FileCompressionType>,
@@ -267,7 +269,7 @@ impl FileScanConfigBuilder {
     /// DataFusion may attempt to read each partition of files
     /// concurrently, however files *within* a partition will be read
     /// sequentially, one after the next.
-    pub fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+    pub fn with_file_groups(mut self, file_groups: Vec<FileGroup>) -> Self {
         self.file_groups = file_groups;
         self
     }
@@ -275,7 +277,7 @@ impl FileScanConfigBuilder {
     /// Add a new file group
     ///
     /// See [`Self::with_file_groups`] for more information
-    pub fn with_file_group(mut self, file_group: Vec<PartitionedFile>) -> Self {
+    pub fn with_file_group(mut self, file_group: FileGroup) -> Self {
         self.file_groups.push(file_group);
         self
     }
@@ -284,7 +286,7 @@ impl FileScanConfigBuilder {
     ///
     /// See [`Self::with_file_groups`] for more information.
     pub fn with_file(self, file: PartitionedFile) -> Self {
-        self.with_file_group(vec![file])
+        self.with_file_group(FileGroup::new(vec![file]))
     }
 
     /// Set the output ordering of the files
@@ -440,7 +442,7 @@ impl DataSource for FileScanConfig {
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format={}", self.file_source.file_type())?;
                 self.file_source.fmt_extra(t, f)?;
-                let num_files = self.file_groups.iter().map(Vec::len).sum::<usize>();
+                let num_files = self.file_groups.iter().map(|fg| fg.len()).sum::<usize>();
                 writeln!(f, "files={num_files}")?;
                 Ok(())
             }
@@ -479,8 +481,10 @@ impl DataSource for FileScanConfig {
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
-        let source = self.clone();
-        Some(Arc::new(source.with_limit(limit)))
+        let source = FileScanConfigBuilder::from(self.clone())
+            .with_limit(limit)
+            .build();
+        Some(Arc::new(source))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -652,12 +656,14 @@ impl FileScanConfig {
     }
 
     /// Set the projection of the files
+    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
     pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
         self.projection = projection;
         self
     }
 
     /// Set the limit of the files
+    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
         self
@@ -666,17 +672,17 @@ impl FileScanConfig {
     /// Add a file as a single group
     ///
     /// See [Self::file_groups] for more information.
+    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
+    #[allow(deprecated)]
     pub fn with_file(self, file: PartitionedFile) -> Self {
-        self.with_file_group(vec![file])
+        self.with_file_group(FileGroup::new(vec![file]))
     }
 
     /// Add the file groups
     ///
     /// See [Self::file_groups] for more information.
-    pub fn with_file_groups(
-        mut self,
-        mut file_groups: Vec<Vec<PartitionedFile>>,
-    ) -> Self {
+    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
+    pub fn with_file_groups(mut self, mut file_groups: Vec<FileGroup>) -> Self {
         self.file_groups.append(&mut file_groups);
         self
     }
@@ -684,18 +690,21 @@ impl FileScanConfig {
     /// Add a new file group
     ///
     /// See [Self::file_groups] for more information
-    pub fn with_file_group(mut self, file_group: Vec<PartitionedFile>) -> Self {
+    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
+    pub fn with_file_group(mut self, file_group: FileGroup) -> Self {
         self.file_groups.push(file_group);
         self
     }
 
     /// Set the partitioning columns of the files
+    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
     pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<Field>) -> Self {
         self.table_partition_cols = table_partition_cols;
         self
     }
 
     /// Set the output ordering of the files
+    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
     pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
         self.output_ordering = output_ordering;
         self
@@ -801,10 +810,13 @@ impl FileScanConfig {
     /// It will produce the smallest number of file groups possible.
     pub fn split_groups_by_statistics(
         table_schema: &SchemaRef,
-        file_groups: &[Vec<PartitionedFile>],
+        file_groups: &[FileGroup],
         sort_order: &LexOrdering,
-    ) -> Result<Vec<Vec<PartitionedFile>>> {
-        let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
+    ) -> Result<Vec<FileGroup>> {
+        let flattened_files = file_groups
+            .iter()
+            .flat_map(FileGroup::iter)
+            .collect::<Vec<_>>();
         // First Fit:
         // * Choose the first file group that a file can be placed into.
         // * If it fits into no existing file groups, create a new one.
@@ -1265,7 +1277,7 @@ fn get_projected_output_ordering(
                 &new_ordering,
                 projected_schema,
                 base_config.projection.as_deref(),
-                group,
+                group.iter(),
             ) {
                 Ok(statistics) => statistics,
                 Err(e) => {
@@ -1874,8 +1886,9 @@ mod tests {
                     .collect::<Result<Vec<_>>>()?,
             );
 
-            let partitioned_files =
-                case.files.into_iter().map(From::from).collect::<Vec<_>>();
+            let partitioned_files = FileGroup::new(
+                case.files.into_iter().map(From::from).collect::<Vec<_>>(),
+            );
             let result = FileScanConfig::split_groups_by_statistics(
                 &table_schema,
                 &[partitioned_files.clone()],
@@ -2036,7 +2049,10 @@ mod tests {
             )])
             .with_constraints(Constraints::empty())
             .with_statistics(Statistics::new_unknown(&file_schema))
-            .with_file_group(vec![PartitionedFile::new("test.parquet", 1234)])
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "test.parquet".to_string(),
+                1024,
+            )])])
             .with_output_ordering(vec![LexOrdering::default()])
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
             .with_newlines_in_values(true)

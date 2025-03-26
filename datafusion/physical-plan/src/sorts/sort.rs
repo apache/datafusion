@@ -33,7 +33,9 @@ use crate::metrics::{
 };
 use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
-use crate::spill::{get_record_batch_memory_size, InProgressSpillFile, SpillManager};
+use crate::spill::get_record_batch_memory_size;
+use crate::spill::in_progress_spill_file::InProgressSpillFile;
+use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
@@ -1244,7 +1246,8 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
-    use datafusion_common::{assert_batches_eq, Result, ScalarValue};
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::RecordBatchStream;
@@ -1252,6 +1255,7 @@ mod tests {
     use datafusion_physical_expr::EquivalenceProperties;
 
     use futures::{FutureExt, Stream};
+    use insta::assert_snapshot;
 
     #[derive(Debug, Clone)]
     pub struct SortedUnboundedExec {
@@ -1913,22 +1917,21 @@ mod tests {
         plan = plan.with_fetch(Some(9));
 
         let batches = collect(Arc::new(plan), task_ctx).await?;
-        #[rustfmt::skip]
-        let expected = [
-            "+----+",
-            "| c1 |",
-            "+----+",
-            "| 0  |",
-            "| 1  |",
-            "| 2  |",
-            "| 3  |",
-            "| 4  |",
-            "| 5  |",
-            "| 6  |",
-            "| 7  |",
-            "| 8  |",
-            "+----+",];
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+
+            | c1 |
+            +----+
+            | 0  |
+            | 1  |
+            | 2  |
+            | 3  |
+            | 4  |
+            | 5  |
+            | 6  |
+            | 7  |
+            | 8  |
+            +----+
+            "#);
         Ok(())
     }
 }
