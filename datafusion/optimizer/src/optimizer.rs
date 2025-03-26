@@ -238,7 +238,6 @@ impl Optimizer {
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
-            Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
             // Must be after PropagateEmptyRelation
@@ -251,9 +250,8 @@ impl Optimizer {
             Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateGroupByConstant::new()),
+            Arc::new(CommonSubexprEliminate::new()),
             Arc::new(OptimizeProjections::new()),
         ];
 
@@ -455,7 +453,7 @@ fn assert_valid_optimization(
     plan: &LogicalPlan,
     prev_schema: &Arc<DFSchema>,
 ) -> Result<()> {
-    // verify invariant: optimizer passes should not change the schema
+    // verify invariant: optimizer passes should not change the schema if the schema can't be cast from the previous schema.
     // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#logical-schema-is-invariant-under-logical-optimization>
     assert_expected_schema(prev_schema, plan)?;
 
@@ -467,7 +465,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use datafusion_common::tree_node::Transformed;
-    use datafusion_common::{plan_err, DFSchema, DFSchemaRef, DataFusionError, Result};
+    use datafusion_common::{
+        assert_contains, plan_err, DFSchema, DFSchemaRef, DataFusionError, Result,
+    };
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
 
@@ -513,28 +513,9 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
         });
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
-        assert!(err.strip_backtrace().starts_with(
-            "Optimizer rule 'get table_scan rule' failed\n\
-            caused by\n\
-            Check optimizer-specific invariants after optimizer rule: get table_scan rule\n\
-            caused by\n\
-            Internal error: Failed due to a difference in schemas, \
-            original schema: DFSchema { inner: Schema { \
-            fields: [], \
-            metadata: {} }, \
-            field_qualifiers: [], \
-            functional_dependencies: FunctionalDependencies { deps: [] } \
-            }, \
-            new schema: DFSchema { inner: Schema { \
-            fields: [\
-              Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-              Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-              Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }\
-            ], \
-            metadata: {} }, \
-            field_qualifiers: [Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" })], \
-            functional_dependencies: FunctionalDependencies { deps: [] } }",
-        ));
+
+        // Simplify assert to check the error message contains the expected message, which is only the schema length mismatch
+        assert_contains!(err.strip_backtrace(), "Schema mismatch: the schema length are not same Expected schema length: 3, got: 0");
     }
 
     #[test]

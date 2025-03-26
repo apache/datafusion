@@ -81,7 +81,7 @@ jobs:
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1
-        run: cargo test --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,extended_tests
+        run: cargo test --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,extended_tests,recursive_protection
       - name: Verify Working Directory Clean
         run: git diff --exit-code
       - name: Cleanup

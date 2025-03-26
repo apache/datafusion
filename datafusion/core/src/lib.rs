@@ -20,7 +20,8 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![warn(missing_docs, clippy::needless_borrow)]
 
@@ -406,7 +407,7 @@
 //! See the [implementors of `ExecutionPlan`] for a list of physical operators available.
 //!
 //! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
-//! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
+//! [Volcano style]: https://doi.org/10.1145/93605.98720
 //! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
 //! [DataFusion paper in SIGMOD 2024]: https://github.com/apache/datafusion/files/15149988/DataFusion_Query_Engine___SIGMOD_2024-FINAL-mk4.pdf
 //! [such as DuckDB]: https://github.com/duckdb/duckdb/issues/1583
@@ -648,6 +649,8 @@
 //!
 //! * [datafusion_common]: Common traits and types
 //! * [datafusion_catalog]: Catalog APIs such as [`SchemaProvider`] and [`CatalogProvider`]
+//! * [datafusion_datasource]: File and Data IO such as [`FileSource`] and [`DataSink`]
+//! * [datafusion_session]: [`Session`] and related structures
 //! * [datafusion_execution]: State and structures needed for execution
 //! * [datafusion_expr]: [`LogicalPlan`], [`Expr`] and related logical planning structure
 //! * [datafusion_functions]: Scalar function packages
@@ -663,6 +666,9 @@
 //!
 //! [`SchemaProvider`]: datafusion_catalog::SchemaProvider
 //! [`CatalogProvider`]: datafusion_catalog::CatalogProvider
+//! [`Session`]: datafusion_session::Session
+//! [`FileSource`]: datafusion_datasource::file::FileSource
+//! [`DataSink`]: datafusion_datasource::sink::DataSink
 //!
 //! ## Citing DataFusion in Academic Papers
 //!

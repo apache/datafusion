@@ -35,6 +35,7 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::PhysicalExpr;
@@ -189,8 +190,8 @@ fn parquet_exec_multiple_sorted(
         Arc::new(ParquetSource::default()),
     )
     .with_file_groups(vec![
-        vec![PartitionedFile::new("x".to_string(), 100)],
-        vec![PartitionedFile::new("y".to_string(), 100)],
+        FileGroup::new(vec![PartitionedFile::new("x".to_string(), 100)]),
+        FileGroup::new(vec![PartitionedFile::new("y".to_string(), 100)]),
     ])
     .with_output_ordering(output_ordering)
     .build()
@@ -223,8 +224,8 @@ fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSource
         Arc::new(CsvSource::new(false, b',', b'"')),
     )
     .with_file_groups(vec![
-        vec![PartitionedFile::new("x".to_string(), 100)],
-        vec![PartitionedFile::new("y".to_string(), 100)],
+        FileGroup::new(vec![PartitionedFile::new("x".to_string(), 100)]),
+        FileGroup::new(vec![PartitionedFile::new("y".to_string(), 100)]),
     ])
     .with_output_ordering(output_ordering)
     .build()

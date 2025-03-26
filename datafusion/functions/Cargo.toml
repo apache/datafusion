@@ -35,14 +35,11 @@ all-features = true
 workspace = true
 
 [features]
-# enable core functions
-core_expressions = []
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 # enable datetime functions
 datetime_expressions = []
 # Enable encoding by default so the doctests work. In general don't automatically enable all packages.
 default = [
-    "core_expressions",
     "datetime_expressions",
     "encoding_expressions",
     "math_expressions",
@@ -69,7 +66,7 @@ arrow = { workspace = true }
 arrow-buffer = { workspace = true }
 base64 = { version = "0.22", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
-blake3 = { version = "1.6", optional = true }
+blake3 = { version = "1.7", optional = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
@@ -85,7 +82,7 @@ rand = { workspace = true }
 regex = { workspace = true, optional = true }
 sha2 = { version = "^0.10.1", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
-uuid = { version = "1.15", features = ["v4"], optional = true }
+uuid = { version = "1.16", features = ["v4"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
@@ -146,7 +143,6 @@ required-features = ["math_expressions"]
 [[bench]]
 harness = false
 name = "nullif"
-required-features = ["core_expressions"]
 
 [[bench]]
 harness = false

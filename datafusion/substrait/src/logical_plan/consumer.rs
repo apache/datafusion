@@ -776,7 +776,7 @@ pub async fn from_substrait_plan_with_consumer(
                             return Ok(plan);
                         }
                         let renamed_schema = make_renamed_schema(plan.schema(), &root.names)?;
-                        if renamed_schema.equivalent_names_and_types(plan.schema()) {
+                        if renamed_schema.has_equivalent_names_and_types(plan.schema()).is_ok() {
                             // Nothing to do if the schema is already equivalent
                             return Ok(plan);
                         }
@@ -1059,8 +1059,8 @@ pub async fn from_project_rel(
     p: &ProjectRel,
 ) -> Result<LogicalPlan> {
     if let Some(input) = p.input.as_ref() {
-        let mut input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
-        let original_schema = input.schema().clone();
+        let input = consumer.consume_rel(input).await?;
+        let original_schema = Arc::clone(input.schema());
 
         // Ensure that all expressions have a unique display name, so that
         // validate_unique_names does not fail when constructing the project.
@@ -1075,6 +1075,10 @@ pub async fn from_project_rel(
         // leaving only explicit expressions.
 
         let mut explicit_exprs: Vec<Expr> = vec![];
+        // For WindowFunctions, we need to wrap them in a Window relation. If there are duplicates,
+        // we can do the window'ing only once, then the project will duplicate the result.
+        // Order here doesn't matter since LPB::window_plan sorts the expressions.
+        let mut window_exprs: HashSet<Expr> = HashSet::new();
         for expr in &p.expressions {
             let e = consumer
                 .consume_expression(expr, input.clone().schema())
@@ -1084,10 +1088,16 @@ pub async fn from_project_rel(
                 // Adding the same expression here and in the project below
                 // works because the project's builder uses columnize_expr(..)
                 // to transform it into a column reference
-                input = input.window(vec![e.clone()])?
+                window_exprs.insert(e.clone());
             }
             explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
+
+        let input = if !window_exprs.is_empty() {
+            LogicalPlanBuilder::window_plan(input, window_exprs)?
+        } else {
+            input
+        };
 
         let mut final_exprs: Vec<Expr> = vec![];
         for index in 0..original_schema.fields().len() {
@@ -1095,7 +1105,7 @@ pub async fn from_project_rel(
             final_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
         final_exprs.append(&mut explicit_exprs);
-        input.project(final_exprs)?.build()
+        project(input, final_exprs)
     } else {
         not_impl_err!("Projection without an input is not supported")
     }
@@ -1626,7 +1636,7 @@ fn apply_emit_kind(
                             .get(field as usize)
                             .ok_or_else(|| substrait_datafusion_err!(
                                   "Emit output field {} cannot be resolved in input schema {}",
-                                  field, proj.input.schema().clone()
+                                  field, proj.input.schema()
                                 ))?;
                         exprs.push(name_tracker.get_uniquely_named_expr(expr.clone())?);
                     }
@@ -1965,6 +1975,15 @@ pub async fn from_substrait_agg_func(
 
     let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
 
+    // Datafusion does not support aggregate functions with no arguments, so
+    // we inject a dummy argument that does not affect the query, but allows
+    // us to bypass this limitation.
+    let args = if udaf.name() == "count" && args.is_empty() {
+        vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
+    } else {
+        args
+    };
+
     Ok(Arc::new(Expr::AggregateFunction(
         expr::AggregateFunction::new_udf(udaf, args, distinct, filter, order_by, None),
     )))
@@ -2238,11 +2257,19 @@ pub async fn from_window_function(
 
     window_frame.regularize_order_bys(&mut order_by)?;
 
+    // Datafusion does not support aggregate functions with no arguments, so
+    // we inject a dummy argument that does not affect the query, but allows
+    // us to bypass this limitation.
+    let args = if fun.name() == "count" && window.arguments.is_empty() {
+        vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
+    } else {
+        from_substrait_func_args(consumer, &window.arguments, input_schema).await?
+    };
+
     Ok(Expr::WindowFunction(expr::WindowFunction {
         fun,
         params: WindowFunctionParams {
-            args: from_substrait_func_args(consumer, &window.arguments, input_schema)
-                .await?,
+            args,
             partition_by: from_substrait_rex_vec(
                 consumer,
                 &window.partitions,
@@ -3390,6 +3417,33 @@ mod test {
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
             Expr::WindowFunction(window_function) => {
                 assert_eq!(window_function.params.order_by.len(), 1)
+            }
+            _ => panic!("expr was not a WindowFunction"),
+        };
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_function_with_count() -> Result<()> {
+        let substrait = substrait::proto::Expression {
+            rex_type: Some(substrait::proto::expression::RexType::WindowFunction(
+                substrait::proto::expression::WindowFunction {
+                    function_reference: 0,
+                    ..Default::default()
+                },
+            )),
+        };
+
+        let mut consumer = test_consumer();
+
+        let mut extensions = Extensions::default();
+        extensions.register_function("count".to_string());
+        consumer.extensions = &extensions;
+
+        match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
+            Expr::WindowFunction(window_function) => {
+                assert_eq!(window_function.params.args.len(), 1)
             }
             _ => panic!("expr was not a WindowFunction"),
         };

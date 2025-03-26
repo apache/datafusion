@@ -334,7 +334,11 @@ fn build_join(
             _ => {
                 // if not correlated, group down to 1 row and left join on that (preserving row count)
                 LogicalPlanBuilder::from(filter_input.clone())
-                    .join_on(sub_query_alias, JoinType::Left, None)?
+                    .join_on(
+                        sub_query_alias,
+                        JoinType::Left,
+                        vec![Expr::Literal(ScalarValue::Boolean(Some(true)))],
+                    )?
                     .build()?
             }
         }
@@ -560,7 +564,7 @@ mod tests {
         // it will optimize, but fail for the same reason the unoptimized query would
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
         \n  Filter: customer.c_custkey = __scalar_sq_1.max(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
-        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
+        \n    Left Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
         \n      SubqueryAlias: __scalar_sq_1 [max(orders.o_custkey):Int64;N]\
         \n        Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]\
@@ -592,7 +596,7 @@ mod tests {
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
         \n  Filter: customer.c_custkey = __scalar_sq_1.max(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
-        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
+        \n    Left Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
         \n      SubqueryAlias: __scalar_sq_1 [max(orders.o_custkey):Int64;N]\
         \n        Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]\
@@ -968,7 +972,7 @@ mod tests {
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
         \n  Filter: customer.c_custkey < __scalar_sq_1.max(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
-        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
+        \n    Left Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
         \n      SubqueryAlias: __scalar_sq_1 [max(orders.o_custkey):Int64;N]\
         \n        Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]\
@@ -999,7 +1003,7 @@ mod tests {
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
         \n  Filter: customer.c_custkey = __scalar_sq_1.max(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
-        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
+        \n    Left Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
         \n      SubqueryAlias: __scalar_sq_1 [max(orders.o_custkey):Int64;N]\
         \n        Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]\
@@ -1100,8 +1104,8 @@ mod tests {
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
         \n  Filter: customer.c_custkey BETWEEN __scalar_sq_1.min(orders.o_custkey) AND __scalar_sq_2.max(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, min(orders.o_custkey):Int64;N, max(orders.o_custkey):Int64;N]\
-        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, min(orders.o_custkey):Int64;N, max(orders.o_custkey):Int64;N]\
-        \n      Left Join:  [c_custkey:Int64, c_name:Utf8, min(orders.o_custkey):Int64;N]\
+        \n    Left Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, min(orders.o_custkey):Int64;N, max(orders.o_custkey):Int64;N]\
+        \n      Left Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, min(orders.o_custkey):Int64;N]\
         \n        TableScan: customer [c_custkey:Int64, c_name:Utf8]\
         \n        SubqueryAlias: __scalar_sq_1 [min(orders.o_custkey):Int64;N]\
         \n          Projection: min(orders.o_custkey) [min(orders.o_custkey):Int64;N]\

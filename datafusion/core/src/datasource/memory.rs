@@ -24,9 +24,7 @@ use std::sync::Arc;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
-use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::insert::{DataSink, DataSinkExec};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
@@ -38,7 +36,9 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
+use datafusion_common_runtime::JoinSet;
 pub use datafusion_datasource::memory::MemorySourceConfig;
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 pub use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
@@ -49,7 +49,6 @@ use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
-use tokio::task::JoinSet;
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
@@ -129,7 +128,7 @@ impl MemTable {
     pub async fn load(
         t: Arc<dyn TableProvider>,
         output_partitions: Option<usize>,
-        state: &SessionState,
+        state: &dyn Session,
     ) -> Result<Self> {
         let schema = t.schema();
         let constraints = t.constraints();
@@ -270,6 +269,8 @@ impl TableProvider for MemTable {
     /// # Returns
     ///
     /// * A plan that returns the number of rows written.
+    ///
+    /// [`SessionState`]: crate::execution::context::SessionState
     async fn insert_into(
         &self,
         _state: &dyn Session,
