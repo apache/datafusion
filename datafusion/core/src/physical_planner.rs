@@ -804,7 +804,12 @@ impl DefaultPhysicalPlanner {
                                 )
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        Partitioning::Hash(runtime_expr, *n)
+                        if session_state.config_options().optimizer.prefer_hash_selection_vector_partitioning {
+                            Partitioning::HashSelectionVector(runtime_expr, *n)
+                        }
+                        else {
+                            Partitioning::Hash(runtime_expr, *n)
+                        }
                     }
                     LogicalPartitioning::DistributeBy(_) => {
                         return not_impl_err!(

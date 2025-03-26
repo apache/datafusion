@@ -889,6 +889,7 @@ fn add_hash_on_top(
     input: DistributionContext,
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
+    prefer_selection_vector: bool,
 ) -> Result<DistributionContext> {
     // Early return if hash repartition is unnecessary
     // `RepartitionExec: partitioning=Hash([...], 1), input_partitions=1` is unnecessary.
@@ -913,7 +914,7 @@ fn add_hash_on_top(
         //   requirements.
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
-        let partitioning = dist.create_partitioning(n_target);
+        let partitioning = dist.create_partitioning(n_target, prefer_selection_vector);
         let repartition =
             RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
                 .with_preserve_order();
@@ -1272,7 +1273,7 @@ pub fn ensure_distribution(
                     // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
                         child =
-                            add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
+                            add_hash_on_top(child, exprs.to_vec(), target_partitions, config.optimizer.prefer_hash_selection_vector_partitioning)?;
                     }
                 }
                 Distribution::UnspecifiedDistribution => {

@@ -117,6 +117,13 @@ pub enum Partitioning {
     /// Allocate rows based on a hash of one of more expressions and the specified number of
     /// partitions
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
+    /// Allocate rows based on a hash of one of more expressions and the specified number
+    /// of partitions with a selection vecotr column.
+    /// 
+    /// The column is a boolean column called `selection` that is used to filter out rows 
+    /// that should not be included in the partition. `true` means the row should be included
+    /// and `false` means the row should be excluded.
+    HashSelectionVector(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
 }
@@ -133,6 +140,14 @@ impl Display for Partitioning {
                     .join(", ");
                 write!(f, "Hash([{phy_exprs_str}], {size})")
             }
+            Partitioning::HashSelectionVector(phy_exprs, size) => {
+                let phy_exprs_str = phy_exprs
+                    .iter()
+                    .map(|e| format!("{e}"))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(f, "HashSelectionVector([{phy_exprs_str}], {size})")
+            }
             Partitioning::UnknownPartitioning(size) => {
                 write!(f, "UnknownPartitioning({size})")
             }
@@ -144,7 +159,10 @@ impl Partitioning {
     pub fn partition_count(&self) -> usize {
         use Partitioning::*;
         match self {
-            RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
+            RoundRobinBatch(n)
+            | Hash(_, n)
+            | HashSelectionVector(_, n)
+            | UnknownPartitioning(n) => *n,
         }
     }
 
@@ -165,7 +183,7 @@ impl Partitioning {
                     // Here we do not check the partition count for hash partitioning and assumes the partition count
                     // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
                     // then we need to have the partition count and hash functions validation.
-                    Partitioning::Hash(partition_exprs, _) => {
+                    Partitioning::Hash(partition_exprs, _) | Partitioning::HashSelectionVector(partition_exprs, _ ) => {
                         let fast_match =
                             physical_exprs_equal(required_exprs, partition_exprs);
                         // If the required exprs do not match, need to leverage the eq_properties provided by the child
@@ -252,14 +270,18 @@ pub enum Distribution {
 
 impl Distribution {
     /// Creates a `Partitioning` that satisfies this `Distribution`
-    pub fn create_partitioning(self, partition_count: usize) -> Partitioning {
+    pub fn create_partitioning(self, partition_count: usize, prefer_selection_vector: bool) -> Partitioning {
         match self {
             Distribution::UnspecifiedDistribution => {
                 Partitioning::UnknownPartitioning(partition_count)
             }
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
             Distribution::HashPartitioned(expr) => {
-                Partitioning::Hash(expr, partition_count)
+                if prefer_selection_vector {
+                    Partitioning::HashSelectionVector(expr, partition_count)
+                } else {
+                    Partitioning::Hash(expr, partition_count)
+                }
             }
         }
     }
