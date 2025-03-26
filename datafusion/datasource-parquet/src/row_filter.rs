@@ -501,7 +501,6 @@ mod test {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
-    use rand::{rng, Rng};
 
     // We should ignore predicate that read non-primitive columns
     #[test]
