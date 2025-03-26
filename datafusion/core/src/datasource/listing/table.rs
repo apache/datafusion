@@ -37,6 +37,7 @@ use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+#[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
@@ -1228,6 +1229,7 @@ fn apply_schema_adapter_to_source(
     // sources could implement, allowing this logic to be generalized without requiring
     // format-specific downcasts. This would make it easier to add schema evolution support
     // to other file formats in the future.
+    #[cfg(feature = "parquet")]
     if let (Some(parquet_source), Some(schema_adapter_factory)) = (
         source.as_any().downcast_ref::<ParquetSource>(),
         schema_adapter_factory,
