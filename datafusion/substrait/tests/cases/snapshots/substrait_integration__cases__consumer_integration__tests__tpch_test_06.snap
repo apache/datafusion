@@ -1,8 +1,0 @@
----
-source: datafusion/substrait/tests/cases/consumer_integration.rs
-expression: plan_str
----
-Aggregate: groupBy=[[]], aggr=[[sum(LINEITEM.L_EXTENDEDPRICE * LINEITEM.L_DISCOUNT) AS REVENUE]]
-  Projection: LINEITEM.L_EXTENDEDPRICE * LINEITEM.L_DISCOUNT
-    Filter: LINEITEM.L_SHIPDATE >= CAST(Utf8("1994-01-01") AS Date32) AND LINEITEM.L_SHIPDATE < CAST(Utf8("1995-01-01") AS Date32) AND LINEITEM.L_DISCOUNT >= Decimal128(Some(5),3,2) AND LINEITEM.L_DISCOUNT <= Decimal128(Some(7),3,2) AND LINEITEM.L_QUANTITY < CAST(Int32(24) AS Decimal128(15, 2))
-      TableScan: LINEITEM
