@@ -22,7 +22,7 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, ParquetSource};
 use datafusion::error::Result;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
@@ -40,14 +40,14 @@ async fn parquet_exec() -> Result<()> {
         source,
     )
     .with_file_groups(vec![
-        vec![PartitionedFile::new(
+        FileGroup::new(vec![PartitionedFile::new(
             "file://foo/part-0.parquet".to_string(),
             123,
-        )],
-        vec![PartitionedFile::new(
+        )]),
+        FileGroup::new(vec![PartitionedFile::new(
             "file://foo/part-1.parquet".to_string(),
             123,
-        )],
+        )]),
     ]);
     let parquet_exec: Arc<dyn ExecutionPlan> = scan_config.build();
 
