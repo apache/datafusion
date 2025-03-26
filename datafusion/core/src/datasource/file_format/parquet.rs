@@ -148,6 +148,7 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field};
     use async_trait::async_trait;
+    use datafusion_datasource::file_groups::FileGroup;
     use futures::stream::BoxStream;
     use futures::{Stream, StreamExt};
     use insta::assert_snapshot;
@@ -1379,7 +1380,7 @@ mod tests {
         let file_sink_config = FileSinkConfig {
             original_url: String::default(),
             object_store_url: object_store_url.clone(),
-            file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
             table_paths: vec![ListingTableUrl::parse(table_path)?],
             output_schema: schema.clone(),
             table_partition_cols: vec![],
@@ -1465,7 +1466,7 @@ mod tests {
         let file_sink_config = FileSinkConfig {
             original_url: String::default(),
             object_store_url: object_store_url.clone(),
-            file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
             table_paths: vec![ListingTableUrl::parse("file:///")?],
             output_schema: schema.clone(),
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
@@ -1549,7 +1550,10 @@ mod tests {
             let file_sink_config = FileSinkConfig {
                 original_url: String::default(),
                 object_store_url: object_store_url.clone(),
-                file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+                file_group: FileGroup::new(vec![PartitionedFile::new(
+                    "/tmp".to_string(),
+                    1,
+                )]),
                 table_paths: vec![ListingTableUrl::parse("file:///")?],
                 output_schema: schema.clone(),
                 table_partition_cols: vec![],

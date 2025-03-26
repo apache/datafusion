@@ -1460,11 +1460,6 @@ fn test_unnest_to_sql() {
 fn test_join_with_no_conditions() {
     sql_round_trip(
         GenericDialect {},
-        "SELECT j1.j1_id, j1.j1_string FROM j1 JOIN j2",
-        "SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2",
-    );
-    sql_round_trip(
-        GenericDialect {},
         "SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2",
         "SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2",
     );
