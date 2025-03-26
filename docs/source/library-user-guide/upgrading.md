@@ -131,6 +131,7 @@ if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
 
 There's also a more convenient helper method `downcast_to_file_source` on `DataSourceExec`
 that simplifies accessing both the config and file source in one call.
+
 ```rust
 # /* comment to avoid running
 if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
