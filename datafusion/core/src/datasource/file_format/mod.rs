@@ -73,7 +73,8 @@ pub(crate) mod test_util {
             statistics: None,
             extensions: None,
             metadata_size_hint: None,
-        }]];
+        }]
+        .into()];
 
         let exec = format
             .create_physical_plan(

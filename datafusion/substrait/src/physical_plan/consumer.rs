@@ -22,7 +22,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::{not_impl_err, substrait_err};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, ParquetSource};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -134,7 +134,7 @@ pub async fn from_substrait_rel(
 
                         let part_index = file.partition_index as usize;
                         while part_index >= file_groups.len() {
-                            file_groups.push(vec![]);
+                            file_groups.push(FileGroup::default());
                         }
                         file_groups[part_index].push(partitioned_file)
                     }

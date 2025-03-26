@@ -47,7 +47,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfig,
     FileSinkConfig, FileSource, ParquetSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
@@ -744,10 +744,10 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
 
     let scan_config =
         FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, file_source)
-            .with_file_groups(vec![vec![PartitionedFile::new(
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.parquet".to_string(),
                 1024,
-            )]])
+            )])])
             .with_statistics(Statistics {
                 num_rows: Precision::Inexact(100),
                 total_byte_size: Precision::Inexact(1024),
@@ -771,7 +771,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let scan_config =
         FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, file_source)
             .with_projection(Some(vec![0, 1]))
-            .with_file_group(vec![file_group])
+            .with_file_group(FileGroup::new(vec![file_group]))
             .with_table_partition_cols(vec![Field::new(
                 "part".to_string(),
                 wrap_partition_type_in_dict(DataType::Int16),
@@ -798,10 +798,10 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
 
     let scan_config =
         FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, file_source)
-            .with_file_groups(vec![vec![PartitionedFile::new(
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.parquet".to_string(),
                 1024,
-            )]])
+            )])])
             .with_statistics(Statistics {
                 num_rows: Precision::Inexact(100),
                 total_byte_size: Precision::Inexact(1024),
@@ -1297,7 +1297,7 @@ fn roundtrip_json_sink() -> Result<()> {
     let file_sink_config = FileSinkConfig {
         original_url: String::default(),
         object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+        file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
@@ -1334,7 +1334,7 @@ fn roundtrip_csv_sink() -> Result<()> {
     let file_sink_config = FileSinkConfig {
         original_url: String::default(),
         object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+        file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
@@ -1390,7 +1390,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
     let file_sink_config = FileSinkConfig {
         original_url: String::default(),
         object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+        file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
@@ -1610,10 +1610,10 @@ async fn roundtrip_projection_source() -> Result<()> {
         schema.clone(),
         file_source,
     )
-    .with_file_groups(vec![vec![PartitionedFile::new(
+    .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
         "/path/to/file.parquet".to_string(),
         1024,
-    )]])
+    )])])
     .with_statistics(statistics)
     .with_projection(Some(vec![0, 1, 2]));
 

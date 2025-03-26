@@ -448,7 +448,7 @@ pub(crate) fn date_part_to_sql(
                 };
 
                 return Ok(Some(ast::Expr::Function(ast::Function {
-                    name: ast::ObjectName(vec![ast::Ident {
+                    name: ast::ObjectName::from(vec![ast::Ident {
                         value: "strftime".to_string(),
                         quote_style: None,
                         span: Span::empty(),
@@ -457,7 +457,7 @@ pub(crate) fn date_part_to_sql(
                         duplicate_treatment: None,
                         args: vec![
                             ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
-                                ast::Expr::Value(ast::Value::SingleQuotedString(
+                                ast::Expr::value(ast::Value::SingleQuotedString(
                                     field.to_string(),
                                 )),
                             )),

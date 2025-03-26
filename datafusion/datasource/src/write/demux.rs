@@ -33,8 +33,10 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::{
-    as_boolean_array, as_date32_array, as_date64_array, as_int32_array, as_int64_array,
-    as_string_array, as_string_view_array,
+    as_boolean_array, as_date32_array, as_date64_array, as_float16_array,
+    as_float32_array, as_float64_array, as_int16_array, as_int32_array, as_int64_array,
+    as_int8_array, as_string_array, as_string_view_array, as_uint16_array,
+    as_uint32_array, as_uint64_array, as_uint8_array,
 };
 use datafusion_common::{exec_datafusion_err, not_impl_err, DataFusionError};
 use datafusion_common_runtime::SpawnedTask;
@@ -407,6 +409,18 @@ fn compute_partition_keys_by_row<'a>(
                     partition_values.push(Cow::from(date));
                 }
             }
+            DataType::Int8 => {
+                let array = as_int8_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::Int16 => {
+                let array = as_int16_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
             DataType::Int32 => {
                 let array = as_int32_array(col_array)?;
                 for i in 0..rb.num_rows() {
@@ -415,6 +429,48 @@ fn compute_partition_keys_by_row<'a>(
             }
             DataType::Int64 => {
                 let array = as_int64_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::UInt8 => {
+                let array = as_uint8_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::UInt16 => {
+                let array = as_uint16_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::UInt32 => {
+                let array = as_uint32_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::UInt64 => {
+                let array = as_uint64_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::Float16 => {
+                let array = as_float16_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::Float32 => {
+                let array = as_float32_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::Float64 => {
+                let array = as_float64_array(col_array)?;
                 for i in 0..rb.num_rows() {
                     partition_values.push(Cow::from(array.value(i).to_string()));
                 }
