@@ -2548,6 +2548,7 @@ dependencies = [
  "datafusion-functions-aggregate",
  "datafusion-functions-nested",
  "datafusion-functions-window",
+ "datafusion-optimizer",
  "env_logger",
  "indexmap 2.8.0",
  "log",
