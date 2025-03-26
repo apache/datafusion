@@ -152,7 +152,7 @@ use crate::expressions::Literal;
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
 use datafusion_expr::Operator;
@@ -168,6 +168,7 @@ use petgraph::Outgoing;
 pub struct ExprIntervalGraph {
     graph: StableGraph<ExprIntervalGraphNode, usize>,
     root: NodeIndex,
+    schema: SchemaRef,
 }
 
 /// This object encapsulates all possible constraint propagation results.
@@ -380,7 +381,7 @@ impl ExprIntervalGraph {
         // Build the full graph:
         let (root, graph) =
             build_dag(expr, &|node| ExprIntervalGraphNode::make_node(node, schema))?;
-        Ok(Self { graph, root })
+        Ok(Self { graph, root, schema: Arc::new(schema.clone()) })
     }
 
     pub fn node_count(&self) -> usize {
@@ -601,8 +602,9 @@ impl ExprIntervalGraph {
             if !children_intervals.is_empty() {
                 // Reverse to align with `PhysicalExpr`'s children:
                 children_intervals.reverse();
-                self.graph[node].interval =
-                    self.graph[node].expr.evaluate_bounds(&children_intervals)?;
+                if let Some(interval) = self.graph[node].expr.evaluate_bounds_checked(&children_intervals, &self.schema)? {
+                    self.graph[node].interval = interval;
+                }
             }
         }
         Ok(self.graph[self.root].interval())

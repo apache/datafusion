@@ -119,6 +119,16 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
         not_impl_err!("Not implemented for {self}")
     }
 
+    /// Checks support of bounds evaluation for this expression, before evaluating bounds.
+    /// Returns None if bounds evaluation is not supported.
+    fn evaluate_bounds_checked(&self, children: &[&Interval], schema: &SchemaRef) -> Result<Option<Interval>> {
+        if self.supports_bounds_evaluation(schema) {
+            Some(self.evaluate_bounds(children)).transpose()
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Indicates whether interval arithmetic is supported for this expression.
     fn supports_bounds_evaluation(&self, _schema: &SchemaRef) -> bool {
         false
@@ -176,13 +186,21 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// statistics accordingly. The default implementation simply creates an
     /// unknown output distribution by combining input ranges. This logic loses
     /// distribution information, but is a safe default.
-    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
+    fn evaluate_statistics(&self, children: &[&Distribution], schema: &SchemaRef) -> Result<Distribution> {
         let children_ranges = children
             .iter()
             .map(|c| c.range())
             .collect::<Result<Vec<_>>>()?;
         let children_ranges_refs = children_ranges.iter().collect::<Vec<_>>();
-        let output_interval = self.evaluate_bounds(children_ranges_refs.as_slice())?;
+
+        let output_interval = if let Some(interval) = self.evaluate_bounds_checked(children_ranges_refs.as_slice(), schema)? {
+            interval
+        } else {
+            self.data_type(schema.as_ref())
+                .and_then(|dt| Interval::make_unbounded(&dt))?
+        };
+
+
         let dt = output_interval.data_type();
         if dt.eq(&DataType::Boolean) {
             let p = if output_interval.eq(&Interval::CERTAINLY_TRUE) {

@@ -22,7 +22,7 @@ use crate::intervals::cp_solver::PropagationResult;
 use crate::physical_expr::PhysicalExpr;
 use crate::utils::{build_dag, ExprTreeNode};
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::statistics::Distribution;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -123,7 +123,7 @@ impl ExprStatisticsGraph {
 
     /// Computes statistics/distributions for an expression via a bottom-up
     /// traversal.
-    pub fn evaluate_statistics(&mut self) -> Result<&Distribution> {
+    pub fn evaluate_statistics(&mut self, schema: &SchemaRef) -> Result<&Distribution> {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(idx) = dfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(idx, Outgoing);
@@ -136,7 +136,7 @@ impl ExprStatisticsGraph {
                 children_statistics.reverse();
                 self.graph[idx].dist = self.graph[idx]
                     .expr
-                    .evaluate_statistics(&children_statistics)?;
+                    .evaluate_statistics(&children_statistics, schema)?;
             }
         }
         Ok(self.graph[self.root].distribution())
@@ -235,23 +235,23 @@ mod tests {
 
     #[test]
     fn test_stats_integration() -> Result<()> {
-        let schema = &Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Float64, false),
             Field::new("b", DataType::Float64, false),
             Field::new("c", DataType::Float64, false),
             Field::new("d", DataType::Float64, false),
-        ]);
+        ]));
 
         let a = Arc::new(Column::new("a", 0)) as _;
         let b = Arc::new(Column::new("b", 1)) as _;
         let c = Arc::new(Column::new("c", 2)) as _;
         let d = Arc::new(Column::new("d", 3)) as _;
 
-        let left = binary_expr(a, Operator::Plus, b, schema)?;
-        let right = binary_expr(c, Operator::Minus, d, schema)?;
-        let expr = binary_expr(left, Operator::Eq, right, schema)?;
+        let left = binary_expr(a, Operator::Plus, b, &schema)?;
+        let right = binary_expr(c, Operator::Minus, d, &schema)?;
+        let expr = binary_expr(left, Operator::Eq, right, &schema)?;
 
-        let mut graph = ExprStatisticsGraph::try_new(expr, schema)?;
+        let mut graph = ExprStatisticsGraph::try_new(expr, &schema)?;
         // 2, 5 and 6 are BinaryExpr
         graph.assign_statistics(&[
             (
@@ -271,7 +271,7 @@ mod tests {
                 Distribution::new_uniform(Interval::make(Some(1.), Some(5.))?)?,
             ),
         ]);
-        let ev_stats = graph.evaluate_statistics()?;
+        let ev_stats = graph.evaluate_statistics(&schema)?;
         assert_eq!(
             ev_stats,
             &Distribution::new_bernoulli(ScalarValue::Float64(None))?

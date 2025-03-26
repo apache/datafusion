@@ -510,7 +510,7 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
-    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
+    fn evaluate_statistics(&self, children: &[&Distribution], _schema: &SchemaRef) -> Result<Distribution> {
         let (left, right) = (children[0], children[1]);
 
         if self.op.is_numerical_operators() {
@@ -4452,7 +4452,7 @@ mod tests {
     /// Test for Uniform-Uniform, Unknown-Uniform, Uniform-Unknown and Unknown-Unknown evaluation.
     #[test]
     fn test_evaluate_statistics_combination_of_range_holders() -> Result<()> {
-        let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
         let a = Arc::new(Column::new("a", 0)) as _;
         let b = lit(ScalarValue::from(12.0));
 
@@ -4507,9 +4507,9 @@ mod tests {
             ];
 
             for op in ops {
-                let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
+                let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), &schema)?;
                 assert_eq!(
-                    expr.evaluate_statistics(&children)?,
+                    expr.evaluate_statistics(&children, &schema)?,
                     new_generic_from_binary_op(&op, children[0], children[1])?
                 );
             }
@@ -4519,19 +4519,19 @@ mod tests {
 
     #[test]
     fn test_evaluate_statistics_bernoulli() -> Result<()> {
-        let schema = &Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
-        ]);
+        ]));
         let a = Arc::new(Column::new("a", 0)) as _;
         let b = Arc::new(Column::new("b", 1)) as _;
         let eq = Arc::new(binary_expr(
             Arc::clone(&a),
             Operator::Eq,
             Arc::clone(&b),
-            schema,
+            &schema,
         )?);
-        let neq = Arc::new(binary_expr(a, Operator::NotEq, b, schema)?);
+        let neq = Arc::new(binary_expr(a, Operator::NotEq, b, &schema)?);
 
         let left_stat = &Distribution::new_uniform(Interval::make(Some(0), Some(7))?)?;
         let right_stat = &Distribution::new_uniform(Interval::make(Some(4), Some(11))?)?;
@@ -4539,13 +4539,13 @@ mod tests {
         // Intervals: [0, 7], [4, 11].
         // The intersection is [4, 7], so the probability of equality is 4 / 64 = 1 / 16.
         assert_eq!(
-            eq.evaluate_statistics(&[left_stat, right_stat])?,
+            eq.evaluate_statistics(&[left_stat, right_stat], &schema)?,
             Distribution::new_bernoulli(ScalarValue::from(1.0 / 16.0))?
         );
 
         // The probability of being distinct is 1 - 1 / 16 = 15 / 16.
         assert_eq!(
-            neq.evaluate_statistics(&[left_stat, right_stat])?,
+            neq.evaluate_statistics(&[left_stat, right_stat], &schema)?,
             Distribution::new_bernoulli(ScalarValue::from(15.0 / 16.0))?
         );
 

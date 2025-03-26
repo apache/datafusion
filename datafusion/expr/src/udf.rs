@@ -933,6 +933,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.evaluate_bounds(input)
     }
 
+    fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        self.inner.supports_bounds_evaluation(schema)
+    }
+
     fn propagate_constraints(
         &self,
         interval: &Interval,

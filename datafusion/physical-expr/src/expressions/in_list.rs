@@ -1471,7 +1471,7 @@ mod tests {
 
     #[test]
     fn test_in_list_bounds_eval() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
         let col_a = col("a", &schema)?;
         let list = vec![lit(0i64), lit(2i64), lit(9i64), lit(6i64)];
 

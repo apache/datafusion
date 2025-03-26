@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -128,7 +128,7 @@ impl PhysicalExpr for NotExpr {
             .map(|result| vec![result]))
     }
 
-    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
+    fn evaluate_statistics(&self, children: &[&Distribution], _schema: &SchemaRef) -> Result<Distribution> {
         match children[0] {
             Bernoulli(b) => {
                 let p_value = b.p_value();
@@ -243,14 +243,15 @@ mod tests {
         interval: Interval,
         expected_interval: Interval,
     ) -> Result<()> {
-        let not_expr = not(col("a", &schema())?)?;
+        let schema = schema();
+        let not_expr = not(col("a", &schema)?)?;
         assert_eq!(not_expr.evaluate_bounds(&[&interval])?, expected_interval);
         Ok(())
     }
 
     #[test]
     fn test_evaluate_statistics() -> Result<()> {
-        let _schema = &Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
         let a = Arc::new(Column::new("a", 0)) as _;
         let expr = not(a)?;
 
@@ -258,7 +259,7 @@ mod tests {
         assert!(expr
             .evaluate_statistics(&[&Distribution::new_uniform(
                 Interval::make_unbounded(&DataType::Float64)?
-            )?])
+            )?], &schema)
             .is_err());
 
         // Exponential
@@ -267,7 +268,7 @@ mod tests {
                 ScalarValue::from(1.0),
                 ScalarValue::from(1.0),
                 true
-            )?])
+            )?], &schema)
             .is_err());
 
         // Gaussian
@@ -275,28 +276,28 @@ mod tests {
             .evaluate_statistics(&[&Distribution::new_gaussian(
                 ScalarValue::from(1.0),
                 ScalarValue::from(1.0),
-            )?])
+            )?], &schema)
             .is_err());
 
         // Bernoulli
         assert_eq!(
             expr.evaluate_statistics(&[&Distribution::new_bernoulli(
                 ScalarValue::from(0.0),
-            )?])?,
+            )?], &schema)?,
             Distribution::new_bernoulli(ScalarValue::from(1.))?
         );
 
         assert_eq!(
             expr.evaluate_statistics(&[&Distribution::new_bernoulli(
                 ScalarValue::from(1.0),
-            )?])?,
+            )?], &schema)?,
             Distribution::new_bernoulli(ScalarValue::from(0.))?
         );
 
         assert_eq!(
             expr.evaluate_statistics(&[&Distribution::new_bernoulli(
                 ScalarValue::from(0.25),
-            )?])?,
+            )?], &schema)?,
             Distribution::new_bernoulli(ScalarValue::from(0.75))?
         );
 
@@ -306,7 +307,7 @@ mod tests {
                 ScalarValue::Null,
                 ScalarValue::Null,
                 Interval::make_unbounded(&DataType::UInt8)?
-            )?])
+            )?], &schema)
             .is_err());
 
         // Unknown with non-boolean interval as range
@@ -316,7 +317,7 @@ mod tests {
                 ScalarValue::Null,
                 ScalarValue::Null,
                 Interval::make_unbounded(&DataType::Float64)?
-            )?])
+            )?], &schema)
             .is_err());
 
         Ok(())

@@ -299,7 +299,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{assert_contains, DFSchema};
+    use datafusion_common::{ DFSchema};
     use datafusion_expr::{
         col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit, Expr,
     };
@@ -422,17 +422,9 @@ mod tests {
     fn test_analyze_invalid_boundary_exprs() {
         let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Int32)]));
         let expr = col("a").lt(lit(10)).or(col("a").gt(lit(20)));
-        let expected_error = "Interval arithmetic does not support the operator OR";
-        let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
         let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
         let physical_expr =
             create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
-        let analysis_error = analyze(
-            &physical_expr,
-            AnalysisContext::new(boundaries),
-            df_schema.as_ref(),
-        )
-        .unwrap_err();
-        assert_contains!(analysis_error.to_string(), expected_error);
+        assert!(!physical_expr.supports_bounds_evaluation(df_schema.as_ref()));
     }
 }
