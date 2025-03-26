@@ -33,7 +33,6 @@ use tokio::sync::mpsc::Sender;
 
 use datafusion_common::{exec_datafusion_err, HashSet, Result};
 
-
 fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
     let file = BufReader::new(File::open(path)?);
     let reader = StreamReader::try_new(file, None)?;
