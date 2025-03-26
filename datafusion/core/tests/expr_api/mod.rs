@@ -330,12 +330,12 @@ async fn test_create_physical_expr_coercion() {
     create_expr_test(lit(1i32).eq(col("id")), "CAST(1 AS Utf8) = id@0");
     // compare int col to string literal `i = '202410'`
     // Note this casts the column (not the field)
-    create_expr_test(col("i").eq(lit("202410")), "i@1 = 202410");
-    create_expr_test(lit("202410").eq(col("i")), "202410 = i@1");
+    create_expr_test(col("i").eq(lit("202410")), "CAST(i@1 AS Utf8) = 202410");
+    create_expr_test(lit("202410").eq(col("i")), "202410 = CAST(i@1 AS Utf8)");
     // however, when simplified the casts on i should removed
     // https://github.com/apache/datafusion/issues/14944
-    create_simplified_expr_test(col("i").eq(lit("202410")), "i@1 = 202410");
-    create_simplified_expr_test(lit("202410").eq(col("i")), "i@1 = 202410");
+    create_simplified_expr_test(col("i").eq(lit("202410")), "CAST(i@1 AS Utf8) = 202410");
+    create_simplified_expr_test(lit("202410").eq(col("i")), "CAST(i@1 AS Utf8) = 202410");
 }
 
 /// Evaluates the specified expr as an aggregate and compares the result to the
