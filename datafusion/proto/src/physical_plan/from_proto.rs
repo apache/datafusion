@@ -440,6 +440,31 @@ pub fn parse_protobuf_hash_partitioning(
     }
 }
 
+pub fn parse_protobuf_hash_selection_vector_partitioning(
+    partitioning: Option<&protobuf::PhysicalHashSelectionVectorRepartition>,
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Option<Partitioning>> {
+    match partitioning {
+        Some(hash_part) => {
+            let expr = parse_physical_exprs(
+                &hash_part.hash_expr,
+                registry,
+                input_schema,
+                codec,
+            )?;
+
+            Ok(Some(Partitioning::HashSelectionVector(
+                expr,
+                hash_part.partition_count.try_into().unwrap(),
+            )))
+        }
+        None => Ok(None),
+    }
+}
+
+
 pub fn parse_protobuf_partitioning(
     partitioning: Option<&protobuf::Partitioning>,
     registry: &dyn FunctionRegistry,
@@ -455,6 +480,14 @@ pub fn parse_protobuf_partitioning(
             ))),
             Some(protobuf::partitioning::PartitionMethod::Hash(hash_repartition)) => {
                 parse_protobuf_hash_partitioning(
+                    Some(hash_repartition),
+                    registry,
+                    input_schema,
+                    codec,
+                )
+            },
+            Some(protobuf::partitioning::PartitionMethod::HashSelectionVector(hash_repartition)) => {
+                parse_protobuf_hash_selection_vector_partitioning(
                     Some(hash_repartition),
                     registry,
                     input_schema,

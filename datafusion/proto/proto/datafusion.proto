@@ -1225,12 +1225,18 @@ message PhysicalHashRepartition {
   uint64 partition_count = 2;
 }
 
+message PhysicalHashSelectionVectorRepartition {
+  repeated PhysicalExprNode hash_expr = 1;
+  uint64 partition_count = 2;
+}
+
 message RepartitionExecNode{
   PhysicalPlanNode input = 1;
   // oneof partition_method {
   //   uint64 round_robin = 2;
   //   PhysicalHashRepartition hash = 3;
   //   uint64 unknown = 4;
+  //   PhysicalHashSelectionVectorRepartition hash_selection_vector = 6;
   // }
   Partitioning partitioning = 5;
 }
@@ -1240,6 +1246,7 @@ message Partitioning {
     uint64 round_robin = 1;
     PhysicalHashRepartition hash = 2;
     uint64 unknown = 3;
+    PhysicalHashSelectionVectorRepartition hash_selection_vector = 4;
   }
 }
 

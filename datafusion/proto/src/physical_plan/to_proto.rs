@@ -412,6 +412,17 @@ pub fn serialize_partitioning(
                     },
                 )),
             }
+        },
+        Partitioning::HashSelectionVector(exprs, partition_count) => {
+            let serialized_exprs = serialize_physical_exprs(exprs, codec)?;
+            protobuf::Partitioning {
+                partition_method: Some(protobuf::partitioning::PartitionMethod::HashSelectionVector(
+                    protobuf::PhysicalHashSelectionVectorRepartition {
+                        hash_expr: serialized_exprs,
+                        partition_count: *partition_count as u64,
+                    },
+                )),
+            }
         }
         Partitioning::UnknownPartitioning(partition_count) => protobuf::Partitioning {
             partition_method: Some(protobuf::partitioning::PartitionMethod::Unknown(
