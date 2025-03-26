@@ -40,9 +40,7 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{
-    ArrayRef, BooleanArray, PrimitiveArray, RecordBatch, RecordBatchOptions,
-};
+use arrow::array::{BooleanArray, PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow_schema::{DataType, Field};
@@ -208,7 +206,7 @@ enum BatchPartitionerState {
     },
 }
 
-pub static SELECTION_FILED_NAME: &str = "selection";
+pub static SELECTION_FILED_NAME: &str = "__selection";
 
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
@@ -383,15 +381,15 @@ impl BatchPartitioner {
                     let it = (0..*num_partitions).map(move |partition| {
                         // Tracking time required for repartitioned batches construction
                         let _timer = partitioner_timer.timer();
-                        let select_vector = hash_vector
-                            .iter()
-                            .map(|&hash| hash == partition as u64)
-                            .collect::<Vec<_>>();
-                        let new_col: ArrayRef =
-                            Arc::new(BooleanArray::from(select_vector)) as ArrayRef;
+                        let selection_vector = Arc::new(
+                            hash_vector
+                                .iter()
+                                .map(|&hash| Some(hash == partition as u64))
+                                .collect::<BooleanArray>(),
+                        );
                         let mut columns =
                             batch.columns().iter().map(Arc::clone).collect::<Vec<_>>();
-                        columns.push(new_col);
+                        columns.push(selection_vector);
                         let mut options = RecordBatchOptions::new();
                         options = options.with_row_count(Some(batch.num_rows()));
                         let batch = RecordBatch::try_new_with_options(

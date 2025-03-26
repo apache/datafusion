@@ -120,7 +120,7 @@ pub enum Partitioning {
     /// Allocate rows based on a hash of one of more expressions and the specified number
     /// of partitions with a selection vecotr column.
     ///
-    /// The column is a boolean column called `selection` that is used to filter out rows
+    /// The column is a boolean column called `__selection` that is used to filter out rows
     /// that should not be included in the partition. `true` means the row should be included
     /// and `false` means the row should be excluded.
     HashSelectionVector(Vec<Arc<dyn PhysicalExpr>>, usize),
