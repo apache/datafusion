@@ -93,11 +93,11 @@ impl ScalarUDFImpl for Md5Func {
         use DataType::*;
         Ok(match &arg_types[0] {
             LargeUtf8 | LargeBinary => Utf8,
-            Utf8View | Utf8 | Binary => Utf8,
+            Utf8View | Utf8 | Binary | BinaryView => Utf8,
             Null => Null,
             Dictionary(_, t) => match **t {
                 LargeUtf8 | LargeBinary => Utf8,
-                Utf8 | Binary => Utf8,
+                Utf8 | Binary | BinaryView => Utf8,
                 Null => Null,
                 _ => {
                     return plan_err!(
