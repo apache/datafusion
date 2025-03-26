@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
 use std::sync::Arc;
+use std::{collections::HashSet, str::FromStr};
 
 use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
+use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
 
 use crate::fuzz_cases::aggregation_fuzzer::{
@@ -452,7 +453,11 @@ impl QueryBuilder {
     pub fn generate_query(&self) -> String {
         let group_by = self.random_group_by();
         let mut query = String::from("SELECT ");
-        query.push_str(&self.random_aggregate_functions().join(", "));
+        query.push_str(&group_by.join(", "));
+        if !group_by.is_empty() {
+            query.push_str(", ");
+        }
+        query.push_str(&self.random_aggregate_functions(&group_by).join(", "));
         query.push_str(" FROM ");
         query.push_str(&self.table_name);
         if !group_by.is_empty() {
@@ -474,7 +479,7 @@ impl QueryBuilder {
     /// * `function_names` are randomly selected from [`Self::aggregate_functions`]
     /// * `<DISTINCT> argument` is randomly selected from [`Self::arguments`]
     /// * `alias` is a unique alias `colN` for the column (to avoid duplicate column names)
-    fn random_aggregate_functions(&self) -> Vec<String> {
+    fn random_aggregate_functions(&self, group_by_cols: &[String]) -> Vec<String> {
         const MAX_NUM_FUNCTIONS: usize = 5;
         let mut rng = thread_rng();
         let num_aggregate_functions = rng.gen_range(1..MAX_NUM_FUNCTIONS);
@@ -482,6 +487,14 @@ impl QueryBuilder {
         let mut alias_gen = 1;
 
         let mut aggregate_functions = vec![];
+
+        let mut order_by_black_list: HashSet<String> =
+            group_by_cols.iter().cloned().collect();
+        // remove one random col
+        if let Some(first) = order_by_black_list.iter().next().cloned() {
+            order_by_black_list.remove(&first);
+        }
+
         while aggregate_functions.len() < num_aggregate_functions {
             let idx = rng.gen_range(0..self.aggregate_functions.len());
             let (function_name, is_distinct) = &self.aggregate_functions[idx];
@@ -489,7 +502,19 @@ impl QueryBuilder {
             let alias = format!("col{}", alias_gen);
             let distinct = if *is_distinct { "DISTINCT " } else { "" };
             alias_gen += 1;
-            let function = format!("{function_name}({distinct}{argument}) as {alias}");
+
+            let (order_by, null_opt) = if function_name.eq("first_value") {
+                (
+                    self.order_by(&order_by_black_list), /* Among the order by columns, at most one group by column can be included to avoid all order by column values being identical */
+                    self.null_opt(),
+                )
+            } else {
+                ("".to_string(), "".to_string())
+            };
+
+            let function = format!(
+                "{function_name}({distinct}{argument}{order_by}) {null_opt} as {alias}"
+            );
             aggregate_functions.push(function);
         }
         aggregate_functions
@@ -500,6 +525,39 @@ impl QueryBuilder {
         let mut rng = thread_rng();
         let idx = rng.gen_range(0..self.arguments.len());
         self.arguments[idx].clone()
+    }
+
+    fn order_by(&self, black_list: &HashSet<String>) -> String {
+        let mut available_columns: Vec<String> = self
+            .arguments
+            .iter()
+            .filter(|col| !black_list.contains(*col))
+            .cloned()
+            .collect();
+
+        available_columns.shuffle(&mut thread_rng());
+
+        let num_of_order_by_col = 12;
+        let column_count = std::cmp::min(num_of_order_by_col, available_columns.len());
+
+        let selected_columns = &available_columns[0..column_count];
+
+        let mut rng = thread_rng();
+        let mut result = String::from_str(" order by ").unwrap();
+        for col in selected_columns {
+            let order = if rng.gen_bool(0.5) { "ASC" } else { "DESC" };
+            result.push_str(&format!("{} {},", col, order));
+        }
+
+        result.strip_suffix(",").unwrap().to_string()
+    }
+
+    fn null_opt(&self) -> String {
+        if thread_rng().gen_bool(0.5) {
+            "RESPECT NULLS".to_string()
+        } else {
+            "IGNORE NULLS".to_string()
+        }
     }
 
     /// Pick a random number of fields to group by (non-repeating)
