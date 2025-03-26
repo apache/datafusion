@@ -1135,13 +1135,6 @@ impl DefaultPhysicalPlanner {
                     && session_state.config().repartition_joins()
                     && prefer_hash_join
                 {
-                    let partition_mode = {
-                        if session_state.config().collect_statistics() {
-                            PartitionMode::Auto
-                        } else {
-                            PartitionMode::Partitioned
-                        }
-                    };
                     Arc::new(HashJoinExec::try_new(
                         physical_left,
                         physical_right,
@@ -1149,7 +1142,7 @@ impl DefaultPhysicalPlanner {
                         join_filter,
                         join_type,
                         None,
-                        partition_mode,
+                        PartitionMode::Auto,
                         null_equals_null,
                     )?)
                 } else {
