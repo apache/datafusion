@@ -379,8 +379,14 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
         distinct_count: Precision::Absent,
     };
 
-    let initial_boundaries =
-        vec![ExprBoundaries::try_from_column(&schema, &column_stats, 0)?];
+    let initial_boundaries = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(idx, field)| {
+            ExprBoundaries::try_from_column(field.as_ref(), &column_stats, idx)
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     // Before we run the analysis pass; let us describe what we can infer from
     // the initial information.
