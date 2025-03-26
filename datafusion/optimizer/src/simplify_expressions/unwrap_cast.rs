@@ -230,7 +230,7 @@ fn is_supported_dictionary_type(data_type: &DataType) -> bool {
                     DataType::Dictionary(_, inner) if is_supported_type(inner))
 }
 
-/// Try to move a cast from a column to the other side of a `=` / `!=` operator
+///// Tries to move a cast from an expression (such as column) to the literal other side of a comparison operator./
 ///
 /// Specifically, rewrites
 /// ```sql
@@ -262,29 +262,12 @@ fn cast_literal_to_type_with_op(
                 target_type,
                 Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
             ) {
-                let opts = arrow::compute::CastOptions {
-                    safe: false,
-                    format_options: Default::default(),
-                };
-
-                let array = ScalarValue::to_array(lit_value).ok()?;
-                let casted =
-                    arrow::compute::cast_with_options(&array, target_type, &opts).ok()?;
-
-                // Perform a round-trip cast: literal -> target_type -> original_type
-                // Ensures cast expressions involving values like '0123' are not unwrapped for correctness (e.g., `cast(c1, UTF8) = '0123'`)
-                let round_tripped = arrow::compute::cast_with_options(
-                    &casted,
-                    &lit_value.data_type(),
-                    &opts,
-                )
-                .ok()?;
-
-                if array != round_tripped {
+                let casted = lit_value.cast_to(target_type).ok()?;
+                let round_tripped = casted.cast_to(&lit_value.data_type()).ok()?;
+                if lit_value != &round_tripped {
                     return None;
                 }
-
-                ScalarValue::try_from_array(&casted, 0).ok()
+                Some(casted)
             } else {
                 None
             }
