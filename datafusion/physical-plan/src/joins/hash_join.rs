@@ -792,13 +792,6 @@ impl ExecutionPlan for HashJoinExec {
             );
         }
 
-        if self.mode == PartitionMode::Auto {
-            return plan_err!(
-                "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
-                PartitionMode::Auto
-            );
-        }
-
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => {
@@ -837,7 +830,12 @@ impl ExecutionPlan for HashJoinExec {
                     1,
                 ))
             }
-            PartitionMode::Auto => unreachable!(),
+            PartitionMode::Auto => {
+                return plan_err!(
+                    "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
+                    PartitionMode::Auto
+                );
+            }
         };
 
         let batch_size = context.session_config().batch_size();
