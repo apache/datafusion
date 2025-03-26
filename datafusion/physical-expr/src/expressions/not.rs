@@ -128,7 +128,11 @@ impl PhysicalExpr for NotExpr {
             .map(|result| vec![result]))
     }
 
-    fn evaluate_statistics(&self, children: &[&Distribution], _schema: &SchemaRef) -> Result<Distribution> {
+    fn evaluate_statistics(
+        &self,
+        children: &[&Distribution],
+        _schema: &SchemaRef,
+    ) -> Result<Distribution> {
         match children[0] {
             Bernoulli(b) => {
                 let p_value = b.p_value();
@@ -251,73 +255,92 @@ mod tests {
 
     #[test]
     fn test_evaluate_statistics() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
         let a = Arc::new(Column::new("a", 0)) as _;
         let expr = not(a)?;
 
         // Uniform with non-boolean bounds
         assert!(expr
-            .evaluate_statistics(&[&Distribution::new_uniform(
-                Interval::make_unbounded(&DataType::Float64)?
-            )?], &schema)
+            .evaluate_statistics(
+                &[&Distribution::new_uniform(Interval::make_unbounded(
+                    &DataType::Float64
+                )?)?],
+                &schema
+            )
             .is_err());
 
         // Exponential
         assert!(expr
-            .evaluate_statistics(&[&Distribution::new_exponential(
-                ScalarValue::from(1.0),
-                ScalarValue::from(1.0),
-                true
-            )?], &schema)
+            .evaluate_statistics(
+                &[&Distribution::new_exponential(
+                    ScalarValue::from(1.0),
+                    ScalarValue::from(1.0),
+                    true
+                )?],
+                &schema
+            )
             .is_err());
 
         // Gaussian
         assert!(expr
-            .evaluate_statistics(&[&Distribution::new_gaussian(
-                ScalarValue::from(1.0),
-                ScalarValue::from(1.0),
-            )?], &schema)
+            .evaluate_statistics(
+                &[&Distribution::new_gaussian(
+                    ScalarValue::from(1.0),
+                    ScalarValue::from(1.0),
+                )?],
+                &schema
+            )
             .is_err());
 
         // Bernoulli
         assert_eq!(
-            expr.evaluate_statistics(&[&Distribution::new_bernoulli(
-                ScalarValue::from(0.0),
-            )?], &schema)?,
+            expr.evaluate_statistics(
+                &[&Distribution::new_bernoulli(ScalarValue::from(0.0),)?],
+                &schema
+            )?,
             Distribution::new_bernoulli(ScalarValue::from(1.))?
         );
 
         assert_eq!(
-            expr.evaluate_statistics(&[&Distribution::new_bernoulli(
-                ScalarValue::from(1.0),
-            )?], &schema)?,
+            expr.evaluate_statistics(
+                &[&Distribution::new_bernoulli(ScalarValue::from(1.0),)?],
+                &schema
+            )?,
             Distribution::new_bernoulli(ScalarValue::from(0.))?
         );
 
         assert_eq!(
-            expr.evaluate_statistics(&[&Distribution::new_bernoulli(
-                ScalarValue::from(0.25),
-            )?], &schema)?,
+            expr.evaluate_statistics(
+                &[&Distribution::new_bernoulli(ScalarValue::from(0.25),)?],
+                &schema
+            )?,
             Distribution::new_bernoulli(ScalarValue::from(0.75))?
         );
 
         assert!(expr
-            .evaluate_statistics(&[&Distribution::new_generic(
-                ScalarValue::Null,
-                ScalarValue::Null,
-                ScalarValue::Null,
-                Interval::make_unbounded(&DataType::UInt8)?
-            )?], &schema)
+            .evaluate_statistics(
+                &[&Distribution::new_generic(
+                    ScalarValue::Null,
+                    ScalarValue::Null,
+                    ScalarValue::Null,
+                    Interval::make_unbounded(&DataType::UInt8)?
+                )?],
+                &schema
+            )
             .is_err());
 
         // Unknown with non-boolean interval as range
         assert!(expr
-            .evaluate_statistics(&[&Distribution::new_generic(
-                ScalarValue::Null,
-                ScalarValue::Null,
-                ScalarValue::Null,
-                Interval::make_unbounded(&DataType::Float64)?
-            )?], &schema)
+            .evaluate_statistics(
+                &[&Distribution::new_generic(
+                    ScalarValue::Null,
+                    ScalarValue::Null,
+                    ScalarValue::Null,
+                    Interval::make_unbounded(&DataType::Float64)?
+                )?],
+                &schema
+            )
             .is_err());
 
         Ok(())

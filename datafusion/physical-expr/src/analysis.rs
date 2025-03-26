@@ -299,7 +299,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{ DFSchema};
+    use datafusion_common::DFSchema;
     use datafusion_expr::{
         col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit, Expr,
     };

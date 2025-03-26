@@ -510,7 +510,11 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
-    fn evaluate_statistics(&self, children: &[&Distribution], _schema: &SchemaRef) -> Result<Distribution> {
+    fn evaluate_statistics(
+        &self,
+        children: &[&Distribution],
+        _schema: &SchemaRef,
+    ) -> Result<Distribution> {
         let (left, right) = (children[0], children[1]);
 
         if self.op.is_numerical_operators() {
@@ -4452,7 +4456,8 @@ mod tests {
     /// Test for Uniform-Uniform, Unknown-Uniform, Uniform-Unknown and Unknown-Unknown evaluation.
     #[test]
     fn test_evaluate_statistics_combination_of_range_holders() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
         let a = Arc::new(Column::new("a", 0)) as _;
         let b = lit(ScalarValue::from(12.0));
 

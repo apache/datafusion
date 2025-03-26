@@ -140,7 +140,11 @@ impl PhysicalExpr for NegativeExpr {
             .map(|result| vec![result]))
     }
 
-    fn evaluate_statistics(&self, children: &[&Distribution], _schema: &SchemaRef) -> Result<Distribution> {
+    fn evaluate_statistics(
+        &self,
+        children: &[&Distribution],
+        _schema: &SchemaRef,
+    ) -> Result<Distribution> {
         match children[0] {
             Uniform(u) => Distribution::new_uniform(u.range().arithmetic_negate()?),
             Exponential(e) => Distribution::new_exponential(
@@ -264,26 +268,34 @@ mod tests {
 
         // Uniform
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Distribution::new_uniform(
-                Interval::make(Some(-2.), Some(3.))?
-            )?], &schema)?,
+            negative_expr.evaluate_statistics(
+                &[&Distribution::new_uniform(Interval::make(
+                    Some(-2.),
+                    Some(3.)
+                )?)?],
+                &schema
+            )?,
             Distribution::new_uniform(Interval::make(Some(-3.), Some(2.))?)?
         );
 
         // Bernoulli
         assert!(negative_expr
-            .evaluate_statistics(&[&Distribution::new_bernoulli(ScalarValue::from(
-                0.75
-            ))?], &schema)
+            .evaluate_statistics(
+                &[&Distribution::new_bernoulli(ScalarValue::from(0.75))?],
+                &schema
+            )
             .is_err());
 
         // Exponential
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Distribution::new_exponential(
-                ScalarValue::from(1.),
-                ScalarValue::from(1.),
-                true
-            )?], &schema)?,
+            negative_expr.evaluate_statistics(
+                &[&Distribution::new_exponential(
+                    ScalarValue::from(1.),
+                    ScalarValue::from(1.),
+                    true
+                )?],
+                &schema
+            )?,
             Distribution::new_exponential(
                 ScalarValue::from(1.),
                 ScalarValue::from(-1.),
@@ -293,21 +305,27 @@ mod tests {
 
         // Gaussian
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Distribution::new_gaussian(
-                ScalarValue::from(15),
-                ScalarValue::from(225),
-            )?], &schema)?,
+            negative_expr.evaluate_statistics(
+                &[&Distribution::new_gaussian(
+                    ScalarValue::from(15),
+                    ScalarValue::from(225),
+                )?],
+                &schema
+            )?,
             Distribution::new_gaussian(ScalarValue::from(-15), ScalarValue::from(225),)?
         );
 
         // Unknown
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Distribution::new_generic(
-                ScalarValue::from(15),
-                ScalarValue::from(15),
-                ScalarValue::from(10),
-                Interval::make(Some(10), Some(20))?
-            )?], &schema)?,
+            negative_expr.evaluate_statistics(
+                &[&Distribution::new_generic(
+                    ScalarValue::from(15),
+                    ScalarValue::from(15),
+                    ScalarValue::from(10),
+                    Interval::make(Some(10), Some(20))?
+                )?],
+                &schema
+            )?,
             Distribution::new_generic(
                 ScalarValue::from(-15),
                 ScalarValue::from(-15),
