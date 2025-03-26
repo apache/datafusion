@@ -78,19 +78,19 @@ version = "45.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "54.1.0", features = [
+arrow = { version = "=54.2.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "54.1.0", default-features = false }
-arrow-flight = { version = "54.1.0", features = [
+arrow-buffer = { version = "=54.2.0", default-features = false }
+arrow-flight = { version = "=54.2.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "54.2.0", default-features = false, features = [
+arrow-ipc = { version = "=54.2.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "54.1.0", default-features = false }
-arrow-schema = { version = "54.1.0", default-features = false }
+arrow-ord = { version = "=54.2.0", default-features = false }
+arrow-schema = { version = "=54.2.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "0.4.7"
 bytes = "1.10"
@@ -134,7 +134,7 @@ itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.11.0", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "54.1.0", default-features = false, features = [
+parquet = { version = "=54.2.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -190,3 +190,14 @@ large_futures = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "refs/pull/7325/head" }
+arrow-array = { git = "https://github.com/apache/arrow-rs", rev = "refs/pull/7325/head" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs", rev = "refs/pull/7325/head" }
+arrow-data = { git = "https://github.com/apache/arrow-rs", rev = "refs/pull/7325/head" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs", rev = "refs/pull/7325/head" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs", rev = "refs/pull/7325/head" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs", rev = "refs/pull/7325/head" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs", rev = "refs/pull/7325/head" }
+arrow-select = { git = "https://github.com/apache/arrow-rs", rev = "refs/pull/7325/head" }
