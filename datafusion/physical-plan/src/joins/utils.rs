@@ -649,11 +649,11 @@ pub fn build_join_schema(
 
 /// A [`SharedResultOnceCell`] is specialized a [`OnceCell`] that stores the result of
 /// the initialization as a [`SharedResult`] wrapped in [`Arc`].
-/// 
+///
 /// It ensures the computation happens exactly once, caching the result for all callers.
-/// This type is primarily used for lazy initialization of fallible operations 
+/// This type is primarily used for lazy initialization of fallible operations
 /// where multiple consumers need access to the same result.
-/// 
+///
 /// See [`OnceCell`] for more details.
 pub(crate) struct SharedResultOnceCell<T>(OnceCell<SharedResult<Arc<T>>>);
 
@@ -671,7 +671,7 @@ impl<T> Debug for SharedResultOnceCell<T> {
 
 impl<T> SharedResultOnceCell<T> {
     /// Gets a reference to the contained value, initializing it if necessary.
-    /// 
+    ///
     /// See [`OnceCell::get_or_init`] for more details.
     ///
     /// # Parameters

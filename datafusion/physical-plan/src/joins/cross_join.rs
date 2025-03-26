@@ -85,7 +85,7 @@ pub struct CrossJoinExec {
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Shared thread-safe OnceCell coordinating the loading of the left (build) side.
-    /// 
+    ///
     /// All output streams share this cell to ensure the left side data is loaded exactly once,
     /// with the first accessing stream handling the initialization.
     left_once_cell: Arc<SharedResultOnceCell<JoinLeftData>>,
