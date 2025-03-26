@@ -475,7 +475,7 @@ take.
 fn analyze_filter_example() -> Result<()> {
     // Create a schema with an 'age' column
     let age = Field::new("age", DataType::Int64, false);
-    let schema = Arc::new(Schema::new(vec![age]));
+    let schema = Arc::new(Schema::new(vec![age.clone()]));
 
     // Define column statistics
     let column_stats = ColumnStatistics {

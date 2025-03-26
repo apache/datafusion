@@ -367,7 +367,7 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
 
     // As always we need to tell DataFusion the type of the column.
     let age_field = make_field("age", DataType::Int64);
-    let schema = Arc::new(Schema::new(vec![age_field]));
+    let schema = Arc::new(Schema::new(vec![age_field.clone()]));
 
     // Similarly to the example in `boundary_analysis_and_selectivity_demo` we
     // can establish column statistics that can be used to describe certain
