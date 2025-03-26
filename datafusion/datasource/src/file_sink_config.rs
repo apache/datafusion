@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::file_groups::FileGroup;
 use crate::sink::DataSink;
 use crate::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
-use crate::{ListingTableUrl, PartitionedFile};
+use crate::ListingTableUrl;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::Result;
