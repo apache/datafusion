@@ -29,14 +29,10 @@ use arrow::array::ArrayData;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
 use arrow::record_batch::RecordBatch;
-use datafusion_execution::runtime_env::RuntimeEnv;
 use tokio::sync::mpsc::Sender;
 
 use datafusion_common::{exec_datafusion_err, HashSet, Result};
-use datafusion_execution::disk_manager::RefCountedTempFile;
-use datafusion_execution::SendableRecordBatchStream;
 
-use crate::stream::RecordBatchReceiverStream;
 
 fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
     let file = BufReader::new(File::open(path)?);

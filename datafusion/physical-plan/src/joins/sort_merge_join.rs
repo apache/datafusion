@@ -48,7 +48,7 @@ use crate::projection::{
     join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_on, ProjectionExec,
 };
-use crate::spill::SpillManager;
+use crate::spill::spill_manager::SpillManager;
 use crate::{
     metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
