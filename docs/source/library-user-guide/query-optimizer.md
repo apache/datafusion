@@ -493,7 +493,7 @@ fn analyze_filter_example() -> Result<()> {
 
     // Initialize analysis context
     let initial_boundaries = vec![ExprBoundaries::try_from_column(
-        &schema, &column_stats, 0)?];
+        &age, &column_stats, 0)?];
     let context = AnalysisContext::new(initial_boundaries);
 
     // Analyze expression

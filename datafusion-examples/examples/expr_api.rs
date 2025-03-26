@@ -366,7 +366,8 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
     let age_between_18_25 = col("age").gt(lit(18i64)).and(col("age").lt_eq(lit(25)));
 
     // As always we need to tell DataFusion the type of the column.
-    let schema = Arc::new(Schema::new(vec![make_field("age", DataType::Int64)]));
+    let age_field = make_field("age", DataType::Int64);
+    let schema = Arc::new(Schema::new(vec![age_field]));
 
     // Similarly to the example in `boundary_analysis_and_selectivity_demo` we
     // can establish column statistics that can be used to describe certain
@@ -379,14 +380,11 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
         distinct_count: Precision::Absent,
     };
 
-    let initial_boundaries = schema
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(idx, field)| {
-            ExprBoundaries::try_from_column(field.as_ref(), &column_stats, idx)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let initial_boundaries = vec![ExprBoundaries::try_from_column(
+        &age_field,
+        &column_stats,
+        0,
+    )?];
 
     // Before we run the analysis pass; let us describe what we can infer from
     // the initial information.
