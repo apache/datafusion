@@ -26,12 +26,10 @@ use std::{any::Any, vec};
 
 use super::utils::{
     asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
-    reorder_output_after_swap, swap_join_projection,
+    reorder_output_after_swap, swap_join_projection, SharedResultOnceCell,
+    SharedResultPending,
 };
-use super::{
-    utils::{OnceAsync, OnceFut},
-    PartitionMode, SharedBitmapBuilder,
-};
+use super::{PartitionMode, SharedBitmapBuilder};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
@@ -83,7 +81,7 @@ use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
 /// HashTable and input data for the left (build side) of a join
@@ -314,9 +312,10 @@ impl JoinLeftData {
 ///
 /// # Clone / Shared State
 ///
-/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
-/// loading of the left side with the processing in each output stream.
-/// Therefore it can not be [`Clone`]
+/// Note this structure includes a shared [`SharedResultOnceCell`] that is
+/// used to coordinate the loading of the left side with the processing in
+/// each output stream.
+/// Therefore it does not implement [`Clone`].
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
@@ -332,13 +331,12 @@ pub struct HashJoinExec {
     /// The schema after join. Please be careful when using this schema,
     /// if there is a projection, the schema isn't the same as the output schema.
     join_schema: SchemaRef,
-    /// Future that consumes left input and builds the hash table
+    /// Shared OnceCell coordinating the loading of the left (build) side.
     ///
-    /// For CollectLeft partition mode, this structure is *shared* across all output streams.
-    ///
-    /// Each output stream waits on the `OnceAsync` to signal the completion of
-    /// the hash table creation.
-    left_fut: OnceAsync<JoinLeftData>,
+    /// For CollectLeft partition mode, all output streams share this cell to
+    /// ensure the build side is computed exactly once, with the first accessing
+    /// stream handling the initialization.
+    left_once_cell: Arc<SharedResultOnceCell<JoinLeftData>>,
     /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Partitioning mode to use
@@ -409,7 +407,7 @@ impl HashJoinExec {
             filter,
             join_type: *join_type,
             join_schema,
-            left_fut: Default::default(),
+            left_once_cell: Default::default(),
             random_state,
             mode: partition_mode,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -793,27 +791,41 @@ impl ExecutionPlan for HashJoinExec {
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
-            PartitionMode::CollectLeft => self.left_fut.once(|| {
-                let reservation =
-                    MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
-                collect_left_input(
-                    None,
-                    self.random_state.clone(),
-                    Arc::clone(&self.left),
-                    on_left.clone(),
-                    Arc::clone(&context),
-                    join_metrics.clone(),
-                    reservation,
-                    need_produce_result_in_final(self.join_type),
-                    self.right().output_partitioning().partition_count(),
-                )
-            }),
+            PartitionMode::CollectLeft => {
+                let memory_pool = Arc::clone(context.memory_pool());
+                let random_state = self.random_state.clone();
+                let left = Arc::clone(&self.left);
+                let context = Arc::clone(&context);
+                let join_metrics = join_metrics.clone();
+                let join_type = self.join_type;
+
+                let fut = Arc::clone(&self.left_once_cell).get_or_init(async move {
+                    // We create the reservation inside this closure to ensure it is only created once
+                    let reservation =
+                        MemoryConsumer::new("HashJoinInput").register(&memory_pool);
+
+                    collect_left_input(
+                        None,
+                        random_state,
+                        left,
+                        on_left,
+                        context,
+                        join_metrics,
+                        reservation,
+                        need_produce_result_in_final(join_type),
+                        right_partitions,
+                    )
+                    .await
+                });
+
+                fut.boxed()
+            }
             PartitionMode::Partitioned => {
                 let reservation =
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
 
-                OnceFut::new(collect_left_input(
+                collect_left_input(
                     Some(partition),
                     self.random_state.clone(),
                     Arc::clone(&self.left),
@@ -823,7 +835,9 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
-                ))
+                )
+                .map(|res| res.map(Arc::new))
+                .boxed()
             }
             PartitionMode::Auto => {
                 return plan_err!(
@@ -1099,7 +1113,7 @@ enum BuildSide {
 /// Container for BuildSide::Initial related data
 struct BuildSideInitialState {
     /// Future for building hash table from build-side input
-    left_fut: OnceFut<JoinLeftData>,
+    left_fut: SharedResultPending<JoinLeftData>,
 }
 
 /// Container for BuildSide::Ready related data
@@ -1423,7 +1437,8 @@ impl HashJoinStream {
             .build_side
             .try_as_initial_mut()?
             .left_fut
-            .get_shared(cx))?;
+            .poll_unpin(cx))?;
+
         build_timer.done();
 
         self.state = HashJoinStreamState::FetchProbeBatch;

@@ -26,7 +26,8 @@ use std::task::Poll;
 use super::utils::{
     asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
     need_produce_result_in_final, reorder_output_after_swap, swap_join_projection,
-    BatchSplitter, BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
+    BatchSplitter, BatchTransformer, NoopBatchTransformer, SharedResultOnceCell,
+    SharedResultPending, StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::common::can_project;
@@ -34,7 +35,7 @@ use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
-    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
+    BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
 };
 use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -62,7 +63,7 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
 /// Left (build-side) data
@@ -148,9 +149,10 @@ impl JoinLeftData {
 ///
 /// # Clone / Shared State
 ///
-/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
-/// loading of the left side with the processing in each output stream.
-/// Therefore it can not be [`Clone`]
+/// Note this structure includes a shared [`SharedResultOnceCell`] that is
+/// used to coordinate the loading of the inner table with the processing in
+/// each output stream.
+/// Therefore it does not implement [`Clone`].
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
     /// left side
@@ -163,13 +165,11 @@ pub struct NestedLoopJoinExec {
     pub(crate) join_type: JoinType,
     /// The schema once the join is applied
     join_schema: SchemaRef,
-    /// Future that consumes left input and buffers it in memory
+    /// Shared OnceCell coordinating the loading of the inner table
     ///
-    /// This structure is *shared* across all output streams.
-    ///
-    /// Each output stream waits on the `OnceAsync` to signal the completion of
-    /// the hash table creation.
-    inner_table: OnceAsync<JoinLeftData>,
+    /// All output streams share this cell to ensure the inner table is loaded exactly once,
+    /// with the first accessing stream handling the initialization.
+    inner_table: Arc<SharedResultOnceCell<JoinLeftData>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Projection to apply to the output of the join
@@ -490,16 +490,16 @@ impl ExecutionPlan for NestedLoopJoinExec {
             MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
                 .register(context.memory_pool());
 
-        let inner_table = self.inner_table.once(|| {
-            collect_left_input(
+        let inner_table = Arc::clone(&self.inner_table)
+            .get_or_init(collect_left_input(
                 Arc::clone(&self.left),
                 Arc::clone(&context),
                 join_metrics.clone(),
                 load_reservation,
                 need_produce_result_in_final(self.join_type),
                 self.right().output_partitioning().partition_count(),
-            )
-        });
+            ))
+            .boxed();
 
         let batch_size = context.session_config().batch_size();
         let enforce_batch_size_in_joins =
@@ -708,7 +708,7 @@ struct NestedLoopJoinStream<T> {
     /// the outer table data of the nested loop join
     outer_table: SendableRecordBatchStream,
     /// the inner table data of the nested loop join
-    inner_table: OnceFut<JoinLeftData>,
+    inner_table: SharedResultPending<JoinLeftData>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     // TODO: support null aware equal
@@ -833,7 +833,7 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
         // build hash table from left (build) side, if not yet done
-        self.left_data = Some(ready!(self.inner_table.get_shared(cx))?);
+        self.left_data = Some(ready!(self.inner_table.poll_unpin(cx))?);
         build_timer.done();
 
         self.state = NestedLoopJoinStreamState::FetchProbeBatch;

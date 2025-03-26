@@ -22,8 +22,8 @@ use std::{any::Any, sync::Arc, task::Poll};
 
 use super::utils::{
     adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter,
-    BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
-    StatefulStreamResult,
+    BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, SharedResultOnceCell,
+    SharedResultPending, StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
@@ -48,7 +48,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, Stream, StreamExt, TryStreamExt};
 
 /// Data of the left side that is buffered into memory
 #[derive(Debug)]
@@ -72,9 +72,10 @@ struct JoinLeftData {
 ///
 /// # Clone / Shared State
 ///
-/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
-/// loading of the left side with the processing in each output stream.
-/// Therefore it can not be [`Clone`]
+/// Note this structure includes a shared [`SharedResultOnceCell`] that is
+/// used to coordinate the loading of the left side with the processing in
+/// each output stream.
+/// Therefore it does not implement [`Clone`].
 #[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory
@@ -83,13 +84,11 @@ pub struct CrossJoinExec {
     pub right: Arc<dyn ExecutionPlan>,
     /// The schema once the join is applied
     schema: SchemaRef,
-    /// Buffered copy of left (build) side in memory.
+    /// Shared thread-safe OnceCell coordinating the loading of the left (build) side.
     ///
-    /// This structure is *shared* across all output streams.
-    ///
-    /// Each output stream waits on the `OnceAsync` to signal the completion of
-    /// the left side loading.
-    left_fut: OnceAsync<JoinLeftData>,
+    /// All output streams share this cell to ensure the left side data is loaded exactly once,
+    /// with the first accessing stream handling the initialization.
+    left_once_cell: Arc<SharedResultOnceCell<JoinLeftData>>,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
     /// Properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -122,7 +121,7 @@ impl CrossJoinExec {
             left,
             right,
             schema,
-            left_fut: Default::default(),
+            left_once_cell: Default::default(),
             metrics: ExecutionPlanMetricsSet::default(),
             cache,
         }
@@ -303,14 +302,14 @@ impl ExecutionPlan for CrossJoinExec {
         let enforce_batch_size_in_joins =
             context.session_config().enforce_batch_size_in_joins();
 
-        let left_fut = self.left_fut.once(|| {
-            load_left_input(
+        let left_fut = Arc::clone(&self.left_once_cell)
+            .get_or_init(load_left_input(
                 Arc::clone(&self.left),
                 context,
                 join_metrics.clone(),
                 reservation,
-            )
-        });
+            ))
+            .boxed();
 
         if enforce_batch_size_in_joins {
             Ok(Box::pin(CrossJoinStream {
@@ -459,7 +458,7 @@ struct CrossJoinStream<T> {
     /// Input schema
     schema: Arc<Schema>,
     /// Future for data from left side
-    left_fut: OnceFut<JoinLeftData>,
+    left_fut: SharedResultPending<JoinLeftData>,
     /// Right side stream
     right: SendableRecordBatchStream,
     /// Current value on the left
@@ -568,10 +567,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
-        let left_data = match ready!(self.left_fut.get(cx)) {
-            Ok(left_data) => left_data,
-            Err(e) => return Poll::Ready(Err(e)),
-        };
+        let left_data = ready!(self.left_fut.poll_unpin(cx))?;
         build_timer.done();
 
         let left_data = left_data.merged_batch.clone();
