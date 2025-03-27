@@ -28,7 +28,7 @@ permissions:
   checks: write
 
 jobs:
-
+  # Starts the extended_tests on a PR branch when someone leaves a `Run extended tests` comment
   run_extended_tests:
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, 'Run extended tests') }}

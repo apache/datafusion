@@ -145,7 +145,7 @@ jobs:
           cargo test --features backtrace --profile release-nonlto --test sqllogictests -- --include-sqlite
           cargo clean
 
-  # If the workflow was triggered by the PR comment we need to manually update check status to display in UI
+  # If the workflow was triggered by the PR comment (through pr_comment_commands.yml action) we need to manually update check status to display in UI
   update-check-status:
     needs: [linux-build-lib, linux-test-extended, hash-collisions, sqllogictest-sqlite]
     runs-on: ubuntu-latest
