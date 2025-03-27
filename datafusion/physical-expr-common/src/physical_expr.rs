@@ -208,11 +208,9 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
             .collect::<Result<Vec<_>>>()?;
         let children_ranges_refs = children_ranges.iter().collect::<Vec<_>>();
 
-        let output_interval = if let Some(interval) =
-            self.evaluate_bounds_checked(children_ranges_refs.as_slice(), schema)?
-        {
-            interval
-        } else {
+        let Some(output_interval) =
+            self.evaluate_bounds_checked(children_ranges_refs.as_slice(), schema)? else {
+            // fall back to unbounded interval
             self.data_type(schema.as_ref())
                 .and_then(|dt| Interval::make_unbounded(&dt))?
         };

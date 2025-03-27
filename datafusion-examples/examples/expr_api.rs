@@ -264,6 +264,8 @@ fn range_analysis_demo() -> Result<()> {
     // Now, we invoke the analysis code to perform the range analysis
     let df_schema = DFSchema::try_from(schema)?;
     let physical_expr = SessionContext::new().create_physical_expr(expr, &df_schema)?;
+
+    assert!(physical_expr.supports_bounds_evaluation(df_schema.as_ref()));
     let analysis_result = analyze(
         &physical_expr,
         AnalysisContext::new(boundaries),
@@ -324,6 +326,8 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
     // Analysis case id >= 5000
     let physical_expr =
         SessionContext::new().create_physical_expr(id_greater_5000, &df_schema)?;
+    assert!(physical_expr.supports_bounds_evaluation(df_schema.as_ref()));
+
     let analysis = analyze(
         &physical_expr,
         AnalysisContext::new(initial_boundaries.clone()),
@@ -405,6 +409,9 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
 
     let physical_expr =
         SessionContext::new().create_physical_expr(age_between_18_25, &df_schema)?;
+
+    assert!(physical_expr.supports_bounds_evaluation(df_schema.as_ref()));
+
     let analysis = analyze(
         &physical_expr,
         // We re-use initial_boundaries elsewhere so we must clone it.
@@ -457,7 +464,11 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
     let physical_expr = SessionContext::new()
         .create_physical_expr(age_greater_than_60_less_than_18, &df_schema)?;
 
-    // Since we don't handle interval arithmetic for `OR` operator this will error out.
+    // This check will return false since we don't handle interval arithmetic
+    // for `OR` operator.
+    assert!(!physical_expr.supports_bounds_evaluation(&df_schema.as_ref()));
+
+    // In consequence, this will error out.
     let analysis = analyze(
         &physical_expr,
         AnalysisContext::new(initial_boundaries),
@@ -465,8 +476,6 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
     );
 
     assert!(analysis.is_err());
-
-    Ok(())
 }
 
 /// This function shows how to use `Expr::get_type` to retrieve the DataType

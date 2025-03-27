@@ -606,11 +606,14 @@ impl ExprIntervalGraph {
             if !children_intervals.is_empty() {
                 // Reverse to align with `PhysicalExpr`'s children:
                 children_intervals.reverse();
-                if let Some(interval) = self.graph[node]
-                    .expr
+                let physical_expr = &self.graph[node]
+                    .expr;
+                if let Some(interval) = physical_expr
                     .evaluate_bounds_checked(&children_intervals, &self.schema)?
                 {
                     self.graph[node].interval = interval;
+                } else {
+                    return internal_err!("bounds evaluation is not supported for this expression: {physical_expr}");
                 }
             }
         }
