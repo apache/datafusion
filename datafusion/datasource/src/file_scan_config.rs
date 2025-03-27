@@ -873,7 +873,6 @@ impl FileScanConfig {
             .collect())
     }
 
-    // TODO: This function should be moved into DataSourceExec once FileScanConfig moved out of datafusion/core
     /// Returns a new [`DataSourceExec`] to scan the files specified by this config
     #[deprecated(since = "47.0.0", note = "use DataSourceExec::new instead")]
     pub fn build(self) -> Arc<DataSourceExec> {
