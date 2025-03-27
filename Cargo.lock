@@ -2380,6 +2380,7 @@ dependencies = [
  "datafusion-sql",
  "env_logger",
  "indexmap 2.8.0",
+ "insta",
  "itertools 0.14.0",
  "log",
  "recursive",

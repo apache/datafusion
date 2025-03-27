@@ -61,3 +61,4 @@ datafusion-functions-window = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-sql = { workspace = true }
 env_logger = { workspace = true }
+insta = {workspace = true }
