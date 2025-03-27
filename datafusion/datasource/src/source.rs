@@ -232,7 +232,11 @@ impl DataSourceExec {
         )
     }
 
-    /// Downcast the `DataSourceExec` to a specific file source
+    /// Downcast the `DataSourceExec`'s `data_source` to a specific file source
+    ///
+    /// Returns `None` if
+    /// 1. the datasource is not scanning files (`FileScanConfig`)
+    /// 2. The [`FileScanConfig::file_source`] is not of type `T`
     pub fn downcast_to_file_source<T: 'static>(&self) -> Option<(&FileScanConfig, &T)> {
         self.data_source()
             .as_any()
