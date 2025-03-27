@@ -39,7 +39,7 @@ arrow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = "1.6.0"
 aws-credential-types = "1.2.0"
-clap = { version = "4.5.32", features = ["derive", "cargo"] }
+clap = { version = "4.5.34", features = ["derive", "cargo"] }
 datafusion = { workspace = true, features = [
     "avro",
     "crypto_expressions",
