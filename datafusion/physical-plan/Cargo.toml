@@ -72,12 +72,12 @@ insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"
+tempfile = "3.19.1"
 tokio = { workspace = true, features = [
     "rt-multi-thread",
     "fs",
     "parking_lot",
 ] }
-tempfile = "3.19.1"
 
 [[bench]]
 harness = false
