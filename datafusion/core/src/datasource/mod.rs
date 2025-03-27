@@ -24,7 +24,7 @@ pub mod empty;
 pub mod file_format;
 pub mod listing;
 pub mod listing_table_factory;
-pub mod memory;
+mod memory_test;
 pub mod physical_plan;
 pub mod provider;
 mod statistics;
@@ -34,12 +34,12 @@ mod view_test;
 pub use self::default_table_source::{
     provider_as_source, source_as_provider, DefaultTableSource,
 };
-pub use self::memory::MemTable;
 pub use self::view::ViewTable;
 pub use crate::catalog::TableProvider;
 pub use crate::logical_expr::TableType;
 pub use datafusion_catalog::cte_worktable;
 pub use datafusion_catalog::default_table_source;
+pub use datafusion_catalog::memory::MemTable;
 pub use datafusion_catalog::stream;
 pub use datafusion_catalog::view;
 pub use datafusion_datasource::schema_adapter;
