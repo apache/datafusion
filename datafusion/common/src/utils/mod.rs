@@ -1005,13 +1005,24 @@ pub fn take_function_args_with_diag<const N: usize, T>(
             v.len()
         );
 
-        let diagnostic = Diagnostic::new_error(
+        let mut diagnostic = Diagnostic::new_error(
             format!(
                 "Wrong number of arguments for {} function call",
                 function_name
             ),
             function_call_site,
         );
+        diagnostic.add_note(
+            format!(
+                "Function {} takes exactly {} {}, but {} were provided",
+                function_name,
+                N,
+                if N == 1 { "argument" } else { "arguments" },
+                v.len(),
+            ),
+            None,
+        );
+
         base_error.with_diagnostic(diagnostic)
     })
 }
