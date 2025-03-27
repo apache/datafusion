@@ -489,11 +489,6 @@ pub fn parse_protobuf_file_scan_config(
         .iter()
         .map(|i| *i as usize)
         .collect::<Vec<_>>();
-    let projection = if projection.is_empty() {
-        None
-    } else {
-        Some(projection)
-    };
 
     let constraints = convert_required!(proto.constraints)?;
     let statistics = convert_required!(proto.statistics)?;
@@ -543,7 +538,7 @@ pub fn parse_protobuf_file_scan_config(
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
-        .with_projection(projection)
+        .with_projection(Some(projection))
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_table_partition_cols(table_partition_cols)
         .with_output_ordering(output_ordering)
