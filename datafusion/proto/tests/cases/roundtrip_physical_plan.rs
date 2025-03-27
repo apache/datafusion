@@ -1655,3 +1655,10 @@ async fn roundtrip_parquet_select_projection_predicate() -> Result<()> {
     let sql = "select string_col, timestamp_col from alltypes_plain where id > 4";
     roundtrip_test_sql_with_context(sql, &ctx).await
 }
+
+#[tokio::test]
+async fn roundtrip_empty_projection() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let sql = "select 1 from alltypes_plain";
+    roundtrip_test_sql_with_context(sql, &ctx).await
+}
