@@ -77,7 +77,12 @@ tokio = { workspace = true, features = [
     "fs",
     "parking_lot",
 ] }
+tempfile = "3.19.1"
 
 [[bench]]
 harness = false
 name = "partial_ordering"
+
+[[bench]]
+harness = false
+name = "read_spill"
