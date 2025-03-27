@@ -606,8 +606,7 @@ impl ExprIntervalGraph {
             if !children_intervals.is_empty() {
                 // Reverse to align with `PhysicalExpr`'s children:
                 children_intervals.reverse();
-                let physical_expr = &self.graph[node]
-                    .expr;
+                let physical_expr = &self.graph[node].expr;
                 if let Some(interval) = physical_expr
                     .evaluate_bounds_checked(&children_intervals, &self.schema)?
                 {

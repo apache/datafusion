@@ -202,18 +202,20 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
         children: &[&Distribution],
         schema: &SchemaRef,
     ) -> Result<Distribution> {
-        let children_ranges = children
+        let child_ranges = children
             .iter()
             .map(|c| c.range())
             .collect::<Result<Vec<_>>>()?;
-        let children_ranges_refs = children_ranges.iter().collect::<Vec<_>>();
+        let child_ranges = child_ranges.iter().collect::<Vec<_>>();
 
-        let Some(output_interval) =
-            self.evaluate_bounds_checked(children_ranges_refs.as_slice(), schema)? else {
-            // fall back to unbounded interval
-            self.data_type(schema.as_ref())
-                .and_then(|dt| Interval::make_unbounded(&dt))?
-        };
+        let output_interval =
+            if let Some(i) = self.evaluate_bounds_checked(&child_ranges, schema)? {
+                i
+            } else {
+                // fall back to unbounded interval
+                self.data_type(schema.as_ref())
+                    .and_then(|dt| Interval::make_unbounded(&dt))?
+            };
 
         let dt = output_interval.data_type();
         if dt.eq(&DataType::Boolean) {
@@ -441,7 +443,7 @@ where
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
 /// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
 /// # #[derive(Debug, Hash, PartialOrd, PartialEq)]
-/// # struct MyExpr {};
+/// # struct MyExpr {}
 /// # impl PhysicalExpr for MyExpr {fn as_any(&self) -> &dyn Any { unimplemented!() }
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
 /// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }

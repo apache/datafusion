@@ -466,7 +466,7 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
 
     // This check will return false since we don't handle interval arithmetic
     // for `OR` operator.
-    assert!(!physical_expr.supports_bounds_evaluation(&df_schema.as_ref()));
+    assert!(!physical_expr.supports_bounds_evaluation(df_schema.inner()));
 
     // In consequence, this will error out.
     let analysis = analyze(
@@ -476,6 +476,8 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
     );
 
     assert!(analysis.is_err());
+
+    Ok(())
 }
 
 /// This function shows how to use `Expr::get_type` to retrieve the DataType
