@@ -94,7 +94,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
     .with_file_group(file_group)
     .build();
 
-    let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(base_config)));
+    let parquet_exec = DataSourceExec::from_data_source(base_config);
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();

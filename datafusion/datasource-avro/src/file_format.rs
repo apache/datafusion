@@ -155,7 +155,7 @@ impl FileFormat for AvroFormat {
         let config = FileScanConfigBuilder::from(conf)
             .with_source(self.file_source())
             .build();
-        Ok(Arc::new(DataSourceExec::new(Arc::new(config))))
+        Ok(DataSourceExec::from_data_source(config))
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {

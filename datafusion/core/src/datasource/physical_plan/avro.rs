@@ -91,7 +91,7 @@ mod tests {
         .with_projection(Some(vec![0, 1, 2]))
         .build();
 
-        let source_exec = Arc::new(DataSourceExec::new(Arc::new(conf)));
+        let source_exec = DataSourceExec::from_data_source(conf);
         assert_eq!(
             source_exec
                 .properties()
@@ -163,7 +163,7 @@ mod tests {
             .with_projection(projection)
             .build();
 
-        let source_exec = Arc::new(DataSourceExec::new(Arc::new(conf)));
+        let source_exec = DataSourceExec::from_data_source(conf);
         assert_eq!(
             source_exec
                 .properties()
@@ -236,7 +236,7 @@ mod tests {
             .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
             .build();
 
-        let source_exec = Arc::new(DataSourceExec::new(Arc::new(conf)));
+        let source_exec = DataSourceExec::from_data_source(conf);
 
         assert_eq!(
             source_exec

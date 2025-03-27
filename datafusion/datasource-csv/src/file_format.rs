@@ -433,7 +433,7 @@ impl FileFormat for CsvFormat {
 
         let config = conf_builder.with_source(source).build();
 
-        Ok(Arc::new(DataSourceExec::new(Arc::new(config))))
+        Ok(DataSourceExec::from_data_source(config))
     }
 
     async fn create_writer_physical_plan(

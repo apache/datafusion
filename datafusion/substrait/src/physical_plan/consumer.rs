@@ -156,9 +156,10 @@ pub async fn from_substrait_rel(
                         }
                     }
 
-                    Ok(Arc::new(DataSourceExec::new(Arc::new(
-                        base_config_builder.build(),
-                    ))) as Arc<dyn ExecutionPlan>)
+                    Ok(
+                        DataSourceExec::from_data_source(base_config_builder.build())
+                            as Arc<dyn ExecutionPlan>,
+                    )
                 }
                 _ => not_impl_err!(
                     "Only LocalFile reads are supported when parsing physical"

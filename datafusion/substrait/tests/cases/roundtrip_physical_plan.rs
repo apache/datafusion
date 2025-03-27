@@ -54,7 +54,7 @@ async fn parquet_exec() -> Result<()> {
     ])
     .build();
     let parquet_exec: Arc<dyn ExecutionPlan> =
-        Arc::new(DataSourceExec::new(Arc::new(scan_config)));
+        DataSourceExec::from_data_source(scan_config);
 
     let mut extension_info: (
         Vec<extensions::SimpleExtensionDeclaration>,

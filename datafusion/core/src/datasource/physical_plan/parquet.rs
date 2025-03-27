@@ -192,8 +192,7 @@ mod tests {
             let session_ctx = SessionContext::new();
             let task_ctx = session_ctx.task_ctx();
 
-            let parquet_exec =
-                Arc::new(DataSourceExec::new(Arc::new(base_config.clone())));
+            let parquet_exec = DataSourceExec::from_data_source(base_config.clone());
             RoundTripResult {
                 batches: collect(parquet_exec.clone(), task_ctx).await,
                 parquet_exec,
@@ -1129,7 +1128,7 @@ mod tests {
             .with_file_groups(file_groups)
             .build();
 
-            let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(config)));
+            let parquet_exec = DataSourceExec::from_data_source(config);
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -1245,7 +1244,7 @@ mod tests {
             ])
             .build();
 
-        let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(config)));
+        let parquet_exec = DataSourceExec::from_data_source(config);
         let partition_count = parquet_exec
             .data_source()
             .output_partitioning()
@@ -1310,7 +1309,7 @@ mod tests {
         .with_file(partitioned_file)
         .build();
 
-        let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(config)));
+        let parquet_exec = DataSourceExec::from_data_source(config);
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
@@ -1968,7 +1967,7 @@ mod tests {
             })
             .build();
 
-        let exec = Arc::new(DataSourceExec::new(Arc::new(config)));
+        let exec = DataSourceExec::from_data_source(config);
 
         let res = collect(exec, ctx.task_ctx()).await.unwrap();
         assert_eq!(res.len(), 2);

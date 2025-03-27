@@ -421,7 +421,7 @@ impl FileFormat for ParquetFormat {
         let conf = FileScanConfigBuilder::from(conf)
             .with_source(Arc::new(source))
             .build();
-        Ok(Arc::new(DataSourceExec::new(Arc::new(conf))))
+        Ok(DataSourceExec::from_data_source(conf))
     }
 
     async fn create_writer_physical_plan(

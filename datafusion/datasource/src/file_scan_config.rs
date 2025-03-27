@@ -119,7 +119,7 @@ use crate::{
 ///    PartitionedFile::new("file3.parquet", 78),
 ///   ])).build();
 /// // create an execution plan from the config
-/// let plan: Arc<dyn ExecutionPlan> = Arc::new(DataSourceExec::new(Arc::new(config)));
+/// let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
 /// ```
 #[derive(Clone)]
 pub struct FileScanConfig {
@@ -571,13 +571,13 @@ impl DataSource for FileScanConfig {
                     .clone()
                     .unwrap_or((0..self.file_schema.fields().len()).collect()),
             );
-            Arc::new(DataSourceExec::new(Arc::new(
+            DataSourceExec::from_data_source(
                 FileScanConfigBuilder::from(file_scan)
                     // Assign projected statistics to source
                     .with_projection(Some(new_projections))
                     .with_source(source)
                     .build(),
-            ))) as _
+            ) as _
         }))
     }
 }
@@ -925,7 +925,7 @@ impl FileScanConfig {
     /// Returns a new [`DataSourceExec`] to scan the files specified by this config
     #[deprecated(since = "47.0.0", note = "use DataSourceExec::new instead")]
     pub fn build(self) -> Arc<DataSourceExec> {
-        Arc::new(DataSourceExec::new(Arc::new(self)))
+        DataSourceExec::from_data_source(self)
     }
 
     /// Write the data_type based on file_source

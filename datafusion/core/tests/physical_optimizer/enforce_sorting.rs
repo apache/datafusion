@@ -76,7 +76,7 @@ fn csv_exec_ordered(
     .with_output_ordering(vec![sort_exprs])
     .build();
 
-    Arc::new(DataSourceExec::new(Arc::new(config)))
+    DataSourceExec::from_data_source(config)
 }
 
 /// Created a sorted parquet exec
@@ -96,7 +96,7 @@ pub fn parquet_exec_sorted(
     .with_output_ordering(vec![sort_exprs])
     .build();
 
-    Arc::new(DataSourceExec::new(Arc::new(config)))
+    DataSourceExec::from_data_source(config)
 }
 
 /// Create a sorted Csv exec
@@ -115,7 +115,7 @@ fn csv_exec_sorted(
     .with_output_ordering(vec![sort_exprs])
     .build();
 
-    Arc::new(DataSourceExec::new(Arc::new(config)))
+    DataSourceExec::from_data_source(config)
 }
 
 /// Runs the sort enforcement optimizer and asserts the plan

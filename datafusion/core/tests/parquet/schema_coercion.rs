@@ -71,7 +71,7 @@ async fn multi_parquet_coercion() {
     .with_file_group(file_group)
     .build();
 
-    let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(conf)));
+    let parquet_exec = DataSourceExec::from_data_source(conf);
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
@@ -129,7 +129,7 @@ async fn multi_parquet_coercion_projection() {
     .with_projection(Some(vec![1, 0, 2]))
     .build();
 
-    let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(config)));
+    let parquet_exec = DataSourceExec::from_data_source(config);
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();

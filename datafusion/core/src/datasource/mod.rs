@@ -137,7 +137,7 @@ mod tests {
         .with_file(partitioned_file)
         .build();
 
-        let parquet_exec = Arc::new(DataSourceExec::new(Arc::new(base_conf)));
+        let parquet_exec = DataSourceExec::from_data_source(base_conf);
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();

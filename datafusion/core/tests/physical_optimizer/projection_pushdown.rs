@@ -382,7 +382,7 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
     .with_projection(Some(vec![0, 1, 2, 3, 4]))
     .build();
 
-    Arc::new(DataSourceExec::new(Arc::new(config)))
+    DataSourceExec::from_data_source(config)
 }
 
 fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
@@ -401,7 +401,7 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
     .with_projection(Some(vec![3, 2, 1]))
     .build();
 
-    Arc::new(DataSourceExec::new(Arc::new(config)))
+    DataSourceExec::from_data_source(config)
 }
 
 fn create_projecting_memory_exec() -> Arc<dyn ExecutionPlan> {
@@ -1413,7 +1413,7 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
     .with_projection(Some(vec![0, 1, 2]))
     .build();
 
-    Arc::new(DataSourceExec::new(Arc::new(config)))
+    DataSourceExec::from_data_source(config)
 }
 
 #[test]

@@ -77,7 +77,7 @@ pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .build();
 
-    Arc::new(DataSourceExec::new(Arc::new(config)))
+    DataSourceExec::from_data_source(config)
 }
 
 /// Create a single parquet file that is sorted
@@ -93,7 +93,7 @@ pub(crate) fn parquet_exec_with_sort(
     .with_output_ordering(output_ordering)
     .build();
 
-    Arc::new(DataSourceExec::new(Arc::new(config)))
+    DataSourceExec::from_data_source(config)
 }
 
 pub fn schema() -> SchemaRef {

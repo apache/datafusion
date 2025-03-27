@@ -257,7 +257,7 @@ impl FileFormat for JsonFormat {
             ))
             .with_source(source)
             .build();
-        Ok(Arc::new(DataSourceExec::new(Arc::new(conf))))
+        Ok(DataSourceExec::from_data_source(conf))
     }
 
     async fn create_writer_physical_plan(

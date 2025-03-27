@@ -197,7 +197,7 @@ fn parquet_exec_multiple_sorted(
     .with_output_ordering(output_ordering)
     .build();
 
-    Arc::new(DataSourceExec::new(Arc::new(config)))
+    DataSourceExec::from_data_source(config)
 }
 
 fn csv_exec() -> Arc<DataSourceExec> {
@@ -214,7 +214,7 @@ fn csv_exec_with_sort(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> 
     .with_output_ordering(output_ordering)
     .build();
 
-    Arc::new(DataSourceExec::new(Arc::new(config)))
+    DataSourceExec::from_data_source(config)
 }
 
 fn csv_exec_multiple() -> Arc<DataSourceExec> {
@@ -235,7 +235,7 @@ fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSource
     .with_output_ordering(output_ordering)
     .build();
 
-    Arc::new(DataSourceExec::new(Arc::new(config)))
+    DataSourceExec::from_data_source(config)
 }
 
 fn projection_exec_with_alias(
@@ -2535,7 +2535,7 @@ fn parallelization_compressed_csv() -> Result<()> {
         };
 
         let plan = aggregate_exec_with_alias(
-            Arc::new(DataSourceExec::new(Arc::new(
+            DataSourceExec::from_data_source(
                 FileScanConfigBuilder::new(
                     ObjectStoreUrl::parse("test:///").unwrap(),
                     schema(),
@@ -2544,7 +2544,7 @@ fn parallelization_compressed_csv() -> Result<()> {
                 .with_file(PartitionedFile::new("x".to_string(), 100))
                 .with_file_compression_type(compression_type)
                 .build(),
-            ))),
+            ),
             vec![("a".to_string(), "a".to_string())],
         );
         let test_config = TestConfig::default()

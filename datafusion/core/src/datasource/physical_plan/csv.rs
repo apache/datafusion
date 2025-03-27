@@ -122,7 +122,7 @@ mod tests {
         .build();
 
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
+        let csv = DataSourceExec::from_data_source(config);
 
         assert_eq!(3, csv.schema().fields().len());
 
@@ -186,7 +186,7 @@ mod tests {
         .with_projection(Some(vec![4, 0, 2]))
         .build();
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
+        let csv = DataSourceExec::from_data_source(config);
         assert_eq!(3, csv.schema().fields().len());
 
         let mut stream = csv.execute(0, task_ctx)?;
@@ -251,7 +251,7 @@ mod tests {
         .with_limit(Some(5))
         .build();
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
+        let csv = DataSourceExec::from_data_source(config);
         assert_eq!(13, csv.schema().fields().len());
 
         let mut it = csv.execute(0, task_ctx)?;
@@ -314,7 +314,7 @@ mod tests {
         .with_limit(Some(5))
         .build();
         assert_eq!(14, config.file_schema.fields().len());
-        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
+        let csv = DataSourceExec::from_data_source(config);
         assert_eq!(14, csv.schema().fields().len());
 
         // errors due to https://github.com/apache/datafusion/issues/4918
@@ -380,7 +380,7 @@ mod tests {
         // partitions are resolved during scan anyway
 
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
+        let csv = DataSourceExec::from_data_source(config);
         assert_eq!(2, csv.schema().fields().len());
 
         let mut it = csv.execute(0, task_ctx)?;
@@ -472,7 +472,7 @@ mod tests {
         .with_newlines_in_values(false)
         .with_file_compression_type(file_compression_type.to_owned())
         .build();
-        let csv = Arc::new(DataSourceExec::new(Arc::new(config)));
+        let csv = DataSourceExec::from_data_source(config);
 
         let it = csv.execute(0, task_ctx).unwrap();
         let batches: Vec<_> = it.try_collect().await.unwrap();

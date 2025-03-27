@@ -247,7 +247,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 .with_newlines_in_values(scan.newlines_in_values)
                 .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
                 .build();
-                Ok(Arc::new(DataSourceExec::new(Arc::new(conf))))
+                Ok(DataSourceExec::from_data_source(conf))
             }
             PhysicalPlanType::JsonScan(scan) => {
                 let scan_conf = parse_protobuf_file_scan_config(
@@ -256,7 +256,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     extension_codec,
                     Arc::new(JsonSource::new()),
                 )?;
-                Ok(Arc::new(DataSourceExec::new(Arc::new(scan_conf))))
+                Ok(DataSourceExec::from_data_source(scan_conf))
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
@@ -293,7 +293,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         extension_codec,
                         Arc::new(source),
                     )?;
-                    Ok(Arc::new(DataSourceExec::new(Arc::new(base_config))))
+                    Ok(DataSourceExec::from_data_source(base_config))
                 }
                 #[cfg(not(feature = "parquet"))]
                 panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
@@ -308,7 +308,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         extension_codec,
                         Arc::new(AvroSource::new()),
                     )?;
-                    Ok(Arc::new(DataSourceExec::new(Arc::new(conf))))
+                    Ok(DataSourceExec::from_data_source(conf))
                 }
                 #[cfg(not(feature = "avro"))]
                 panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")

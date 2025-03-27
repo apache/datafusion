@@ -96,7 +96,7 @@ pub fn scan_partitioned_csv(
         FileScanConfigBuilder::from(partitioned_csv_config(schema, file_groups, source))
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
             .build();
-    Ok(Arc::new(DataSourceExec::new(Arc::new(config))))
+    Ok(DataSourceExec::from_data_source(config))
 }
 
 /// Returns file groups [`Vec<FileGroup>`] for scanning `partitions` of `filename`

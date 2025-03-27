@@ -354,8 +354,7 @@ impl TestFull {
             .with_file(partitioned_file)
             .build();
 
-        let plan: Arc<dyn ExecutionPlan> =
-            Arc::new(DataSourceExec::new(Arc::new(config)));
+        let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
 
         // run the DataSourceExec and collect the results
         let results =

@@ -428,7 +428,7 @@ impl ExecutionPlan for CsvExec {
 ///     .with_file(PartitionedFile::new("file1.csv", 100*1024*1024))
 ///     .with_newlines_in_values(true) // The file contains newlines in values;
 ///     .build();
-/// let exec = Arc::new(DataSourceExec::new(Arc::new(config)));
+/// let exec = (DataSourceExec::from_data_source(config));
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct CsvSource {

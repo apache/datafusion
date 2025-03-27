@@ -507,7 +507,7 @@ impl TableProvider for IndexTableProvider {
                 .build();
 
         // Finally, put it all together into a DataSourceExec
-        Ok(Arc::new(DataSourceExec::new(Arc::new(file_scan_config))))
+        Ok(DataSourceExec::from_data_source(file_scan_config))
     }
 
     /// Tell DataFusion to push filters down to the scan method
