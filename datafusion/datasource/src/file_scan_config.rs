@@ -278,6 +278,10 @@ impl FileScanConfigBuilder {
         self
     }
 
+    /// Set the file source for scanning files.
+    ///
+    /// This method allows you to change the file source implementation (e.g. ParquetSource, CsvSource, etc.)
+    /// after the builder has been created.
     pub fn with_source(mut self, file_source: Arc<dyn FileSource>) -> Self {
         self.file_source = file_source;
         self
