@@ -296,10 +296,9 @@ impl ParquetSource {
         self
     }
 
-    fn with_metrics(&self, metrics: ExecutionPlanMetricsSet) -> Self {
-        let mut conf = self.clone();
-        conf.metrics = metrics;
-        conf
+    fn with_metrics(mut self, metrics: ExecutionPlanMetricsSet) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     /// Set predicate information, also sets pruning_predicate and page_pruning_predicate attributes
@@ -314,7 +313,7 @@ impl ParquetSource {
         let predicate_creation_errors =
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
-        conf.with_metrics(metrics);
+        conf = conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
 
         match PruningPredicate::try_new(Arc::clone(&predicate), Arc::clone(&file_schema))
