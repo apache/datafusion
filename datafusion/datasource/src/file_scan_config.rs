@@ -191,7 +191,7 @@ pub struct FileScanConfig {
 /// # use datafusion_datasource::file::FileSource;
 ///
 /// # fn main() {
-/// # fn set_source(file_source: impl FileSource) {
+/// # fn with_source(file_source: Arc<dyn FileSource>) {
 ///     // Create a schema for our Parquet files
 ///     let schema = Arc::new(Schema::new(vec![
 ///         Field::new("id", DataType::Int32, false),
