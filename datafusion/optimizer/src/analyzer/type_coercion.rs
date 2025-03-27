@@ -296,6 +296,7 @@ impl<'a> TypeCoercionRewriter<'a> {
             &right.get_type(right_schema)?,
         )
         .get_input_types()?;
+
         Ok((
             left.cast_to(&left_type, left_schema)?,
             right.cast_to(&right_type, right_schema)?,
