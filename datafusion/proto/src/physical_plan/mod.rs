@@ -1714,31 +1714,27 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
         #[cfg(feature = "parquet")]
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let data_source_exec = exec.data_source();
-            if let Some(maybe_parquet) =
-                data_source_exec.as_any().downcast_ref::<FileScanConfig>()
+            if let Some((maybe_parquet, conf)) =
+                exec.downcast_to_file_source::<ParquetSource>()
             {
-                let source = maybe_parquet.file_source();
-                if let Some(conf) = source.as_any().downcast_ref::<ParquetSource>() {
-                    let predicate = conf
-                        .predicate()
-                        .map(|pred| serialize_physical_expr(pred, extension_codec))
-                        .transpose()?;
-                    return Ok(protobuf::PhysicalPlanNode {
-                        physical_plan_type: Some(PhysicalPlanType::ParquetScan(
-                            protobuf::ParquetScanExecNode {
-                                base_conf: Some(serialize_file_scan_config(
-                                    maybe_parquet,
-                                    extension_codec,
-                                )?),
-                                predicate,
-                                parquet_options: Some(
-                                    conf.table_parquet_options().try_into()?,
-                                ),
-                            },
-                        )),
-                    });
-                }
+                let predicate = conf
+                    .predicate()
+                    .map(|pred| serialize_physical_expr(pred, extension_codec))
+                    .transpose()?;
+                return Ok(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::ParquetScan(
+                        protobuf::ParquetScanExecNode {
+                            base_conf: Some(serialize_file_scan_config(
+                                maybe_parquet,
+                                extension_codec,
+                            )?),
+                            predicate,
+                            parquet_options: Some(
+                                conf.table_parquet_options().try_into()?,
+                            ),
+                        },
+                    )),
+                });
             }
         }
 

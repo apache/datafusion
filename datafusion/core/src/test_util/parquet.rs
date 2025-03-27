@@ -201,18 +201,11 @@ impl TestParquetFile {
     /// on the first one it finds
     pub fn parquet_metrics(plan: &Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
         if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-            let data_source = data_source_exec.data_source();
-            if let Some(maybe_parquet) =
-                data_source.as_any().downcast_ref::<FileScanConfig>()
+            if data_source_exec
+                .downcast_to_file_source::<ParquetSource>()
+                .is_some()
             {
-                if maybe_parquet
-                    .file_source()
-                    .as_any()
-                    .downcast_ref::<ParquetSource>()
-                    .is_some()
-                {
-                    return data_source_exec.metrics();
-                }
+                return data_source_exec.metrics();
             }
         }
 
