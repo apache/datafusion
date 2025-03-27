@@ -60,7 +60,7 @@ mod tests {
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::assert_batches_sorted_eq;
+    use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_datasource::file_scan_config::FileScanConfig;
     use datafusion_datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
@@ -138,15 +138,13 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let read = collect(parquet_exec, task_ctx).await.unwrap();
 
-        let expected = [
-            "+----+--------------+",
-            "| id | extra_column |",
-            "+----+--------------+",
-            "| 1  | foo          |",
-            "+----+--------------+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &read);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
+        +----+--------------+
+        | id | extra_column |
+        +----+--------------+
+        | 1  | foo          |
+        +----+--------------+
+        "###);
     }
 
     #[test]
