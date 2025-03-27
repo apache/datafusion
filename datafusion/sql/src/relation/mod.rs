@@ -25,8 +25,6 @@ use datafusion_common::{
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
-use datafusion_optimizer::eliminate_sort::EliminateSort;
-use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
 
 mod join;
@@ -163,14 +161,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         };
 
-        let opt_subquery_sort = EliminateSort::new();
-        let optimized_plan = opt_subquery_sort
-            .rewrite(plan, &OptimizerContext::default())?
-            .data;
         if let Some(alias) = alias {
-            self.apply_table_alias(optimized_plan, alias)
+            self.apply_table_alias(plan, alias)
         } else {
-            Ok(optimized_plan)
+            Ok(plan)
         }
     }
 

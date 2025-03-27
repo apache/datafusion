@@ -48,7 +48,6 @@ arrow = { workspace = true }
 bigdecimal = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
-datafusion-optimizer = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 recursive = { workspace = true, optional = true }
