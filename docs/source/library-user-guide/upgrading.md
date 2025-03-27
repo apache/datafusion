@@ -129,20 +129,6 @@ if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
 # */
 ```
 
-There's also a more convenient helper method `downcast_to_file_source` on `DataSourceExec`
-that simplifies accessing both the config and file source in one call.
-
-```rust
-# /* comment to avoid running
-if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-  if let Some((scan_config, parquet_source)) = datasource_exec.downcast_to_file_source::<ParquetSource>() {
-    // scan_config contains FileGroups and other FileScanConfig information
-    // parquet_source contains PruningPredicates and parquet options
-  }
-}
-# */
-```
-
 ### Cookbook: Changes to `ParquetExecBuilder`
 
 Likewise code that builds `ParquetExec` using the `ParquetExecBuilder` such as
