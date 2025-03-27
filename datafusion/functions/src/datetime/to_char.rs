@@ -211,7 +211,7 @@ fn _to_char_scalar(
     // of the implementation in arrow-rs we need to convert it to an array
     let mut data_type = &expression.data_type();
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
-    let mut array = expression.clone().into_array(1)?;
+    let mut array = expression.into_array(1)?;
 
     if format.is_none() {
         if is_scalar_expression {
