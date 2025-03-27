@@ -43,6 +43,7 @@ datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-session = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true }
 regex = { workspace = true }

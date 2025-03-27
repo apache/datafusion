@@ -17,9 +17,8 @@
 
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
 
+use crate::file_groups::FileGroup;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
-
-use crate::PartitionedFile;
 
 /// A wrapper to customize partitioned file display
 ///
@@ -28,7 +27,7 @@ use crate::PartitionedFile;
 /// {NUM_GROUPS groups: [[file1, file2,...], [fileN, fileM, ...], ...]}
 /// ```
 #[derive(Debug)]
-pub(crate) struct FileGroupsDisplay<'a>(pub(crate) &'a [Vec<PartitionedFile>]);
+pub(crate) struct FileGroupsDisplay<'a>(pub(crate) &'a [FileGroup]);
 
 impl DisplayAs for FileGroupsDisplay<'_> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
@@ -60,7 +59,7 @@ impl DisplayAs for FileGroupsDisplay<'_> {
 /// [file1, file2,...]
 /// ```
 #[derive(Debug)]
-pub struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
+pub struct FileGroupDisplay<'a>(pub &'a FileGroup);
 
 impl DisplayAs for FileGroupDisplay<'_> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
@@ -69,7 +68,7 @@ impl DisplayAs for FileGroupDisplay<'_> {
             DisplayFormatType::Default | DisplayFormatType::TreeRender => {
                 // To avoid showing too many files
                 let max_files = 5;
-                fmt_up_to_n_elements(self.0, max_files, f, |pf, f| {
+                fmt_up_to_n_elements(self.0.files(), max_files, f, |pf, f| {
                     write!(f, "{}", pf.object_meta.location.as_ref())?;
                     if let Some(range) = pf.range.as_ref() {
                         write!(f, ":{}..{}", range.start, range.end)?;
@@ -138,6 +137,7 @@ mod tests {
     use datafusion_physical_plan::{DefaultDisplay, VerboseDisplay};
     use object_store::{path::Path, ObjectMeta};
 
+    use crate::PartitionedFile;
     use chrono::Utc;
 
     #[test]
@@ -148,7 +148,10 @@ mod tests {
 
     #[test]
     fn file_groups_display_one() {
-        let files = [vec![partitioned_file("foo"), partitioned_file("bar")]];
+        let files = [FileGroup::new(vec![
+            partitioned_file("foo"),
+            partitioned_file("bar"),
+        ])];
 
         let expected = "{1 group: [[foo, bar]]}";
         assert_eq!(
@@ -160,9 +163,9 @@ mod tests {
     #[test]
     fn file_groups_display_many_default() {
         let files = [
-            vec![partitioned_file("foo"), partitioned_file("bar")],
-            vec![partitioned_file("baz")],
-            vec![],
+            FileGroup::new(vec![partitioned_file("foo"), partitioned_file("bar")]),
+            FileGroup::new(vec![partitioned_file("baz")]),
+            FileGroup::default(),
         ];
 
         let expected = "{3 groups: [[foo, bar], [baz], []]}";
@@ -175,9 +178,9 @@ mod tests {
     #[test]
     fn file_groups_display_many_verbose() {
         let files = [
-            vec![partitioned_file("foo"), partitioned_file("bar")],
-            vec![partitioned_file("baz")],
-            vec![],
+            FileGroup::new(vec![partitioned_file("foo"), partitioned_file("bar")]),
+            FileGroup::new(vec![partitioned_file("baz")]),
+            FileGroup::default(),
         ];
 
         let expected = "{3 groups: [[foo, bar], [baz], []]}";
@@ -190,13 +193,13 @@ mod tests {
     #[test]
     fn file_groups_display_too_many_default() {
         let files = [
-            vec![partitioned_file("foo"), partitioned_file("bar")],
-            vec![partitioned_file("baz")],
-            vec![partitioned_file("qux")],
-            vec![partitioned_file("quux")],
-            vec![partitioned_file("quuux")],
-            vec![partitioned_file("quuuux")],
-            vec![],
+            FileGroup::new(vec![partitioned_file("foo"), partitioned_file("bar")]),
+            FileGroup::new(vec![partitioned_file("baz")]),
+            FileGroup::new(vec![partitioned_file("qux")]),
+            FileGroup::new(vec![partitioned_file("quux")]),
+            FileGroup::new(vec![partitioned_file("quuux")]),
+            FileGroup::new(vec![partitioned_file("quuuux")]),
+            FileGroup::default(),
         ];
 
         let expected = "{7 groups: [[foo, bar], [baz], [qux], [quux], [quuux], ...]}";
@@ -209,13 +212,13 @@ mod tests {
     #[test]
     fn file_groups_display_too_many_verbose() {
         let files = [
-            vec![partitioned_file("foo"), partitioned_file("bar")],
-            vec![partitioned_file("baz")],
-            vec![partitioned_file("qux")],
-            vec![partitioned_file("quux")],
-            vec![partitioned_file("quuux")],
-            vec![partitioned_file("quuuux")],
-            vec![],
+            FileGroup::new(vec![partitioned_file("foo"), partitioned_file("bar")]),
+            FileGroup::new(vec![partitioned_file("baz")]),
+            FileGroup::new(vec![partitioned_file("qux")]),
+            FileGroup::new(vec![partitioned_file("quux")]),
+            FileGroup::new(vec![partitioned_file("quuux")]),
+            FileGroup::new(vec![partitioned_file("quuuux")]),
+            FileGroup::default(),
         ];
 
         let expected =
@@ -228,7 +231,8 @@ mod tests {
 
     #[test]
     fn file_group_display_many_default() {
-        let files = vec![partitioned_file("foo"), partitioned_file("bar")];
+        let files =
+            FileGroup::new(vec![partitioned_file("foo"), partitioned_file("bar")]);
 
         let expected = "[foo, bar]";
         assert_eq!(
@@ -239,14 +243,14 @@ mod tests {
 
     #[test]
     fn file_group_display_too_many_default() {
-        let files = vec![
+        let files = FileGroup::new(vec![
             partitioned_file("foo"),
             partitioned_file("bar"),
             partitioned_file("baz"),
             partitioned_file("qux"),
             partitioned_file("quux"),
             partitioned_file("quuux"),
-        ];
+        ]);
 
         let expected = "[foo, bar, baz, qux, quux, ...]";
         assert_eq!(
@@ -257,14 +261,14 @@ mod tests {
 
     #[test]
     fn file_group_display_too_many_verbose() {
-        let files = vec![
+        let files = FileGroup::new(vec![
             partitioned_file("foo"),
             partitioned_file("bar"),
             partitioned_file("baz"),
             partitioned_file("qux"),
             partitioned_file("quux"),
             partitioned_file("quuux"),
-        ];
+        ]);
 
         let expected = "[foo, bar, baz, qux, quux, quuux]";
         assert_eq!(

@@ -33,7 +33,9 @@ use crate::metrics::{
 };
 use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
-use crate::spill::{get_record_batch_memory_size, InProgressSpillFile, SpillManager};
+use crate::spill::get_record_batch_memory_size;
+use crate::spill::in_progress_spill_file::InProgressSpillFile;
+use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
