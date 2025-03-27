@@ -164,7 +164,6 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 let new_types = data_types_with_aggregate_udf(&data_types, func)
                     .map_err(|err| {
-                        dbg!(&err);
                         let diagnostic = err.diagnostic().cloned();
 
                         let err = plan_datafusion_err!(
