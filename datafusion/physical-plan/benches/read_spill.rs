@@ -88,8 +88,14 @@ fn bench_spill_read(c: &mut Criterion) {
     let mut group = c.benchmark_group("read_spill");
 
     let benches = &[
-        ("StreamReader/with_validation", read_spill as fn(_, _) -> _),
-        ("StreamReader/skip_validation", read_spill_skip_validation),
+        (
+            "StreamReader/read_100/with_validation",
+            read_spill as fn(_, _) -> _,
+        ),
+        (
+            "StreamReader/read_100/skip_validation",
+            read_spill_skip_validation,
+        ),
     ];
 
     for &(name, func) in benches {
@@ -100,8 +106,7 @@ fn bench_spill_read(c: &mut Criterion) {
                 // - A background thread to consume received RecordBatches.
                 // This ensures each iteration starts with clean resources.
                 || {
-                    let (sender, receiver) =
-                        channel::<Result<RecordBatch>>();
+                    let (sender, receiver) = channel::<Result<RecordBatch>>();
                     let join_handle = thread::spawn(move || {
                         while let Ok(batch) = receiver.recv() {
                             let _ = batch.unwrap();
