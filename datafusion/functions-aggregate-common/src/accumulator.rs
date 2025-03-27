@@ -50,9 +50,7 @@ pub struct AccumulatorArgs<'a> {
     /// ```sql
     /// SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
     /// ```
-    ///
-    /// If no `ORDER BY` is specified, `ordering_req` will be empty.
-    pub ordering_req: &'a LexOrdering,
+    pub ordering_req: Option<&'a LexOrdering>,
 
     /// Whether the aggregation is running in reverse order
     pub is_reversed: bool,

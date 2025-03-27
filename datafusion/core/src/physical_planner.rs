@@ -828,7 +828,7 @@ impl DefaultPhysicalPlanner {
                     session_state.execution_props(),
                 )?;
                 let new_sort =
-                    SortExec::new(sort_expr, physical_input).with_fetch(*fetch);
+                    SortExec::new(sort_expr.into(), physical_input).with_fetch(*fetch);
                 Arc::new(new_sort)
             }
             LogicalPlan::Subquery(_) => todo!(),
@@ -1552,7 +1552,7 @@ pub fn create_window_expr_with_name(
                 name,
                 &physical_args,
                 &partition_by,
-                order_by.as_ref(),
+                &order_by.into(),
                 window_frame,
                 physical_schema,
                 ignore_nulls,
@@ -1626,21 +1626,21 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 == NullTreatment::IgnoreNulls;
 
             let (agg_expr, filter, order_by) = {
-                let physical_sort_exprs = match order_by {
-                    Some(exprs) => Some(create_physical_sort_exprs(
-                        exprs,
-                        logical_input_schema,
-                        execution_props,
-                    )?),
+                let ordering = match order_by {
+                    Some(exprs) => Some(
+                        create_physical_sort_exprs(
+                            exprs,
+                            logical_input_schema,
+                            execution_props,
+                        )?
+                        .into(),
+                    ),
                     None => None,
                 };
 
-                let ordering_reqs: LexOrdering =
-                    physical_sort_exprs.clone().unwrap_or_default();
-
                 let agg_expr =
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
-                        .order_by(ordering_reqs)
+                        .order_by(ordering.clone())
                         .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
                         .human_display(human_displan)
@@ -1649,7 +1649,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         .build()
                         .map(Arc::new)?;
 
-                (agg_expr, filter, physical_sort_exprs)
+                (agg_expr, filter, ordering)
             };
 
             Ok((agg_expr, filter, order_by))
@@ -1713,11 +1713,11 @@ pub fn create_physical_sort_exprs(
     exprs: &[SortExpr],
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
-) -> Result<LexOrdering> {
+) -> Result<Vec<PhysicalSortExpr>> {
     exprs
         .iter()
         .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<LexOrdering>>()
+        .collect()
 }
 
 impl DefaultPhysicalPlanner {

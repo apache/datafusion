@@ -332,7 +332,7 @@ pub(crate) fn get_partition_by_sort_exprs(
     input: &Arc<dyn ExecutionPlan>,
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     ordered_partition_by_indices: &[usize],
-) -> Result<LexOrdering> {
+) -> Result<Vec<PhysicalSortExpr>> {
     let ordered_partition_exprs = ordered_partition_by_indices
         .iter()
         .map(|idx| Arc::clone(&partition_by_exprs[*idx]))

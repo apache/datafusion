@@ -2206,7 +2206,7 @@ mod tests {
         let args = [col("b", schema)?];
 
         AggregateExprBuilder::new(first_value_udaf(), args.to_vec())
-            .order_by(LexOrdering::new(ordering_req.to_vec()))
+            .order_by(Some(LexOrdering::from_iter(ordering_req)))
             .schema(Arc::new(schema.clone()))
             .alias(String::from("first_value(b) ORDER BY [b ASC NULLS LAST]"))
             .build()
@@ -2224,7 +2224,7 @@ mod tests {
         }];
         let args = [col("b", schema)?];
         AggregateExprBuilder::new(last_value_udaf(), args.to_vec())
-            .order_by(LexOrdering::new(ordering_req.to_vec()))
+            .order_by(Some(LexOrdering::from_iter(ordering_req)))
             .schema(Arc::new(schema.clone()))
             .alias(String::from("last_value(b) ORDER BY [b ASC NULLS LAST]"))
             .build()
@@ -2403,10 +2403,9 @@ mod tests {
         let mut aggr_exprs = order_by_exprs
             .into_iter()
             .map(|order_by_expr| {
-                let ordering_req = order_by_expr.unwrap_or_default();
                 AggregateExprBuilder::new(array_agg_udaf(), vec![Arc::clone(col_a)])
                     .alias("a")
-                    .order_by(LexOrdering::new(ordering_req.to_vec()))
+                    .order_by(order_by_expr.map(LexOrdering::new))
                     .schema(Arc::clone(&test_schema))
                     .build()
                     .map(Arc::new)

@@ -61,8 +61,7 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use ahash::RandomState;
 use futures::stream::Stream;
@@ -153,7 +152,7 @@ impl BoundedWindowAggExec {
     // We are sure that partition by columns are always at the beginning of sort_keys
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
-    pub fn partition_by_sort_keys(&self) -> Result<LexOrdering> {
+    pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
         let partition_by = self.window_expr()[0].partition_by();
         get_partition_by_sort_exprs(
             &self.input,
@@ -744,7 +743,7 @@ impl LinearSearch {
 /// when computing partitions.
 pub struct SortedSearch {
     /// Stores partition by columns and their ordering information
-    partition_by_sort_keys: LexOrdering,
+    partition_by_sort_keys: Vec<PhysicalSortExpr>,
     /// Input ordering and partition by key ordering need not be the same, so
     /// this vector stores the mapping between them. For instance, if the input
     /// is ordered by a, b and the window expression contains a PARTITION BY b, a

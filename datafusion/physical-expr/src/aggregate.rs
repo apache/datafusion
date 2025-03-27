@@ -70,7 +70,7 @@ pub struct AggregateExprBuilder {
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
     /// The physical order by expressions
-    ordering_req: LexOrdering,
+    ordering_req: Option<LexOrdering>,
     /// Whether to ignore null values
     ignore_nulls: bool,
     /// Whether is distinct aggregate function
@@ -87,7 +87,7 @@ impl AggregateExprBuilder {
             alias: None,
             human_display: String::default(),
             schema: Arc::new(Schema::empty()),
-            ordering_req: LexOrdering::default(),
+            ordering_req: None,
             ignore_nulls: false,
             is_distinct: false,
             is_reversed: false,
@@ -115,14 +115,13 @@ impl AggregateExprBuilder {
 
         let mut ordering_fields = vec![];
 
-        if !ordering_req.is_empty() {
+        if let Some(ordering_req) = &ordering_req {
             let ordering_types = ordering_req
                 .iter()
                 .map(|e| e.expr.data_type(&schema))
                 .collect::<Result<Vec<_>>>()?;
 
-            ordering_fields =
-                utils::ordering_fields(ordering_req.as_ref(), &ordering_types);
+            ordering_fields = utils::ordering_fields(ordering_req, &ordering_types);
         }
 
         let input_exprs_types = args
@@ -179,7 +178,7 @@ impl AggregateExprBuilder {
         self
     }
 
-    pub fn order_by(mut self, order_by: LexOrdering) -> Self {
+    pub fn order_by(mut self, order_by: Option<LexOrdering>) -> Self {
         self.ordering_req = order_by;
         self
     }
@@ -230,7 +229,7 @@ pub struct AggregateFunctionExpr {
     human_display: String,
     schema: Schema,
     // The physical order by expressions
-    ordering_req: LexOrdering,
+    ordering_req: Option<LexOrdering>,
     // Whether to ignore null values
     ignore_nulls: bool,
     // fields used for order sensitive aggregation functions
@@ -323,22 +322,17 @@ impl AggregateFunctionExpr {
     /// By default it is `None` (there is no requirement)
     /// Order-sensitive aggregators, such as `FIRST_VALUE(x ORDER BY y)` should implement this
     pub fn order_bys(&self) -> Option<&LexOrdering> {
-        if self.ordering_req.is_empty() {
+        let Some(ordering_req) = &self.ordering_req else {
             return None;
-        }
-
-        if !self.order_sensitivity().is_insensitive() {
-            return Some(self.ordering_req.as_ref());
-        }
-
-        None
+        };
+        (!self.order_sensitivity().is_insensitive()).then_some(ordering_req)
     }
 
     /// Indicates whether aggregator can produce the correct result with any
     /// arbitrary input ordering. By default, we assume that aggregate expressions
     /// are order insensitive.
     pub fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        if !self.ordering_req.is_empty() {
+        if self.ordering_req.is_some() {
             // If there is requirement, use the sensitivity of the implementation
             self.fun.order_sensitivity()
         } else {
@@ -493,18 +487,16 @@ impl AggregateFunctionExpr {
             ReversedUDAF::NotSupported => None,
             ReversedUDAF::Identical => Some(self.clone()),
             ReversedUDAF::Reversed(reverse_udf) => {
-                let reverse_ordering_req = reverse_order_bys(self.ordering_req.as_ref());
                 let mut name = self.name().to_string();
                 // If the function is changed, we need to reverse order_by clause as well
                 // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
-                if self.fun().name() == reverse_udf.name() {
-                } else {
+                if self.fun().name() != reverse_udf.name() {
                     replace_order_by_clause(&mut name);
                 }
                 replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
 
                 AggregateExprBuilder::new(reverse_udf, self.args.to_vec())
-                    .order_by(reverse_ordering_req)
+                    .order_by(self.ordering_req.as_ref().map(reverse_order_bys))
                     .schema(Arc::new(self.schema.clone()))
                     .alias(name)
                     .with_ignore_nulls(self.ignore_nulls)
@@ -520,14 +512,12 @@ impl AggregateFunctionExpr {
     /// These expressions are  (1)function arguments, (2) order by expressions.
     pub fn all_expressions(&self) -> AggregatePhysicalExpressions {
         let args = self.expressions();
-        let order_bys = self
+        let order_by_exprs = self
             .order_bys()
-            .cloned()
-            .unwrap_or_else(LexOrdering::default);
-        let order_by_exprs = order_bys
+            .map_or_else(Vec::new, |ordering| ordering.iter().collect())
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
-            .collect::<Vec<_>>();
+            .collect();
         AggregatePhysicalExpressions {
             args,
             order_by_exprs,

@@ -42,7 +42,6 @@ use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
 };
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -945,16 +944,10 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
         // if any of the following conditions is true
         // - Preserving ordering is not helpful in terms of satisfying ordering requirements
         // - Usage of order preserving variants is not desirable
-        // (determined by flag `config.optimizer.bounded_order_preserving_variants`)
-        let should_preserve_ordering = input.plan.output_ordering().is_some();
-
-        let new_plan = if should_preserve_ordering {
+        // (determined by flag `config.optimizer.prefer_existing_sort`)
+        let new_plan = if let Some(ordering) = input.plan.output_ordering() {
             Arc::new(SortPreservingMergeExec::new(
-                input
-                    .plan
-                    .output_ordering()
-                    .unwrap_or(&LexOrdering::default())
-                    .clone(),
+                ordering.clone(),
                 Arc::clone(&input.plan),
             )) as _
         } else {

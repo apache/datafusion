@@ -45,7 +45,6 @@ use datafusion_common_runtime::JoinSet;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
@@ -311,7 +310,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::new_with_config(session_config);
-    let mut sort_keys = LexOrdering::default();
+    let mut sort_keys = vec![];
     for ordering_col in ["a", "b", "c"] {
         sort_keys.push(PhysicalSortExpr {
             expr: col(ordering_col, &schema).unwrap(),
@@ -331,7 +330,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     let running_source = Arc::new(DataSourceExec::new(Arc::new(
         MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
             .unwrap()
-            .try_with_sort_information(vec![sort_keys])
+            .try_with_sort_information(vec![sort_keys.into()])
             .unwrap(),
     )));
 

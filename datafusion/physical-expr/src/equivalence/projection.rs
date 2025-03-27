@@ -138,9 +138,7 @@ fn project_index_to_exprs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::equivalence::tests::{
-        convert_to_orderings, convert_to_orderings_owned, output_schema,
-    };
+    use crate::equivalence::tests::{convert_to_orderings, output_schema};
     use crate::equivalence::EquivalenceProperties;
     use crate::expressions::{col, BinaryExpr};
     use crate::utils::tests::TestScalarUDF;
@@ -628,7 +626,7 @@ mod tests {
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
-            let expected = convert_to_orderings_owned(&expected);
+            let expected = convert_to_orderings(&expected);
 
             let projected_eq = eq_properties.project(&projection_mapping, output_schema);
             let orderings = projected_eq.oeq_class();

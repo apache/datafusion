@@ -105,7 +105,7 @@ pub fn parse_physical_sort_exprs(
         .map(|sort_expr| {
             parse_physical_sort_expr(sort_expr, registry, input_schema, codec)
         })
-        .collect::<Result<LexOrdering>>()
+        .collect()
 }
 
 /// Parses a physical window expr from a protobuf.

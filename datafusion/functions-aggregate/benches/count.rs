@@ -22,7 +22,6 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;
 
 fn prepare_accumulator() -> Box<dyn GroupsAccumulator> {
@@ -31,7 +30,7 @@ fn prepare_accumulator() -> Box<dyn GroupsAccumulator> {
         return_type: &DataType::Int64,
         schema: &schema,
         ignore_nulls: false,
-        ordering_req: &LexOrdering::default(),
+        ordering_req: None,
         is_reversed: false,
         name: "COUNT(f)",
         is_distinct: false,

@@ -150,10 +150,6 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         Ok(ExprSimplifyResult::Simplified(replacement))
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn output_ordering(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
         Ok(SortProperties::Unordered)
     }

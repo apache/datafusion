@@ -577,7 +577,7 @@ impl ExecutionPlan for RepartitionExec {
         let input = Arc::clone(&self.input);
         let partitioning = self.partitioning().clone();
         let metrics = self.metrics.clone();
-        let preserve_order = self.preserve_order;
+        let preserve_order = self.sort_exprs().is_some();
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);

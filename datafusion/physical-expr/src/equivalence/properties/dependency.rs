@@ -615,7 +615,7 @@ mod tests {
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
             result,
-            LexOrdering::new(vec![
+            vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
                     options: sort_options_not
@@ -624,7 +624,7 @@ mod tests {
                     expr: Arc::clone(col_a),
                     options: sort_options
                 }
-            ])
+            ]
         );
 
         let schema = Schema::new(vec![
@@ -656,7 +656,7 @@ mod tests {
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
             result,
-            LexOrdering::new(vec![
+            vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
                     options: sort_options_not
@@ -665,7 +665,7 @@ mod tests {
                     expr: Arc::clone(col_a),
                     options: sort_options
                 }
-            ])
+            ]
         );
 
         let required_columns = [

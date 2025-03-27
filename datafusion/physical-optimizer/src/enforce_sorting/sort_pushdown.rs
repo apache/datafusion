@@ -24,7 +24,9 @@ use crate::utils::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, plan_err, HashSet, JoinSide, Result};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, plan_err, HashSet, JoinSide, Result,
+};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
@@ -244,7 +246,9 @@ fn pushdown_requirement_to_children(
                 .properties()
                 .output_ordering()
                 .cloned()
-                .unwrap_or(LexOrdering::default()),
+                .ok_or_else(|| {
+                    internal_datafusion_err!("SortExec should have output ordering")
+                })?,
         );
         sort_exec
             .properties()
@@ -336,9 +340,7 @@ fn pushdown_requirement_to_children(
         let mut spm_eqs = plan.equivalence_properties().clone();
         // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
         spm_eqs = spm_eqs.with_reorder(new_ordering);
-        if spm_eqs
-            .ordering_satisfy(plan.output_ordering().unwrap_or(&LexOrdering::default()))
-        {
+        if spm_eqs.ordering_satisfy(plan.output_ordering().unwrap()) {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
             // than SortPreservingMergeExec output ordering.
             Ok(Some(vec![Some(parent_required.clone())]))
@@ -419,8 +421,8 @@ fn try_pushdown_requirements_to_join(
     let mut smj_required_orderings = smj.required_input_ordering();
     let right_requirement = smj_required_orderings.swap_remove(1);
     let left_requirement = smj_required_orderings.swap_remove(0);
-    let left_ordering = &smj.left().output_ordering().cloned().unwrap_or_default();
-    let right_ordering = &smj.right().output_ordering().cloned().unwrap_or_default();
+    let left_ordering = &smj.left().output_ordering().cloned().unwrap();
+    let right_ordering = &smj.right().output_ordering().cloned().unwrap();
 
     let (new_left_ordering, new_right_ordering) = match push_side {
         JoinSide::Left => {
@@ -552,7 +554,7 @@ fn shift_right_required(
         })
         .collect::<Vec<_>>();
     if new_right_required.len() == parent_required.len() {
-        Ok(LexRequirement::new(new_right_required))
+        Ok(new_right_required.into())
     } else {
         plan_err!(
             "Expect to shift all the parent required column indexes for SortMergeJoin"

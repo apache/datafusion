@@ -211,9 +211,9 @@ impl EquivalenceProperties {
 
     /// Returns the output ordering of the properties.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
+        // Prune out constant expressions:
         let constants = self.constants();
-        let mut output_ordering = self.oeq_class().output_ordering().unwrap_or_default();
-        // Prune out constant expressions
+        let mut output_ordering = self.oeq_class().output_ordering()?;
         output_ordering
             .retain(|sort_expr| !const_exprs_contains(constants, &sort_expr.expr));
         (!output_ordering.is_empty()).then_some(output_ordering)
@@ -446,17 +446,16 @@ impl EquivalenceProperties {
     /// If the given ordering is already satisfied, the function does nothing.
     pub fn with_reorder(mut self, sort_exprs: LexOrdering) -> Self {
         // Filter out constant expressions as they don't affect ordering
-        let filtered_exprs = LexOrdering::new(
-            sort_exprs
-                .into_iter()
-                .filter(|expr| !self.is_expr_constant(&expr.expr))
-                .collect(),
-        );
+        let filtered_exprs = sort_exprs
+            .into_iter()
+            .filter(|expr| !self.is_expr_constant(&expr.expr))
+            .collect::<Vec<_>>();
 
         if filtered_exprs.is_empty() {
             return self;
         }
 
+        let filtered_exprs = LexOrdering::new(filtered_exprs);
         let mut new_orderings = vec![filtered_exprs.clone()];
 
         // Preserve valid suffixes from existing orderings
@@ -607,7 +606,7 @@ impl EquivalenceProperties {
             // by any ordering.
             return true;
         };
-        // Check whether given requirement is satisfied by constraints first:
+        // Then, check whether given requirement is satisfied by constraints:
         if self.satisfied_by_constraints(&normalized_reqs) {
             return true;
         }
@@ -1227,7 +1226,7 @@ impl EquivalenceProperties {
     pub fn find_longest_permutation(
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> (LexOrdering, Vec<usize>) {
+    ) -> (Vec<PhysicalSortExpr>, Vec<usize>) {
         let mut eq_properties = self.clone();
         let mut result = vec![];
         // The algorithm is as follows:
@@ -1290,8 +1289,7 @@ impl EquivalenceProperties {
             // Add new ordered section to the state.
             result.extend(ordered_exprs);
         }
-        let (left, right) = result.into_iter().unzip();
-        (LexOrdering::new(left), right)
+        result.into_iter().unzip()
     }
 
     /// This function determines whether the provided expression is constant

@@ -429,13 +429,13 @@ impl LexOrdering {
     ///
     /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
     pub fn collapse(self) -> Self {
-        let mut output = Self::default();
-        for item in self {
-            if !output.iter().any(|req| req.expr.eq(&item.expr)) {
-                output.push(item);
+        let mut orderings = Vec::<PhysicalSortExpr>::new();
+        for element in self {
+            if !orderings.iter().any(|item| item.expr.eq(&element.expr)) {
+                orderings.push(element);
             }
         }
-        output
+        Self::new(orderings)
     }
 
     /// Transforms each `PhysicalSortExpr` in the `LexOrdering`
@@ -584,13 +584,13 @@ impl LexRequirement {
     /// For example, `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a
     /// Some(ASC)]`.
     pub fn collapse(self) -> Self {
-        let mut output = Vec::<PhysicalSortRequirement>::new();
-        for item in self {
-            if !output.iter().any(|req| req.expr.eq(&item.expr)) {
-                output.push(item);
+        let mut reqs = Vec::<PhysicalSortRequirement>::new();
+        for element in self {
+            if !reqs.iter().any(|item| item.expr.eq(&element.expr)) {
+                reqs.push(element);
             }
         }
-        LexRequirement::new(output)
+        Self::new(reqs)
     }
 }
 
@@ -636,8 +636,20 @@ impl From<LexOrdering> for LexRequirement {
     }
 }
 
+impl From<Vec<PhysicalSortExpr>> for LexRequirement {
+    fn from(value: Vec<PhysicalSortExpr>) -> Self {
+        Self::new(value.into_iter().map(Into::into).collect())
+    }
+}
+
 impl From<LexRequirement> for LexOrdering {
     fn from(value: LexRequirement) -> Self {
         value.into_iter().map(Into::into).collect()
+    }
+}
+
+impl From<Vec<PhysicalSortRequirement>> for LexOrdering {
+    fn from(value: Vec<PhysicalSortRequirement>) -> Self {
+        Self::new(value.into_iter().map(Into::into).collect())
     }
 }

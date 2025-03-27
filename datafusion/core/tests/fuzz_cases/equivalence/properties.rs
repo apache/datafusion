@@ -24,7 +24,7 @@ use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::expressions::{col, BinaryExpr};
 use datafusion_physical_expr::{PhysicalExprRef, ScalarFunctionExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use itertools::Itertools;
 use std::sync::Arc;
 
@@ -77,7 +77,7 @@ fn test_find_longest_permutation_random() -> Result<()> {
                         expr: Arc::clone(&exprs[idx]),
                         options: sort_expr.options,
                     })
-                    .collect::<LexOrdering>();
+                    .collect::<Vec<_>>();
                 assert_eq!(
                     ordering, ordering2,
                     "indices and lexicographical ordering do not match"
@@ -92,7 +92,7 @@ fn test_find_longest_permutation_random() -> Result<()> {
                 // that result will be same after sort (e.g sort was unnecessary).
                 assert!(
                     is_table_same_after_sort(
-                        ordering.clone(),
+                        ordering.into(),
                         table_data_with_properties.clone(),
                     )?,
                     "{}",

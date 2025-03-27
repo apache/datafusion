@@ -539,7 +539,7 @@ fn rountrip_aggregate_with_sort() -> Result<()> {
             AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
                 .alias("ARRAY_AGG(b)")
-                .order_by(sort_exprs)
+                .order_by(Some(sort_exprs))
                 .build()
                 .map(Arc::new)?,
         ];

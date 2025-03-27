@@ -339,10 +339,6 @@ impl AggregateUDFImpl for Count {
         })
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         // groups accumulator only supports `COUNT(c1)`, not
         // `COUNT(c1, c2)`, etc

@@ -23,6 +23,8 @@ mod sp_repartition_fuzz_tests {
     use arrow::compute::{concat_batches, lexsort, SortColumn, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::datasource::source::DataSourceExec;
     use datafusion::physical_plan::{
         collect,
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet},
@@ -44,9 +46,6 @@ mod sp_repartition_fuzz_tests {
     };
     use test_utils::add_empty_batches;
 
-    use datafusion::datasource::memory::MemorySourceConfig;
-    use datafusion::datasource::source::DataSourceExec;
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
@@ -347,7 +346,7 @@ mod sp_repartition_fuzz_tests {
         let schema = input1[0].schema();
         let session_config = SessionConfig::new().with_batch_size(50);
         let ctx = SessionContext::new_with_config(session_config);
-        let mut sort_keys = LexOrdering::default();
+        let mut sort_keys = vec![];
         for ordering_col in ["a", "b", "c"] {
             sort_keys.push(PhysicalSortExpr {
                 expr: col(ordering_col, &schema).unwrap(),
@@ -360,7 +359,7 @@ mod sp_repartition_fuzz_tests {
         let running_source = Arc::new(
             MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
                 .unwrap()
-                .try_with_sort_information(vec![sort_keys.clone()])
+                .try_with_sort_information(vec![sort_keys.clone().into()])
                 .unwrap(),
         );
         let running_source = Arc::new(DataSourceExec::new(running_source));
@@ -381,7 +380,7 @@ mod sp_repartition_fuzz_tests {
             sort_preserving_repartition_exec_hash(intermediate, hash_exprs.clone())
         };
 
-        let final_plan = sort_preserving_merge_exec(sort_keys.clone(), intermediate);
+        let final_plan = sort_preserving_merge_exec(sort_keys, intermediate);
         let task_ctx = ctx.task_ctx();
 
         let collected_running = collect(final_plan, task_ctx.clone()).await.unwrap();

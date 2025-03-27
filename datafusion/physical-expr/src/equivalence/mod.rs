@@ -55,6 +55,7 @@ pub fn add_offset_to_expr(
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Borrow;
 
     use super::*;
     use crate::expressions::col;
@@ -200,50 +201,23 @@ mod tests {
     }
 
     // Convert each tuple to PhysicalSortExpr
-    pub fn convert_to_sort_exprs(
-        in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-    ) -> LexOrdering {
-        in_data
-            .iter()
+    pub fn convert_to_sort_exprs<T: Borrow<Arc<dyn PhysicalExpr>>>(
+        args: &[(T, SortOptions)],
+    ) -> Vec<PhysicalSortExpr> {
+        args.iter()
             .map(|(expr, options)| PhysicalSortExpr {
-                expr: Arc::clone(*expr),
+                expr: Arc::clone(expr.borrow()),
                 options: *options,
             })
             .collect()
     }
 
-    // Convert each inner tuple to PhysicalSortExpr
-    pub fn convert_to_orderings(
-        orderings: &[Vec<(&Arc<dyn PhysicalExpr>, SortOptions)>],
+    // Convert each inner tuple to PhysicalSortExpr and then into LexOrdering
+    pub fn convert_to_orderings<T: Borrow<Arc<dyn PhysicalExpr>>>(
+        args: &[Vec<(T, SortOptions)>],
     ) -> Vec<LexOrdering> {
-        orderings
-            .iter()
-            .map(|sort_exprs| convert_to_sort_exprs(sort_exprs))
-            .collect()
-    }
-
-    // Convert each tuple to PhysicalSortExpr
-    pub fn convert_to_sort_exprs_owned(
-        in_data: &[(Arc<dyn PhysicalExpr>, SortOptions)],
-    ) -> LexOrdering {
-        LexOrdering::new(
-            in_data
-                .iter()
-                .map(|(expr, options)| PhysicalSortExpr {
-                    expr: Arc::clone(expr),
-                    options: *options,
-                })
-                .collect(),
-        )
-    }
-
-    // Convert each inner tuple to PhysicalSortExpr
-    pub fn convert_to_orderings_owned(
-        orderings: &[Vec<(Arc<dyn PhysicalExpr>, SortOptions)>],
-    ) -> Vec<LexOrdering> {
-        orderings
-            .iter()
-            .map(|sort_exprs| convert_to_sort_exprs_owned(sort_exprs))
+        args.iter()
+            .map(|sort_exprs| convert_to_sort_exprs(sort_exprs).into())
             .collect()
     }
 

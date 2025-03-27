@@ -44,7 +44,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr::PhysicalSortExpr;
 
 use futures::{ready, Stream, StreamExt};
 
@@ -107,7 +107,7 @@ impl WindowAggExec {
     // We are sure that partition by columns are always at the beginning of sort_keys
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
-    pub fn partition_by_sort_keys(&self) -> Result<LexOrdering> {
+    pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
         let partition_by = self.window_expr()[0].partition_by();
         get_partition_by_sort_exprs(
             &self.input,
@@ -307,7 +307,7 @@ pub struct WindowAggStream {
     batches: Vec<RecordBatch>,
     finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
-    partition_by_sort_keys: LexOrdering,
+    partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
 }
@@ -319,7 +319,7 @@ impl WindowAggStream {
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
-        partition_by_sort_keys: LexOrdering,
+        partition_by_sort_keys: Vec<PhysicalSortExpr>,
         ordered_partition_by_indices: Vec<usize>,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.

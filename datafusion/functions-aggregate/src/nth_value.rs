@@ -86,7 +86,7 @@ pub fn nth_value(
         description = "The position (nth) of the value to retrieve, based on the ordering."
     )
 )]
-/// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
+/// Expression for a `NTH_VALUE(..., ... ORDER BY ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
 /// and then their results are merged.
 #[derive(Debug)]
@@ -148,8 +148,11 @@ impl AggregateUDFImpl for NthValueAgg {
             }
         };
 
-        let ordering_dtypes = acc_args
-            .ordering_req
+        let Some(ordering_req) = acc_args.ordering_req else {
+            return TrivialNthValueAccumulator::try_new(n, acc_args.return_type)
+                .map(|acc| Box::new(acc) as _);
+        };
+        let ordering_dtypes = ordering_req
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
@@ -159,7 +162,7 @@ impl AggregateUDFImpl for NthValueAgg {
             n,
             &data_type,
             &ordering_dtypes,
-            acc_args.ordering_req.clone(),
+            ordering_req.clone(),
         )
         .map(|acc| Box::new(acc) as _)
     }
@@ -182,16 +185,132 @@ impl AggregateUDFImpl for NthValueAgg {
         Ok(fields)
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Reversed(nth_value_udaf())
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[derive(Debug)]
+pub struct TrivialNthValueAccumulator {
+    /// The `N` value.
+    n: i64,
+    /// Stores entries in the `NTH_VALUE` result.
+    values: VecDeque<ScalarValue>,
+    /// Data types of the value.
+    datatype: DataType,
+}
+
+impl TrivialNthValueAccumulator {
+    /// Create a new order-insensitive NTH_VALUE accumulator based on the given
+    /// item data type.
+    pub fn try_new(n: i64, datatype: &DataType) -> Result<Self> {
+        if n == 0 {
+            // n cannot be 0
+            return internal_err!("Nth value indices are 1 based. 0 is invalid index");
+        }
+        Ok(Self {
+            n,
+            values: VecDeque::new(),
+            datatype: datatype.clone(),
+        })
+    }
+
+    /// Updates state, with the `values`. Fetch contains missing number of entries for state to be complete
+    /// None represents all of the new `values` need to be added to the state.
+    fn append_new_data(
+        &mut self,
+        values: &[ArrayRef],
+        fetch: Option<usize>,
+    ) -> Result<()> {
+        let n_row = values[0].len();
+        let n_to_add = if let Some(fetch) = fetch {
+            std::cmp::min(fetch, n_row)
+        } else {
+            n_row
+        };
+        for index in 0..n_to_add {
+            let mut row = get_row_at_idx(values, index)?;
+            self.values.push_back(row.swap_remove(0));
+            // At index 1, we have n index argument, which is constant.
+        }
+        Ok(())
+    }
+}
+
+impl Accumulator for TrivialNthValueAccumulator {
+    /// Updates its state with the `values`. Assumes data in the `values` satisfies the required
+    /// ordering for the accumulator (across consecutive batches, not just batch-wise).
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if !values.is_empty() {
+            let n_required = self.n.unsigned_abs() as usize;
+            let from_start = self.n > 0;
+            if from_start {
+                // direction is from start
+                let n_remaining = n_required.saturating_sub(self.values.len());
+                self.append_new_data(values, Some(n_remaining))?;
+            } else {
+                // direction is from end
+                self.append_new_data(values, None)?;
+                let start_offset = self.values.len().saturating_sub(n_required);
+                if start_offset > 0 {
+                    self.values.drain(0..start_offset);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if !states.is_empty() {
+            // First entry in the state is the aggregation result.
+            let n_required = self.n.unsigned_abs() as usize;
+            let array_agg_res = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
+            for v in array_agg_res.into_iter() {
+                self.values.extend(v);
+                if self.values.len() > n_required {
+                    // There is enough data collected, can stop merging:
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let mut values_cloned = self.values.clone();
+        let values_slice = values_cloned.make_contiguous();
+        Ok(vec![ScalarValue::List(ScalarValue::new_list_nullable(
+            values_slice,
+            &self.datatype,
+        ))])
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let n_required = self.n.unsigned_abs() as usize;
+        let from_start = self.n > 0;
+        let nth_value_idx = if from_start {
+            // index is from start
+            let forward_idx = n_required - 1;
+            (forward_idx < self.values.len()).then_some(forward_idx)
+        } else {
+            // index is from end
+            self.values.len().checked_sub(n_required)
+        };
+        if let Some(idx) = nth_value_idx {
+            Ok(self.values[idx].clone())
+        } else {
+            ScalarValue::try_from(self.datatype.clone())
+        }
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) + ScalarValue::size_of_vec_deque(&self.values)
+            - size_of_val(&self.values)
+            + size_of::<DataType>()
     }
 }
 
@@ -235,6 +354,64 @@ impl NthValueAccumulator {
             datatypes,
             ordering_req,
         })
+    }
+
+    fn evaluate_orderings(&self) -> Result<ScalarValue> {
+        let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
+        let struct_field = Fields::from(fields.clone());
+
+        let mut column_wise_ordering_values = vec![];
+        let num_columns = fields.len();
+        for i in 0..num_columns {
+            let column_values = self
+                .ordering_values
+                .iter()
+                .map(|x| x[i].clone())
+                .collect::<Vec<_>>();
+            let array = if column_values.is_empty() {
+                new_empty_array(fields[i].data_type())
+            } else {
+                ScalarValue::iter_to_array(column_values.into_iter())?
+            };
+            column_wise_ordering_values.push(array);
+        }
+
+        let ordering_array =
+            StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
+
+        Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
+    }
+
+    fn evaluate_values(&self) -> ScalarValue {
+        let mut values_cloned = self.values.clone();
+        let values_slice = values_cloned.make_contiguous();
+        ScalarValue::List(ScalarValue::new_list_nullable(
+            values_slice,
+            &self.datatypes[0],
+        ))
+    }
+
+    /// Updates state, with the `values`. Fetch contains missing number of entries for state to be complete
+    /// None represents all of the new `values` need to be added to the state.
+    fn append_new_data(
+        &mut self,
+        values: &[ArrayRef],
+        fetch: Option<usize>,
+    ) -> Result<()> {
+        let n_row = values[0].len();
+        let n_to_add = if let Some(fetch) = fetch {
+            std::cmp::min(fetch, n_row)
+        } else {
+            n_row
+        };
+        for index in 0..n_to_add {
+            let row = get_row_at_idx(values, index)?;
+            self.values.push_back(row[0].clone());
+            // At index 1, we have n index argument.
+            // Ordering values cover starting from 2nd index to end
+            self.ordering_values.push_back(row[2..].to_vec());
+        }
+        Ok(())
     }
 }
 
@@ -394,65 +571,5 @@ impl Accumulator for NthValueAccumulator {
         total += size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
         // TODO: Calculate size of each `PhysicalSortExpr` more accurately.
         total
-    }
-}
-
-impl NthValueAccumulator {
-    fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
-        let struct_field = Fields::from(fields.clone());
-
-        let mut column_wise_ordering_values = vec![];
-        let num_columns = fields.len();
-        for i in 0..num_columns {
-            let column_values = self
-                .ordering_values
-                .iter()
-                .map(|x| x[i].clone())
-                .collect::<Vec<_>>();
-            let array = if column_values.is_empty() {
-                new_empty_array(fields[i].data_type())
-            } else {
-                ScalarValue::iter_to_array(column_values.into_iter())?
-            };
-            column_wise_ordering_values.push(array);
-        }
-
-        let ordering_array =
-            StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
-
-        Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
-    }
-
-    fn evaluate_values(&self) -> ScalarValue {
-        let mut values_cloned = self.values.clone();
-        let values_slice = values_cloned.make_contiguous();
-        ScalarValue::List(ScalarValue::new_list_nullable(
-            values_slice,
-            &self.datatypes[0],
-        ))
-    }
-
-    /// Updates state, with the `values`. Fetch contains missing number of entries for state to be complete
-    /// None represents all of the new `values` need to be added to the state.
-    fn append_new_data(
-        &mut self,
-        values: &[ArrayRef],
-        fetch: Option<usize>,
-    ) -> Result<()> {
-        let n_row = values[0].len();
-        let n_to_add = if let Some(fetch) = fetch {
-            std::cmp::min(fetch, n_row)
-        } else {
-            n_row
-        };
-        for index in 0..n_to_add {
-            let row = get_row_at_idx(values, index)?;
-            self.values.push_back(row[0].clone());
-            // At index 1, we have n index argument.
-            // Ordering values cover starting from 2nd index to end
-            self.ordering_values.push_back(row[2..].to_vec());
-        }
-        Ok(())
     }
 }

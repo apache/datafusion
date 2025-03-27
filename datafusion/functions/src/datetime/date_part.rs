@@ -231,6 +231,7 @@ impl ScalarUDFImpl for DatePartFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }

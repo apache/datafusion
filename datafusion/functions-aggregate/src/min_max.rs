@@ -233,10 +233,6 @@ impl AggregateUDFImpl for Max {
         Ok(Box::new(MaxAccumulator::try_new(acc_args.return_type)?))
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
         matches!(
@@ -1085,10 +1081,6 @@ impl AggregateUDFImpl for Min {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(MinAccumulator::try_new(acc_args.return_type)?))
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {

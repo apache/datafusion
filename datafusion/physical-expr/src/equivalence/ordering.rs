@@ -682,7 +682,7 @@ mod tests {
 
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
-                eq_properties.ordering_satisfy(reqs.as_ref()),
+                eq_properties.ordering_satisfy(&reqs.into()),
                 expected,
                 "{}",
                 err_msg
@@ -742,7 +742,7 @@ mod tests {
                 format!("error in test reqs: {:?}, expected: {:?}", reqs, expected,);
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
-                eq_properties.ordering_satisfy(reqs.as_ref()),
+                eq_properties.ordering_satisfy(&reqs.into()),
                 expected,
                 "{}",
                 err_msg

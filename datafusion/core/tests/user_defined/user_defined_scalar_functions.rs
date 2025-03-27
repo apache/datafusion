@@ -967,10 +967,6 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 
         Ok(ExprSimplifyResult::Simplified(replacement))
     }
-
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
 }
 
 impl ScalarFunctionWrapper {

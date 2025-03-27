@@ -290,7 +290,7 @@ pub(crate) fn add_new_ordering_expr_with_partition_by(
         let (mut ordering, _) = eqp.find_longest_permutation(partition_by);
         if ordering.len() == partition_by.len() {
             ordering.push(expr);
-            eqp.add_new_orderings([ordering]);
+            eqp.add_new_orderings([ordering.into()]);
         }
     }
 }
