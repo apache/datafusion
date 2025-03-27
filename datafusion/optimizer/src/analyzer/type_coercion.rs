@@ -1054,7 +1054,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow::datatypes::DataType::Utf8;
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
 
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
@@ -2089,6 +2089,31 @@ mod test {
             schema
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_map_with_diff_name() -> Result<()> {
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("key", Utf8, false));
+        builder.push(Field::new("value", DataType::Float64, true));
+        let struct_fields = builder.finish().fields;
+
+        let fields =
+            Field::new("entries", DataType::Struct(struct_fields.clone()), false);
+        let map_type_entries = DataType::Map(Arc::new(fields), false);
+
+        let fields = Field::new("key_value", DataType::Struct(struct_fields), false);
+        let may_type_cutsom = DataType::Map(Arc::new(fields), false);
+
+        let expr = col("a").eq(cast(col("a"), may_type_cutsom));
+        let empty = empty_with_type(map_type_entries);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let expected = "Projection: a = CAST(CAST(a AS Map(Field { name: \"key_value\", data_type: Struct([Field { name: \"key\", data_type: Utf8, \
+        nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"value\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), \
+        nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false)) AS Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Utf8, nullable: false, \
+        dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"value\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false))\n  \
+        EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
 
     #[test]
