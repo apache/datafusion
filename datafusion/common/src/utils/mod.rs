@@ -990,7 +990,7 @@ pub fn take_function_args<const N: usize, T>(
     })
 }
 
-pub fn take_function_args_with_span<const N: usize, T>(
+pub fn take_function_args_with_diag<const N: usize, T>(
     function_name: &str,
     args: impl IntoIterator<Item = T>,
     function_call_site: Option<Span>,

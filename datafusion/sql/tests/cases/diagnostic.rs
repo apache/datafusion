@@ -26,7 +26,6 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 use regex::Regex;
-use sqlparser::ast::{Expr as SQLExpr, SelectItem, SetExpr, Statement};
 use sqlparser::{dialect::GenericDialect, parser::Parser};
 
 use crate::{MockContextProvider, MockSessionState};
@@ -48,13 +47,10 @@ fn do_query(sql: &'static str) -> Diagnostic {
     let sql_to_rel = SqlToRel::new_with_options(&context, options);
     match sql_to_rel.statement_to_plan(statement) {
         Ok(_) => panic!("expected error"),
-        Err(err) => {
-            dbg!(&err);
-            match err.diagnostic() {
-                Some(diag) => diag.clone(),
-                None => panic!("expected diagnostic"),
-            }
-        }
+        Err(err) => match err.diagnostic() {
+            Some(diag) => diag.clone(),
+            None => panic!("expected diagnostic"),
+        },
     }
 }
 
