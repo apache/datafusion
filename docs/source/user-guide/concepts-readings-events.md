@@ -134,6 +134,8 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 ## 📅 Release Notes & Updates
 
+- **2025-03-24** [Apache DataFusion 46.0.0 Release](https://datafusion.apache.org/blog/2025/03/24/datafusion-46.0.0/)
+
 - **2024-09-14** [Apache DataFusion Python 43.1.0 Released](https://datafusion.apache.org/blog/2024/12/14/datafusion-python-43.1.0/)
 
 - **2024-08-24** [Apache DataFusion Python 40.1.0 Released, Significant usability updates](https://datafusion.apache.org/blog/2024/08/20/python-datafusion-40.0.0/)

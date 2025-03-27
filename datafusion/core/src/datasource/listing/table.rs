@@ -1191,14 +1191,12 @@ mod tests {
     use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
-    use crate::{
-        assert_batches_eq,
-        test::{columns, object_store::register_test_store},
-    };
+    use crate::test::{columns, object_store::register_test_store};
 
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::stats::Precision;
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
@@ -2209,16 +2207,14 @@ mod tests {
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &res);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Read the records in the table
         let batches = session_ctx
@@ -2226,16 +2222,14 @@ mod tests {
             .await?
             .collect()
             .await?;
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Assert that `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -2249,17 +2243,14 @@ mod tests {
 
         // Again, execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
-        // Insert returns the number of rows written, in our case this would be 6.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &res);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Read the contents of the table
         let batches = session_ctx
@@ -2268,17 +2259,13 @@ mod tests {
             .collect()
             .await?;
 
-        // Define the expected result after the second append.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 40    |",
-            "+-------+",
-        ];
-
-        // Assert that the batches read from the file after the second append match the expected result.
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 40    |
+            +-------+
+        "###);}
 
         // Assert that another `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -2334,16 +2321,15 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+-----+-----+---+",
-            "| a   | b   | c |",
-            "+-----+-----+---+",
-            "| foo | bar | 1 |",
-            "| foo | bar | 2 |",
-            "| foo | bar | 3 |",
-            "+-----+-----+---+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-----+-----+---+
+            | a   | b   | c |
+            +-----+-----+---+
+            | foo | bar | 1 |
+            | foo | bar | 2 |
+            | foo | bar | 3 |
+            +-----+-----+---+
+        "###);}
 
         Ok(())
     }

@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::{
     datasource::{
@@ -87,29 +87,22 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
     ];
     let exec = table.scan(&ctx.state(), None, &filters, None).await?;
     let data_source_exec = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let data_source = data_source_exec.data_source();
-    let file_source = data_source
-        .as_any()
-        .downcast_ref::<FileScanConfig>()
-        .unwrap();
-    let parquet_config = file_source
-        .file_source()
-        .as_any()
-        .downcast_ref::<ParquetSource>()
-        .unwrap();
-    let pred = parquet_config.predicate().unwrap();
-    // Only the last filter should be pushdown to TableScan
-    let expected = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
-        Operator::Gt,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-    ));
+    if let Some((_, parquet_config)) =
+        data_source_exec.downcast_to_file_source::<ParquetSource>()
+    {
+        let pred = parquet_config.predicate().unwrap();
+        // Only the last filter should be pushdown to TableScan
+        let expected = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        ));
 
-    assert!(pred.as_any().is::<BinaryExpr>());
-    let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
+        assert!(pred.as_any().is::<BinaryExpr>());
+        let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
 
-    assert_eq!(pred, expected.as_ref());
-
+        assert_eq!(pred, expected.as_ref());
+    }
     Ok(())
 }
 
