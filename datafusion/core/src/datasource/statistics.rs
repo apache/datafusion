@@ -258,20 +258,20 @@ pub fn compute_all_files_statistics(
     collect_stats: bool,
     inexact_stats: bool,
 ) -> Result<(Vec<FileGroup>, Statistics)> {
-    let mut file_groups = file_groups;
+    let mut file_groups_with_stats = Vec::with_capacity(file_groups.len());
 
     // First compute statistics for each file group
-    for file_group in file_groups.iter_mut() {
-        *file_group = compute_file_group_statistics(
-            file_group.clone(),
+    for file_group in file_groups {
+        file_groups_with_stats.push(compute_file_group_statistics(
+            file_group,
             Arc::clone(&file_schema),
             collect_stats,
-        )?;
+        )?);
     }
 
     // Then summary statistics across all file groups
     let mut statistics =
-        compute_summary_statistics(&file_groups, &file_schema, |file_group| {
+        compute_summary_statistics(&file_groups_with_stats, &file_schema, |file_group| {
             file_group.statistics()
         });
 
@@ -279,7 +279,7 @@ pub fn compute_all_files_statistics(
         statistics = statistics.to_inexact()
     }
 
-    Ok((file_groups, statistics))
+    Ok((file_groups_with_stats, statistics))
 }
 
 pub(crate) fn add_row_stats(
