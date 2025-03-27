@@ -3018,8 +3018,6 @@ mod tests {
             ),
         ];
         for (first, second, expected) in possible_cases {
-            println!("{}", first);
-            println!("{}", second);
             assert_eq!(first.union(second)?, expected)
         }
 
