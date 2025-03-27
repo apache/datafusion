@@ -258,7 +258,9 @@ impl TableProvider for IndexTableProvider {
                 PartitionedFile::new(canonical_path.display().to_string(), file_size),
             );
         }
-        Ok(DataSourceExec::from_data_source(file_scan_config_builder.build()))
+        Ok(DataSourceExec::from_data_source(
+            file_scan_config_builder.build(),
+        ))
     }
 
     /// Tell DataFusion to push filters down to the scan method
