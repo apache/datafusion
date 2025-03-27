@@ -407,7 +407,7 @@
 //! See the [implementors of `ExecutionPlan`] for a list of physical operators available.
 //!
 //! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
-//! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
+//! [Volcano style]: https://doi.org/10.1145/93605.98720
 //! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
 //! [DataFusion paper in SIGMOD 2024]: https://github.com/apache/datafusion/files/15149988/DataFusion_Query_Engine___SIGMOD_2024-FINAL-mk4.pdf
 //! [such as DuckDB]: https://github.com/duckdb/duckdb/issues/1583
@@ -649,6 +649,8 @@
 //!
 //! * [datafusion_common]: Common traits and types
 //! * [datafusion_catalog]: Catalog APIs such as [`SchemaProvider`] and [`CatalogProvider`]
+//! * [datafusion_datasource]: File and Data IO such as [`FileSource`] and [`DataSink`]
+//! * [datafusion_session]: [`Session`] and related structures
 //! * [datafusion_execution]: State and structures needed for execution
 //! * [datafusion_expr]: [`LogicalPlan`], [`Expr`] and related logical planning structure
 //! * [datafusion_functions]: Scalar function packages
@@ -664,6 +666,9 @@
 //!
 //! [`SchemaProvider`]: datafusion_catalog::SchemaProvider
 //! [`CatalogProvider`]: datafusion_catalog::CatalogProvider
+//! [`Session`]: datafusion_session::Session
+//! [`FileSource`]: datafusion_datasource::file::FileSource
+//! [`DataSink`]: datafusion_datasource::sink::DataSink
 //!
 //! ## Citing DataFusion in Academic Papers
 //!

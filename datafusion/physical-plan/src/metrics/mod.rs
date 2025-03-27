@@ -31,7 +31,7 @@ use std::{
 use datafusion_common::HashMap;
 
 // public exports
-pub use baseline::{BaselineMetrics, RecordOutput};
+pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics};
 pub use builder::MetricBuilder;
 pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
