@@ -19,8 +19,10 @@ pub(crate) mod catalog;
 pub(crate) mod schema;
 pub(crate) mod table;
 
-pub use datafusion_datasource::memory::MemorySourceConfig;
-pub use datafusion_datasource::source::DataSourceExec;
 pub use catalog::*;
 pub use schema::*;
 pub use table::*;
+
+// backward compatibility
+pub use datafusion_datasource::memory::MemorySourceConfig;
+pub use datafusion_datasource::source::DataSourceExec;

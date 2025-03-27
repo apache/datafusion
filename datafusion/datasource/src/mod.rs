@@ -60,6 +60,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 pub use self::url::ListingTableUrl;
+pub use statistics::get_statistics_with_limit;
 
 /// Stream of files get listed from object store
 pub type PartitionedFileStream =
