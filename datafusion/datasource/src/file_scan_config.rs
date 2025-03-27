@@ -175,6 +175,55 @@ pub struct FileScanConfig {
     pub batch_size: Option<usize>,
 }
 
+/// A builder for [`FileScanConfig`]'s.
+///
+/// Example:
+///
+/// ```rust
+/// # use std::sync::Arc;
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_datasource::file_scan_config::{FileScanConfigBuilder, FileScanConfig};
+/// # use datafusion_datasource::file_compression_type::FileCompressionType;
+/// # use datafusion_datasource::file_groups::FileGroup;
+/// # use datafusion_datasource::PartitionedFile;
+/// # use datafusion_execution::object_store::ObjectStoreUrl;
+/// # use datafusion_common::Statistics;
+/// # use datafusion_datasource::file::FileSource;
+///
+/// # fn main() {
+/// # fn set_source(file_source: impl FileSource) {
+///     // Create a schema for our Parquet files
+///     let schema = Arc::new(Schema::new(vec![
+///         Field::new("id", DataType::Int32, false),
+///         Field::new("value", DataType::Utf8, false),
+///     ]));
+///
+///     // Create a builder for scanning Parquet files from a local filesystem
+///     let config = FileScanConfigBuilder::new(
+///         ObjectStoreUrl::local_filesystem(),
+///         schema,
+///         file_source,
+///     )
+///     // Set a limit of 1000 rows
+///     .with_limit(Some(1000))
+///     // Project only the first column
+///     .with_projection(Some(vec![0]))
+///     // Add partition columns
+///     .with_table_partition_cols(vec![
+///         Field::new("date", DataType::Utf8, false),
+///     ])
+///     // Add a file group with two files
+///     .with_file_group(FileGroup::new(vec![
+///         PartitionedFile::new("data/date=2024-01-01/file1.parquet", 1024),
+///         PartitionedFile::new("data/date=2024-01-01/file2.parquet", 2048),
+///     ]))
+///     // Set compression type
+///     .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+///     // Build the final config
+///     .build();
+/// # }
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
