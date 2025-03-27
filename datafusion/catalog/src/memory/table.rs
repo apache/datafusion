@@ -37,9 +37,9 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
 use datafusion_common_runtime::JoinSet;
-pub use datafusion_datasource::memory::MemorySourceConfig;
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
-pub use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::SortExpr;
@@ -269,7 +269,7 @@ impl TableProvider for MemTable {
     ///
     /// * A plan that returns the number of rows written.
     ///
-    /// [`SessionState`]: crate::execution::context::SessionState
+    /// [`SessionState`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html
     async fn insert_into(
         &self,
         _state: &dyn Session,
