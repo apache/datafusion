@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
+use arrow::datatypes::SchemaRef;
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
@@ -121,6 +122,10 @@ impl PhysicalExpr for NegativeExpr {
         children[0].arithmetic_negate()
     }
 
+    fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        self.arg().supports_bounds_evaluation(schema)
+    }
+
     /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
     /// given the input interval is known to be `children`.
     fn propagate_constraints(
@@ -135,7 +140,11 @@ impl PhysicalExpr for NegativeExpr {
             .map(|result| vec![result]))
     }
 
-    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
+    fn evaluate_statistics(
+        &self,
+        children: &[&Distribution],
+        _schema: &SchemaRef,
+    ) -> Result<Distribution> {
         match children[0] {
             Uniform(u) => Distribution::new_uniform(u.range().arithmetic_negate()?),
             Exponential(e) => Distribution::new_exponential(
@@ -261,30 +270,39 @@ mod tests {
 
     #[test]
     fn test_evaluate_statistics() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", Float32, true)]));
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
 
         // Uniform
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Distribution::new_uniform(
-                Interval::make(Some(-2.), Some(3.))?
-            )?])?,
+            negative_expr.evaluate_statistics(
+                &[&Distribution::new_uniform(Interval::make(
+                    Some(-2.),
+                    Some(3.)
+                )?)?],
+                &schema
+            )?,
             Distribution::new_uniform(Interval::make(Some(-3.), Some(2.))?)?
         );
 
         // Bernoulli
         assert!(negative_expr
-            .evaluate_statistics(&[&Distribution::new_bernoulli(ScalarValue::from(
-                0.75
-            ))?])
+            .evaluate_statistics(
+                &[&Distribution::new_bernoulli(ScalarValue::from(0.75))?],
+                &schema
+            )
             .is_err());
 
         // Exponential
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Distribution::new_exponential(
-                ScalarValue::from(1.),
-                ScalarValue::from(1.),
-                true
-            )?])?,
+            negative_expr.evaluate_statistics(
+                &[&Distribution::new_exponential(
+                    ScalarValue::from(1.),
+                    ScalarValue::from(1.),
+                    true
+                )?],
+                &schema
+            )?,
             Distribution::new_exponential(
                 ScalarValue::from(1.),
                 ScalarValue::from(-1.),
@@ -294,21 +312,27 @@ mod tests {
 
         // Gaussian
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Distribution::new_gaussian(
-                ScalarValue::from(15),
-                ScalarValue::from(225),
-            )?])?,
+            negative_expr.evaluate_statistics(
+                &[&Distribution::new_gaussian(
+                    ScalarValue::from(15),
+                    ScalarValue::from(225),
+                )?],
+                &schema
+            )?,
             Distribution::new_gaussian(ScalarValue::from(-15), ScalarValue::from(225),)?
         );
 
         // Unknown
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Distribution::new_generic(
-                ScalarValue::from(15),
-                ScalarValue::from(15),
-                ScalarValue::from(10),
-                Interval::make(Some(10), Some(20))?
-            )?])?,
+            negative_expr.evaluate_statistics(
+                &[&Distribution::new_generic(
+                    ScalarValue::from(15),
+                    ScalarValue::from(15),
+                    ScalarValue::from(10),
+                    Interval::make(Some(10), Some(20))?
+                )?],
+                &schema
+            )?,
             Distribution::new_generic(
                 ScalarValue::from(-15),
                 ScalarValue::from(-15),

@@ -42,3 +42,6 @@ datafusion-common = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 paste = "^1.0"
+
+[dev-dependencies]
+arrow-buffer = { workspace = true }

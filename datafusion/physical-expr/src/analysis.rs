@@ -25,7 +25,7 @@ use crate::intervals::cp_solver::{ExprIntervalGraph, PropagationResult};
 use crate::utils::collect_columns;
 use crate::PhysicalExpr;
 
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Field, Schema};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_datafusion_err, internal_err, ColumnStatistics, Result, ScalarValue,
@@ -60,13 +60,17 @@ impl AnalysisContext {
 
     /// Create a new analysis context from column statistics.
     pub fn try_from_statistics(
-        input_schema: &Schema,
+        schema: &Schema,
         statistics: &[ColumnStatistics],
     ) -> Result<Self> {
-        statistics
+        schema
+            .fields()
             .iter()
+            .zip(statistics.iter())
             .enumerate()
-            .map(|(idx, stats)| ExprBoundaries::try_from_column(input_schema, stats, idx))
+            .map(|(idx, (field, stats))| {
+                ExprBoundaries::try_from_column(field.as_ref(), stats, idx)
+            })
             .collect::<Result<Vec<_>>>()
             .map(Self::new)
     }
@@ -94,17 +98,10 @@ pub struct ExprBoundaries {
 impl ExprBoundaries {
     /// Create a new `ExprBoundaries` object from column level statistics.
     pub fn try_from_column(
-        schema: &Schema,
+        field: &Field,
         col_stats: &ColumnStatistics,
         col_index: usize,
     ) -> Result<Self> {
-        let field = schema.fields().get(col_index).ok_or_else(|| {
-            internal_datafusion_err!(
-                "Could not create `ExprBoundaries`: in `try_from_column` `col_index` 
-                has gone out of bounds with a value of {col_index}, the schema has {} columns.",
-                schema.fields.len()
-            )
-        })?;
         let empty_field =
             ScalarValue::try_from(field.data_type()).unwrap_or(ScalarValue::Null);
         let interval = Interval::try_new(
@@ -302,7 +299,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{assert_contains, DFSchema};
+    use datafusion_common::DFSchema;
     use datafusion_expr::{
         col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit, Expr,
     };
@@ -425,17 +422,9 @@ mod tests {
     fn test_analyze_invalid_boundary_exprs() {
         let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Int32)]));
         let expr = col("a").lt(lit(10)).or(col("a").gt(lit(20)));
-        let expected_error = "Interval arithmetic does not support the operator OR";
-        let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
         let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
         let physical_expr =
             create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
-        let analysis_error = analyze(
-            &physical_expr,
-            AnalysisContext::new(boundaries),
-            df_schema.as_ref(),
-        )
-        .unwrap_err();
-        assert_contains!(analysis_error.to_string(), expected_error);
+        assert!(!physical_expr.supports_bounds_evaluation(df_schema.as_ref()));
     }
 }

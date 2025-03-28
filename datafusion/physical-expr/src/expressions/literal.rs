@@ -23,15 +23,16 @@ use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 
+use arrow::datatypes::SchemaRef;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::Expr;
-use datafusion_expr_common::columnar_value::ColumnarValue;
-use datafusion_expr_common::interval_arithmetic::Interval;
-use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::{ColumnarValue, Expr};
+use datafusion_physical_expr_common::utils::is_supported_datatype_for_bounds_eval;
 
 /// Represents a literal value
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -96,6 +97,14 @@ impl PhysicalExpr for Literal {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
+    }
+
+    fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        if let Ok(dt) = self.data_type(schema) {
+            is_supported_datatype_for_bounds_eval(&dt)
+        } else {
+            false
+        }
     }
 }
 
