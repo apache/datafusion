@@ -37,7 +37,6 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
-use datafusion_datasource::memory::PartitionData;
 
 use datafusion::catalog::Session;
 use tokio::time::timeout;

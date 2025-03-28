@@ -36,8 +36,8 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
 use datafusion_common_runtime::JoinSet;
+use datafusion_datasource::memory::MemSink;
 use datafusion_datasource::memory::MemorySourceConfig;
-use datafusion_datasource::memory::{MemSink, PartitionData};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::dml::InsertOp;
@@ -50,6 +50,9 @@ use log::debug;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
 
+// backward compatibility
+pub use datafusion_datasource::memory::PartitionData;
+
 /// In-memory data source for presenting a `Vec<RecordBatch>` as a
 /// data source that can be queried by DataFusion. This allows data to
 /// be pre-loaded into memory and then repeatedly queried without
@@ -57,7 +60,7 @@ use tokio::sync::RwLock;
 #[derive(Debug)]
 pub struct MemTable {
     schema: SchemaRef,
-    // make it pub(crate) when possible
+    // batches used to be pub(crate), but it's needed to be public for the tests
     pub batches: Vec<PartitionData>,
     constraints: Constraints,
     column_defaults: HashMap<String, Expr>,
