@@ -92,7 +92,7 @@ pub fn compare_split_groups_by_statistics_algorithms(c: &mut Criterion) {
 
     let target_partitions: [usize; 4] = [4, 8, 16, 32];
 
-    let mut group = c.benchmark_group("");
+    let mut group = c.benchmark_group("split_groups");
     group.measurement_time(Duration::from_secs(10));
 
     for &num_files in &file_counts {
