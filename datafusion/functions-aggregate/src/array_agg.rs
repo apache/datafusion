@@ -488,27 +488,27 @@ impl OrderSensitiveArrayAggAccumulator {
     }
 
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
-        let num_columns = fields.len();
-        let struct_field = Fields::from(fields.clone());
+        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
 
-        let mut column_wise_ordering_values = vec![];
-        for i in 0..num_columns {
-            let column_values = self
-                .ordering_values
+        let column_wise_ordering_values = if self.ordering_values.is_empty() {
+            fields
                 .iter()
-                .map(|x| x[i].clone())
-                .collect::<Vec<_>>();
-            let array = if column_values.is_empty() {
-                new_empty_array(fields[i].data_type())
-            } else {
-                ScalarValue::iter_to_array(column_values.into_iter())?
-            };
-            column_wise_ordering_values.push(array);
-        }
+                .map(|f| new_empty_array(f.data_type()))
+                .collect::<Vec<_>>()
+        } else {
+            (0..fields.len())
+                .map(|i| {
+                    let column_values = self.ordering_values.iter().map(|x| x[i].clone());
+                    ScalarValue::iter_to_array(column_values)
+                })
+                .collect::<Result<_>>()?
+        };
 
-        let ordering_array =
-            StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
+        let ordering_array = StructArray::try_new(
+            Fields::from(fields),
+            column_wise_ordering_values,
+            None,
+        )?;
         Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
     }
 }
