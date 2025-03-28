@@ -155,7 +155,7 @@ mod tests {
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
-                format!("{}", &plan),
+                &plan,
             @r#"
         Values: (List([1, 2]))
         "#
