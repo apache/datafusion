@@ -136,7 +136,7 @@ pub fn adjust_right_output_partitioning(
 fn replace_on_columns_of_right_ordering(
     on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     right_ordering: &mut LexOrdering,
-) -> Result<()> {
+) {
     for (left_col, right_col) in on_columns {
         right_ordering.transform(|item| {
             let new_expr = Arc::clone(&item.expr)
@@ -152,7 +152,6 @@ fn replace_on_columns_of_right_ordering(
             item.expr = new_expr;
         });
     }
-    Ok(())
 }
 
 fn offset_ordering(
@@ -176,55 +175,58 @@ fn offset_ordering(
 
 /// Calculate the output ordering of a given join operation.
 pub fn calculate_join_output_ordering(
-    left_ordering: &LexOrdering,
-    right_ordering: &LexOrdering,
+    left_ordering: Option<&LexOrdering>,
+    right_ordering: Option<&LexOrdering>,
     join_type: JoinType,
     on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     left_columns_len: usize,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
 ) -> Option<LexOrdering> {
-    let output_ordering = match maintains_input_order {
+    match maintains_input_order {
         [true, false] => {
             // Special case, we can prefix ordering of right side with the ordering of left side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
-                replace_on_columns_of_right_ordering(
-                    on_columns,
-                    &mut right_ordering.clone(),
-                )
-                .ok()?;
-                merge_vectors(
-                    left_ordering,
-                    offset_ordering(right_ordering, &join_type, left_columns_len)
-                        .as_ref(),
-                )
-            } else {
-                left_ordering.clone()
+                if let Some(right_ordering) = right_ordering {
+                    replace_on_columns_of_right_ordering(
+                        on_columns,
+                        &mut right_ordering.clone(),
+                    );
+                    let right_offset = offset_ordering(right_ordering, &join_type, left_columns_len);
+                    return if let Some(left_ordering) = left_ordering {
+                        Some(merge_vectors(left_ordering, &right_offset))
+                    } else {
+                        Some(right_offset)
+                    };
+                }
             }
+            left_ordering.cloned()
         }
         [false, true] => {
             // Special case, we can prefix ordering of left side with the ordering of right side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
-                replace_on_columns_of_right_ordering(
-                    on_columns,
-                    &mut right_ordering.clone(),
-                )
-                .ok()?;
-                merge_vectors(
-                    offset_ordering(right_ordering, &join_type, left_columns_len)
-                        .as_ref(),
-                    left_ordering,
-                )
-            } else {
-                offset_ordering(right_ordering, &join_type, left_columns_len)
+                return if let Some(right_ordering) = right_ordering {
+                    replace_on_columns_of_right_ordering(
+                        on_columns,
+                        &mut right_ordering.clone(),
+                    );
+                    let right_offset = offset_ordering(right_ordering, &join_type, left_columns_len);
+                    if let Some(left_ordering) = left_ordering {
+                        Some(merge_vectors(&right_offset, left_ordering))
+                    } else {
+                        Some(right_offset)
+                    }
+                } else {
+                    left_ordering.cloned()
+                };
             }
+            right_ordering.map(|o| offset_ordering(o, &join_type, left_columns_len))
         }
         // Doesn't maintain ordering, output ordering is None.
         [false, false] => return None,
         [true, true] => unreachable!("Cannot maintain ordering of both sides"),
         _ => unreachable!("Join operators can not have more than two children"),
-    };
-    (!output_ordering.is_empty()).then_some(output_ordering)
+    }
 }
 
 /// Information about the index and placement (left or right) of the columns
@@ -2406,8 +2408,8 @@ mod tests {
         {
             assert_eq!(
                 calculate_join_output_ordering(
-                    left_ordering.as_ref(),
-                    right_ordering.as_ref(),
+                    Some(&left_ordering),
+                    Some(&right_ordering),
                     join_type,
                     &on_columns,
                     left_columns_len,

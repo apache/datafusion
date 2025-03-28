@@ -416,19 +416,13 @@ fn try_pushdown_requirements_to_join(
     sort_expr: &LexOrdering,
     push_side: JoinSide,
 ) -> Result<Option<Vec<Option<RequiredInputOrdering>>>> {
-    let left_eq_properties = smj.left().equivalence_properties();
-    let right_eq_properties = smj.right().equivalence_properties();
     let mut smj_required_orderings = smj.required_input_ordering();
-    let right_requirement = smj_required_orderings.swap_remove(1);
-    let left_requirement = smj_required_orderings.swap_remove(0);
-    let left_ordering = &smj.left().output_ordering().cloned().unwrap();
-    let right_ordering = &smj.right().output_ordering().cloned().unwrap();
 
     let (new_left_ordering, new_right_ordering) = match push_side {
         JoinSide::Left => {
             let left_eq_properties =
-                left_eq_properties.clone().with_reorder(sort_expr.clone());
-            let Some(left_requirement) = left_requirement else {
+                smj.left().equivalence_properties().clone().with_reorder(sort_expr.clone());
+            let Some(left_requirement) = smj_required_orderings.swap_remove(0) else {
                 return Ok(None);
             };
             if !left_eq_properties
@@ -437,13 +431,13 @@ fn try_pushdown_requirements_to_join(
                 return Ok(None);
             }
             // After re-ordering requirement is still satisfied
-            (sort_expr, right_ordering)
+            (Some(sort_expr), smj.right().output_ordering())
         }
         JoinSide::Right => {
             let right_eq_properties =
-                right_eq_properties.clone().with_reorder(sort_expr.clone());
+                smj.right().equivalence_properties().clone().with_reorder(sort_expr.clone());
 
-            let Some(right_requirement) = right_requirement else {
+            let Some(right_requirement) = smj_required_orderings.swap_remove(1) else {
                 return Ok(None);
             };
             if !right_eq_properties
@@ -452,7 +446,7 @@ fn try_pushdown_requirements_to_join(
                 return Ok(None);
             }
             // After re-ordering requirement is still satisfied
-            (left_ordering, sort_expr)
+            (smj.left().output_ordering(), Some(sort_expr))
         }
         JoinSide::None => return Ok(None),
     };

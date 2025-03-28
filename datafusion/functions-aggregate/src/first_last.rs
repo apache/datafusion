@@ -804,10 +804,11 @@ impl Accumulator for TrivialFirstValueAccumulator {
             let flags = states[1].as_boolean();
             let filtered_states =
                 filter_states_according_to_is_set(&states[0..1], flags)?;
-            // If we have any values, take the first one we find:
             if let Some(first) = filtered_states.first() {
-                self.first = ScalarValue::try_from_array(first, 0)?;
-                self.is_set = true;
+                if !first.is_empty() {
+                    self.first = ScalarValue::try_from_array(first, 0)?;
+                    self.is_set = true;
+                }
             }
         }
         Ok(())
@@ -1146,10 +1147,11 @@ impl Accumulator for TrivialLastValueAccumulator {
         // Second index contains is_set flag.
         let flags = states[1].as_boolean();
         let filtered_states = filter_states_according_to_is_set(&states[0..1], flags)?;
-        // If we have any values, take the last one we find:
         if let Some(last) = filtered_states.last() {
-            self.last = ScalarValue::try_from_array(last, 0)?;
-            self.is_set = true;
+            if !last.is_empty() {
+                self.last = ScalarValue::try_from_array(last, 0)?;
+                self.is_set = true;
+            }
         }
         Ok(())
     }
@@ -1315,7 +1317,7 @@ fn filter_states_according_to_is_set(
     states
         .iter()
         .map(|state| compute::filter(state, flags).map_err(|e| arrow_datafusion_err!(e)))
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
 
 /// Combines array refs and their corresponding orderings to construct `SortColumn`s.
@@ -1326,7 +1328,7 @@ fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<Sort
             values: Arc::clone(item),
             options: Some(sort_expr.options),
         })
-        .collect::<Vec<_>>()
+        .collect()
 }
 
 #[cfg(test)]
