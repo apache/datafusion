@@ -48,6 +48,7 @@ use datafusion_functions_aggregate::{
 use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::rank::rank_udwf;
+use insta::assert_snapshot;
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
@@ -225,9 +226,10 @@ fn cast_to_invalid_decimal_type_precision_0() {
     {
         let sql = "SELECT CAST(10 AS DECIMAL(0))";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Error during planning: Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
-            err.strip_backtrace()
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @r"Error during planning: Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`."
         );
     }
 }
@@ -248,9 +250,10 @@ fn cast_to_invalid_decimal_type_precision_gt_76() {
     {
         let sql = "SELECT CAST(10 AS DECIMAL(79))";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Error during planning: Decimal(precision = 79, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
-            err.strip_backtrace()
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @r"Error during planning: Decimal(precision = 79, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`."
         );
     }
 }
@@ -261,9 +264,10 @@ fn cast_to_invalid_decimal_type_precision_lt_scale() {
     {
         let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Error during planning: Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
-            err.strip_backtrace()
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @r"Error during planning: Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 76`, and `scale <= precision`."
         );
     }
 }
@@ -559,9 +563,12 @@ fn select_column_does_not_exist() {
 fn select_repeated_column() {
     let sql = "SELECT age, age FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"person.age\" at position 0 and \"person.age\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Projections require unique expression names but the expression "person.age" at position 0 and "person.age" at position 1 have the same name. Consider aliasing ("AS") one of them.
+        "#
     );
 }
 
@@ -735,9 +742,10 @@ fn table_with_column_alias_number_cols() {
     let sql = "SELECT a, b, c
                    FROM lineitem l (a, b)";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Source table contains 3 columns but only 2 names given as column alias",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r"Error during planning: Source table contains 3 columns but only 2 names given as column alias"
     );
 }
 
@@ -745,9 +753,10 @@ fn table_with_column_alias_number_cols() {
 fn select_with_ambiguous_column() {
     let sql = "SELECT id FROM person a, person b";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Schema error: Ambiguous reference to unqualified field id",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r"Schema error: Ambiguous reference to unqualified field id"
     );
 }
 
@@ -794,10 +803,11 @@ fn select_with_having() {
                    FROM person
                    HAVING age > 100 AND age < 200";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Error during planning: HAVING clause references: person.age > Int64(100) AND person.age < Int64(200) must appear in the GROUP BY clause or be used in an aggregate function",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r"Error during planning: HAVING clause references: person.age > Int64(100) AND person.age < Int64(200) must appear in the GROUP BY clause or be used in an aggregate function"
+    );
 }
 
 #[test]
@@ -806,10 +816,13 @@ fn select_with_having_referencing_column_not_in_select() {
                    FROM person
                    HAVING first_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Error during planning: HAVING clause references: person.first_name = Utf8(\"M\") must appear in the GROUP BY clause or be used in an aggregate function",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: HAVING clause references: person.first_name = Utf8("M") must appear in the GROUP BY clause or be used in an aggregate function
+        "#
+    );
 }
 
 #[test]
@@ -819,10 +832,13 @@ fn select_with_having_refers_to_invalid_column() {
                    GROUP BY id
                    HAVING first_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: While expanding wildcard, column \"person.first_name\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"person.id, max(person.age)\" appears in the SELECT clause satisfies this requirement",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.first_name" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.id, max(person.age)" appears in the SELECT clause satisfies this requirement
+        "#
+    );
 }
 
 #[test]
@@ -831,10 +847,13 @@ fn select_with_having_referencing_column_nested_in_select_expression() {
                    FROM person
                    HAVING age > 100";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Error during planning: HAVING clause references: person.age > Int64(100) must appear in the GROUP BY clause or be used in an aggregate function",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: HAVING clause references: person.age > Int64(100) must appear in the GROUP BY clause or be used in an aggregate function
+        "#
+    );
 }
 
 #[test]
@@ -843,10 +862,11 @@ fn select_with_having_with_aggregate_not_in_select() {
                    FROM person
                    HAVING MAX(age) > 100";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column \"person.first_name\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"max(person.age)\" appears in the SELECT clause satisfies this requirement",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.first_name" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "max(person.age)" appears in the SELECT clause satisfies this requirement"#
+    );
 }
 
 #[test]
@@ -879,9 +899,12 @@ fn select_aggregate_with_having_referencing_column_not_in_select() {
                    FROM person
                    HAVING first_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: While expanding wildcard, column \"person.first_name\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"count(*)\" appears in the SELECT clause satisfies this requirement",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.first_name" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "count(*)" appears in the SELECT clause satisfies this requirement
+        "#
     );
 }
 
@@ -1000,9 +1023,12 @@ fn select_aggregate_with_group_by_with_having_referencing_column_not_in_group_by
                    GROUP BY first_name
                    HAVING MAX(age) > 10 AND last_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: While expanding wildcard, column \"person.last_name\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"person.first_name, max(person.age)\" appears in the SELECT clause satisfies this requirement",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.last_name" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.first_name, max(person.age)" appears in the SELECT clause satisfies this requirement
+        "#
     );
 }
 
@@ -1134,9 +1160,12 @@ fn select_simple_aggregate_column_does_not_exist() {
 fn select_simple_aggregate_repeated_aggregate() {
     let sql = "SELECT MIN(age), MIN(age) FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"min(person.age)\" at position 0 and \"min(person.age)\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Projections require unique expression names but the expression "min(person.age)" at position 0 and "min(person.age)" at position 1 have the same name. Consider aliasing ("AS") one of them.
+        "#
     );
 }
 
@@ -1175,9 +1204,12 @@ fn select_from_typed_string_values() {
 fn select_simple_aggregate_repeated_aggregate_with_repeated_aliases() {
     let sql = "SELECT MIN(age) AS a, MIN(age) AS a FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"min(person.age) AS a\" at position 0 and \"min(person.age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Projections require unique expression names but the expression "min(person.age) AS a" at position 0 and "min(person.age) AS a" at position 1 have the same name. Consider aliasing ("AS") one of them.
+        "#
     );
 }
 
@@ -1205,9 +1237,12 @@ fn select_simple_aggregate_with_groupby_with_aliases() {
 fn select_simple_aggregate_with_groupby_with_aliases_repeated() {
     let sql = "SELECT state AS a, MIN(age) AS a FROM person GROUP BY state";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"person.state AS a\" at position 0 and \"min(person.age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Projections require unique expression names but the expression "person.state AS a" at position 0 and "min(person.age) AS a" at position 1 have the same name. Consider aliasing ("AS") one of them.
+        "#
     );
 }
 
@@ -1225,11 +1260,13 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
 fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
     let sql = "SELECT sum(age) FROM person GROUP BY doesnotexist";
     let err = logical_plan(sql).expect_err("query should have failed");
-    let expected = "Schema error: No field named doesnotexist. \
-        Valid fields are \"sum(person.age)\", \
-        person.id, person.first_name, person.last_name, person.age, person.state, \
-        person.salary, person.birth_date, person.\"😀\".";
-    assert_eq!(err.strip_backtrace(), expected);
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Schema error: No field named doesnotexist. Valid fields are "sum(person.age)", person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person."😀".
+        "#
+    );
 }
 
 #[test]
@@ -1243,9 +1280,12 @@ fn select_simple_aggregate_with_groupby_and_column_in_aggregate_does_not_exist()
 fn select_interval_out_of_range() {
     let sql = "SELECT INTERVAL '100000000000000000 day'";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Arrow error: Invalid argument error: Unable to represent 100000000000000000 days in a signed 32-bit integer",
+
+    assert_snapshot!(
         err.strip_backtrace(),
+        @r#"
+        Arrow error: Invalid argument error: Unable to represent 100000000000000000 days in a signed 32-bit integer
+        "#
     );
 }
 
@@ -1279,16 +1319,22 @@ fn select_simple_aggregate_with_groupby_can_use_positions() {
 fn select_simple_aggregate_with_groupby_position_out_of_range() {
     let sql = "SELECT state, MIN(age) FROM person GROUP BY 0";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Cannot find column with position 0 in SELECT clause. Valid columns: 1 to 2",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Cannot find column with position 0 in SELECT clause. Valid columns: 1 to 2
+        "#
     );
 
     let sql2 = "SELECT state, MIN(age) FROM person GROUP BY 5";
     let err2 = logical_plan(sql2).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 2",
-        err2.strip_backtrace()
+
+    assert_snapshot!(
+        err2.strip_backtrace(),
+        @r#"
+        Error during planning: Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 2
+        "#
     );
 }
 
@@ -1306,9 +1352,12 @@ fn select_simple_aggregate_with_groupby_can_use_alias() {
 fn select_simple_aggregate_with_groupby_aggregate_repeated() {
     let sql = "SELECT state, MIN(age), MIN(age) FROM person GROUP BY state";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"min(person.age)\" at position 1 and \"min(person.age)\" at position 2 have the same name. Consider aliasing (\"AS\") one of them.",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Projections require unique expression names but the expression "min(person.age)" at position 1 and "min(person.age)" at position 2 have the same name. Consider aliasing ("AS") one of them.
+        "#
     );
 }
 
@@ -1364,20 +1413,26 @@ fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_not_res
     // The query should fail, because age + 9 is not in the group by.
     let sql = "SELECT ((age + 1) / 2) * (age + 9), MIN(first_name) FROM person GROUP BY age + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column \"person.age\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"person.age + Int64(1), min(person.first_name)\" appears in the SELECT clause satisfies this requirement",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.age" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.age + Int64(1), min(person.first_name)" appears in the SELECT clause satisfies this requirement
+        "#
+    );
 }
 
 #[test]
 fn select_simple_aggregate_with_groupby_non_column_expression_and_its_column_selected() {
     let sql = "SELECT age, MIN(first_name) FROM person GROUP BY age + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column \"person.age\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"person.age + Int64(1), min(person.first_name)\" appears in the SELECT clause satisfies this requirement",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.age" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.age + Int64(1), min(person.first_name)" appears in the SELECT clause satisfies this requirement
+        "#
+    );
 }
 
 #[test]
@@ -1528,9 +1583,12 @@ fn select_order_by_index_of_0() {
     let err = logical_plan(sql)
         .expect_err("query should have failed")
         .strip_backtrace();
-    assert_eq!(
-        "Error during planning: Order by index starts at 1 for column indexes",
-        err
+
+    assert_snapshot!(
+        err,
+        @r#"
+        Error during planning: Order by index starts at 1 for column indexes
+        "#
     );
 }
 
@@ -1540,9 +1598,12 @@ fn select_order_by_index_oob() {
     let err = logical_plan(sql)
         .expect_err("query should have failed")
         .strip_backtrace();
-    assert_eq!(
-        "Error during planning: Order by column out of bounds, specified: 2, max: 1",
-        err
+
+    assert_snapshot!(
+        err,
+        @r#"
+        Error during planning: Order by column out of bounds, specified: 2, max: 1
+        "#
     );
 }
 
@@ -1635,9 +1696,12 @@ fn select_7480_1() {
 fn select_7480_2() {
     let sql = "SELECT c1, c13, MIN(c12) FROM aggregate_test_100 GROUP BY c1";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column \"aggregate_test_100.c13\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"aggregate_test_100.c1, min(aggregate_test_100.c12)\" appears in the SELECT clause satisfies this requirement",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "aggregate_test_100.c13" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "aggregate_test_100.c1, min(aggregate_test_100.c12)" appears in the SELECT clause satisfies this requirement
+        "#
     );
 }
 
@@ -1724,9 +1788,12 @@ fn create_external_table_with_compression_type() {
     ];
     for sql in sqls {
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Error during planning: File compression type cannot be set for PARQUET, AVRO, or ARROW files.",
-            err.strip_backtrace()
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @r#"
+            Error during planning: File compression type cannot be set for PARQUET, AVRO, or ARROW files.
+            "#
         );
     }
 }
@@ -2826,11 +2893,16 @@ fn hive_aggregate_with_filter() -> Result<()> {
     let dialect = &HiveDialect {};
     let sql = "SELECT sum(age) FILTER (WHERE age > 4) FROM person";
     let plan = logical_plan_with_dialect(sql, dialect)?;
-    let expected = "Projection: sum(person.age) FILTER (WHERE person.age > Int64(4))\
-        \n  Aggregate: groupBy=[[]], aggr=[[sum(person.age) FILTER (WHERE person.age > Int64(4))]]\
-        \n    TableScan: person"
-        .to_string();
-    assert_eq!(plan.display_indent().to_string(), expected);
+
+    assert_snapshot!(
+        plan,
+        @r###"
+        Projection: sum(person.age) FILTER (WHERE person.age > Int64(4))
+          Aggregate: groupBy=[[]], aggr=[[sum(person.age) FILTER (WHERE person.age > Int64(4))]]
+            TableScan: person
+        "###
+    );
+
     Ok(())
 }
 
@@ -2853,19 +2925,27 @@ fn order_by_unaliased_name() {
 #[test]
 fn order_by_ambiguous_name() {
     let sql = "select * from person a join person b using (id) order by age";
-    let expected = "Schema error: Ambiguous reference to unqualified field age";
-
     let err = logical_plan(sql).unwrap_err();
-    assert_eq!(err.strip_backtrace(), expected);
+
+    assert_snapshot!(
+        err,
+        @r###"
+        Schema error: Ambiguous reference to unqualified field age
+        "###
+    );
 }
 
 #[test]
 fn group_by_ambiguous_name() {
     let sql = "select max(id) from person a join person b using (id) group by age";
-    let expected = "Schema error: Ambiguous reference to unqualified field age";
-
     let err = logical_plan(sql).unwrap_err();
-    assert_eq!(err.strip_backtrace(), expected);
+
+    assert_snapshot!(
+        err,
+        @r###"
+        Schema error: Ambiguous reference to unqualified field age
+        "###
+    );
 }
 
 #[test]
@@ -3107,14 +3187,17 @@ fn test_select_order_by() {
 fn test_select_distinct_order_by() {
     let sql = "SELECT distinct '1' from person order by id";
 
-    let expected =
-        "Error during planning: For SELECT DISTINCT, ORDER BY expressions person.id must appear in select list";
-
     // It should return error.
     let result = logical_plan(sql);
     assert!(result.is_err());
     let err = result.err().unwrap();
-    assert_eq!(err.strip_backtrace(), expected);
+
+    assert_snapshot!(
+        err,
+        @r###"
+        Error during planning: For SELECT DISTINCT, ORDER BY expressions person.id must appear in select list
+        "###
+    );
 }
 
 #[rstest]
@@ -3203,13 +3286,17 @@ fn test_ambiguous_column_references_in_on_join() {
             INNER JOIN person as p2
             ON id = 1";
 
-    let expected = "Schema error: Ambiguous reference to unqualified field id";
-
     // It should return error.
     let result = logical_plan(sql);
     assert!(result.is_err());
     let err = result.err().unwrap();
-    assert_eq!(err.strip_backtrace(), expected);
+
+    assert_snapshot!(
+        err,
+        @r###"
+        Schema error: Ambiguous reference to unqualified field id
+        "###
+    );
 }
 
 #[test]
@@ -3233,9 +3320,12 @@ fn test_prepare_statement_to_plan_panic_param_format() {
     // param is not number following the $ sign
     // panic due to error returned from the parser
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo";
-    assert_eq!(
+
+    assert_snapshot!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        "Error during planning: Invalid placeholder, not a number: $foo"
+        @r###"
+        Error during planning: Invalid placeholder, not a number: $foo
+        "###
     );
 }
 
@@ -3244,9 +3334,12 @@ fn test_prepare_statement_to_plan_panic_param_zero() {
     // param is zero following the $ sign
     // panic due to error returned from the parser
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $0";
-    assert_eq!(
+
+    assert_snapshot!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        "Error during planning: Invalid placeholder, zero is not a valid index: $0"
+        @r###"
+        Error during planning: Invalid placeholder, zero is not a valid index: $0
+        "###
     );
 }
 
@@ -3356,12 +3449,14 @@ fn test_prepare_statement_to_plan_one_param_no_value_panic() {
     let plan = logical_plan(sql).unwrap();
     // declare 1 param but provide 0
     let param_values: Vec<ScalarValue> = vec![];
-    assert_eq!(
+
+    assert_snapshot!(
         plan.with_param_values(param_values)
-            .unwrap_err()
-            .strip_backtrace(),
-        "Error during planning: Expected 1 parameters, got 0"
-    );
+        .unwrap_err()
+        .strip_backtrace(),
+        @r###"
+        Error during planning: Expected 1 parameters, got 0
+        "###);
 }
 
 #[test]
@@ -3371,11 +3466,14 @@ fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
     let plan = logical_plan(sql).unwrap();
     // declare 1 param but provide 0
     let param_values = vec![ScalarValue::Float64(Some(20.0))];
-    assert_eq!(
+
+    assert_snapshot!(
         plan.with_param_values(param_values)
             .unwrap_err()
             .strip_backtrace(),
-        "Error during planning: Expected parameter of type Int32, got Float64 at index 0"
+        @r###"
+        Error during planning: Expected parameter of type Int32, got Float64 at index 0
+        "###
     );
 }
 
@@ -3386,11 +3484,14 @@ fn test_prepare_statement_to_plan_no_param_on_value_panic() {
     let plan = logical_plan(sql).unwrap();
     // declare 1 param but provide 0
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    assert_eq!(
+
+    assert_snapshot!(
         plan.with_param_values(param_values)
             .unwrap_err()
             .strip_backtrace(),
-        "Error during planning: Expected 0 parameters, got 1"
+        @r###"
+        Error during planning: Expected 0 parameters, got 1
+        "###
     );
 }
 
@@ -3894,14 +3995,24 @@ fn test_multi_grouping_sets() {
 fn test_field_not_found_window_function() {
     let order_by_sql = "SELECT count() OVER (order by a);";
     let order_by_err = logical_plan(order_by_sql).expect_err("query should have failed");
-    let expected = "Schema error: No field named a.";
-    assert_eq!(order_by_err.strip_backtrace(), expected);
+
+    assert_snapshot!(
+        order_by_err,
+        @r###"
+        Schema error: No field named a.
+        "###
+    );
 
     let partition_by_sql = "SELECT count() OVER (PARTITION BY a);";
     let partition_by_err =
         logical_plan(partition_by_sql).expect_err("query should have failed");
-    let expected = "Schema error: No field named a.";
-    assert_eq!(partition_by_err.strip_backtrace(), expected);
+
+    assert_snapshot!(
+        partition_by_err,
+        @r###"
+        Schema error: No field named a.
+        "###
+    );
 
     let qualified_sql =
         "SELECT order_id, MAX(qty) OVER (PARTITION BY orders.order_id) from orders";
@@ -3929,10 +4040,13 @@ fn test_parse_escaped_string_literal_value() {
     quick_test(sql, expected);
 
     let sql = r"SELECT character_length(E'\000') AS len";
-    assert_eq!(
-        logical_plan(sql).unwrap_err().strip_backtrace(),
-        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column: 25\")"
-    )
+
+    assert_snapshot!(
+        logical_plan(sql).unwrap_err(),
+        @r###"
+        SQL error: TokenizerError("Unterminated encoded string literal at Line: 1, Column: 25")
+        "###
+    );
 }
 
 #[test]
@@ -4048,22 +4162,36 @@ fn test_custom_type_plan() -> Result<()> {
     }
 
     let plan = plan_sql(sql);
-    let expected =
-        "Projection: CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None))\
-    \n  EmptyRelation";
-    assert_eq!(plan.to_string(), expected);
+
+    assert_snapshot!(
+        plan,
+        @r###"
+        Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None))
+          EmptyRelation
+        "###
+    );
 
     let plan = plan_sql("SELECT CAST(TIMESTAMP '2001-01-01 18:00:00' AS DATETIME)");
-    let expected = "Projection: CAST(CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None)) AS Timestamp(Nanosecond, None))\
-    \n  EmptyRelation";
-    assert_eq!(plan.to_string(), expected);
+
+    assert_snapshot!(
+        plan,
+        @r###"
+        Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)) AS Timestamp(Nanosecond, None))
+          EmptyRelation
+        "###
+    );
 
     let plan = plan_sql(
         "SELECT ARRAY[DATETIME '2001-01-01 18:00:00', DATETIME '2001-01-02 18:00:00']",
     );
-    let expected = "Projection: make_array(CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2001-01-02 18:00:00\") AS Timestamp(Nanosecond, None)))\
-    \n  EmptyRelation";
-    assert_eq!(plan.to_string(), expected);
+
+    assert_snapshot!(
+        plan,
+        @r###"
+        Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(Nanosecond, None)))
+          EmptyRelation
+        "###
+    );
 
     Ok(())
 }
