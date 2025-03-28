@@ -790,6 +790,13 @@ impl ExecutionPlan for HashJoinExec {
             );
         }
 
+        if self.mode == PartitionMode::CollectLeft && left_partitions != 1 {
+            return internal_err!(
+                "Invalid HashJoinExec,the output partition count of the left child must be 1 in CollectLeft mode,\
+                 consider using CoalescePartitionsExec"
+            );
+        }
+
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => {
