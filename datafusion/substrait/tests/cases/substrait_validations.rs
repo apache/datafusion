@@ -26,6 +26,7 @@ mod tests {
         use datafusion::datasource::empty::EmptyTable;
         use datafusion::prelude::SessionContext;
         use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+        use insta::assert_snapshot;
         use std::collections::HashMap;
         use std::sync::Arc;
 
@@ -66,11 +67,13 @@ mod tests {
             let ctx = generate_context_with_table("DATA", df_schema)?;
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-            assert_eq!(
-                format!("{}", plan),
-                "Projection: DATA.a, DATA.b\
-                \n  TableScan: DATA"
-            );
+            assert_snapshot!(
+            plan,
+            @r#"
+                Projection: DATA.a, DATA.b
+                  TableScan: DATA
+                "#
+                        );
             Ok(())
         }
 
@@ -87,11 +90,13 @@ mod tests {
             let ctx = generate_context_with_table("DATA", df_schema)?;
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-            assert_eq!(
-                format!("{}", plan),
-                "Projection: DATA.a, DATA.b\
-                \n  TableScan: DATA projection=[a, b]"
-            );
+            assert_snapshot!(
+            plan,
+            @r#"
+                Projection: DATA.a, DATA.b
+                  TableScan: DATA projection=[a, b]
+                "#
+                        );
             Ok(())
         }
 
@@ -110,11 +115,13 @@ mod tests {
             let ctx = generate_context_with_table("DATA", df_schema)?;
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-            assert_eq!(
-                format!("{}", plan),
-                "Projection: DATA.a, DATA.b\
-                \n  TableScan: DATA projection=[a, b]"
-            );
+            assert_snapshot!(
+            plan,
+            @r#"
+                Projection: DATA.a, DATA.b
+                  TableScan: DATA projection=[a, b]
+                "#
+                        );
             Ok(())
         }
 
