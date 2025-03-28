@@ -719,7 +719,7 @@ pub fn try_type_union_resolution_with_struct(
 /// strings.  For example when comparing `'2' > 1`,  the arguments will be
 /// coerced to `Utf8` for comparison
 pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type == rhs_type {
+    if lhs_type.equals_datatype(rhs_type) {
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
@@ -838,7 +838,6 @@ pub fn binary_numeric_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
     if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
         return None;
     };
@@ -852,39 +851,7 @@ pub fn binary_numeric_coercion(
         return Some(t);
     }
 
-    // These are ordered from most informative to least informative so
-    // that the coercion does not lose information via truncation
-    match (lhs_type, rhs_type) {
-        (Float64, _) | (_, Float64) => Some(Float64),
-        (_, Float32) | (Float32, _) => Some(Float32),
-        // The following match arms encode the following logic: Given the two
-        // integral types, we choose the narrowest possible integral type that
-        // accommodates all values of both types. Note that to avoid information
-        // loss when combining UInt64 with signed integers we use Decimal128(20, 0).
-        (UInt64, Int64 | Int32 | Int16 | Int8)
-        | (Int64 | Int32 | Int16 | Int8, UInt64) => Some(Decimal128(20, 0)),
-        (UInt64, _) | (_, UInt64) => Some(UInt64),
-        (Int64, _)
-        | (_, Int64)
-        | (UInt32, Int8)
-        | (Int8, UInt32)
-        | (UInt32, Int16)
-        | (Int16, UInt32)
-        | (UInt32, Int32)
-        | (Int32, UInt32) => Some(Int64),
-        (Int32, _)
-        | (_, Int32)
-        | (UInt16, Int16)
-        | (Int16, UInt16)
-        | (UInt16, Int8)
-        | (Int8, UInt16) => Some(Int32),
-        (UInt32, _) | (_, UInt32) => Some(UInt32),
-        (Int16, _) | (_, Int16) | (Int8, UInt8) | (UInt8, Int8) => Some(Int16),
-        (UInt16, _) | (_, UInt16) => Some(UInt16),
-        (Int8, _) | (_, Int8) => Some(Int8),
-        (UInt8, _) | (_, UInt8) => Some(UInt8),
-        _ => None,
-    }
+    numerical_coercion(lhs_type, rhs_type)
 }
 
 /// Decimal coercion rules.
@@ -1045,15 +1012,36 @@ fn mathematics_numerical_coercion(
         (_, Dictionary(_, value_type)) => {
             mathematics_numerical_coercion(lhs_type, value_type)
         }
+        _ => numerical_coercion(lhs_type, rhs_type),
+    }
+}
+
+/// A common set of numerical coercions that are applied for mathematical and binary ops
+/// to `lhs_type` and `rhs_type`.
+fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    match (lhs_type, rhs_type) {
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
-        (Int64, _) | (_, Int64) => Some(Int64),
-        (Int32, _) | (_, Int32) => Some(Int32),
-        (Int16, _) | (_, Int16) => Some(Int16),
-        (Int8, _) | (_, Int8) => Some(Int8),
+        // The following match arms encode the following logic: Given the two
+        // integral types, we choose the narrowest possible integral type that
+        // accommodates all values of both types. Note that to avoid information
+        // loss when combining UInt64 with signed integers we use Decimal128(20, 0).
+        (UInt64, Int64 | Int32 | Int16 | Int8)
+        | (Int64 | Int32 | Int16 | Int8, UInt64) => Some(Decimal128(20, 0)),
         (UInt64, _) | (_, UInt64) => Some(UInt64),
+        (Int64, _)
+        | (_, Int64)
+        | (UInt32, Int32 | Int16 | Int8)
+        | (Int32 | Int16 | Int8, UInt32) => Some(Int64),
         (UInt32, _) | (_, UInt32) => Some(UInt32),
+        (Int32, _) | (_, Int32) | (UInt16, Int16 | Int8) | (Int16 | Int8, UInt16) => {
+            Some(Int32)
+        }
         (UInt16, _) | (_, UInt16) => Some(UInt16),
+        (Int16, _) | (_, Int16) | (Int8, UInt8) | (UInt8, Int8) => Some(Int16),
+        (Int8, _) | (_, Int8) => Some(Int8),
         (UInt8, _) | (_, UInt8) => Some(UInt8),
         _ => None,
     }
@@ -1632,7 +1620,7 @@ mod tests {
 
     /// Test coercion rules for binary operators
     ///
-    /// Applies coercion rules for `$LHS_TYPE $OP $RHS_TYPE` and asserts that the
+    /// Applies coercion rules for `$LHS_TYPE $OP $RHS_TYPE` and asserts that
     /// the result type is `$RESULT_TYPE`
     macro_rules! test_coercion_binary_rule {
         ($LHS_TYPE:expr, $RHS_TYPE:expr, $OP:expr, $RESULT_TYPE:expr) => {{
@@ -1640,6 +1628,26 @@ mod tests {
                 BinaryTypeCoercer::new(&$LHS_TYPE, &$OP, &$RHS_TYPE).get_input_types()?;
             assert_eq!(lhs, $RESULT_TYPE);
             assert_eq!(rhs, $RESULT_TYPE);
+        }};
+    }
+
+    /// Test coercion rules for binary operators
+    ///
+    /// Applies coercion rules for each RHS_TYPE in $RHS_TYPES such that
+    /// `$LHS_TYPE $OP RHS_TYPE` and asserts that the result type is `$RESULT_TYPE`.
+    /// Also tests that the inverse `RHS_TYPE $OP $LHS_TYPE` is true
+    macro_rules! test_coercion_binary_rule_multiple {
+        ($LHS_TYPE:expr, $RHS_TYPES:expr, $OP:expr, $RESULT_TYPE:expr) => {{
+            for rh_type in $RHS_TYPES {
+                let (lhs, rhs) = BinaryTypeCoercer::new(&$LHS_TYPE, &$OP, &rh_type)
+                    .get_input_types()?;
+                assert_eq!(lhs, $RESULT_TYPE);
+                assert_eq!(rhs, $RESULT_TYPE);
+
+                BinaryTypeCoercer::new(&rh_type, &$OP, &$LHS_TYPE).get_input_types()?;
+                assert_eq!(lhs, $RESULT_TYPE);
+                assert_eq!(rhs, $RESULT_TYPE);
+            }
         }};
     }
 
@@ -2002,39 +2010,94 @@ mod tests {
 
     #[test]
     fn test_type_coercion_arithmetic() -> Result<()> {
-        // integer
-        test_coercion_binary_rule!(
-            DataType::Int32,
-            DataType::UInt32,
+        use DataType::*;
+
+        // (Float64, _) | (_, Float64) => Some(Float64),
+        test_coercion_binary_rule_multiple!(
+            Float64,
+            [
+                Float64, Float32, Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16,
+                Int8, UInt8
+            ],
             Operator::Plus,
-            DataType::Int32
+            Float64
         );
-        test_coercion_binary_rule!(
-            DataType::Int32,
-            DataType::UInt16,
+        // (_, Float32) | (Float32, _) => Some(Float32),
+        test_coercion_binary_rule_multiple!(
+            Float32,
+            [
+                Float32, Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8,
+                UInt8
+            ],
+            Operator::Plus,
+            Float32
+        );
+        // (UInt64, Int64 | Int32 | Int16 | Int8) | (Int64 | Int32 | Int16 | Int8, UInt64)  => Some(Decimal128(20, 0)),
+        test_coercion_binary_rule_multiple!(
+            UInt64,
+            [Int64, Int32, Int16, Int8],
+            Operator::Divide,
+            Decimal128(20, 0)
+        );
+        // (UInt64, _) | (_, UInt64) => Some(UInt64),
+        test_coercion_binary_rule_multiple!(
+            UInt64,
+            [UInt64, UInt32, UInt16, UInt8],
+            Operator::Modulo,
+            UInt64
+        );
+        // (Int64, _) | (_, Int64) => Some(Int64),
+        test_coercion_binary_rule_multiple!(
+            Int64,
+            [Int64, Int32, UInt32, Int16, UInt16, Int8, UInt8],
+            Operator::Modulo,
+            Int64
+        );
+        // (UInt32, Int32 | Int16 | Int8) | (Int32 | Int16 | Int8, UInt32) => Some(Int64)
+        test_coercion_binary_rule_multiple!(
+            UInt32,
+            [Int32, Int16, Int8],
+            Operator::Modulo,
+            Int64
+        );
+        // (UInt32, _) | (_, UInt32) => Some(UInt32),
+        test_coercion_binary_rule_multiple!(
+            UInt32,
+            [UInt32, UInt16, UInt8],
+            Operator::Modulo,
+            UInt32
+        );
+        // (Int32, _) | (_, Int32) => Some(Int32),
+        test_coercion_binary_rule_multiple!(
+            Int32,
+            [Int32, Int16, Int8],
+            Operator::Modulo,
+            Int32
+        );
+        // (UInt16, Int16 | Int8) | (Int16 | Int8, UInt16) => Some(Int32)
+        test_coercion_binary_rule_multiple!(
+            UInt16,
+            [Int16, Int8],
             Operator::Minus,
-            DataType::Int32
+            Int32
         );
-        test_coercion_binary_rule!(
-            DataType::Int8,
-            DataType::Int64,
-            Operator::Multiply,
-            DataType::Int64
-        );
-        // float
-        test_coercion_binary_rule!(
-            DataType::Float32,
-            DataType::Int32,
+        // (UInt16, _) | (_, UInt16) => Some(UInt16),
+        test_coercion_binary_rule_multiple!(
+            UInt16,
+            [UInt16, UInt8, UInt8],
             Operator::Plus,
-            DataType::Float32
+            UInt16
         );
-        test_coercion_binary_rule!(
-            DataType::Float32,
-            DataType::Float64,
-            Operator::Multiply,
-            DataType::Float64
-        );
-        // TODO add other data type
+        // (Int16, _) | (_, Int16) => Some(Int16),
+        test_coercion_binary_rule_multiple!(Int16, [Int16, Int8], Operator::Plus, Int16);
+        // (UInt8, Int8) | (Int8, UInt8) => Some(Int16)
+        test_coercion_binary_rule!(Int8, UInt8, Operator::Minus, Int16);
+        test_coercion_binary_rule!(UInt8, Int8, Operator::Multiply, Int16);
+        // (UInt8, _) | (_, UInt8) => Some(UInt8),
+        test_coercion_binary_rule!(UInt8, UInt8, Operator::Minus, UInt8);
+        // (Int8, _) | (_, Int8) => Some(Int8),
+        test_coercion_binary_rule!(Int8, Int8, Operator::Plus, Int8);
+
         Ok(())
     }
 

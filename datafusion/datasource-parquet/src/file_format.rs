@@ -24,19 +24,9 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::{Fields, Schema, SchemaRef};
-use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
-use datafusion_datasource::write::{create_writer, get_writer_schema, SharedBuffer};
-
-use datafusion_datasource::file_format::{
-    FileFormat, FileFormatFactory, FilePushdownSupport,
-};
-use datafusion_datasource::write::demux::DemuxedStreamReceiver;
-
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_catalog::Session;
+use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
@@ -48,7 +38,15 @@ use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::file_format::{
+    FileFormat, FileFormatFactory, FilePushdownSupport,
+};
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
+use datafusion_datasource::write::demux::DemuxedStreamReceiver;
+use datafusion_datasource::write::{create_writer, get_writer_schema, SharedBuffer};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
@@ -57,11 +55,14 @@ use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::Accumulator;
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_session::Session;
 
+use crate::can_expr_be_pushed_down_with_schemas;
+use crate::source::ParquetSource;
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_datasource::source::DataSourceExec;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::debug;
@@ -82,9 +83,6 @@ use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-
-use crate::can_expr_be_pushed_down_with_schemas;
-use crate::source::ParquetSource;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -419,7 +417,11 @@ impl FileFormat for ParquetFormat {
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
-        Ok(conf.with_source(Arc::new(source)).build())
+
+        let conf = FileScanConfigBuilder::from(conf)
+            .with_source(Arc::new(source))
+            .build();
+        Ok(DataSourceExec::from_data_source(conf))
     }
 
     async fn create_writer_physical_plan(
@@ -983,7 +985,7 @@ impl DisplayAs for ParquetSink {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ParquetSink(file_groups=",)?;
-                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {

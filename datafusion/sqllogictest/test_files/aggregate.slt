@@ -176,6 +176,25 @@ FROM
 ----
 [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8]
 
+# array agg can use order by with distinct
+query ?
+SELECT array_agg(DISTINCT c13 ORDER BY c13)
+FROM
+  (SELECT *
+  FROM aggregate_test_100
+  ORDER BY c13
+  LIMIT 5) as t1
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8]
+
+query error Execution error: In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
+SELECT array_agg(DISTINCT c13 ORDER BY c12)
+FROM aggregate_test_100
+
+query error Execution error: In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
+SELECT array_agg(DISTINCT c13 ORDER BY c13, c12)
+FROM aggregate_test_100
+
 statement ok
 CREATE EXTERNAL TABLE agg_order (
 c1 INT NOT NULL,
@@ -233,6 +252,30 @@ select column1, nth_value(column3, 2 order by column2, column4 desc) from array_
 ----
 b [4, 5, 6]
 w [9, 5, 2]
+
+query ?
+select array_agg(DISTINCT column2 order by column2) from array_agg_order_list_table;
+----
+[1, 2]
+
+query ?
+select array_agg(DISTINCT column2 order by column2 desc) from array_agg_order_list_table;
+----
+[2, 1]
+
+query ?
+select array_agg(DISTINCT column2 + 1 order by column2 + 1 desc) from array_agg_order_list_table;
+----
+[3, 2]
+
+query ?
+select array_agg(DISTINCT column2 order by column2) from array_agg_order_list_table GROUP BY column1;
+----
+[1, 2]
+[1, 2]
+
+statement error In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
+select array_agg(DISTINCT column2 order by column1) from array_agg_order_list_table;
 
 statement ok
 drop table array_agg_order_list_table;

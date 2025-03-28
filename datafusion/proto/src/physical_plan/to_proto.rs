@@ -485,7 +485,7 @@ pub fn serialize_file_scan_config(
     let file_groups = conf
         .file_groups
         .iter()
-        .map(|p| p.as_slice().try_into())
+        .map(|p| p.files().try_into())
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut output_orderings = vec![];
@@ -512,7 +512,7 @@ pub fn serialize_file_scan_config(
         projection: conf
             .projection
             .as_ref()
-            .unwrap_or(&vec![])
+            .unwrap_or(&(0..schema.fields().len()).collect::<Vec<_>>())
             .iter()
             .map(|n| *n as u32)
             .collect(),
@@ -585,7 +585,7 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
 
     fn try_from(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
         let file_groups = conf
-            .file_groups
+            .file_group
             .iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>>>()?;

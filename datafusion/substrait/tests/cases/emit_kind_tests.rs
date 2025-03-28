@@ -26,6 +26,7 @@ mod tests {
     use datafusion::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use datafusion_substrait::logical_plan::producer::to_substrait_plan;
+    use insta::assert_snapshot;
 
     #[tokio::test]
     async fn project_respects_direct_emit_kind() -> Result<()> {
@@ -35,13 +36,13 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        let plan_str = format!("{}", plan);
-
-        assert_eq!(
-            plan_str,
-            "Projection: DATA.A AS a, DATA.B AS b, DATA.A + Int64(1) AS add1\
-            \n  TableScan: DATA"
-        );
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: DATA.A AS a, DATA.B AS b, DATA.A + Int64(1) AS add1
+              TableScan: DATA
+            "#
+                );
         Ok(())
     }
 
@@ -53,15 +54,15 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        let plan_str = format!("{}", plan);
-
-        assert_eq!(
-            plan_str,
-            // Note that duplicate references in the remap are aliased
-            "Projection: DATA.B, DATA.A AS A1, DATA.A AS DATA.A__temp__0 AS A2\
-             \n  Filter: DATA.B = Int64(2)\
-             \n    TableScan: DATA"
-        );
+        assert_snapshot!(
+        plan,
+        // Note that duplicate references in the remap are aliased
+        @r#"
+            Projection: DATA.B, DATA.A AS A1, DATA.A AS DATA.A__temp__0 AS A2
+              Filter: DATA.B = Int64(2)
+                TableScan: DATA
+            "#
+                );
         Ok(())
     }
 
@@ -85,21 +86,24 @@ mod tests {
             .await?;
 
         let plan = df.into_unoptimized_plan();
-        assert_eq!(
-            format!("{}", plan),
-            "Projection: random() AS c1, data.a + Int64(1) AS c2\
-             \n  TableScan: data"
-        );
+        assert_snapshot!(
+            plan,
+            @r#"
+            Projection: random() AS c1, data.a + Int64(1) AS c2
+              TableScan: data
+            "#        );
 
         let proto = to_substrait_plan(&plan, &ctx.state())?;
         let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
         // note how the Projections are not flattened
-        assert_eq!(
-            format!("{}", plan2),
-            "Projection: random() AS c1, data.a + Int64(1) AS c2\
-             \n  Projection: data.a, data.b, data.c, data.d, data.e, data.f, random(), data.a + Int64(1)\
-             \n    TableScan: data"
-        );
+        assert_snapshot!(
+        plan2,
+        @r#"
+            Projection: random() AS c1, data.a + Int64(1) AS c2
+              Projection: data.a, data.b, data.c, data.d, data.e, data.f, random(), data.a + Int64(1)
+                TableScan: data
+            "#
+                );
         Ok(())
     }
 
@@ -109,17 +113,21 @@ mod tests {
         let df = ctx.sql("SELECT a + 1, b + 2 FROM data").await?;
 
         let plan = df.into_unoptimized_plan();
-        assert_eq!(
-            format!("{}", plan),
-            "Projection: data.a + Int64(1), data.b + Int64(2)\
-             \n  TableScan: data"
-        );
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: data.a + Int64(1), data.b + Int64(2)
+              TableScan: data
+            "#
+                );
 
         let proto = to_substrait_plan(&plan, &ctx.state())?;
         let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
 
         let plan1str = format!("{plan}");
         let plan2str = format!("{plan2}");
+        println!("{}", plan1str);
+        println!("{}", plan2str);
         assert_eq!(plan1str, plan2str);
 
         Ok(())

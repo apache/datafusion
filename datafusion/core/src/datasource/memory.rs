@@ -25,7 +25,6 @@ use std::sync::Arc;
 use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::logical_expr::Expr;
-use crate::physical_plan::insert::{DataSink, DataSinkExec};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
@@ -39,6 +38,7 @@ use datafusion_catalog::Session;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
 use datafusion_common_runtime::JoinSet;
 pub use datafusion_datasource::memory::MemorySourceConfig;
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 pub use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
@@ -251,7 +251,7 @@ impl TableProvider for MemTable {
             source = source.try_with_sort_information(file_sort_order)?;
         }
 
-        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+        Ok(DataSourceExec::from_data_source(source))
     }
 
     /// Returns an ExecutionPlan that inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].

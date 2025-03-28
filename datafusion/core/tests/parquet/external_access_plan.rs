@@ -27,7 +27,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{assert_contains, DFSchema};
 use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
@@ -36,6 +36,8 @@ use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::ExecutionPlan;
 
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -348,10 +350,11 @@ impl TestFull {
         } else {
             Arc::new(ParquetSource::default())
         };
-        let config = FileScanConfig::new(object_store_url, schema.clone(), source)
-            .with_file(partitioned_file);
+        let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
+            .with_file(partitioned_file)
+            .build();
 
-        let plan: Arc<dyn ExecutionPlan> = config.build();
+        let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
 
         // run the DataSourceExec and collect the results
         let results =
