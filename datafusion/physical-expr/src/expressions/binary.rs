@@ -365,7 +365,7 @@ impl PhysicalExpr for BinaryExpr {
                     match arg {
                         ColumnarValue::Array(array) => {
                             if let Ok(array) = as_boolean_array(&array) {
-                                return array.true_count() == 0;
+                                return array.false_count() == array.len();
                             }
                         }
                         ColumnarValue::Scalar(scalar) => {
