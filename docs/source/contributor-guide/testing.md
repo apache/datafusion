@@ -82,7 +82,7 @@ portions of the entire [sqlite test suite].
 You can run the extended tests on any PR by leaving the following comment (see [example here]):
 
 ```
-Run extended tets
+Run extended tests
 ```
 
 [extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
