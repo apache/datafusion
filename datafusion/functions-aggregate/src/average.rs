@@ -25,7 +25,7 @@ use arrow::array::{
 use arrow::compute::sum;
 use arrow::datatypes::{
     i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType, Field,
-    Float64Type, UInt64Type,
+    Float64Type, Int64Type, TimeUnit, UInt64Type,
 };
 use datafusion_common::{
     exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
@@ -145,6 +145,15 @@ impl AggregateUDFImpl for Avg {
                 target_precision: *target_precision,
                 target_scale: *target_scale,
             })),
+
+            (Duration(_unit), Duration(target_unit)) => {
+                Ok(Box::new(DurationAvgAccumulator {
+                    sum: None,
+                    count: 0,
+                    unit: target_unit.clone(),
+                }))
+            }
+
             _ => exec_err!(
                 "AvgAccumulator for ({} --> {})",
                 &data_type,
@@ -390,6 +399,76 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
         self.count -= (values.len() - values.null_count()) as u64;
         if let Some(x) = sum(values) {
             self.sum = Some(self.sum.unwrap().sub_wrapping(x));
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug)]
+struct DurationAvgAccumulator {
+    sum: Option<i64>,
+    count: u64,
+    unit: TimeUnit,
+}
+
+impl Accumulator for DurationAvgAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = values[0].as_primitive::<Int64Type>();
+        self.count += (values.len() - values.null_count()) as u64;
+
+        if let Some(x) = sum(values) {
+            let v = self.sum.get_or_insert(0);
+            *v += x;
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(self
+            .sum
+            .map(|sum| {
+                let avg = sum / self.count as i64;
+                match self.unit {
+                    TimeUnit::Second => ScalarValue::DurationSecond(Some(avg)),
+                    TimeUnit::Millisecond => ScalarValue::DurationMillisecond(Some(avg)),
+                    TimeUnit::Microsecond => ScalarValue::DurationMicrosecond(Some(avg)),
+                    TimeUnit::Nanosecond => ScalarValue::DurationNanosecond(Some(avg)),
+                }
+            })
+            .unwrap_or(ScalarValue::Null))
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![
+            ScalarValue::UInt64(Some(self.count)),
+            ScalarValue::Int64(self.sum),
+        ])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.count += sum(states[0].as_primitive::<UInt64Type>()).unwrap_or_default();
+
+        if let Some(x) = sum(states[1].as_primitive::<Int64Type>()) {
+            let v = self.sum.get_or_insert(0);
+            *v += x;
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = values[0].as_primitive::<Int64Type>();
+        self.count -= (values.len() - values.null_count()) as u64;
+
+        if let Some(x) = sum(values) {
+            self.sum = Some(self.sum.unwrap() - x);
         }
         Ok(())
     }
