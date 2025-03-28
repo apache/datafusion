@@ -135,19 +135,17 @@ impl AggregateUDFImpl for FirstValue {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if let Some(ordering_req) = acc_args.ordering_req {
-            if !self.requirement_satisfied {
-                let ordering_dtypes = ordering_req
-                    .iter()
-                    .map(|e| e.expr.data_type(acc_args.schema))
-                    .collect::<Result<Vec<_>>>()?;
-                return FirstValueAccumulator::try_new(
-                    acc_args.return_type,
-                    &ordering_dtypes,
-                    ordering_req.clone(),
-                    acc_args.ignore_nulls,
-                )
-                .map(|acc| Box::new(acc) as _);
-            }
+            let ordering_dtypes = ordering_req
+                .iter()
+                .map(|e| e.expr.data_type(acc_args.schema))
+                .collect::<Result<Vec<_>>>()?;
+            return FirstValueAccumulator::try_new(
+                acc_args.return_type,
+                &ordering_dtypes,
+                ordering_req.clone(),
+                acc_args.ignore_nulls,
+            )
+            .map(|acc| Box::new(acc) as _);
         }
         TrivialFirstValueAccumulator::try_new(acc_args.return_type, acc_args.ignore_nulls)
             .map(|acc| Box::new(acc) as _)
@@ -1040,19 +1038,17 @@ impl AggregateUDFImpl for LastValue {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if let Some(ordering_req) = acc_args.ordering_req {
-            if !self.requirement_satisfied {
-                let ordering_dtypes = ordering_req
-                    .iter()
-                    .map(|e| e.expr.data_type(acc_args.schema))
-                    .collect::<Result<Vec<_>>>()?;
-                return LastValueAccumulator::try_new(
-                    acc_args.return_type,
-                    &ordering_dtypes,
-                    ordering_req.clone(),
-                    acc_args.ignore_nulls,
-                )
-                .map(|acc| Box::new(acc) as _);
-            }
+            let ordering_dtypes = ordering_req
+                .iter()
+                .map(|e| e.expr.data_type(acc_args.schema))
+                .collect::<Result<Vec<_>>>()?;
+            return LastValueAccumulator::try_new(
+                acc_args.return_type,
+                &ordering_dtypes,
+                ordering_req.clone(),
+                acc_args.ignore_nulls,
+            )
+            .map(|acc| Box::new(acc) as _);
         }
         TrivialLastValueAccumulator::try_new(acc_args.return_type, acc_args.ignore_nulls)
             .map(|acc| Box::new(acc) as _)
