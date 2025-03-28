@@ -36,10 +36,8 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        let plan_str = format!("{}", plan);
-
         assert_snapshot!(
-        plan_str,
+        plan,
         @r#"
             Projection: DATA.A AS a, DATA.B AS b, DATA.A + Int64(1) AS add1
               TableScan: DATA
@@ -56,10 +54,8 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        let plan_str = format!("{}", plan);
-
         assert_snapshot!(
-        plan_str,
+        plan,
         // Note that duplicate references in the remap are aliased
         @r#"
             Projection: DATA.B, DATA.A AS A1, DATA.A AS DATA.A__temp__0 AS A2
@@ -91,7 +87,7 @@ mod tests {
 
         let plan = df.into_unoptimized_plan();
         assert_snapshot!(
-            format!("{}", plan),
+            plan,
             @r#"
             Projection: random() AS c1, data.a + Int64(1) AS c2
               TableScan: data
@@ -101,7 +97,7 @@ mod tests {
         let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
         // note how the Projections are not flattened
         assert_snapshot!(
-        format!("{}", plan2),
+        plan2,
         @r#"
             Projection: random() AS c1, data.a + Int64(1) AS c2
               Projection: data.a, data.b, data.c, data.d, data.e, data.f, random(), data.a + Int64(1)
@@ -118,7 +114,7 @@ mod tests {
 
         let plan = df.into_unoptimized_plan();
         assert_snapshot!(
-        format!("{}", plan),
+        plan,
         @r#"
             Projection: data.a + Int64(1), data.b + Int64(2)
               TableScan: data
@@ -132,13 +128,7 @@ mod tests {
         let plan2str = format!("{plan2}");
         println!("{}", plan1str);
         println!("{}", plan2str);
-        assert_snapshot!(
-        plan1str,
-        @r#"
-            Projection: data.a + Int64(1), data.b + Int64(2)
-              TableScan: data
-            "#
-                );
+        assert_eq!(plan1str, plan2str);
 
         Ok(())
     }
