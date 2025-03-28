@@ -18,7 +18,7 @@
 //! Logical plan types
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
@@ -2681,24 +2681,16 @@ impl Union {
         Ok(Union { inputs, schema })
     }
 
-    /// When constructing a `UNION BY NAME`, we may need to wrap inputs
+    /// When constructing a `UNION BY NAME`, we need to wrap inputs
     /// in an additional `Projection` to account for absence of columns
-    /// in input schemas.
+    /// in input schemas or differing projection orders.
     fn rewrite_inputs_from_schema(
-        schema: &DFSchema,
+        schema: &Arc<DFSchema>,
         inputs: Vec<Arc<LogicalPlan>>,
     ) -> Result<Vec<Arc<LogicalPlan>>> {
         let schema_width = schema.iter().count();
         let mut wrapped_inputs = Vec::with_capacity(inputs.len());
         for input in inputs {
-            // If the input plan's schema contains the same number of fields
-            // as the derived schema, then it does not to be wrapped in an
-            // additional `Projection`.
-            if input.schema().iter().count() == schema_width {
-                wrapped_inputs.push(input);
-                continue;
-            }
-
             // Any columns that exist within the derived schema but do not exist
             // within an input's schema should be replaced with `NULL` aliased
             // to the appropriate column in the derived schema.
@@ -2713,9 +2705,9 @@ impl Union {
                     expr.push(Expr::Literal(ScalarValue::Null).alias(column.name()));
                 }
             }
-            wrapped_inputs.push(Arc::new(LogicalPlan::Projection(Projection::try_new(
-                expr, input,
-            )?)));
+            wrapped_inputs.push(Arc::new(LogicalPlan::Projection(
+                Projection::try_new_with_schema(expr, input, Arc::clone(schema))?,
+            )));
         }
 
         Ok(wrapped_inputs)
@@ -2749,45 +2741,60 @@ impl Union {
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
-        type FieldData<'a> = (&'a DataType, bool, Vec<&'a HashMap<String, String>>);
-        // Prefer `BTreeMap` as it produces items in order by key when iterated over
-        let mut cols: BTreeMap<&str, FieldData> = BTreeMap::new();
+        type FieldData<'a> =
+            (&'a DataType, bool, Vec<&'a HashMap<String, String>>, usize);
+        let mut cols: Vec<(&str, FieldData)> = Vec::new();
         for input in inputs.iter() {
             for field in input.schema().fields() {
-                match cols.entry(field.name()) {
-                    std::collections::btree_map::Entry::Occupied(mut occupied) => {
-                        let (data_type, is_nullable, metadata) = occupied.get_mut();
-                        if !loose_types && *data_type != field.data_type() {
-                            return plan_err!(
-                                "Found different types for field {}",
-                                field.name()
-                            );
-                        }
-
-                        metadata.push(field.metadata());
-                        // If the field is nullable in any one of the inputs,
-                        // then the field in the final schema is also nullable.
-                        *is_nullable |= field.is_nullable();
+                if let Some((_, (data_type, is_nullable, metadata, occurrences))) =
+                    cols.iter_mut().find(|(name, _)| name == field.name())
+                {
+                    if !loose_types && *data_type != field.data_type() {
+                        return plan_err!(
+                            "Found different types for field {}",
+                            field.name()
+                        );
                     }
-                    std::collections::btree_map::Entry::Vacant(vacant) => {
-                        vacant.insert((
+
+                    metadata.push(field.metadata());
+                    // If the field is nullable in any one of the inputs,
+                    // then the field in the final schema is also nullable.
+                    *is_nullable |= field.is_nullable();
+                    *occurrences += 1;
+                } else {
+                    cols.push((
+                        field.name(),
+                        (
                             field.data_type(),
                             field.is_nullable(),
                             vec![field.metadata()],
-                        ));
-                    }
+                            1,
+                        ),
+                    ));
                 }
             }
         }
 
         let union_fields = cols
             .into_iter()
-            .map(|(name, (data_type, is_nullable, unmerged_metadata))| {
-                let mut field = Field::new(name, data_type.clone(), is_nullable);
-                field.set_metadata(intersect_maps(unmerged_metadata));
+            .map(
+                |(name, (data_type, is_nullable, unmerged_metadata, occurrences))| {
+                    // If the final number of occurrences of the field is less
+                    // than the number of inputs (i.e. the field is missing from
+                    // one or more inputs), then it must be treated as nullable.
+                    let final_is_nullable = if occurrences == inputs.len() {
+                        is_nullable
+                    } else {
+                        true
+                    };
 
-                (None, Arc::new(field))
-            })
+                    let mut field =
+                        Field::new(name, data_type.clone(), final_is_nullable);
+                    field.set_metadata(intersect_maps(unmerged_metadata));
+
+                    (None, Arc::new(field))
+                },
+            )
             .collect::<Vec<(Option<TableReference>, _)>>();
 
         let union_schema_metadata =

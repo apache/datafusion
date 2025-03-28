@@ -46,6 +46,7 @@ use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
 use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource_csv::partitioned_csv_config;
 #[cfg(feature = "compression")]
 use flate2::write::GzEncoder;
@@ -91,9 +92,11 @@ pub fn scan_partitioned_csv(
         work_dir,
     )?;
     let source = Arc::new(CsvSource::new(true, b'"', b'"'));
-    let config = partitioned_csv_config(schema, file_groups, source)
-        .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
-    Ok(config.build())
+    let config =
+        FileScanConfigBuilder::from(partitioned_csv_config(schema, file_groups, source))
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .build();
+    Ok(DataSourceExec::from_data_source(config))
 }
 
 /// Returns file groups [`Vec<FileGroup>`] for scanning `partitions` of `filename`

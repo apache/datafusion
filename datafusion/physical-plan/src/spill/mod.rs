@@ -29,55 +29,9 @@ use arrow::array::ArrayData;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
 use arrow::record_batch::RecordBatch;
-use log::debug;
 use tokio::sync::mpsc::Sender;
 
 use datafusion_common::{exec_datafusion_err, HashSet, Result};
-use datafusion_execution::disk_manager::RefCountedTempFile;
-use datafusion_execution::memory_pool::human_readable_size;
-use datafusion_execution::SendableRecordBatchStream;
-
-use crate::stream::RecordBatchReceiverStream;
-
-/// Read spilled batches from the disk
-///
-/// `path` - temp file
-/// `schema` - batches schema, should be the same across batches
-/// `buffer` - internal buffer of capacity batches
-pub(crate) fn read_spill_as_stream(
-    path: RefCountedTempFile,
-    schema: SchemaRef,
-    buffer: usize,
-) -> Result<SendableRecordBatchStream> {
-    let mut builder = RecordBatchReceiverStream::builder(schema, buffer);
-    let sender = builder.tx();
-
-    builder.spawn_blocking(move || read_spill(sender, path.path()));
-
-    Ok(builder.build())
-}
-
-/// Spills in-memory `batches` to disk.
-///
-/// Returns total number of the rows spilled to disk.
-pub(crate) fn spill_record_batches(
-    batches: &[RecordBatch],
-    path: PathBuf,
-    schema: SchemaRef,
-) -> Result<(usize, usize)> {
-    let mut writer = IPCStreamWriter::new(path.as_ref(), schema.as_ref())?;
-    for batch in batches {
-        writer.write(batch)?;
-    }
-    writer.finish()?;
-    debug!(
-        "Spilled {} batches of total {} rows to disk, memory released {}",
-        writer.num_batches,
-        writer.num_rows,
-        human_readable_size(writer.num_bytes),
-    );
-    Ok((writer.num_rows, writer.num_bytes))
-}
 
 fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
     let file = BufReader::new(File::open(path)?);
@@ -92,6 +46,10 @@ fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
 
 /// Spill the `RecordBatch` to disk as smaller batches
 /// split by `batch_size_rows`
+#[deprecated(
+    since = "46.0.0",
+    note = "This method is deprecated. Use `SpillManager::spill_record_batch_by_size` instead."
+)]
 pub fn spill_record_batch_by_size(
     batch: &RecordBatch,
     path: PathBuf,
@@ -619,10 +577,26 @@ mod tests {
 
         let spill_manager =
             Arc::new(SpillManager::new(env, metrics, Arc::clone(&schema)));
-        let mut in_progress_file = spill_manager.create_in_progress_file("Test")?;
 
-        // Attempt to finish without appending any batches
+        // Test write empty batch with interface `InProgressSpillFile` and `append_batch()`
+        let mut in_progress_file = spill_manager.create_in_progress_file("Test")?;
         let completed_file = in_progress_file.finish()?;
+        assert!(completed_file.is_none());
+
+        // Test write empty batch with interface `spill_record_batch_and_finish()`
+        let completed_file = spill_manager.spill_record_batch_and_finish(&[], "Test")?;
+        assert!(completed_file.is_none());
+
+        // Test write empty batch with interface `spill_record_batch_by_size()`
+        let empty_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(Vec::<Option<i32>>::new())),
+                Arc::new(StringArray::from(Vec::<Option<&str>>::new())),
+            ],
+        )?;
+        let completed_file =
+            spill_manager.spill_record_batch_by_size(&empty_batch, "Test", 1)?;
         assert!(completed_file.is_none());
 
         Ok(())

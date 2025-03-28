@@ -86,8 +86,8 @@ use std::ops::{Index, IndexMut};
 /// tuples must be preserved, multiple files can not be mixed in the same group.
 ///
 /// In this case, the code will split the largest files evenly into any
-/// available empty groups, but the overall distribution may not not be as even
-/// as as even as if the order did not need to be preserved.
+/// available empty groups, but the overall distribution may not be as even
+/// as if the order did not need to be preserved.
 ///
 /// ```text
 ///                                   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐

@@ -943,6 +943,6 @@ impl TableProvider for SortedTableProvider {
         )?
         .try_with_sort_information(self.sort_information.clone())?;
 
-        Ok(Arc::new(DataSourceExec::new(Arc::new(mem_conf))))
+        Ok(DataSourceExec::from_data_source(mem_conf))
     }
 }
