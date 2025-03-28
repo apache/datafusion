@@ -290,17 +290,63 @@ impl<'a> TypeCoercionRewriter<'a> {
         right: Expr,
         right_schema: &DFSchema,
     ) -> Result<(Expr, Expr)> {
-        let (left_type, right_type) = BinaryTypeCoercer::new(
-            &left.get_type(left_schema)?,
-            &op,
-            &right.get_type(right_schema)?,
-        )
-        .get_input_types()?;
+        let left_type = left.get_type(left_schema)?;
+        let right_type = right.get_type(right_schema)?;
+
+        match (&left, &right) {
+            (left, Expr::Literal(ref lit_value)) => {
+                if let Some(casted) =
+                    try_cast_literal_to_type_with_op(&left_type, op, lit_value)?
+                {
+                    return Ok((left.clone(), Expr::Literal(casted)));
+                }
+            }
+            (Expr::Literal(ref lit_value), right) if op.swap().is_some() => {
+                if let Some(casted) = try_cast_literal_to_type_with_op(
+                    &right_type,
+                    op.swap().unwrap(),
+                    lit_value,
+                )? {
+                    return Ok((Expr::Literal(casted), right.clone()));
+                }
+            }
+            _ => {}
+        }
+
+        let (left_type, right_type) =
+            BinaryTypeCoercer::new(&left_type, &op, &right_type).get_input_types()?;
 
         Ok((
             left.cast_to(&left_type, left_schema)?,
             right.cast_to(&right_type, right_schema)?,
         ))
+    }
+}
+
+fn try_cast_literal_to_type_with_op(
+    target_type: &DataType,
+    op: Operator,
+    lit_value: &ScalarValue,
+) -> Result<Option<ScalarValue>> {
+    match (op, lit_value) {
+        (
+            op,
+            ScalarValue::Utf8(_) | ScalarValue::Utf8View(_) | ScalarValue::LargeUtf8(_),
+        ) if op.supports_propagation() => {
+            if target_type.is_numeric() {
+                let Ok(casted) = lit_value.cast_to(target_type) else {
+                    return plan_err!(
+                        "Cannot coerce '{}' to type '{}'",
+                        lit_value,
+                        target_type
+                    );
+                };
+                return Ok(Some(casted));
+            }
+
+            Ok(None)
+        }
+        _ => Ok(None),
     }
 }
 

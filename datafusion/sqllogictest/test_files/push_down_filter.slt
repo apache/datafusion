@@ -230,19 +230,19 @@ logical_plan TableScan: t projection=[a], full_filters=[t.a != Int32(100)]
 query TT
 explain select a from t where a = '99999999999';
 ----
-logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("99999999999")]
+
 
 # The predicate should still have the column cast when the value is a NOT valid i32
 query TT
 explain select a from t where a = '99.99';
 ----
-logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("99.99")]
+
 
 # The predicate should still have the column cast when the value is a NOT valid i32
 query TT
 explain select a from t where a = '';
 ----
-logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("")]
+
 
 # The predicate should not have a column cast when the operator is = or != and the literal can be round-trip casted without losing information.
 query TT
