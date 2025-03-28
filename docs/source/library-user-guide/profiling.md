@@ -105,7 +105,8 @@ samply record --profile profiling ./my-application my-arguments
 
 [Set up benchmarks](https://github.com/apache/datafusion/blob/main/benchmarks/README.md#running-the-benchmarks) if not yet done
 
-Example: Profile Q22 query from TPC-H benchmark
+Example: Profile Q22 query from TPC-H benchmark.
+Note: `--profile profiling` to profile release optimized artifact with debug symbols
 
 ```shell
 samply record cargo run --profile profiling --bin tpch -- benchmark datafusion --iterations 5 --path datafusion/benchmarks/data/tpch_sf10 --prefer_hash_join true --format parquet -o datafusion/benchmarks/results/dev2/tpch_sf10.json --query 22
