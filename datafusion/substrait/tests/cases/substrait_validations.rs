@@ -68,7 +68,7 @@ mod tests {
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
             assert_snapshot!(
-            format!("{}", plan),
+            plan,
             @r#"
                 Projection: DATA.a, DATA.b
                   TableScan: DATA
@@ -91,7 +91,7 @@ mod tests {
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
             assert_snapshot!(
-            format!("{}", plan),
+            plan,
             @r#"
                 Projection: DATA.a, DATA.b
                   TableScan: DATA projection=[a, b]
@@ -116,7 +116,7 @@ mod tests {
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
             assert_snapshot!(
-            format!("{}", plan),
+            plan,
             @r#"
                 Projection: DATA.a, DATA.b
                   TableScan: DATA projection=[a, b]

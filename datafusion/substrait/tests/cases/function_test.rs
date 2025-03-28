@@ -32,10 +32,8 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        let plan_str = format!("{}", plan);
-
         assert_snapshot!(
-        plan_str,
+        plan,
         @r#"
             Projection: nation.n_name
               Filter: contains(nation.n_name, Utf8("IA"))

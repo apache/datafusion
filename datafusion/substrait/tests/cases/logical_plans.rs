@@ -42,7 +42,7 @@ mod tests {
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
-        format!("{}", plan),
+        plan,
         @r#"
             Projection: NOT DATA.D AS EXPR$0
               TableScan: DATA
@@ -73,7 +73,7 @@ mod tests {
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
-        format!("{}", plan),
+        plan,
         @r#"
             Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR
               WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
@@ -100,7 +100,7 @@ mod tests {
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
-        format!("{}", plan),
+        plan,
         @r#"
             Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED
               WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
@@ -129,7 +129,7 @@ mod tests {
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
-        format!("{}", plan),
+        plan,
         @r#"
             Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$1
               WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
@@ -175,7 +175,7 @@ mod tests {
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_snapshot!(
-        format!("{}", plan),
+        plan,
         @r#"
             Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count
               Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]
