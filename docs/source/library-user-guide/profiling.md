@@ -82,10 +82,10 @@ CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph --root --bench sql_planner -- 
 
 [Video: how to CPU profile DataFusion with XCode Instruments](https://youtu.be/P3dXH61Kr5U)
 
-## Cross Platform 
+## Cross Platform
 
 There is an opportunity to build flamegraphs, call trees and stack charts on any platform using
-[Samply](https://github.com/mstange/samply) 
+[Samply](https://github.com/mstange/samply)
 
 Install Samply
 
@@ -95,7 +95,8 @@ cargo install --locked samply
 
 More [installation options](https://github.com/mstange/samply?tab=readme-ov-file#installation)
 
-Run the profiler 
+Run the profiler
+
 ```shell
 samply record --profile profiling ./my-application my-arguments
 ```
@@ -103,7 +104,6 @@ samply record --profile profiling ./my-application my-arguments
 ### Profile the benchmark
 
 [Set up benchmarks](../../../benchmarks/README.md#running-the-benchmarks) if not yet done
-
 
 Example: Profile Q22 query from TPC-H benchmark
 
