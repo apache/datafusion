@@ -32,7 +32,9 @@ use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
-use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, UnaryOperator, Value};
+use sqlparser::ast::{
+    BinaryOperator, Expr as SQLExpr, Interval, UnaryOperator, Value, ValueWithSpan,
+};
 use sqlparser::parser::ParserError::ParserError;
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -254,8 +256,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
 fn interval_literal(interval_value: SQLExpr, negative: bool) -> Result<String> {
     let s = match interval_value {
-        SQLExpr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) => s,
-        SQLExpr::Value(Value::Number(ref v, long)) => {
+        SQLExpr::Value(ValueWithSpan {
+            value: Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+            span: _,
+        }) => s,
+        SQLExpr::Value(ValueWithSpan {
+            value: Value::Number(ref v, long),
+            span: _,
+        }) => {
             if long {
                 return not_impl_err!(
                     "Unsupported interval argument. Long number not supported: {interval_value:?}"
@@ -304,7 +312,7 @@ fn try_decode_hex_literal(s: &str) -> Option<Vec<u8>> {
     for i in (start_idx..hex_bytes.len()).step_by(2) {
         let high = try_decode_hex_char(hex_bytes[i])?;
         let low = try_decode_hex_char(hex_bytes[i + 1])?;
-        decoded_bytes.push(high << 4 | low);
+        decoded_bytes.push((high << 4) | low);
     }
 
     Some(decoded_bytes)

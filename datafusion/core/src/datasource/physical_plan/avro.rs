@@ -15,346 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution plan for reading line-delimited Avro files
+//! Reexports the [`datafusion_datasource_json::source`] module, containing [Avro] based [`FileSource`].
+//!
+//! [Avro]: https://avro.apache.org/
+//! [`FileSource`]: datafusion_datasource::file::FileSource
 
-use std::any::Any;
-use std::fmt::Formatter;
-use std::sync::Arc;
-
-use super::{FileOpener, FileScanConfig};
-#[cfg(feature = "avro")]
-use crate::datasource::avro_to_arrow::Reader as AvroReader;
-use crate::datasource::data_source::FileSource;
-use crate::error::Result;
-
-use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraints, Statistics};
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::source::DataSourceExec;
-use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-};
-
-use object_store::ObjectStore;
-
-/// Execution plan for scanning Avro data source
-#[derive(Debug, Clone)]
-#[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
-pub struct AvroExec {
-    inner: DataSourceExec,
-    base_config: FileScanConfig,
-}
-
-#[allow(unused, deprecated)]
-impl AvroExec {
-    /// Create a new Avro reader execution plan provided base configurations
-    pub fn new(base_config: FileScanConfig) -> Self {
-        let (
-            projected_schema,
-            projected_constraints,
-            projected_statistics,
-            projected_output_ordering,
-        ) = base_config.project();
-        let cache = Self::compute_properties(
-            Arc::clone(&projected_schema),
-            &projected_output_ordering,
-            projected_constraints,
-            &base_config,
-        );
-        let base_config = base_config.with_source(Arc::new(AvroSource::default()));
-        Self {
-            inner: DataSourceExec::new(Arc::new(base_config.clone())),
-            base_config,
-        }
-    }
-
-    /// Ref to the base configs
-    pub fn base_config(&self) -> &FileScanConfig {
-        &self.base_config
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
-        schema: SchemaRef,
-        orderings: &[LexOrdering],
-        constraints: Constraints,
-        file_scan_config: &FileScanConfig,
-    ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
-            .with_constraints(constraints);
-        let n_partitions = file_scan_config.file_groups.len();
-
-        PlanProperties::new(
-            eq_properties,
-            Partitioning::UnknownPartitioning(n_partitions), // Output Partitioning
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
-    }
-}
-
-#[allow(unused, deprecated)]
-impl DisplayAs for AvroExec {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        self.inner.fmt_as(t, f)
-    }
-}
-
-#[allow(unused, deprecated)]
-impl ExecutionPlan for AvroExec {
-    fn name(&self) -> &'static str {
-        "AvroExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        self.inner.properties()
-    }
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        Vec::new()
-    }
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-    #[cfg(not(feature = "avro"))]
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        Err(crate::error::DataFusionError::NotImplemented(
-            "Cannot execute avro plan without avro feature enabled".to_string(),
-        ))
-    }
-    #[cfg(feature = "avro")]
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        self.inner.execute(partition, context)
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.inner.statistics()
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        self.inner.metrics()
-    }
-
-    fn fetch(&self) -> Option<usize> {
-        self.inner.fetch()
-    }
-
-    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.inner.with_fetch(limit)
-    }
-}
-
-/// AvroSource holds the extra configuration that is necessary for opening avro files
-#[derive(Clone, Default)]
-pub struct AvroSource {
-    schema: Option<SchemaRef>,
-    batch_size: Option<usize>,
-    projection: Option<Vec<String>>,
-    metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
-}
-
-impl AvroSource {
-    /// Initialize an AvroSource with default values
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[cfg(feature = "avro")]
-    fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
-        AvroReader::try_new(
-            reader,
-            Arc::clone(self.schema.as_ref().expect("Schema must set before open")),
-            self.batch_size.expect("Batch size must set before open"),
-            self.projection.clone(),
-        )
-    }
-}
-
-impl FileSource for AvroSource {
-    #[cfg(feature = "avro")]
-    fn create_file_opener(
-        &self,
-        object_store: Result<Arc<dyn ObjectStore>>,
-        _base_config: &FileScanConfig,
-        _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        Ok(Arc::new(private::AvroOpener {
-            config: Arc::new(self.clone()),
-            object_store: object_store?,
-        }))
-    }
-
-    #[cfg(not(feature = "avro"))]
-    fn create_file_opener(
-        &self,
-        _object_store: Result<Arc<dyn ObjectStore>>,
-        _base_config: &FileScanConfig,
-        _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        panic!("Avro feature is not enabled in this build")
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
-    }
-
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.schema = Some(schema);
-        Arc::new(conf)
-    }
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projection = config.projected_file_column_names();
-        Arc::new(conf)
-    }
-
-    fn metrics(&self) -> &ExecutionPlanMetricsSet {
-        &self.metrics
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        Ok(statistics
-            .clone()
-            .expect("projected_statistics must be set"))
-    }
-
-    fn file_type(&self) -> &str {
-        "avro"
-    }
-    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
-        !(config.file_compression_type.is_compressed()
-            || config.new_lines_in_values
-            || self.as_any().downcast_ref::<AvroSource>().is_some())
-    }
-}
-
-#[cfg(feature = "avro")]
-mod private {
-    use super::*;
-    use crate::datasource::physical_plan::FileMeta;
-    use crate::datasource::physical_plan::{FileOpenFuture, FileOpener};
-
-    use bytes::Buf;
-    use futures::StreamExt;
-    use object_store::{GetResultPayload, ObjectStore};
-
-    pub struct DeprecatedAvroConfig {
-        pub schema: SchemaRef,
-        pub batch_size: usize,
-        pub projection: Option<Vec<String>>,
-        pub object_store: Arc<dyn ObjectStore>,
-    }
-
-    impl DeprecatedAvroConfig {
-        fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
-            AvroReader::try_new(
-                reader,
-                Arc::clone(&self.schema),
-                self.batch_size,
-                self.projection.clone(),
-            )
-        }
-    }
-
-    pub struct DeprecatedAvroOpener {
-        pub config: Arc<DeprecatedAvroConfig>,
-    }
-    impl FileOpener for DeprecatedAvroOpener {
-        fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
-            let config = Arc::clone(&self.config);
-            Ok(Box::pin(async move {
-                let r = config.object_store.get(file_meta.location()).await?;
-                match r.payload {
-                    GetResultPayload::File(file, _) => {
-                        let reader = config.open(file)?;
-                        Ok(futures::stream::iter(reader).boxed())
-                    }
-                    GetResultPayload::Stream(_) => {
-                        let bytes = r.bytes().await?;
-                        let reader = config.open(bytes.reader())?;
-                        Ok(futures::stream::iter(reader).boxed())
-                    }
-                }
-            }))
-        }
-    }
-
-    pub struct AvroOpener {
-        pub config: Arc<AvroSource>,
-        pub object_store: Arc<dyn ObjectStore>,
-    }
-
-    impl FileOpener for AvroOpener {
-        fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
-            let config = Arc::clone(&self.config);
-            let object_store = Arc::clone(&self.object_store);
-            Ok(Box::pin(async move {
-                let r = object_store.get(file_meta.location()).await?;
-                match r.payload {
-                    GetResultPayload::File(file, _) => {
-                        let reader = config.open(file)?;
-                        Ok(futures::stream::iter(reader).boxed())
-                    }
-                    GetResultPayload::Stream(_) => {
-                        let bytes = r.bytes().await?;
-                        let reader = config.open(bytes.reader())?;
-                        Ok(futures::stream::iter(reader).boxed())
-                    }
-                }
-            }))
-        }
-    }
-}
+pub use datafusion_datasource_avro::source::*;
 
 #[cfg(test)]
-#[cfg(feature = "avro")]
 mod tests {
-    use super::*;
-    use crate::arrow::datatypes::{DataType, Field, SchemaBuilder};
-    use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
-    use crate::datasource::listing::PartitionedFile;
-    use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::prelude::SessionContext;
-    use crate::scalar::ScalarValue;
-    use crate::test::object_store::local_unpartitioned_file;
 
+    use std::sync::Arc;
+
+    use crate::prelude::SessionContext;
+    use crate::test::object_store::local_unpartitioned_file;
+    use arrow::datatypes::{DataType, Field, SchemaBuilder};
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::{test_util, Result, ScalarValue};
+    use datafusion_datasource::file_format::FileFormat;
+    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_datasource::PartitionedFile;
+    use datafusion_datasource_avro::source::AvroSource;
+    use datafusion_datasource_avro::AvroFormat;
+    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::ExecutionPlan;
 
     use futures::StreamExt;
+    use insta::assert_snapshot;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
@@ -385,7 +72,7 @@ mod tests {
         let url = Url::parse("file://").unwrap();
         session_ctx.register_object_store(&url, store.clone());
 
-        let testdata = crate::test_util::arrow_test_data();
+        let testdata = test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let meta = local_unpartitioned_file(filename);
 
@@ -417,22 +104,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+-------------+",
-            "| id | bool_col | tinyint_col |",
-            "+----+----------+-------------+",
-            "| 4  | true     | 0           |",
-            "| 5  | false    | 1           |",
-            "| 6  | true     | 0           |",
-            "| 7  | false    | 1           |",
-            "| 2  | true     | 0           |",
-            "| 3  | false    | 1           |",
-            "| 0  | true     | 0           |",
-            "| 1  | false    | 1           |",
-            "+----+----------+-------------+",
-        ];
-
-        crate::assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+-------------+
+            | id | bool_col | tinyint_col |
+            +----+----------+-------------+
+            | 4  | true     | 0           |
+            | 5  | false    | 1           |
+            | 6  | true     | 0           |
+            | 7  | false    | 1           |
+            | 2  | true     | 0           |
+            | 3  | false    | 1           |
+            | 0  | true     | 0           |
+            | 1  | false    | 1           |
+            +----+----------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -451,7 +136,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
 
-        let testdata = crate::test_util::arrow_test_data();
+        let testdata = test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
@@ -491,22 +176,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+-------------+-------------+",
-            "| id | bool_col | tinyint_col | missing_col |",
-            "+----+----------+-------------+-------------+",
-            "| 4  | true     | 0           |             |",
-            "| 5  | false    | 1           |             |",
-            "| 6  | true     | 0           |             |",
-            "| 7  | false    | 1           |             |",
-            "| 2  | true     | 0           |             |",
-            "| 3  | false    | 1           |             |",
-            "| 0  | true     | 0           |             |",
-            "| 1  | false    | 1           |             |",
-            "+----+----------+-------------+-------------+",
-        ];
-
-        crate::assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+-------------+-------------+
+            | id | bool_col | tinyint_col | missing_col |
+            +----+----------+-------------+-------------+
+            | 4  | true     | 0           |             |
+            | 5  | false    | 1           |             |
+            | 6  | true     | 0           |             |
+            | 7  | false    | 1           |             |
+            | 2  | true     | 0           |             |
+            | 3  | false    | 1           |             |
+            | 0  | true     | 0           |             |
+            | 1  | false    | 1           |             |
+            +----+----------+-------------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -525,7 +208,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
 
-        let testdata = crate::test_util::arrow_test_data();
+        let testdata = test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
@@ -566,21 +249,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = [
-            "+----+----------+------------+-------------+",
-            "| id | bool_col | date       | tinyint_col |",
-            "+----+----------+------------+-------------+",
-            "| 4  | true     | 2021-10-26 | 0           |",
-            "| 5  | false    | 2021-10-26 | 1           |",
-            "| 6  | true     | 2021-10-26 | 0           |",
-            "| 7  | false    | 2021-10-26 | 1           |",
-            "| 2  | true     | 2021-10-26 | 0           |",
-            "| 3  | false    | 2021-10-26 | 1           |",
-            "| 0  | true     | 2021-10-26 | 0           |",
-            "| 1  | false    | 2021-10-26 | 1           |",
-            "+----+----------+------------+-------------+",
-        ];
-        crate::assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----------+------------+-------------+
+            | id | bool_col | date       | tinyint_col |
+            +----+----------+------------+-------------+
+            | 4  | true     | 2021-10-26 | 0           |
+            | 5  | false    | 2021-10-26 | 1           |
+            | 6  | true     | 2021-10-26 | 0           |
+            | 7  | false    | 2021-10-26 | 1           |
+            | 2  | true     | 2021-10-26 | 0           |
+            | 3  | false    | 2021-10-26 | 1           |
+            | 0  | true     | 2021-10-26 | 0           |
+            | 1  | false    | 2021-10-26 | 1           |
+            +----+----------+------------+-------------+
+        "###);}
 
         let batch = results.next().await;
         assert!(batch.is_none());

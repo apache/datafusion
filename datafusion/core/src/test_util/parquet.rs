@@ -26,7 +26,7 @@ use crate::common::ToDFSchema;
 use crate::config::ConfigOptions;
 use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
 use crate::datasource::object_store::ObjectStoreUrl;
-use crate::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use crate::datasource::physical_plan::ParquetSource;
 use crate::error::Result;
 use crate::logical_expr::execution_props::ExecutionProps;
 use crate::logical_expr::simplify::SimplifyContext;
@@ -37,7 +37,8 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::source::DataSourceExec;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -199,18 +200,12 @@ impl TestParquetFile {
     /// Recursively searches for DataSourceExec and returns the metrics
     /// on the first one it finds
     pub fn parquet_metrics(plan: &Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
-        if let Some(maybe_file) = plan.as_any().downcast_ref::<DataSourceExec>() {
-            let source = maybe_file.source();
-            if let Some(maybe_parquet) = source.as_any().downcast_ref::<FileScanConfig>()
+        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+            if data_source_exec
+                .downcast_to_file_source::<ParquetSource>()
+                .is_some()
             {
-                if maybe_parquet
-                    .file_source()
-                    .as_any()
-                    .downcast_ref::<ParquetSource>()
-                    .is_some()
-                {
-                    return maybe_file.metrics();
-                }
+                return data_source_exec.metrics();
             }
         }
 

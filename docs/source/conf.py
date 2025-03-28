@@ -34,7 +34,7 @@
 # -- Project information -----------------------------------------------------
 
 project = 'Apache DataFusion'
-copyright = '2019-2024, Apache Software Foundation'
+copyright = '2019-2025, Apache Software Foundation'
 author = 'Apache Software Foundation'
 
 
@@ -104,10 +104,6 @@ html_logo = "_static/images/2x_bgwhite_original.png"
 
 html_css_files = [
     "theme_overrides.css"
-]
-
-html_js_files = [
-    ("https://buttons.github.io/buttons.js", {'async': 'true', 'defer': 'true'}),
 ]
 
 html_sidebars = {

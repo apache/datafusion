@@ -18,11 +18,12 @@
 extern crate criterion;
 
 use arrow::array::{ArrayRef, Int64Array, OffsetSizeTrait};
+use arrow::datatypes::DataType;
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode;
 use std::sync::Arc;
 
@@ -109,8 +110,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             format!("substr_string_view [size={}, strlen={}]", size, len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
+                    black_box(substr.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8View,
+                    }))
                 })
             },
         );
@@ -120,8 +124,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             format!("substr_string [size={}, strlen={}]", size, len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
+                    black_box(substr.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8View,
+                    }))
                 })
             },
         );
@@ -131,8 +138,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             format!("substr_large_string [size={}, strlen={}]", size, len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
+                    black_box(substr.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8View,
+                    }))
                 })
             },
         );
@@ -154,8 +164,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
+                    black_box(substr.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8View,
+                    }))
                 })
             },
         );
@@ -168,8 +181,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
+                    black_box(substr.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8View,
+                    }))
                 })
             },
         );
@@ -182,8 +198,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
+                    black_box(substr.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8View,
+                    }))
                 })
             },
         );
@@ -205,8 +224,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
+                    black_box(substr.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8View,
+                    }))
                 })
             },
         );
@@ -219,8 +241,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
+                    black_box(substr.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8View,
+                    }))
                 })
             },
         );
@@ -233,8 +258,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(substr.invoke_batch(&args, size))
+                    black_box(substr.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8View,
+                    }))
                 })
             },
         );

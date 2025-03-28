@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::{any::Any, str::FromStr, sync::Arc};
 
-use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
+use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
 use super::{ListingTableUrl, PartitionedFile};
 
 use crate::datasource::{
@@ -29,15 +29,17 @@ use crate::datasource::{
         file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
     },
     get_statistics_with_limit,
-    physical_plan::{FileScanConfig, FileSinkConfig},
+    physical_plan::FileSinkConfig,
 };
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
-use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
+use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_common::{
@@ -53,6 +55,7 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -614,6 +617,7 @@ impl ListingOptions {
 /// using an  [`ObjectStore`] instance, for example from local files or objects
 /// from AWS S3.
 ///
+/// # Reading Directories
 /// For example, given the `table1` directory (or object store prefix)
 ///
 /// ```text
@@ -649,13 +653,19 @@ impl ListingOptions {
 /// If the query has a predicate like `WHERE date = '2024-06-01'`
 /// only the corresponding directory will be read.
 ///
-/// `ListingTable` also supports filter and projection pushdown for formats that
+/// `ListingTable` also supports limit, filter and projection pushdown for formats that
 /// support it as such as Parquet.
+///
+/// # Implementation
+///
+/// `ListingTable` Uses [`DataSourceExec`] to execute the data. See that struct
+/// for more details.
+///
+/// [`DataSourceExec`]: crate::datasource::source::DataSourceExec
 ///
 /// # Example
 ///
-/// Here is an example of reading a directory of parquet files using a
-/// [`ListingTable`]:
+/// To read a directory of parquet files using a [`ListingTable`]:
 ///
 /// ```no_run
 /// # use datafusion::prelude::SessionContext;
@@ -1022,15 +1032,16 @@ impl TableProvider for ListingTable {
         )
         .await?;
 
-        let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
+        let file_group = file_list_stream.try_collect::<Vec<_>>().await?.into();
         let keep_partition_by_columns =
             state.config_options().execution.keep_partition_by_columns;
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
+            original_url: String::default(),
             object_store_url: self.table_paths()[0].object_store(),
             table_paths: self.table_paths().clone(),
-            file_groups,
+            file_group,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             insert_op,
@@ -1078,7 +1089,7 @@ impl ListingTable {
         ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
+    ) -> Result<(Vec<FileGroup>, Statistics)> {
         let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
@@ -1096,7 +1107,9 @@ impl ListingTable {
             )
         }))
         .await?;
-        let file_list = stream::iter(file_list).flatten();
+        let meta_fetch_concurrency =
+            ctx.config_options().execution.meta_fetch_concurrency;
+        let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
         // collect the statistics if required by the config
         let files = file_list
             .map(|part_file| async {
@@ -1113,7 +1126,7 @@ impl ListingTable {
                 }
             })
             .boxed()
-            .buffered(ctx.config_options().execution.meta_fetch_concurrency);
+            .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
         let (files, statistics) = get_statistics_with_limit(
             files,
@@ -1124,7 +1137,7 @@ impl ListingTable {
         .await?;
 
         Ok((
-            split_files(files, self.options.target_partitions),
+            files.split_files(self.options.target_partitions),
             statistics,
         ))
     }
@@ -1171,7 +1184,6 @@ impl ListingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::avro::AvroFormat;
     use crate::datasource::file_format::csv::CsvFormat;
     use crate::datasource::file_format::json::JsonFormat;
     #[cfg(feature = "parquet")]
@@ -1179,21 +1191,21 @@ mod tests {
     use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
-    use crate::{
-        assert_batches_eq,
-        test::{columns, object_store::register_test_store},
-    };
-    use datafusion_physical_plan::collect;
+    use crate::test::{columns, object_store::register_test_store};
 
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::stats::Precision;
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_plan::collect;
     use datafusion_physical_plan::ExecutionPlanProperties;
 
+    use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
     use tempfile::TempDir;
+    use url::Url;
 
     #[tokio::test]
     async fn read_single_file() -> Result<()> {
@@ -1237,6 +1249,7 @@ mod tests {
 
         let exec = table.scan(&state, None, &[], None).await?;
         assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
 
         Ok(())
@@ -1293,7 +1306,7 @@ mod tests {
                 vec![vec![
                     col("int_col").add(lit(1)).sort(true, true),
                 ]],
-                Err("Expected single column references in output_ordering, got int_col + Int32(1)"),
+                Err("Expected single column reference in sort_order[0][0], got int_col + Int32(1)"),
             ),
             // ok with one column
             (
@@ -1362,11 +1375,14 @@ mod tests {
     #[tokio::test]
     async fn read_empty_table() -> Result<()> {
         let ctx = SessionContext::new();
-        let path = String::from("table/p1=v1/file.avro");
+        let path = String::from("table/p1=v1/file.json");
         register_test_store(&ctx, &[(&path, 100)]);
 
-        let opt = ListingOptions::new(Arc::new(AvroFormat {}))
-            .with_file_extension(AvroFormat.get_ext())
+        let format = JsonFormat::default();
+        let ext = format.get_ext();
+
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension(ext)
             .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)])
             .with_target_partitions(4);
 
@@ -1476,9 +1492,9 @@ mod tests {
         // files that don't match the prefix or the default file extention
         assert_list_files_for_scan_grouping(
             &[
-                "bucket/key-prefix/file0.avro",
+                "bucket/key-prefix/file0.json",
                 "bucket/key-prefix/file1.parquet",
-                "bucket/other-prefix/roguefile.avro",
+                "bucket/other-prefix/roguefile.json",
             ],
             "test:///bucket/key-prefix/",
             10,
@@ -1566,14 +1582,89 @@ mod tests {
         // files that don't match the prefix or the default file ext
         assert_list_files_for_multi_paths(
             &[
-                "bucket/key1/file0.avro",
+                "bucket/key1/file0.json",
                 "bucket/key1/file1.csv",
-                "bucket/key1/file2.avro",
+                "bucket/key1/file2.json",
                 "bucket/key2/file3.csv",
-                "bucket/key2/file4.avro",
+                "bucket/key2/file4.json",
                 "bucket/key3/file5.csv",
             ],
             &["test:///bucket/key1/", "test:///bucket/key3/"],
+            2,
+            2,
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_assert_list_files_for_exact_paths() -> Result<()> {
+        // more expected partitions than files
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+            ],
+            12,
+            5,
+            Some(""),
+        )
+        .await?;
+
+        // more files than meta_fetch_concurrency (32)
+        let files: Vec<String> =
+            (0..64).map(|i| format!("bucket/key1/file{}", i)).collect();
+        // Collect references to each string
+        let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
+        assert_list_files_for_exact_paths(file_refs.as_slice(), 5, 5, Some("")).await?;
+
+        // as many expected partitions as files
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+            ],
+            5,
+            5,
+            Some(""),
+        )
+        .await?;
+
+        // more files as expected partitions
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+            ],
+            2,
+            2,
+            Some(""),
+        )
+        .await?;
+
+        // no files => no groups
+        assert_list_files_for_exact_paths(&[], 2, 0, Some("")).await?;
+
+        // files that don't match the default file ext
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0.json",
+                "bucket/key1/file1.csv",
+                "bucket/key1/file2.json",
+                "bucket/key2/file3.csv",
+                "bucket/key2/file4.json",
+                "bucket/key3/file5.csv",
+            ],
             2,
             2,
             None,
@@ -1609,9 +1700,7 @@ mod tests {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
-        let format = AvroFormat {};
-
-        let opt = ListingOptions::new(Arc::new(format))
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
             .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
 
@@ -1643,9 +1732,7 @@ mod tests {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
-        let format = AvroFormat {};
-
-        let opt = ListingOptions::new(Arc::new(format))
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
             .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
 
@@ -1654,6 +1741,56 @@ mod tests {
         let table_paths = table_prefix
             .iter()
             .map(|t| ListingTableUrl::parse(t).unwrap())
+            .collect();
+        let config = ListingTableConfig::new_with_multi_paths(table_paths)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema));
+
+        let table = ListingTable::try_new(config)?;
+
+        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+
+        assert_eq!(file_list.len(), output_partitioning);
+
+        Ok(())
+    }
+
+    /// Check that the files listed by the table match the specified `output_partitioning`
+    /// when the object store contains `files`, and validate that file metadata is fetched
+    /// concurrently
+    async fn assert_list_files_for_exact_paths(
+        files: &[&str],
+        target_partitions: usize,
+        output_partitioning: usize,
+        file_ext: Option<&str>,
+    ) -> Result<()> {
+        let ctx = SessionContext::new();
+        let (store, _) = make_test_store_and_state(
+            &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>(),
+        );
+
+        let meta_fetch_concurrency = ctx
+            .state()
+            .config_options()
+            .execution
+            .meta_fetch_concurrency;
+        let expected_concurrency = files.len().min(meta_fetch_concurrency);
+        let head_blocking_store = ensure_head_concurrency(store, expected_concurrency);
+
+        let url = Url::parse("test://").unwrap();
+        ctx.register_object_store(&url, head_blocking_store.clone());
+
+        let format = JsonFormat::default();
+
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension_opt(file_ext)
+            .with_target_partitions(target_partitions);
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+
+        let table_paths = files
+            .iter()
+            .map(|t| ListingTableUrl::parse(format!("test:///{}", t)).unwrap())
             .collect();
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
             .with_listing_options(opt)
@@ -1704,6 +1841,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn test_insert_into_append_2_new_parquet_files_defaults() -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
@@ -1722,6 +1860,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn test_insert_into_append_1_new_parquet_files_defaults() -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
@@ -2008,6 +2147,7 @@ mod tests {
                     )
                     .await?;
             }
+            #[cfg(feature = "parquet")]
             "parquet" => {
                 session_ctx
                     .register_parquet(
@@ -2017,6 +2157,7 @@ mod tests {
                     )
                     .await?;
             }
+            #[cfg(feature = "avro")]
             "avro" => {
                 session_ctx
                     .register_avro(
@@ -2066,16 +2207,14 @@ mod tests {
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &res);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Read the records in the table
         let batches = session_ctx
@@ -2083,16 +2222,14 @@ mod tests {
             .await?
             .collect()
             .await?;
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Assert that `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -2106,17 +2243,14 @@ mod tests {
 
         // Again, execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
-        // Insert returns the number of rows written, in our case this would be 6.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &res);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Read the contents of the table
         let batches = session_ctx
@@ -2125,17 +2259,13 @@ mod tests {
             .collect()
             .await?;
 
-        // Define the expected result after the second append.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 40    |",
-            "+-------+",
-        ];
-
-        // Assert that the batches read from the file after the second append match the expected result.
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 40    |
+            +-------+
+        "###);}
 
         // Assert that another `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -2191,16 +2321,15 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+-----+-----+---+",
-            "| a   | b   | c |",
-            "+-----+-----+---+",
-            "| foo | bar | 1 |",
-            "| foo | bar | 2 |",
-            "| foo | bar | 3 |",
-            "+-----+-----+---+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-----+-----+---+
+            | a   | b   | c |
+            +-----+-----+---+
+            | foo | bar | 1 |
+            | foo | bar | 2 |
+            | foo | bar | 3 |
+            +-----+-----+---+
+        "###);}
 
         Ok(())
     }

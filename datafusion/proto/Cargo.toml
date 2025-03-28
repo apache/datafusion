@@ -31,14 +31,17 @@ rust-version = { workspace = true }
 # Exclude proto files so crates.io consumers don't need protoc
 exclude = ["*.proto"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lib]
 name = "datafusion_proto"
-path = "src/lib.rs"
 
 [features]
 default = ["parquet"]
-json = ["pbjson", "serde", "serde_json"]
+json = ["pbjson", "serde", "serde_json", "datafusion-proto-common/json"]
 parquet = ["datafusion/parquet", "datafusion-common/parquet"]
+avro = ["datafusion/avro", "datafusion-common/avro"]
 
 [dependencies]
 arrow = { workspace = true }

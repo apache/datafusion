@@ -42,6 +42,7 @@ mod tests {
 
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+        ctx.state().create_physical_plan(&plan).await?;
         Ok(format!("{}", plan))
     }
 
@@ -452,6 +453,45 @@ mod tests {
             \n            Filter: ORDERS.O_CUSTKEY = ORDERS.O_ORDERKEY\
             \n              TableScan: ORDERS\
             \n          TableScan: CUSTOMER"
+        );
+        Ok(())
+    }
+
+    async fn test_plan_to_string(name: &str) -> Result<String> {
+        let path = format!("tests/testdata/test_plans/{name}");
+        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
+            File::open(path).expect("file not found"),
+        ))
+        .expect("failed to parse json");
+
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+        ctx.state().create_physical_plan(&plan).await?;
+        Ok(format!("{}", plan))
+    }
+
+    #[tokio::test]
+    async fn test_select_count_from_select_1() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("select_count_from_select_1.substrait.json").await?;
+
+        assert_eq!(
+            plan_str,
+            "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
+            \n  Values: (Int64(0))"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_select_window_count() -> Result<()> {
+        let plan_str = test_plan_to_string("select_window_count.substrait.json").await?;
+
+        assert_eq!(
+            plan_str,
+            "Projection: count(Int64(1)) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR\
+            \n  WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]\
+            \n    TableScan: DATA"
         );
         Ok(())
     }

@@ -28,6 +28,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -50,3 +53,4 @@ recursive = { workspace = true, optional = true }
 [dev-dependencies]
 datafusion-expr = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+insta = { workspace = true }

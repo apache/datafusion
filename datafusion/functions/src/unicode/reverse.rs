@@ -85,11 +85,11 @@ impl ScalarUDFImpl for ReverseFunc {
         utf8_to_str_type(&arg_types[0], "reverse")
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = &args.args;
         match args[0].data_type() {
             Utf8 | Utf8View => make_scalar_function(reverse::<i32>, vec![])(args),
             LargeUtf8 => make_scalar_function(reverse::<i64>, vec![])(args),

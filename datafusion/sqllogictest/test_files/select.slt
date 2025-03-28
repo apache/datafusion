@@ -1541,20 +1541,22 @@ LIMIT 4)
 GROUP BY c2;
 ----
 logical_plan
-01)Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[count(Int64(1)) AS count(*)]]
-02)--Projection: aggregate_test_100.c2
-03)----Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST, fetch=4
-04)------Projection: aggregate_test_100.c2, aggregate_test_100.c1
-05)--------TableScan: aggregate_test_100 projection=[c1, c2]
+01)Projection: aggregate_test_100.c2, count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[count(Int64(1))]]
+03)----Projection: aggregate_test_100.c2
+04)------Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST, fetch=4
+05)--------Projection: aggregate_test_100.c2, aggregate_test_100.c1
+06)----------TableScan: aggregate_test_100 projection=[c1, c2]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[count(*)]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
-04)------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(*)]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------ProjectionExec: expr=[c2@0 as c2]
-07)------------SortExec: TopK(fetch=4), expr=[c1@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c1], file_type=csv, has_header=true
+01)ProjectionExec: expr=[c2@0 as c2, count(Int64(1))@1 as count(*)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[count(Int64(1))]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
+05)--------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(Int64(1))]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------ProjectionExec: expr=[c2@0 as c2]
+08)--------------SortExec: TopK(fetch=4), expr=[c1@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c1], file_type=csv, has_header=true
 
 # FilterExec can track equality of non-column expressions.
 # plan below shouldn't have a SortExec because given column 'a' is ordered.
@@ -1818,6 +1820,9 @@ query I
 select a from t;
 ----
 
+statement count 0
+drop table t;
+
 statement ok
 set datafusion.optimizer.max_passes=3;
 
@@ -1840,3 +1845,29 @@ SELECT t1.v1 FROM (SELECT 1 AS "t1.v1");
 # Test issue: https://github.com/apache/datafusion/issues/14124
 query error DataFusion error: Arrow error: Arithmetic overflow: Overflow happened on: 10000 \* 100000000000000000000000000000000000
 SELECT ('0.54321543215432154321543215432154321'::DECIMAL(35,35) + 10000)::VARCHAR
+
+# where_selection_with_ambiguous_column
+statement ok
+CREATE TABLE t(a int, b int, id int);
+
+query error DataFusion error: Schema error: Ambiguous reference to unqualified field id
+select * from t a, t b where id = id + 1;
+
+statement count 0
+drop table t;
+
+
+# test wildcard + other columns
+statement count 0
+create table t(a int) as values (1), (2), (3), (1);
+
+query II
+select *, count(*) over() as ta from t;
+----
+1 4
+2 4
+3 4
+1 4
+
+statement count 0
+drop table t;

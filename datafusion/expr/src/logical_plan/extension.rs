@@ -82,17 +82,6 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// For example: `TopK: k=10`
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result;
 
-    #[deprecated(since = "39.0.0", note = "use with_exprs_and_inputs instead")]
-    #[allow(clippy::wrong_self_convention)]
-    fn from_template(
-        &self,
-        exprs: &[Expr],
-        inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode> {
-        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
-            .unwrap()
-    }
-
     /// Create a new `UserDefinedLogicalNode` with the specified children
     /// and expressions. This function is used during optimization
     /// when the plan is being rewritten and a new instance of the
@@ -281,13 +270,6 @@ pub trait UserDefinedLogicalNodeCore:
     ///
     /// For example: `TopK: k=10`
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result;
-
-    #[deprecated(since = "39.0.0", note = "use with_exprs_and_inputs instead")]
-    #[allow(clippy::wrong_self_convention)]
-    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
-        self.with_exprs_and_inputs(exprs.to_vec(), inputs.to_vec())
-            .unwrap()
-    }
 
     /// Create a new `UserDefinedLogicalNode` with the specified children
     /// and expressions. This function is used during optimization
