@@ -251,7 +251,7 @@ impl TableProvider for MemTable {
             source = source.try_with_sort_information(file_sort_order)?;
         }
 
-        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+        Ok(DataSourceExec::from_data_source(source))
     }
 
     /// Returns an ExecutionPlan that inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].

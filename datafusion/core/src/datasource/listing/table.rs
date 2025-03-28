@@ -34,7 +34,7 @@ use crate::datasource::{
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
@@ -942,7 +942,7 @@ impl TableProvider for ListingTable {
             .format
             .create_physical_plan(
                 session_state,
-                FileScanConfig::new(
+                FileScanConfigBuilder::new(
                     object_store_url,
                     Arc::clone(&self.file_schema),
                     self.options.format.file_source(),
@@ -953,7 +953,8 @@ impl TableProvider for ListingTable {
                 .with_projection(projection.cloned())
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
-                .with_table_partition_cols(table_partition_cols),
+                .with_table_partition_cols(table_partition_cols)
+                .build(),
                 filters.as_ref(),
             )
             .await
