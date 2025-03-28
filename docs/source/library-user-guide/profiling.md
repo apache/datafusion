@@ -103,7 +103,7 @@ samply record --profile profiling ./my-application my-arguments
 
 ### Profile the benchmark
 
-[Set up benchmarks](../../../benchmarks/README.md#running-the-benchmarks) if not yet done
+[Set up benchmarks](https://github.com/apache/datafusion/blob/main/benchmarks/README.md#running-the-benchmarks) if not yet done
 
 Example: Profile Q22 query from TPC-H benchmark
 
