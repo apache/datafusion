@@ -150,7 +150,7 @@ impl AggregateUDFImpl for Avg {
                 Ok(Box::new(DurationAvgAccumulator {
                     sum: None,
                     count: 0,
-                    unit: target_unit.clone(),
+                    unit: *target_unit,
                 }))
             }
 
