@@ -23,9 +23,6 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::can_expr_be_pushed_down_with_schemas;
-use crate::source::ParquetSource;
-
 use arrow::array::RecordBatch;
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -45,7 +42,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
     FileFormat, FileFormatFactory, FilePushdownSupport,
 };
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
@@ -61,8 +58,11 @@ use datafusion_physical_plan::Accumulator;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
+use crate::can_expr_be_pushed_down_with_schemas;
+use crate::source::ParquetSource;
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion_datasource::source::DataSourceExec;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::debug;
@@ -417,7 +417,11 @@ impl FileFormat for ParquetFormat {
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
-        Ok(conf.with_source(Arc::new(source)).build())
+
+        let conf = FileScanConfigBuilder::from(conf)
+            .with_source(Arc::new(source))
+            .build();
+        Ok(DataSourceExec::from_data_source(conf))
     }
 
     async fn create_writer_physical_plan(

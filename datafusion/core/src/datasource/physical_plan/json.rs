@@ -49,6 +49,8 @@ mod tests {
     use arrow::datatypes::SchemaRef;
     use arrow::datatypes::{Field, SchemaBuilder};
     use datafusion_datasource::file_groups::FileGroup;
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_datasource::source::DataSourceExec;
     use insta::assert_snapshot;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
@@ -168,7 +170,7 @@ mod tests {
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
-        use datafusion_datasource::file_scan_config::FileScanConfig;
+
         use futures::StreamExt;
 
         let tmp_dir = TempDir::new()?;
@@ -176,11 +178,12 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_limit(Some(3))
-            .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.build();
+            .with_file_compression_type(file_compression_type.to_owned())
+            .build();
+        let exec = DataSourceExec::from_data_source(conf);
 
         // TODO: this is not where schema inference should be tested
 
@@ -232,7 +235,7 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         use arrow::datatypes::DataType;
-        use datafusion_datasource::file_scan_config::FileScanConfig;
+
         use futures::StreamExt;
 
         let session_ctx = SessionContext::new();
@@ -250,11 +253,12 @@ mod tests {
         let missing_field_idx = file_schema.fields.len() - 1;
 
         let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_limit(Some(3))
-            .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.build();
+            .with_file_compression_type(file_compression_type.to_owned())
+            .build();
+        let exec = DataSourceExec::from_data_source(conf);
 
         let mut it = exec.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
@@ -282,7 +286,6 @@ mod tests {
     async fn nd_json_exec_file_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        use datafusion_datasource::file_scan_config::FileScanConfig;
         use futures::StreamExt;
 
         let session_ctx = SessionContext::new();
@@ -293,11 +296,12 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_projection(Some(vec![0, 2]))
-            .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.build();
+            .with_file_compression_type(file_compression_type.to_owned())
+            .build();
+        let exec = DataSourceExec::from_data_source(conf);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
 
@@ -330,7 +334,6 @@ mod tests {
     async fn nd_json_exec_file_mixed_order_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        use datafusion_datasource::file_scan_config::FileScanConfig;
         use futures::StreamExt;
 
         let session_ctx = SessionContext::new();
@@ -341,11 +344,12 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_projection(Some(vec![3, 0, 2]))
-            .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.build();
+            .with_file_compression_type(file_compression_type.to_owned())
+            .build();
+        let exec = DataSourceExec::from_data_source(conf);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 3);
 

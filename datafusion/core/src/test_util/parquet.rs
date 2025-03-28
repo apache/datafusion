@@ -37,7 +37,7 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -157,7 +157,7 @@ impl TestParquetFile {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let parquet_options = ctx.copied_table_options().parquet;
         let source = Arc::new(ParquetSource::new(parquet_options.clone()));
-        let scan_config = FileScanConfig::new(
+        let scan_config_builder = FileScanConfigBuilder::new(
             self.object_store_url.clone(),
             Arc::clone(&self.schema),
             source,
@@ -183,15 +183,17 @@ impl TestParquetFile {
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
 
             let source = Arc::new(ParquetSource::new(parquet_options).with_predicate(
-                Arc::clone(&scan_config.file_schema),
+                Arc::clone(&self.schema),
                 Arc::clone(&physical_filter_expr),
             ));
-            let parquet_exec = scan_config.with_source(source).build();
+            let config = scan_config_builder.with_source(source).build();
+            let parquet_exec = DataSourceExec::from_data_source(config);
 
             let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
-            Ok(scan_config.build())
+            let config = scan_config_builder.build();
+            Ok(DataSourceExec::from_data_source(config))
         }
     }
 

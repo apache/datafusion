@@ -195,6 +195,10 @@ impl ExecutionPlan for DataSourceExec {
 }
 
 impl DataSourceExec {
+    pub fn from_data_source(data_source: impl DataSource + 'static) -> Arc<Self> {
+        Arc::new(Self::new(Arc::new(data_source)))
+    }
+
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
         let cache = Self::compute_properties(Arc::clone(&data_source));
         Self { data_source, cache }

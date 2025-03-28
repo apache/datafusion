@@ -61,7 +61,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::test_util::batches_to_sort_string;
-    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
@@ -72,6 +72,7 @@ mod tests {
 
     use ::object_store::path::Path;
     use ::object_store::ObjectMeta;
+    use datafusion_datasource::source::DataSourceExec;
     use datafusion_physical_plan::collect;
     use tempfile::TempDir;
 
@@ -128,11 +129,15 @@ mod tests {
             ParquetSource::default()
                 .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
         );
-        let base_conf =
-            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
-                .with_file(partitioned_file);
+        let base_conf = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            schema,
+            source,
+        )
+        .with_file(partitioned_file)
+        .build();
 
-        let parquet_exec = base_conf.build();
+        let parquet_exec = DataSourceExec::from_data_source(base_conf);
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
