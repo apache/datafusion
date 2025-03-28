@@ -17,6 +17,7 @@
 
 //! Helper functions for the table implementation
 
+use std::collections::HashMap as StdHashMap;
 use std::mem;
 use std::sync::Arc;
 
@@ -28,7 +29,8 @@ use datafusion_datasource::PartitionedFile;
 use datafusion_expr::{BinaryExpr, Operator};
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray, StringBuilder},
+    array::{Array, ArrayRef, AsArray, BooleanArray, StringBuilder},
+    buffer::BooleanBuffer,
     compute::{and, cast, prep_null_mask_filter},
     datatypes::{DataType, Field, Fields, Schema},
     record_batch::RecordBatch,
@@ -279,42 +281,18 @@ async fn prune_partitions(
         .collect();
     let schema = Arc::new(Schema::new(fields));
 
-    let df_schema = DFSchema::from_unqualified_fields(
-        partition_cols
-            .iter()
-            .map(|(n, d)| Field::new(n, d.clone(), true))
-            .collect(),
-        Default::default(),
-    )?;
-
     let batch = RecordBatch::try_new(schema, arrays)?;
 
     // TODO: Plumb this down
     let props = ExecutionProps::new();
 
-    // Applies `filter` to `batch` returning `None` on error
-    let do_filter = |filter| -> Result<ArrayRef> {
-        let expr = create_physical_expr(filter, &df_schema, &props)?;
-        expr.evaluate(&batch)?.into_array(partitions.len())
-    };
-
-    //.Compute the conjunction of the filters
-    let mask = filters
-        .iter()
-        .map(|f| do_filter(f).map(|a| a.as_boolean().clone()))
-        .reduce(|a, b| Ok(and(&a?, &b?)?));
-
-    let mask = match mask {
-        Some(Ok(mask)) => mask,
-        Some(Err(err)) => return Err(err),
-        None => return Ok(partitions),
-    };
-
     // Don't retain partitions that evaluated to null
-    let prepared = match mask.null_count() {
-        0 => mask,
-        _ => prep_null_mask_filter(&mask),
-    };
+    let prepared = apply_filters(&batch, filters, &props)?;
+
+    // If all rows are retained, return all partitions
+    if prepared.true_count() == prepared.len() {
+        return Ok(partitions);
+    }
 
     // Sanity check
     assert_eq!(prepared.len(), partitions.len());
@@ -326,6 +304,54 @@ async fn prune_partitions(
         .collect();
 
     Ok(filtered)
+}
+
+/// Applies the given filters to the input batch and returns a boolean mask that represents
+/// the result of the filters applied to each row.
+pub(crate) fn apply_filters(
+    batch: &RecordBatch,
+    filters: &[Expr],
+    props: &ExecutionProps,
+) -> Result<BooleanArray> {
+    if filters.is_empty() {
+        return Ok(BooleanArray::new(
+            BooleanBuffer::new_set(batch.num_rows()),
+            None,
+        ));
+    }
+
+    let num_rows = batch.num_rows();
+
+    let df_schema = DFSchema::from_unqualified_fields(
+        batch.schema().fields().clone(),
+        StdHashMap::default(),
+    )?;
+
+    // Applies `filter` to `batch` returning `None` on error
+    let do_filter = |filter| -> Result<ArrayRef> {
+        let expr = create_physical_expr(filter, &df_schema, props)?;
+        expr.evaluate(batch)?.into_array(num_rows)
+    };
+
+    // Compute the conjunction of the filters
+    let mask = filters
+        .iter()
+        .map(|f| do_filter(f).map(|a| a.as_boolean().clone()))
+        .reduce(|a, b| Ok(and(&a?, &b?)?));
+
+    let mask = match mask {
+        Some(Ok(mask)) => mask,
+        Some(Err(err)) => return Err(err),
+        None => return Ok(BooleanArray::new(BooleanBuffer::new_set(num_rows), None)),
+    };
+
+    // Don't retain rows that evaluated to null
+    let prepared = match mask.null_count() {
+        0 => mask,
+        _ => prep_null_mask_filter(&mask),
+    };
+
+    Ok(prepared)
 }
 
 #[derive(Debug)]
@@ -545,11 +571,40 @@ mod tests {
     use std::ops::Not;
 
     use super::*;
+    use arrow::array::{
+        BooleanArray as ArrowBooleanArray, Int32Array, Int64Array, StringArray,
+    };
     use datafusion_expr::{
         case, col, lit, AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF,
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
+
+    // Helper function for testing prune_partitions
+    async fn test_prune_partitions(
+        table_path: &str,
+        partition_paths: Vec<&str>,
+        filters: &[Expr],
+        partition_cols: &[(String, DataType)],
+    ) -> Result<Vec<String>> {
+        let url = ListingTableUrl::parse(table_path).unwrap();
+
+        // Create partition objects
+        let partitions = partition_paths
+            .into_iter()
+            .map(|path| Partition {
+                path: Path::from(path),
+                depth: path.matches('/').count(),
+                files: None,
+            })
+            .collect();
+
+        // Run the prune_partitions function
+        let pruned = prune_partitions(&url, partitions, filters, partition_cols).await?;
+
+        // Return the paths of the pruned partitions for easier assertion
+        Ok(pruned.into_iter().map(|p| p.path.to_string()).collect())
+    }
 
     #[test]
     fn test_split_files() {
@@ -1003,6 +1058,617 @@ mod tests {
             ),
             Some(Path::from("a=1970-01-05")),
         );
+    }
+
+    #[test]
+    fn test_apply_filters_empty() {
+        // Test with empty filters
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col1", DataType::Int32, false),
+            Field::new("col2", DataType::Utf8, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])),
+            ],
+        )
+        .unwrap();
+
+        let props = ExecutionProps::new();
+        let result = apply_filters(&batch, &[], &props).unwrap();
+
+        // With empty filters, all rows should be selected
+        assert_eq!(result.len(), 5);
+        assert_eq!(result.true_count(), 5);
+
+        let expected_values = [true, true, true, true, true];
+        for (i, val) in expected_values.iter().enumerate() {
+            assert_eq!(result.value(i), *val);
+        }
+    }
+
+    #[test]
+    fn test_apply_filters_single_filter() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col1", DataType::Int32, false),
+            Field::new("col2", DataType::Utf8, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])),
+            ],
+        )
+        .unwrap();
+
+        let props = ExecutionProps::new();
+
+        // Test with a filter on col1
+        let filter = col("col1").gt(lit(3));
+        let result = apply_filters(&batch, &[filter], &props).unwrap();
+
+        assert_eq!(result.len(), 5);
+        assert_eq!(result.true_count(), 2);
+
+        let expected_values = [false, false, false, true, true];
+        for (i, val) in expected_values.iter().enumerate() {
+            assert_eq!(result.value(i), *val);
+        }
+
+        // Test with a filter on col2
+        let filter = col("col2").eq(lit("b"));
+        let result = apply_filters(&batch, &[filter], &props).unwrap();
+
+        assert_eq!(result.len(), 5);
+        assert_eq!(result.true_count(), 1);
+
+        let expected_values = [false, true, false, false, false];
+        for (i, val) in expected_values.iter().enumerate() {
+            assert_eq!(result.value(i), *val);
+        }
+    }
+
+    #[test]
+    fn test_apply_filters_multiple_filters() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col1", DataType::Int32, false),
+            Field::new("col2", DataType::Utf8, false),
+            Field::new("col3", DataType::Boolean, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])),
+                Arc::new(ArrowBooleanArray::from(vec![
+                    true, true, false, true, false,
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let props = ExecutionProps::new();
+
+        // Test with multiple filters (AND semantics)
+        let filter1 = col("col1").gt(lit(2));
+        let filter2 = col("col3").eq(lit(true));
+        let result = apply_filters(&batch, &[filter1, filter2], &props).unwrap();
+
+        assert_eq!(result.len(), 5);
+        assert_eq!(result.true_count(), 1);
+
+        let expected_values = [false, false, false, true, false];
+        for (i, val) in expected_values.iter().enumerate() {
+            assert_eq!(result.value(i), *val);
+        }
+    }
+
+    #[test]
+    fn test_apply_filters_with_nulls() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col1", DataType::Int32, true),
+            Field::new("col2", DataType::Utf8, true),
+        ]));
+
+        // Create arrays with nulls
+        let mut int_builder = Int32Array::builder(5);
+        int_builder.append_value(1);
+        int_builder.append_null();
+        int_builder.append_value(3);
+        int_builder.append_value(4);
+        int_builder.append_null();
+        let int_array = int_builder.finish();
+
+        let mut str_builder = StringBuilder::new();
+        str_builder.append_value("a");
+        str_builder.append_value("b");
+        str_builder.append_null();
+        str_builder.append_value("d");
+        str_builder.append_value("e");
+        let str_array = str_builder.finish();
+
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(int_array), Arc::new(str_array)])
+                .unwrap();
+
+        let props = ExecutionProps::new();
+
+        // Filter that involves nulls
+        let filter = col("col1").is_not_null();
+        let result = apply_filters(&batch, &[filter], &props).unwrap();
+
+        assert_eq!(result.len(), 5);
+        assert_eq!(result.true_count(), 3);
+
+        let expected_values = [true, false, true, true, false];
+        for (i, val) in expected_values.iter().enumerate() {
+            assert_eq!(result.value(i), *val);
+        }
+
+        // Multiple filters with nulls
+        let filter1 = col("col1").is_not_null();
+        let filter2 = col("col2").is_not_null();
+        let result = apply_filters(&batch, &[filter1, filter2], &props).unwrap();
+
+        assert_eq!(result.len(), 5);
+        assert_eq!(result.true_count(), 2);
+
+        let expected_values = [true, false, false, true, false];
+        for (i, val) in expected_values.iter().enumerate() {
+            assert_eq!(result.value(i), *val);
+        }
+    }
+
+    #[test]
+    fn test_apply_filters_with_complex_expressions() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col1", DataType::Int32, false),
+            Field::new("col2", DataType::Int64, false),
+            Field::new("col3", DataType::Utf8, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(Int64Array::from(vec![10, 20, 30, 40, 50])),
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])),
+            ],
+        )
+        .unwrap();
+
+        let props = ExecutionProps::new();
+
+        // Test with a complex filter expression
+        let filter = col("col1")
+            .gt(lit(2))
+            .and(col("col2").lt(lit(50i64))) // Ensure the literal matches the column type
+            .or(col("col3").eq(lit("e")));
+
+        let result = apply_filters(&batch, &[filter], &props).unwrap();
+
+        assert_eq!(result.len(), 5);
+        assert_eq!(result.true_count(), 3);
+
+        // col1 > 2 AND col2 < 50 => row 2 (col1=3, col2=30) and row 3 (col1=4, col2=40)
+        // OR col3 = "e" => row 4 (col3="e")
+        let expected_values = [false, false, true, true, true];
+        for (i, val) in expected_values.iter().enumerate() {
+            assert_eq!(result.value(i), *val);
+        }
+    }
+
+    #[test]
+    fn test_apply_filters_case_expression() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col1", DataType::Int32, false),
+            Field::new("col2", DataType::Utf8, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])),
+            ],
+        )
+        .unwrap();
+
+        let props = ExecutionProps::new();
+
+        // Test with a CASE expression
+        let case_expr = case(col("col1"))
+            .when(lit(1), lit(true))
+            .when(lit(3), lit(true))
+            .when(lit(5), lit(true))
+            .otherwise(lit(false))
+            .unwrap();
+
+        let result = apply_filters(&batch, &[case_expr], &props).unwrap();
+
+        assert_eq!(result.len(), 5);
+        assert_eq!(result.true_count(), 3);
+
+        let expected_values = [true, false, true, false, true];
+        for (i, val) in expected_values.iter().enumerate() {
+            assert_eq!(result.value(i), *val);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prune_partitions_empty_filters() {
+        let table_path = "file:///table";
+        let partition_paths = vec![
+            "table/year=2021/month=01/day=01",
+            "table/year=2021/month=01/day=02",
+            "table/year=2021/month=02/day=01",
+            "table/year=2022/month=01/day=01",
+        ];
+
+        let partition_cols = vec![
+            ("year".to_string(), DataType::Int32),
+            ("month".to_string(), DataType::Int32),
+            ("day".to_string(), DataType::Int32),
+        ];
+
+        // With empty filters, all partitions should be returned
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(pruned.len(), partition_paths.len());
+        for (i, path) in partition_paths.iter().enumerate() {
+            assert_eq!(pruned[i], *path);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prune_partitions_single_filter() {
+        let table_path = "file:///table";
+        let partition_paths = vec![
+            "table/year=2021/month=01/day=01",
+            "table/year=2021/month=01/day=02",
+            "table/year=2021/month=02/day=01",
+            "table/year=2022/month=01/day=01",
+        ];
+
+        let partition_cols = vec![
+            ("year".to_string(), DataType::Int32),
+            ("month".to_string(), DataType::Int32),
+            ("day".to_string(), DataType::Int32),
+        ];
+
+        // Filter by year=2021
+        let filter = col("year").eq(lit(2021));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(pruned.len(), 3);
+        assert_eq!(
+            pruned,
+            vec![
+                "table/year=2021/month=01/day=01",
+                "table/year=2021/month=01/day=02",
+                "table/year=2021/month=02/day=01",
+            ]
+        );
+
+        // Filter by month=01
+        let filter = col("month").eq(lit(1));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(pruned.len(), 3);
+        assert_eq!(
+            pruned,
+            vec![
+                "table/year=2021/month=01/day=01",
+                "table/year=2021/month=01/day=02",
+                "table/year=2022/month=01/day=01",
+            ]
+        );
+
+        // Filter by day=01
+        let filter = col("day").eq(lit(1));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(pruned.len(), 3);
+        assert_eq!(
+            pruned,
+            vec![
+                "table/year=2021/month=01/day=01",
+                "table/year=2021/month=02/day=01",
+                "table/year=2022/month=01/day=01",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prune_partitions_multiple_filters() {
+        let table_path = "file:///table";
+        let partition_paths = vec![
+            "table/year=2021/month=01/day=01",
+            "table/year=2021/month=01/day=02",
+            "table/year=2021/month=02/day=01",
+            "table/year=2022/month=01/day=01",
+            "table/year=2022/month=02/day=02",
+        ];
+
+        let partition_cols = vec![
+            ("year".to_string(), DataType::Int32),
+            ("month".to_string(), DataType::Int32),
+            ("day".to_string(), DataType::Int32),
+        ];
+
+        // Filter by year=2021 AND month=01
+        let filter1 = col("year").eq(lit(2021));
+        let filter2 = col("month").eq(lit(1));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter1, filter2],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(pruned.len(), 2);
+        assert_eq!(
+            pruned,
+            vec![
+                "table/year=2021/month=01/day=01",
+                "table/year=2021/month=01/day=02",
+            ]
+        );
+
+        // Filter by year=2022 AND day=02
+        let filter1 = col("year").eq(lit(2022));
+        let filter2 = col("day").eq(lit(2));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter1, filter2],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(pruned.len(), 1);
+        assert_eq!(pruned, vec!["table/year=2022/month=02/day=02",]);
+    }
+
+    #[tokio::test]
+    async fn test_prune_partitions_complex_filters() {
+        let table_path = "file:///table";
+        let partition_paths = vec![
+            "table/year=2021/month=01/day=01",
+            "table/year=2021/month=01/day=02",
+            "table/year=2021/month=02/day=01",
+            "table/year=2022/month=01/day=01",
+            "table/year=2022/month=02/day=02",
+        ];
+
+        let partition_cols = vec![
+            ("year".to_string(), DataType::Int32),
+            ("month".to_string(), DataType::Int32),
+            ("day".to_string(), DataType::Int32),
+        ];
+
+        // Filter by year=2021 OR day=02
+        let filter = col("year").eq(lit(2021)).or(col("day").eq(lit(2)));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        // This should match all paths with year=2021 or day=02
+        assert_eq!(pruned.len(), 4);
+
+        // Check that all the expected paths are included
+        assert!(pruned.contains(&"table/year=2021/month=01/day=01".to_string()));
+        assert!(pruned.contains(&"table/year=2021/month=01/day=02".to_string()));
+        assert!(pruned.contains(&"table/year=2021/month=02/day=01".to_string()));
+        assert!(pruned.contains(&"table/year=2022/month=02/day=02".to_string()));
+
+        // Filter by (year=2021 AND month=01) OR (day=02 AND year=2022)
+        let filter = col("year")
+            .eq(lit(2021))
+            .and(col("month").eq(lit(1)))
+            .or(col("day").eq(lit(2)).and(col("year").eq(lit(2022))));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(pruned.len(), 3);
+        assert_eq!(
+            pruned,
+            vec![
+                "table/year=2021/month=01/day=01",
+                "table/year=2021/month=01/day=02",
+                "table/year=2022/month=02/day=02",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prune_partitions_no_matches() {
+        let table_path = "file:///table";
+        let partition_paths = vec![
+            "table/year=2021/month=01/day=01",
+            "table/year=2021/month=01/day=02",
+            "table/year=2021/month=02/day=01",
+            "table/year=2022/month=01/day=01",
+        ];
+
+        let partition_cols = vec![
+            ("year".to_string(), DataType::Int32),
+            ("month".to_string(), DataType::Int32),
+            ("day".to_string(), DataType::Int32),
+        ];
+
+        // Filter by year=2023 (no matches)
+        let filter = col("year").eq(lit(2023));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(pruned.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_prune_partitions_range_filters() {
+        let table_path = "file:///table";
+        let partition_paths = vec![
+            "table/year=2020/month=01/day=01",
+            "table/year=2021/month=01/day=01",
+            "table/year=2021/month=06/day=15",
+            "table/year=2022/month=01/day=01",
+            "table/year=2023/month=01/day=01",
+        ];
+
+        let partition_cols = vec![
+            ("year".to_string(), DataType::Int32),
+            ("month".to_string(), DataType::Int32),
+            ("day".to_string(), DataType::Int32),
+        ];
+
+        // Filter by year >= 2021 AND year <= 2022
+        let filter1 = col("year").gt_eq(lit(2021));
+        let filter2 = col("year").lt_eq(lit(2022));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter1, filter2],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(pruned.len(), 3);
+        assert_eq!(
+            pruned,
+            vec![
+                "table/year=2021/month=01/day=01",
+                "table/year=2021/month=06/day=15",
+                "table/year=2022/month=01/day=01",
+            ]
+        );
+
+        // Filter by year > 2021
+        let filter = col("year").gt(lit(2021));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(pruned.len(), 2);
+        assert_eq!(
+            pruned,
+            vec![
+                "table/year=2022/month=01/day=01",
+                "table/year=2023/month=01/day=01",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prune_partitions_with_missing_partition_values() {
+        let table_path = "file:///table";
+        let partition_paths = vec![
+            "table/year=2021/month=01", // missing day partition
+            "table/year=2021/month=01/day=01",
+            "table/year=2021", // missing month and day partitions
+            "table/year=2022/month=01/day=01",
+        ];
+
+        let partition_cols = vec![
+            ("year".to_string(), DataType::Int32),
+            ("month".to_string(), DataType::Int32),
+            ("day".to_string(), DataType::Int32),
+        ];
+
+        // Filter by year=2021
+        let filter = col("year").eq(lit(2021));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        // All partitions with year=2021 should be included,
+        // even those with missing month or day values
+        assert_eq!(pruned.len(), 3);
+        assert!(pruned.contains(&"table/year=2021/month=01".to_string()));
+        assert!(pruned.contains(&"table/year=2021/month=01/day=01".to_string()));
+        assert!(pruned.contains(&"table/year=2021".to_string()));
+
+        // Filter by month=01
+        let filter = col("month").eq(lit(1));
+        let pruned = test_prune_partitions(
+            table_path,
+            partition_paths.clone(),
+            &[filter],
+            &partition_cols,
+        )
+        .await
+        .unwrap();
+
+        // Only partitions with month=01 should be included
+        assert_eq!(pruned.len(), 3);
+        assert!(pruned.contains(&"table/year=2021/month=01".to_string()));
+        assert!(pruned.contains(&"table/year=2021/month=01/day=01".to_string()));
+        assert!(pruned.contains(&"table/year=2022/month=01/day=01".to_string()));
     }
 
     pub fn make_test_store_and_state(

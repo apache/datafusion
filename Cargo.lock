@@ -1929,6 +1929,7 @@ version = "46.0.1"
 dependencies = [
  "arrow",
  "async-trait",
+ "chrono",
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-datasource",
