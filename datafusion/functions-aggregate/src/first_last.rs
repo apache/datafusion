@@ -1139,8 +1139,7 @@ impl Accumulator for TrivialLastValueAccumulator {
         // LAST_VALUE(last1, last2, last3, ...)
         // Second index contains is_set flag.
         let flags = states[1].as_boolean();
-        let filtered_states =
-            filter_states_according_to_is_set(&states[0..1], flags)?;
+        let filtered_states = filter_states_according_to_is_set(&states[0..1], flags)?;
         // If we have any values, take the last one we find:
         if let Some(last) = filtered_states.last() {
             self.last = ScalarValue::try_from_array(last, 0)?;
@@ -1240,12 +1239,13 @@ impl Accumulator for LastValueAccumulator {
             let row = get_row_at_idx(values, last_idx)?;
             let orderings = &row[1..];
             // Update when there is a more recent entry
-            if !self.is_set || compare_rows(
-                &self.orderings,
-                orderings,
-                &get_sort_options(self.ordering_req.as_ref()),
-            )?
-            .is_lt()
+            if !self.is_set
+                || compare_rows(
+                    &self.orderings,
+                    orderings,
+                    &get_sort_options(self.ordering_req.as_ref()),
+                )?
+                .is_lt()
             {
                 self.update_with_new_row(&row);
             }

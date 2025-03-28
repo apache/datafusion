@@ -755,7 +755,7 @@ mod memory_source_tests {
             expr: col("c", &schema)?,
             options: SortOptions::default(),
         }]);
-        let mut expected_output_order = LexOrdering::default();
+        let mut expected_output_order = vec![];
         expected_output_order.extend(sort1.clone());
         expected_output_order.extend(sort2.clone());
 
@@ -767,7 +767,7 @@ mod memory_source_tests {
 
         assert_eq!(
             mem_exec.properties().output_ordering().unwrap(),
-            &expected_output_order
+            &expected_output_order.into()
         );
         let eq_properties = mem_exec.properties().equivalence_properties();
         assert!(eq_properties.oeq_class().contains(&sort1));

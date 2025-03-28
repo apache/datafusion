@@ -1206,7 +1206,7 @@ impl ExecutionPlan for SortExec {
             return Ok(None);
         }
 
-        let mut updated_exprs = LexOrdering::default();
+        let mut updated_exprs = vec![];
         for sort in self.expr() {
             let Some(new_expr) = update_expr(&sort.expr, projection.expr(), false)?
             else {
@@ -1219,9 +1219,12 @@ impl ExecutionPlan for SortExec {
         }
 
         Ok(Some(Arc::new(
-            SortExec::new(updated_exprs, make_with_child(projection, self.input())?)
-                .with_fetch(self.fetch())
-                .with_preserve_partitioning(self.preserve_partitioning()),
+            SortExec::new(
+                updated_exprs.into(),
+                make_with_child(projection, self.input())?,
+            )
+            .with_fetch(self.fetch())
+            .with_preserve_partitioning(self.preserve_partitioning()),
         )))
     }
 }

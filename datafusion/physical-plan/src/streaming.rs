@@ -307,7 +307,7 @@ impl ExecutionPlan for StreamingTableExec {
 
         let mut lex_orderings = vec![];
         for lex_ordering in self.projected_output_ordering().into_iter() {
-            let mut orderings = LexOrdering::default();
+            let mut orderings = vec![];
             for order in lex_ordering {
                 let Some(new_ordering) =
                     update_expr(&order.expr, projection.expr(), false)?
@@ -319,7 +319,7 @@ impl ExecutionPlan for StreamingTableExec {
                     options: order.options,
                 });
             }
-            lex_orderings.push(orderings);
+            lex_orderings.push(orderings.into());
         }
 
         StreamingTableExec::try_new(

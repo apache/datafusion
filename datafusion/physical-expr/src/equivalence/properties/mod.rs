@@ -226,7 +226,7 @@ impl EquivalenceProperties {
         OrderingEquivalenceClass::new(
             self.oeq_class
                 .iter()
-                .map(|ordering| self.normalize_sort_exprs(ordering))
+                .filter_map(|ordering| self.normalize_sort_exprs(ordering))
                 .collect(),
         )
     }
@@ -497,7 +497,7 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
+    pub fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> Option<LexOrdering> {
         let normalized_sort_exprs = self.eq_group.normalize_sort_exprs(sort_exprs);
         let mut constant_exprs = vec![];
         constant_exprs.extend(
@@ -507,12 +507,12 @@ impl EquivalenceProperties {
         );
         let constants_normalized = self.eq_group.normalize_exprs(constant_exprs);
         // Prune redundant sections in the ordering:
-        normalized_sort_exprs
+        let sort_exprs = normalized_sort_exprs
             .iter()
             .filter(|&order| !physical_exprs_contains(&constants_normalized, &order.expr))
             .cloned()
-            .collect::<LexOrdering>()
-            .collapse()
+            .collect::<Vec<_>>();
+        (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs).collapse())
     }
 
     /// Normalizes the given sort requirements (i.e. `sort_reqs`) using the
@@ -552,8 +552,12 @@ impl EquivalenceProperties {
     /// orderings.
     pub fn ordering_satisfy(&self, given: &LexOrdering) -> bool {
         // First, standardize the given ordering:
-        let normalized_ordering = self.normalize_sort_exprs(given);
-        // Check whether given ordering is satisfied by constraints first:
+        let Some(normalized_ordering) = self.normalize_sort_exprs(given) else {
+            // If the requirement vanishes after normalization, it is satisfied
+            // by any ordering.
+            return true;
+        };
+        // Then, check whether given ordering is satisfied by constraints:
         if self.satisfied_by_constraints_ordering(&normalized_ordering) {
             return true;
         }
@@ -810,8 +814,12 @@ impl EquivalenceProperties {
         lhs: &LexOrdering,
         rhs: &LexOrdering,
     ) -> Option<LexOrdering> {
-        let mut lhs = self.normalize_sort_exprs(lhs);
-        let mut rhs = self.normalize_sort_exprs(rhs);
+        let Some(mut rhs) = self.normalize_sort_exprs(rhs) else {
+            return self.normalize_sort_exprs(lhs);
+        };
+        let Some(mut lhs) = self.normalize_sort_exprs(lhs) else {
+            return Some(rhs);
+        };
         lhs.iter_mut()
             .zip(rhs.iter_mut())
             .all(|(lhs, rhs)| lhs.expr.eq(&rhs.expr) && lhs.options == rhs.options)
@@ -1083,8 +1091,13 @@ impl EquivalenceProperties {
                     let mut dependency_orderings =
                         generate_dependency_orderings(&relevant_deps, &dependency_map);
                     // Append `sort_expr` to the dependent orderings:
-                    for ordering in dependency_orderings.iter_mut() {
-                        ordering.push(sort_expr.clone());
+                    if dependency_orderings.is_empty() {
+                        dependency_orderings
+                            .push(LexOrdering::new(vec![sort_expr.clone()]));
+                    } else {
+                        for ordering in dependency_orderings.iter_mut() {
+                            ordering.push(sort_expr.clone());
+                        }
                     }
                     dependency_orderings
                 })
@@ -1100,12 +1113,15 @@ impl EquivalenceProperties {
             if prefixes.is_empty() {
                 // If prefix is empty, there is no dependency. Insert
                 // empty ordering:
-                prefixes = vec![LexOrdering::default()];
-            }
-            // Append current ordering on top its dependencies:
-            for ordering in prefixes.iter_mut() {
                 if let Some(target) = &node.target_sort_expr {
-                    ordering.push(target.clone())
+                    prefixes.push(LexOrdering::new(vec![target.clone()]));
+                }
+            } else {
+                // Append current ordering on top its dependencies:
+                for ordering in prefixes.iter_mut() {
+                    if let Some(target) = &node.target_sort_expr {
+                        ordering.push(target.clone())
+                    }
                 }
             }
             prefixes

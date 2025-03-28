@@ -583,7 +583,7 @@ impl ExecutionPlan for RepartitionExec {
         let schema_captured = Arc::clone(&schema);
 
         // Get existing ordering to use for merging
-        let sort_exprs = self.sort_exprs().cloned().unwrap_or_default();
+        let sort_exprs = self.sort_exprs().cloned();
 
         let stream = futures::stream::once(async move {
             let num_input_partitions = input.output_partitioning().partition_count();
@@ -650,7 +650,7 @@ impl ExecutionPlan for RepartitionExec {
                 StreamingMergeBuilder::new()
                     .with_streams(input_streams)
                     .with_schema(schema_captured)
-                    .with_expressions(&sort_exprs)
+                    .with_expressions(&sort_exprs.unwrap())
                     .with_metrics(BaselineMetrics::new(&metrics, partition))
                     .with_batch_size(context.session_config().batch_size())
                     .with_fetch(fetch)

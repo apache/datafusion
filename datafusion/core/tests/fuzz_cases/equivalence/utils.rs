@@ -114,7 +114,7 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
     };
 
     while !remaining_exprs.is_empty() {
-        let n_sort_expr = rng.gen_range(0..remaining_exprs.len() + 1);
+        let n_sort_expr = rng.gen_range(1..remaining_exprs.len() + 1);
         remaining_exprs.shuffle(&mut rng);
 
         let ordering = remaining_exprs

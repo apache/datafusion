@@ -1545,7 +1545,7 @@ pub fn create_window_expr_with_name(
                 name,
                 &physical_args,
                 &partition_by,
-                &order_by.into(),
+                (!order_by.is_empty()).then(|| order_by.into()),
                 window_frame,
                 physical_schema,
                 ignore_nulls,

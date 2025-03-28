@@ -114,7 +114,7 @@ pub fn create_ordering(
 
     for (group_idx, exprs) in sort_order.iter().enumerate() {
         // Construct PhysicalSortExpr objects from Expr objects:
-        let mut sort_exprs = LexOrdering::default();
+        let mut sort_exprs = vec![];
         for (expr_idx, sort) in exprs.iter().enumerate() {
             match &sort.expr {
                 Expr::Column(col) => match expressions::col(&col.name, schema) {
@@ -142,7 +142,7 @@ pub fn create_ordering(
             }
         }
         if !sort_exprs.is_empty() {
-            all_sort_orders.push(sort_exprs);
+            all_sort_orders.push(LexOrdering::new(sort_exprs));
         }
     }
     Ok(all_sort_orders)

@@ -397,13 +397,10 @@ pub fn generate_dependency_orderings(
             (!prefixes.is_empty()).then_some(prefixes)
         })
         .collect::<Vec<_>>();
+    // Note that if relevant prefixes are empty, there is no dependency,
+    // meaning that dependent is a leading ordering.
 
-    // No dependency, dependent is a leading ordering.
-    if relevant_prefixes.is_empty() {
-        // Return an empty ordering:
-        return vec![LexOrdering::default()];
-    }
-
+    // Generate all possible valid orderings:
     relevant_prefixes
         .into_iter()
         .multi_cartesian_product()
@@ -411,11 +408,13 @@ pub fn generate_dependency_orderings(
             prefix_orderings
                 .iter()
                 .permutations(prefix_orderings.len())
-                .map(|prefixes| {
-                    prefixes
-                        .into_iter()
-                        .flat_map(|ordering| ordering.clone())
-                        .collect()
+                .filter_map(|prefixes| {
+                    (!prefixes.is_empty()).then(|| {
+                        prefixes
+                            .into_iter()
+                            .flat_map(|ordering| ordering.clone())
+                            .collect()
+                    })
                 })
                 .collect::<Vec<_>>()
         })

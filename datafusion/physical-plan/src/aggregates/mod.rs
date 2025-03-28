@@ -1045,15 +1045,14 @@ fn get_aggregate_expr_req(
     aggr_expr: &AggregateFunctionExpr,
     group_by: &PhysicalGroupBy,
     agg_mode: &AggregateMode,
-) -> LexOrdering {
+) -> Option<LexOrdering> {
     // If the aggregation function is ordering requirement is not absolutely
     // necessary, or the aggregation is performing a "second stage" calculation,
     // then ignore the ordering requirement.
     if !aggr_expr.order_sensitivity().hard_requires() || !agg_mode.is_first_stage() {
-        return LexOrdering::default();
+        return None;
     }
-
-    let mut req = aggr_expr.order_bys().cloned().unwrap_or_default();
+    let mut req = aggr_expr.order_bys().cloned()?.to_vec();
 
     // In non-first stage modes, we accumulate data (using `merge_batch`) from
     // different partitions (i.e. merge partial results). During this merge, we
@@ -1069,34 +1068,7 @@ fn get_aggregate_expr_req(
             !physical_exprs_contains(&physical_exprs, &sort_expr.expr)
         });
     }
-    req
-}
-
-/// Computes the finer ordering for between given existing ordering requirement
-/// of aggregate expression.
-///
-/// # Parameters
-///
-/// * `existing_req` - The existing lexical ordering that needs refinement.
-/// * `aggr_expr` - A reference to an aggregate expression trait object.
-/// * `group_by` - Information about the physical grouping (e.g group by expression).
-/// * `eq_properties` - Equivalence properties relevant to the computation.
-/// * `agg_mode` - The mode of aggregation (e.g., Partial, Final, etc.).
-///
-/// # Returns
-///
-/// An `Option<LexOrdering>` representing the computed finer lexical ordering,
-/// or `None` if there is no finer ordering; e.g. the existing requirement and
-/// the aggregator requirement is incompatible.
-fn finer_ordering(
-    existing_req: &LexOrdering,
-    aggr_expr: &AggregateFunctionExpr,
-    group_by: &PhysicalGroupBy,
-    eq_properties: &EquivalenceProperties,
-    agg_mode: &AggregateMode,
-) -> Option<LexOrdering> {
-    let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
-    eq_properties.get_finer_ordering(existing_req, aggr_req.as_ref())
+    (!req.is_empty()).then(|| req.into())
 }
 
 /// Concatenates the given slices.
@@ -1128,67 +1100,79 @@ pub fn get_finer_aggregate_exprs_requirement(
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
 ) -> Result<Vec<PhysicalSortRequirement>> {
-    let mut requirement = LexOrdering::default();
+    let mut requirement = None;
     for aggr_expr in aggr_exprs.iter_mut() {
-        if let Some(finer_ordering) =
-            finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
+        let (mut conflict, mut conflict_rev) = (false, false);
+        let mut finer = if let Some(aggr_req) =
+            get_aggregate_expr_req(aggr_expr, group_by, agg_mode)
         {
-            if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
-                // Requirement is satisfied by existing ordering
-                requirement = finer_ordering;
-                continue;
+            if let Some(req) = requirement.as_ref() {
+                let finer = eq_properties.get_finer_ordering(req, &aggr_req);
+                conflict = finer.is_none();
+                finer
+            } else {
+                eq_properties.normalize_sort_exprs(&aggr_req)
             }
-        }
-        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
-            if let Some(finer_ordering) = finer_ordering(
-                &requirement,
-                &reverse_aggr_expr,
-                group_by,
-                eq_properties,
-                agg_mode,
-            ) {
-                if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
-                    // Reverse requirement is satisfied by exiting ordering.
-                    // Hence reverse the aggregator
-                    requirement = finer_ordering;
-                    *aggr_expr = Arc::new(reverse_aggr_expr);
-                    continue;
-                }
-            }
-        }
-        if let Some(finer_ordering) =
-            finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
+        } else {
+            requirement.clone()
+        };
+        if let Some(finer_ordering) = finer.take_if(|o| eq_properties.ordering_satisfy(o))
         {
-            // There is a requirement that both satisfies existing requirement and current
-            // aggregate requirement. Use updated requirement
-            requirement = finer_ordering;
+            // Requirement is satisfied by the existing ordering:
+            requirement = Some(finer_ordering);
             continue;
         }
-        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
-            if let Some(finer_ordering) = finer_ordering(
-                &requirement,
-                &reverse_aggr_expr,
-                group_by,
-                eq_properties,
-                agg_mode,
-            ) {
-                // There is a requirement that both satisfies existing requirement and reverse
-                // aggregate requirement. Use updated requirement
-                requirement = finer_ordering;
+        let mut finer_rev = None;
+        let mut rev_expr = aggr_expr.reverse_expr();
+        if let Some(reverse_aggr_expr) = rev_expr.take() {
+            finer_rev = if let Some(aggr_req) =
+                get_aggregate_expr_req(&reverse_aggr_expr, group_by, agg_mode)
+            {
+                if let Some(req) = requirement.as_ref() {
+                    let finer = eq_properties.get_finer_ordering(req, &aggr_req);
+                    conflict_rev = finer.is_none();
+                    finer
+                } else {
+                    eq_properties.normalize_sort_exprs(&aggr_req)
+                }
+            } else {
+                requirement.clone()
+            };
+            if let Some(finer_ordering) =
+                finer_rev.take_if(|o| eq_properties.ordering_satisfy(o))
+            {
+                // Reverse requirement is satisfied by the existing ordering.
+                // Hence, we need to reverse the aggregate expression:
+                requirement = Some(finer_ordering);
                 *aggr_expr = Arc::new(reverse_aggr_expr);
                 continue;
             }
+            let _ = rev_expr.insert(reverse_aggr_expr);
         }
-
-        // Neither the existing requirement and current aggregate requirement satisfy the other, this means
-        // requirements are conflicting. Currently, we do not support
-        // conflicting requirements.
-        return not_impl_err!(
-            "Conflicting ordering requirements in aggregate functions is not supported"
-        );
+        if finer.is_some() {
+            // There is a requirement that satisfies both the existing requirement
+            // and the aggregate requirement. Use updated requirement:
+            requirement = finer;
+            continue;
+        } else if let Some(reverse_aggr_expr) = rev_expr {
+            if finer_rev.is_some() {
+                // There is a requirement that satisfies both the existing requirement
+                // and the reverse aggregate requirement. Use updated requirement:
+                *aggr_expr = Arc::new(reverse_aggr_expr);
+                requirement = finer_rev;
+                continue;
+            }
+        } else if conflict && conflict_rev {
+            // Neither the existing requirement nor the aggregate requirement
+            // satisfy the other, this means requirements are conflicting.
+            // Currently, we do not support conflicting requirements.
+            return not_impl_err!(
+                "Conflicting ordering requirements in aggregate functions is not supported"
+            );
+        }
     }
 
-    Ok(requirement.into_iter().map(Into::into).collect())
+    Ok(requirement.map_or_else(Vec::new, |o| o.into_iter().map(Into::into).collect()))
 }
 
 /// Returns physical expressions for arguments to evaluate against a batch.

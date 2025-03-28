@@ -188,19 +188,19 @@ mod tests {
         Ok((test_schema, eq_properties))
     }
 
-    // Convert each tuple to PhysicalSortRequirement
+    // Convert each tuple to a `PhysicalSortRequirement` and construct a
+    // a `LexRequirement` from them.
     pub fn convert_to_sort_reqs(
-        in_data: &[(&Arc<dyn PhysicalExpr>, Option<SortOptions>)],
+        args: &[(&Arc<dyn PhysicalExpr>, Option<SortOptions>)],
     ) -> LexRequirement {
-        in_data
-            .iter()
+        args.iter()
             .map(|(expr, options)| {
                 PhysicalSortRequirement::new(Arc::clone(*expr), *options)
             })
             .collect()
     }
 
-    // Convert each tuple to PhysicalSortExpr
+    // Convert each tuple to a `PhysicalSortExpr` and construct a vector.
     pub fn convert_to_sort_exprs<T: Borrow<Arc<dyn PhysicalExpr>>>(
         args: &[(T, SortOptions)],
     ) -> Vec<PhysicalSortExpr> {
@@ -212,7 +212,7 @@ mod tests {
             .collect()
     }
 
-    // Convert each inner tuple to PhysicalSortExpr and then into LexOrdering
+    // Convert each vector of tuples to a `LexOrdering`.
     pub fn convert_to_orderings<T: Borrow<Arc<dyn PhysicalExpr>>>(
         args: &[Vec<(T, SortOptions)>],
     ) -> Vec<LexOrdering> {
