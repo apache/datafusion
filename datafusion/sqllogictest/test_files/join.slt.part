@@ -1389,6 +1389,144 @@ physical_plan
 14)------------------FilterExec: y@1 = x@0
 15)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# always use hash repartition
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+query TT
+explain
+SELECT * FROM
+(SELECT x+1 AS col0, y+1 AS col1 FROM PAIRS WHERE x == y)
+JOIN f
+ON col0 = f.a
+JOIN s
+ON col1 = s.b
+----
+logical_plan
+01)Inner Join: col1 = CAST(s.b AS Int64)
+02)--Inner Join: col0 = CAST(f.a AS Int64)
+03)----Projection: CAST(pairs.x AS Int64) + Int64(1) AS col0, CAST(pairs.y AS Int64) + Int64(1) AS col1
+04)------Filter: pairs.y = pairs.x
+05)--------TableScan: pairs projection=[x, y]
+06)----TableScan: f projection=[a]
+07)--TableScan: s projection=[b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col1@1, CAST(s.b AS Int64)@1)], projection=[col0@0, col1@1, a@2, b@3]
+03)----ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@0 as a]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[a@0, col0@2, col1@3]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------RepartitionExec: partitioning=Hash([CAST(f.a AS Int64)@1], 16), input_partitions=1
+08)--------------ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)----------CoalesceBatchesExec: target_batch_size=8192
+11)------------RepartitionExec: partitioning=Hash([col0@0], 16), input_partitions=16
+12)--------------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
+13)----------------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
+14)------------------CoalesceBatchesExec: target_batch_size=8192
+15)--------------------FilterExec: y@1 = x@0
+16)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
+17)----CoalesceBatchesExec: target_batch_size=8192
+18)------RepartitionExec: partitioning=Hash([CAST(s.b AS Int64)@1], 16), input_partitions=1
+19)--------ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
+20)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.prefer_hash_selection_vector_partitioning = true;
+
+query TT
+explain
+SELECT * FROM
+(SELECT x+1 AS col0, y+1 AS col1 FROM PAIRS WHERE x == y)
+JOIN f
+ON col0 = f.a
+JOIN s
+ON col1 = s.b
+----
+logical_plan
+01)Inner Join: col1 = CAST(s.b AS Int64)
+02)--Inner Join: col0 = CAST(f.a AS Int64)
+03)----Projection: CAST(pairs.x AS Int64) + Int64(1) AS col0, CAST(pairs.y AS Int64) + Int64(1) AS col1
+04)------Filter: pairs.y = pairs.x
+05)--------TableScan: pairs projection=[x, y]
+06)----TableScan: f projection=[a]
+07)--TableScan: s projection=[b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col1@1, CAST(s.b AS Int64)@1)], projection=[col0@0, col1@1, a@2, b@3]
+03)----ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@0 as a]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[a@0, col0@2, col1@3]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------RepartitionExec: partitioning=HashSelectionVector([CAST(f.a AS Int64)@1], 16), input_partitions=1
+08)--------------ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)----------CoalesceBatchesExec: target_batch_size=8192
+11)------------RepartitionExec: partitioning=HashSelectionVector([col0@0], 16), input_partitions=16
+12)--------------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
+13)----------------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
+14)------------------CoalesceBatchesExec: target_batch_size=8192
+15)--------------------FilterExec: y@1 = x@0
+16)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
+17)----CoalesceBatchesExec: target_batch_size=8192
+18)------RepartitionExec: partitioning=HashSelectionVector([CAST(s.b AS Int64)@1], 16), input_partitions=1
+19)--------ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
+20)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# TODO: It should be:
+# 2 2 2 2
+# 3 3 3 3
+# After fix https://github.com/apache/datafusion/issues/15382
+query IIII
+SELECT * FROM
+(SELECT x+1 AS col0, y+1 AS col1 FROM PAIRS WHERE x == y)
+JOIN f
+ON col0 = f.a
+JOIN s
+ON col1 = s.b
+----
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+2 2 2 2
+3 3 3 3
+
+# reset the config
+statement ok
+set datafusion.optimizer.prefer_hash_selection_vector_partitioning = false;
+
+# reset the config
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 1048576
+
 statement ok
 drop table pairs;
 
