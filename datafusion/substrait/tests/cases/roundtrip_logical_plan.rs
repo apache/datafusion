@@ -810,12 +810,15 @@ async fn aggregate_wo_projection_consume() -> Result<()> {
     let proto_plan =
         read_json("tests/testdata/test_plans/aggregate_no_project.substrait.json");
 
-    assert_expected_plan_substrait(
-        proto_plan,
-        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
-        \n  TableScan: data projection=[a]",
-    )
-    .await
+    let plan = generate_plan_from_substrait(proto_plan).await?;
+    assert_snapshot!(
+    plan,
+    @r#"
+            Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]
+              TableScan: data projection=[a]
+            "#
+        );
+    Ok(())
 }
 
 #[tokio::test]
@@ -823,12 +826,15 @@ async fn aggregate_wo_projection_group_expression_ref_consume() -> Result<()> {
     let proto_plan =
         read_json("tests/testdata/test_plans/aggregate_no_project_group_expression_ref.substrait.json");
 
-    assert_expected_plan_substrait(
-        proto_plan,
-        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
-        \n  TableScan: data projection=[a]",
-    )
-    .await
+    let plan = generate_plan_from_substrait(proto_plan).await?;
+    assert_snapshot!(
+    plan,
+    @r#"
+            Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]
+              TableScan: data projection=[a]
+            "#
+        );
+    Ok(())
 }
 
 #[tokio::test]
@@ -836,12 +842,15 @@ async fn aggregate_wo_projection_sorted_consume() -> Result<()> {
     let proto_plan =
         read_json("tests/testdata/test_plans/aggregate_sorted_no_project.substrait.json");
 
-    assert_expected_plan_substrait(
-        proto_plan,
-        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) ORDER BY [data.a DESC NULLS FIRST] AS countA]]\
-        \n  TableScan: data projection=[a]",
-    )
-    .await
+    let plan = generate_plan_from_substrait(proto_plan).await?;
+    assert_snapshot!(
+    plan,
+    @r#"
+    Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) ORDER BY [data.a DESC NULLS FIRST] AS countA]]
+      TableScan: data projection=[a]
+    "#
+            );
+    Ok(())
 }
 
 #[tokio::test]
@@ -1532,20 +1541,14 @@ async fn assert_expected_plan(
     Ok(())
 }
 
-async fn assert_expected_plan_substrait(
-    substrait_plan: Plan,
-    expected_plan_str: &str,
-) -> Result<()> {
+async fn generate_plan_from_substrait(substrait_plan: Plan) -> Result<LogicalPlan> {
     let ctx = create_context().await?;
 
     let plan = from_substrait_plan(&ctx.state(), &substrait_plan).await?;
 
     let plan = ctx.state().optimize(&plan)?;
 
-    let planstr = format!("{plan}");
-    assert_eq!(planstr, expected_plan_str);
-
-    Ok(())
+    Ok(plan)
 }
 
 async fn assert_substrait_sql(substrait_plan: Plan, sql: &str) -> Result<()> {
