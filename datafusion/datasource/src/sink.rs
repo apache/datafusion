@@ -22,20 +22,18 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion_physical_plan::metrics::MetricsSet;
-use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_physical_plan::ExecutionPlanProperties;
-use datafusion_physical_plan::{
-    execute_input_stream, execution_plan::RequiredInputOrdering, DisplayAs,
-    DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream,
-};
-
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{Distribution, EquivalenceProperties};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties, LexRequirement};
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
+use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_physical_plan::{
+    execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -89,7 +87,7 @@ pub struct DataSinkExec {
     /// Schema describing the structure of the output data.
     count_schema: SchemaRef,
     /// Optional required sort order for output data.
-    sort_order: Option<RequiredInputOrdering>,
+    sort_order: Option<LexRequirement>,
     cache: PlanProperties,
 }
 
@@ -104,7 +102,7 @@ impl DataSinkExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         sink: Arc<dyn DataSink>,
-        sort_order: Option<RequiredInputOrdering>,
+        sort_order: Option<LexRequirement>,
     ) -> Self {
         let count_schema = make_count_schema();
         let cache = Self::create_schema(&input, count_schema);
@@ -128,7 +126,7 @@ impl DataSinkExec {
     }
 
     /// Optional sort order for output data
-    pub fn sort_order(&self) -> &Option<RequiredInputOrdering> {
+    pub fn sort_order(&self) -> &Option<LexRequirement> {
         &self.sort_order
     }
 
@@ -187,7 +185,10 @@ impl ExecutionPlan for DataSinkExec {
     fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
         // The required input ordering is set externally (e.g. by a `ListingTable`).
         // Otherwise, there is no specific requirement (i.e. `sort_expr` is `None`).
-        vec![self.sort_order.clone()]
+        vec![self
+            .sort_order
+            .as_ref()
+            .map(|req| RequiredInputOrdering::new(req.clone()))]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

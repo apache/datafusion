@@ -1095,38 +1095,17 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 
 #[cfg(test)]
 mod tests {
-    use crate::{test_util::MockSource, tests::aggr_test_schema};
-
-    use super::*;
-    use arrow::{
-        array::{Int32Array, RecordBatch},
-        compute::SortOptions,
-    };
-
-    use datafusion_common::stats::Precision;
-    use datafusion_common::{assert_batches_eq, DFSchema};
-    use datafusion_expr::{execution_props::ExecutionProps, SortExpr};
-    use datafusion_physical_expr::create_physical_expr;
     use std::collections::HashMap;
 
-    fn create_physical_sort_expr(
-        e: &SortExpr,
-        input_dfschema: &DFSchema,
-        execution_props: &ExecutionProps,
-    ) -> Result<PhysicalSortExpr> {
-        let SortExpr {
-            expr,
-            asc,
-            nulls_first,
-        } = e;
-        Ok(PhysicalSortExpr {
-            expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-            options: SortOptions {
-                descending: !asc,
-                nulls_first: *nulls_first,
-            },
-        })
-    }
+    use super::*;
+    use crate::{test_util::MockSource, tests::aggr_test_schema};
+
+    use arrow::array::{Int32Array, RecordBatch};
+
+    use datafusion_common::assert_batches_eq;
+    use datafusion_common::stats::Precision;
+    use datafusion_expr::SortExpr;
+    use datafusion_physical_expr::create_physical_sort_expr;
 
     /// Returns the column names on the schema
     pub fn columns(schema: &Schema) -> Vec<String> {

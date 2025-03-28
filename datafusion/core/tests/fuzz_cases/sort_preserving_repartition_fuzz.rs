@@ -36,9 +36,7 @@ mod sp_repartition_fuzz_tests {
     };
     use datafusion::prelude::SessionContext;
     use datafusion_common::Result;
-    use datafusion_execution::{
-        config::SessionConfig, memory_pool::MemoryConsumer, SendableRecordBatchStream,
-    };
+    use datafusion_execution::{config::SessionConfig, memory_pool::MemoryConsumer};
     use datafusion_physical_expr::{
         equivalence::{EquivalenceClass, EquivalenceProperties},
         expressions::{col, Column},
@@ -226,18 +224,21 @@ mod sp_repartition_fuzz_tests {
             let table_data_with_properties =
                 generate_table_for_eq_properties(&eq_properties, N_ELEM, N_DISTINCT)?;
             let schema = table_data_with_properties.schema();
-            let streams: Vec<SendableRecordBatchStream> = (0..N_PARTITION)
+            let streams = (0..N_PARTITION)
                 .map(|_idx| {
                     let batch = table_data_with_properties.clone();
                     Box::pin(RecordBatchStreamAdapter::new(
                         schema.clone(),
                         futures::stream::once(async { Ok(batch) }),
-                    )) as SendableRecordBatchStream
+                    )) as _
                 })
                 .collect::<Vec<_>>();
 
-            // Returns concatenated version of the all available orderings
-            let exprs = eq_properties.oeq_class().output_ordering().unwrap();
+            // Returns concatenated version of the all available orderings:
+            let Some(exprs) = eq_properties.oeq_class().output_ordering() else {
+                // We always should have an ordering due to the way we generate the schema:
+                unreachable!("No ordering found in eq_properties: {:?}", eq_properties);
+            };
 
             let context = SessionContext::new().task_ctx();
             let mem_reservation =

@@ -53,8 +53,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
+use datafusion_physical_expr::{LexRequirement, PhysicalExpr};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -181,7 +180,7 @@ impl FileFormat for ArrowFormat {
         input: Arc<dyn ExecutionPlan>,
         _state: &dyn Session,
         conf: FileSinkConfig,
-        order_requirements: Option<RequiredInputOrdering>,
+        order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.insert_op != InsertOp::Append {
             return not_impl_err!("Overwrites are not implemented yet for Arrow format");

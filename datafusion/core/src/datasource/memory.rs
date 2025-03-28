@@ -30,25 +30,27 @@ use crate::physical_plan::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, SendableRecordBatchStream,
 };
-use crate::physical_planner::create_physical_sort_exprs;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
 use datafusion_common_runtime::JoinSet;
-pub use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
-pub use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::SortExpr;
+use datafusion_physical_expr::create_physical_sort_exprs;
 
 use async_trait::async_trait;
 use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
+
+// Exports:
+pub use datafusion_datasource::memory::MemorySourceConfig;
+pub use datafusion_datasource::source::DataSourceExec;
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;

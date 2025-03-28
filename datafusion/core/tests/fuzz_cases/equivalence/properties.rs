@@ -15,18 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::fuzz_cases::equivalence::utils::{
     create_random_schema, generate_table_for_eq_properties, is_table_same_after_sort,
     TestScalarUDF,
 };
+
 use datafusion_common::Result;
 use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::expressions::{col, BinaryExpr};
-use datafusion_physical_expr::{PhysicalExprRef, ScalarFunctionExpr};
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
 use itertools::Itertools;
-use std::sync::Arc;
 
 #[test]
 fn test_find_longest_permutation_random() -> Result<()> {
@@ -47,13 +49,13 @@ fn test_find_longest_permutation_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
-        )?) as PhysicalExprRef;
+        )?) as _;
 
         let a_plus_b = Arc::new(BinaryExpr::new(
             col("a", &test_schema)?,
             Operator::Plus,
             col("b", &test_schema)?,
-        )) as Arc<dyn PhysicalExpr>;
+        )) as _;
         let exprs = [
             col("a", &test_schema)?,
             col("b", &test_schema)?,
@@ -90,16 +92,15 @@ fn test_find_longest_permutation_random() -> Result<()> {
                 assert_eq!(ordering.len(), indices.len(), "{}", err_msg);
                 // Since ordered section satisfies schema, we expect
                 // that result will be same after sort (e.g sort was unnecessary).
-                if !ordering.is_empty() {
-                    assert!(
-                        is_table_same_after_sort(
+                assert!(
+                    ordering.is_empty()
+                        || is_table_same_after_sort(
                             ordering.into(),
                             table_data_with_properties.clone(),
                         )?,
-                        "{}",
-                        err_msg
-                    );
-                }
+                    "{}",
+                    err_msg
+                );
             }
         }
     }

@@ -420,8 +420,11 @@ fn try_pushdown_requirements_to_join(
 
     let (new_left_ordering, new_right_ordering) = match push_side {
         JoinSide::Left => {
-            let left_eq_properties =
-                smj.left().equivalence_properties().clone().with_reorder(sort_expr.clone());
+            let left_eq_properties = smj
+                .left()
+                .equivalence_properties()
+                .clone()
+                .with_reorder(sort_expr.clone());
             let Some(left_requirement) = smj_required_orderings.swap_remove(0) else {
                 return Ok(None);
             };
@@ -434,8 +437,11 @@ fn try_pushdown_requirements_to_join(
             (Some(sort_expr), smj.right().output_ordering())
         }
         JoinSide::Right => {
-            let right_eq_properties =
-                smj.right().equivalence_properties().clone().with_reorder(sort_expr.clone());
+            let right_eq_properties = smj
+                .right()
+                .equivalence_properties()
+                .clone()
+                .with_reorder(sort_expr.clone());
 
             let Some(right_requirement) = smj_required_orderings.swap_remove(1) else {
                 return Ok(None);

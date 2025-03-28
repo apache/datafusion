@@ -46,7 +46,6 @@ use datafusion_expr::utils::conjunction;
 use datafusion_expr::{Expr, SortExpr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_expr::{create_physical_expr, LexOrdering};
 use datafusion_physical_plan::empty::EmptyExec;
-use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
 use async_trait::async_trait;
@@ -1045,10 +1044,7 @@ impl TableProvider for ListingTable {
 
         let orderings = self.try_create_output_ordering()?;
         // It is sufficient to pass only one of the equivalent orderings:
-        let order_requirements = orderings.first().map(|ordering| {
-            let reqs = ordering.iter().cloned().map(Into::into).collect();
-            RequiredInputOrdering::new(reqs)
-        });
+        let order_requirements = orderings.into_iter().next().map(Into::into);
 
         self.options()
             .format

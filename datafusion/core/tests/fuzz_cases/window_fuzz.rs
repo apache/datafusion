@@ -601,7 +601,7 @@ async fn run_window_test(
         })
     }
     if orderby_exprs.len() > 1 && !window_frame.can_accept_multi_orderby() {
-        orderby_exprs = orderby_exprs[0..1].to_vec();
+        orderby_exprs.truncate(1);
     }
     let mut partitionby_exprs = vec![];
     for column in &partition_by_columns {

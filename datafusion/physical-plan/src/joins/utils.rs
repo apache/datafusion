@@ -192,7 +192,8 @@ pub fn calculate_join_output_ordering(
                         on_columns,
                         &mut right_ordering.clone(),
                     );
-                    let right_offset = offset_ordering(right_ordering, &join_type, left_columns_len);
+                    let right_offset =
+                        offset_ordering(right_ordering, &join_type, left_columns_len);
                     return if let Some(left_ordering) = left_ordering {
                         Some(merge_vectors(left_ordering, &right_offset))
                     } else {
@@ -210,7 +211,8 @@ pub fn calculate_join_output_ordering(
                         on_columns,
                         &mut right_ordering.clone(),
                     );
-                    let right_offset = offset_ordering(right_ordering, &join_type, left_columns_len);
+                    let right_offset =
+                        offset_ordering(right_ordering, &join_type, left_columns_len);
                     if let Some(left_ordering) = left_ordering {
                         Some(merge_vectors(&right_offset, left_ordering))
                     } else {
@@ -223,7 +225,7 @@ pub fn calculate_join_output_ordering(
             right_ordering.map(|o| offset_ordering(o, &join_type, left_columns_len))
         }
         // Doesn't maintain ordering, output ordering is None.
-        [false, false] => return None,
+        [false, false] => None,
         [true, true] => unreachable!("Cannot maintain ordering of both sides"),
         _ => unreachable!("Join operators can not have more than two children"),
     }

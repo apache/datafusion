@@ -35,7 +35,6 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_physical_expr::create_ordering;
-use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
@@ -354,10 +353,7 @@ impl TableProvider for StreamTable {
         let schema = self.0.source.schema();
         let orders = create_ordering(schema, &self.0.order)?;
         // It is sufficient to pass only one of the equivalent orderings:
-        let order_requirements = orders.first().map(|ordering| {
-            let reqs = ordering.iter().cloned().map(Into::into).collect();
-            RequiredInputOrdering::new(reqs)
-        });
+        let order_requirements = orders.into_iter().next().map(Into::into);
 
         Ok(Arc::new(DataSinkExec::new(
             input,

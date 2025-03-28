@@ -32,8 +32,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt, Result, Statistics};
 use datafusion_expr::Expr;
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
+use datafusion_physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
@@ -105,7 +104,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         _input: Arc<dyn ExecutionPlan>,
         _state: &dyn Session,
         _conf: FileSinkConfig,
-        _order_requirements: Option<RequiredInputOrdering>,
+        _order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
     }

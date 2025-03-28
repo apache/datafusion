@@ -154,17 +154,12 @@ pub fn create_physical_sort_expr(
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<PhysicalSortExpr> {
-    let SortExpr {
-        expr,
-        asc,
-        nulls_first,
-    } = e;
-    Ok(PhysicalSortExpr {
-        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-        options: SortOptions {
-            descending: !asc,
-            nulls_first: *nulls_first,
-        },
+    create_physical_expr(&e.expr, input_dfschema, execution_props).map(|expr| {
+        let options = SortOptions {
+            descending: !e.asc,
+            nulls_first: e.nulls_first,
+        };
+        PhysicalSortExpr { expr, options }
     })
 }
 
@@ -173,11 +168,11 @@ pub fn create_physical_sort_exprs(
     exprs: &[SortExpr],
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
-) -> Result<LexOrdering> {
+) -> Result<Vec<PhysicalSortExpr>> {
     exprs
         .iter()
-        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<LexOrdering>>()
+        .map(|e| create_physical_sort_expr(e, input_dfschema, execution_props))
+        .collect()
 }
 
 #[cfg(test)]
