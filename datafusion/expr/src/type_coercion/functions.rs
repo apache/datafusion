@@ -301,11 +301,20 @@ fn get_valid_types_with_aggregate_udf(
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
             Ok(coerced_types) => vec![coerced_types],
             Err(e) => {
+                let diagnostic = e.diagnostic().cloned();
+
                 return exec_err!(
                     "Function '{}' user-defined coercion failed with {:?}",
                     func.name(),
                     e.strip_backtrace()
                 )
+                .map_err(|e| {
+                    if let Some(diagnostic) = diagnostic {
+                        e.with_diagnostic(diagnostic)
+                    } else {
+                        e
+                    }
+                });
             }
         },
         TypeSignature::OneOf(signatures) => signatures
