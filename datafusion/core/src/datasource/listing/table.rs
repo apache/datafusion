@@ -36,8 +36,8 @@ use datafusion_common::{
     config_datafusion_err, config_err, internal_err, plan_err, project_schema,
     Constraints, DataFusionError, Result, SchemaExt, ToDFSchema,
 };
-use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::cache::{
     cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache,
 };

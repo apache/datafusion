@@ -44,8 +44,8 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt, ReversedUDAF,
-    GroupsAccumulator, Signature, SortExpr, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt,
+    GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_macros::user_doc;
@@ -198,14 +198,20 @@ impl AggregateUDFImpl for FirstValue {
         where
             T: ArrowPrimitiveType + Send,
         {
-            let ordering_dtypes = args
-                .ordering_req
+            let Some(ordering_req) = args.ordering_req else {
+                // return TrivialFirstValueAccumulator::try_new(args.return_type, args.ignore_nulls)
+                //     .map(|acc| Box::new(acc) as _)
+                // TODO Fix
+                return internal_err!("Order by is a must!");
+            };
+
+            let ordering_dtypes = ordering_req
                 .iter()
                 .map(|e| e.expr.data_type(args.schema))
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(Box::new(FirstPrimitiveGroupsAccumulator::<T>::try_new(
-                args.ordering_req.clone(),
+                ordering_req.clone(),
                 args.ignore_nulls,
                 args.return_type,
                 &ordering_dtypes,

@@ -17,6 +17,7 @@
 
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
+use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -37,10 +38,6 @@ use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
-use std::mem::{size_of, size_of_val};
-use std::sync::Arc;
 
 make_udaf_expr_and_func!(
     ArrayAgg,
@@ -156,15 +153,15 @@ impl AggregateUDFImpl for ArrayAgg {
             // ARRAY_AGG(DISTINCT concat(col, '') ORDER BY concat(col, '')) <- Valid
             // ARRAY_AGG(DISTINCT col ORDER BY other_col)                   <- Invalid
             // ARRAY_AGG(DISTINCT col ORDER BY concat(col, ''))             <- Invalid
-            if acc_args.ordering_req.len() > 1 {
-                return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
-            }
             let mut sort_option: Option<SortOptions> = None;
-            if let Some(order) = acc_args.ordering_req.first() {
-                if !order.expr.eq(&acc_args.exprs[0]) {
+            if let Some(ordering_req) = acc_args.ordering_req {
+                if ordering_req.len() > 1 {
                     return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
                 }
-                sort_option = Some(order.options)
+                if !ordering_req[0].expr.eq(&acc_args.exprs[0]) {
+                    return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
+                }
+                sort_option = Some(ordering_req[0].options)
             }
             return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
                 &data_type,
@@ -931,7 +928,7 @@ mod tests {
     struct ArrayAggAccumulatorBuilder {
         data_type: DataType,
         distinct: bool,
-        ordering: LexOrdering,
+        ordering: Option<LexOrdering>,
         schema: Schema,
     }
 
@@ -944,7 +941,7 @@ mod tests {
             Self {
                 data_type: data_type.clone(),
                 distinct: Default::default(),
-                ordering: Default::default(),
+                ordering: None,
                 schema: Schema {
                     fields: Fields::from(vec![Field::new(
                         "col",
@@ -964,13 +961,19 @@ mod tests {
         }
 
         fn order_by_col(mut self, col: &str, sort_options: SortOptions) -> Self {
-            self.ordering.extend([PhysicalSortExpr::new(
+            let new_order = PhysicalSortExpr::new(
                 Arc::new(
                     Column::new_with_schema(col, &self.schema)
                         .expect("column not available in schema"),
                 ),
                 sort_options,
-            )]);
+            );
+            if let Some(mut existing_ordering) = self.ordering {
+                existing_ordering.extend([new_order]);
+                self.ordering = Some(existing_ordering);
+            } else {
+                self.ordering = Some(LexOrdering::from(vec![new_order]));
+            }
             self
         }
 
@@ -979,7 +982,7 @@ mod tests {
                 return_type: &self.data_type,
                 schema: &self.schema,
                 ignore_nulls: false,
-                ordering_req: &self.ordering,
+                ordering_req: self.ordering.as_ref(),
                 is_reversed: false,
                 name: "",
                 is_distinct: self.distinct,

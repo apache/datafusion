@@ -1162,7 +1162,8 @@ pub fn get_finer_aggregate_exprs_requirement(
                 requirement = finer_rev;
                 continue;
             }
-        } else if conflict && conflict_rev {
+        }
+        if conflict && conflict_rev {
             // Neither the existing requirement nor the aggregate requirement
             // satisfy the other, this means requirements are conflicting.
             // Currently, we do not support conflicting requirements.

@@ -77,12 +77,13 @@ use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
     Analyze, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
+    Filter, JoinType, RecursiveQuery, SkipType, SortExpr, StringifiedPlan, WindowFrame,
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
@@ -1680,14 +1681,6 @@ pub fn create_aggregate_expr_and_maybe_filter(
         execution_props,
     )
 }
-
-#[deprecated(
-    since = "47.0.0",
-    note = "use datafusion::create_physical_sort_expr"
-)]
-pub use datafusion_physical_expr::{
-    create_physical_sort_expr,
-};
 
 /// Create a physical sort expression from a logical expression
 pub fn create_physical_sort_expr(

@@ -36,7 +36,6 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_physical_expr::create_ordering;
 use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
-use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
