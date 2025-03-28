@@ -62,39 +62,23 @@ use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 
 use rstest::rstest;
 
-/// Create a csv exec for tests
-fn csv_exec_ordered(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    FileScanConfig::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        schema.clone(),
-        Arc::new(CsvSource::new(true, 0, b'"')),
-    )
-    .with_file(PartitionedFile::new("file_path".to_string(), 100))
-    .with_output_ordering(vec![sort_exprs])
-    .build()
-}
-
 /// Created a sorted parquet exec
-pub fn parquet_exec_sorted(
+fn parquet_exec_sorted(
     schema: &SchemaRef,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
+    let sort_exprs = sort_exprs.into_iter().collect::<Vec<_>>();
     let source = Arc::new(ParquetSource::default());
-    FileScanConfig::new(
+    let mut builder = FileScanConfig::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         source,
     )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
-    .with_output_ordering(vec![sort_exprs])
-    .build()
+    .with_file(PartitionedFile::new("x".to_string(), 100));
+    if !sort_exprs.is_empty() {
+        builder = builder.with_output_ordering(vec![sort_exprs.into()]);
+    }
+    builder.build()
 }
 
 /// Create a sorted Csv exec
@@ -102,16 +86,17 @@ fn csv_exec_sorted(
     schema: &SchemaRef,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    FileScanConfig::new(
+    let sort_exprs = sort_exprs.into_iter().collect::<Vec<_>>();
+    let mut builder = FileScanConfig::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         Arc::new(CsvSource::new(false, 0, 0)),
     )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
-    .with_output_ordering(vec![sort_exprs])
-    .build()
+    .with_file(PartitionedFile::new("x".to_string(), 100));
+    if !sort_exprs.is_empty() {
+        builder = builder.with_output_ordering(vec![sort_exprs.into()]);
+    }
+    builder.build()
 }
 
 /// Runs the sort enforcement optimizer and asserts the plan
@@ -1461,7 +1446,7 @@ async fn test_with_lost_ordering_unbounded_bounded(
     let source = if source_unbounded {
         stream_exec_ordered(&schema, sort_exprs)
     } else {
-        csv_exec_ordered(&schema, sort_exprs)
+        csv_exec_sorted(&schema, sort_exprs)
     };
     let repartition_rr = repartition_exec(source);
     let repartition_hash = Arc::new(RepartitionExec::try_new(
@@ -1484,7 +1469,7 @@ async fn test_with_lost_ordering_unbounded_bounded(
         "  CoalescePartitionsExec",
         "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=true",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false",
     ];
 
     // Expected unbounded result (same for with and without flag)
@@ -1501,14 +1486,14 @@ async fn test_with_lost_ordering_unbounded_bounded(
         "  CoalescePartitionsExec",
         "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=true",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false",
     ];
     let expected_optimized_bounded_parallelize_sort = vec![
         "SortPreservingMergeExec: [a@0 ASC]",
         "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
         "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=true",
+        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false",
     ];
     let (expected_input, expected_optimized, expected_optimized_sort_parallelize) =
         if source_unbounded {
@@ -2400,7 +2385,7 @@ async fn test_push_with_required_input_ordering_prohibited() -> Result<()> {
     let plan = memory_exec(&schema);
     let plan = sort_exec(sort_exprs_a.clone(), plan);
     let plan = RequirementsTestExec::new(plan)
-        .with_required_input_ordering(sort_exprs_a)
+        .with_required_input_ordering(Some(sort_exprs_a))
         .with_maintains_input_order(true)
         .into_arc();
     let plan = sort_exec(sort_exprs_b, plan);
@@ -2431,7 +2416,7 @@ async fn test_push_with_required_input_ordering_allowed() -> Result<()> {
     let plan = memory_exec(&schema);
     let plan = sort_exec(sort_exprs_a.clone(), plan);
     let plan = RequirementsTestExec::new(plan)
-        .with_required_input_ordering(sort_exprs_a)
+        .with_required_input_ordering(Some(sort_exprs_a))
         .with_maintains_input_order(true)
         .into_arc();
     let plan = sort_exec(sort_exprs_ab, plan);
@@ -3712,7 +3697,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
             case.func.1,
             &case.func.2,
             &partition_by,
-            &LexOrdering::default(),
+            None,
             case.window_frame,
             input_schema.as_ref(),
             false,

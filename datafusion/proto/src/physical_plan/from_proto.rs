@@ -35,7 +35,7 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig, FileSource};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
@@ -99,7 +99,7 @@ pub fn parse_physical_sort_exprs(
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
-) -> Result<LexOrdering> {
+) -> Result<Vec<PhysicalSortExpr>> {
     proto
         .iter()
         .map(|sort_expr| {
@@ -172,7 +172,7 @@ pub fn parse_physical_window_expr(
         name,
         &window_node_expr,
         &partition_by,
-        order_by.as_ref(),
+        (!order_by.is_empty()).then(|| order_by.into()),
         Arc::new(window_frame),
         &extended_schema,
         false,
@@ -534,7 +534,7 @@ pub fn parse_protobuf_file_scan_config(
             &schema,
             codec,
         )?;
-        output_ordering.push(sort_expr);
+        output_ordering.push(sort_expr.into());
     }
 
     let config = FileScanConfig::new(object_store_url, file_schema, file_source)

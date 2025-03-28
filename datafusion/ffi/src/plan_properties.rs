@@ -188,12 +188,12 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let proto_output_ordering =
             PhysicalSortExprNodeCollection::decode(df_result!(ffi_orderings)?.as_ref())
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let orderings = Some(parse_physical_sort_exprs(
+        let sort_exprs = parse_physical_sort_exprs(
             &proto_output_ordering.physical_sort_expr_nodes,
             &default_ctx,
             &schema,
             &codex,
-        )?);
+        )?;
 
         let partitioning_vec =
             unsafe { df_result!((ffi_props.output_partitioning)(&ffi_props))? };
@@ -211,11 +211,13 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 .to_string(),
         ))?;
 
-        let eq_properties = match orderings {
-            Some(ordering) => {
-                EquivalenceProperties::new_with_orderings(Arc::new(schema), &[ordering])
-            }
-            None => EquivalenceProperties::new(Arc::new(schema)),
+        let eq_properties = if sort_exprs.is_empty() {
+            EquivalenceProperties::new(Arc::new(schema))
+        } else {
+            EquivalenceProperties::new_with_orderings(
+                Arc::new(schema),
+                &[sort_exprs.into()],
+            )
         };
 
         let emission_type: EmissionType =

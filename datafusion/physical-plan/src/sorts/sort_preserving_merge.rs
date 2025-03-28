@@ -363,7 +363,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             return Ok(None);
         }
 
-        let mut updated_exprs = LexOrdering::default();
+        let mut updated_exprs = vec![];
         for sort in self.expr() {
             let Some(updated_expr) = update_expr(&sort.expr, projection.expr(), false)?
             else {
@@ -377,7 +377,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
         Ok(Some(Arc::new(
             SortPreservingMergeExec::new(
-                updated_exprs,
+                updated_exprs.into(),
                 make_with_child(projection, self.input())?,
             )
             .with_fetch(self.fetch()),
@@ -413,7 +413,7 @@ mod tests {
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{assert_batches_eq, assert_contains, DataFusionError};
+    use datafusion_common::{assert_batches_eq, DataFusionError};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -547,30 +547,6 @@ mod tests {
             task_ctx,
         )
         .await;
-    }
-
-    #[tokio::test]
-    async fn test_merge_no_exprs() {
-        let task_ctx = Arc::new(TaskContext::default());
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
-        let batch = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
-
-        let schema = batch.schema();
-        let sort = LexOrdering::default(); // no sort expressions
-        let exec = TestMemoryExec::try_new_exec(
-            &[vec![batch.clone()], vec![batch]],
-            schema,
-            None,
-        )
-        .unwrap();
-
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
-
-        let res = collect(merge, task_ctx).await.unwrap_err();
-        assert_contains!(
-            res.to_string(),
-            "Internal error: Sort expressions cannot be empty for streaming merge"
-        );
     }
 
     #[tokio::test]

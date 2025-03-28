@@ -205,14 +205,14 @@ pub fn bounded_window_exec_with_partition(
     partition_by: &[Arc<dyn PhysicalExpr>],
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
+    let sort_exprs = sort_exprs.into_iter().collect::<Vec<_>>();
     let schema = input.schema();
     let window_expr = create_window_expr(
         &WindowFunctionDefinition::AggregateUDF(count_udaf()),
         "count".to_owned(),
         &[col(col_name, &schema).unwrap()],
         partition_by,
-        sort_exprs.as_ref(),
+        (!sort_exprs.is_empty()).then(|| sort_exprs.into()),
         Arc::new(WindowFrame::new(Some(false))),
         schema.as_ref(),
         false,
@@ -327,7 +327,7 @@ pub fn projection_exec(
 /// A test [`ExecutionPlan`] whose requirements can be configured.
 #[derive(Debug)]
 pub struct RequirementsTestExec {
-    required_input_ordering: LexOrdering,
+    required_input_ordering: Option<LexOrdering>,
     maintains_input_order: bool,
     input: Arc<dyn ExecutionPlan>,
 }
@@ -335,7 +335,7 @@ pub struct RequirementsTestExec {
 impl RequirementsTestExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
-            required_input_ordering: LexOrdering::default(),
+            required_input_ordering: None,
             maintains_input_order: true,
             input,
         }
@@ -344,7 +344,7 @@ impl RequirementsTestExec {
     /// sets the required input ordering
     pub fn with_required_input_ordering(
         mut self,
-        required_input_ordering: LexOrdering,
+        required_input_ordering: Option<LexOrdering>,
     ) -> Self {
         self.required_input_ordering = required_input_ordering;
         self
@@ -390,9 +390,11 @@ impl ExecutionPlan for RequirementsTestExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
-        vec![Some(RequiredInputOrdering::from(
-            self.required_input_ordering.clone(),
-        ))]
+        if let Some(ordering) = &self.required_input_ordering {
+            vec![Some(RequiredInputOrdering::from(ordering.clone()))]
+        } else {
+            vec![None]
+        }
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

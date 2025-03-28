@@ -335,7 +335,7 @@ fn to_str(options: &SortOptions) -> &str {
 /// For example, `vec![a ASC, b DESC]` represents a lexicographical ordering
 /// that first sorts by column `a` in ascending order, then by column `b` in
 /// descending order.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LexOrdering {
     inner: Vec<PhysicalSortExpr>,
 }
@@ -349,6 +349,7 @@ impl AsRef<LexOrdering> for LexOrdering {
 impl LexOrdering {
     /// Creates a new [`LexOrdering`] from a vector
     pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
+        debug_assert!(!inner.is_empty());
         Self { inner }
     }
 

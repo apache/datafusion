@@ -294,7 +294,10 @@ impl ExecutionPlan for BoundedWindowAggExec {
             .ordered_partition_by_indices
             .iter()
             .map(|idx| &partition_bys[*idx]);
-        vec![calc_requirements(partition_bys, order_keys.iter())]
+        vec![calc_requirements(
+            partition_bys,
+            order_keys.map_or_else(Vec::new, |o| o.to_vec()),
+        )]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -1360,7 +1363,7 @@ mod tests {
                 fn_name,
                 &args,
                 &partitionby_exprs,
-                orderby_exprs.as_ref(),
+                Some(orderby_exprs),
                 Arc::new(window_frame),
                 &input.schema(),
                 false,
@@ -1614,7 +1617,7 @@ mod tests {
             Arc::new(StandardWindowExpr::new(
                 last_value_func,
                 &[],
-                &LexOrdering::default(),
+                None,
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1625,7 +1628,7 @@ mod tests {
             Arc::new(StandardWindowExpr::new(
                 nth_value_func1,
                 &[],
-                &LexOrdering::default(),
+                None,
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1636,7 +1639,7 @@ mod tests {
             Arc::new(StandardWindowExpr::new(
                 nth_value_func2,
                 &[],
-                &LexOrdering::default(),
+                None,
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),

@@ -468,8 +468,10 @@ fn try_pushdown_requirements_to_join(
         Some(probe_side),
     );
     let mut smj_eqs = smj.properties().equivalence_properties().clone();
-    // smj will have this ordering when its input changes.
-    smj_eqs = smj_eqs.with_reorder(new_output_ordering.unwrap_or_default());
+    if let Some(new_output_ordering) = new_output_ordering {
+        // smj will have this ordering when its input changes.
+        smj_eqs = smj_eqs.with_reorder(new_output_ordering);
+    }
     let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required);
     Ok(should_pushdown.then(|| {
         let mut required_input_ordering = smj.required_input_ordering();

@@ -25,8 +25,8 @@ use super::{StandardWindowFunctionExpr, WindowExpr};
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
+
 use arrow::array::{new_empty_array, ArrayRef};
-use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
@@ -40,7 +40,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 pub struct StandardWindowExpr {
     expr: Arc<dyn StandardWindowFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
-    order_by: LexOrdering,
+    order_by: Option<LexOrdering>,
     window_frame: Arc<WindowFrame>,
 }
 
@@ -49,13 +49,13 @@ impl StandardWindowExpr {
     pub fn new(
         expr: Arc<dyn StandardWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: &LexOrdering,
+        order_by: Option<LexOrdering>,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             expr,
             partition_by: partition_by.to_vec(),
-            order_by: order_by.clone(),
+            order_by,
             window_frame,
         }
     }
@@ -104,7 +104,7 @@ impl WindowExpr for StandardWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> &LexOrdering {
+    fn order_by(&self) -> Option<&LexOrdering> {
         self.order_by.as_ref()
     }
 
@@ -112,8 +112,11 @@ impl WindowExpr for StandardWindowExpr {
         let mut evaluator = self.expr.create_evaluator()?;
         let num_rows = batch.num_rows();
         if evaluator.uses_window_frame() {
-            let sort_options: Vec<SortOptions> =
-                self.order_by.iter().map(|o| o.options).collect();
+            let sort_options = if let Some(ob) = &self.order_by {
+                ob.iter().map(|o| o.options).collect()
+            } else {
+                vec![]
+            };
             let mut row_wise_results = vec![];
 
             let mut values = self.evaluate_args(batch)?;
@@ -157,7 +160,11 @@ impl WindowExpr for StandardWindowExpr {
     ) -> Result<()> {
         let field = self.expr.field()?;
         let out_type = field.data_type();
-        let sort_options = self.order_by.iter().map(|o| o.options).collect::<Vec<_>>();
+        let sort_options = if let Some(ob) = &self.order_by {
+            ob.iter().map(|o| o.options).collect()
+        } else {
+            vec![]
+        };
         for (partition_row, partition_batch_state) in partition_batches.iter() {
             let window_state =
                 if let Some(window_state) = window_agg_state.get_mut(partition_row) {
@@ -253,7 +260,7 @@ impl WindowExpr for StandardWindowExpr {
             Arc::new(StandardWindowExpr::new(
                 reverse_expr,
                 &self.partition_by.clone(),
-                reverse_order_bys(self.order_by.as_ref()).as_ref(),
+                self.order_by.as_ref().map(reverse_order_bys),
                 Arc::new(self.window_frame.reverse()),
             )) as _
         })

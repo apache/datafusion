@@ -181,14 +181,14 @@ impl OrderingEquivalenceClass {
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let output_ordering = self
-            .orderings
-            .iter()
-            .flatten()
-            .cloned()
-            .collect::<LexOrdering>()
-            .collapse();
-        (!output_ordering.is_empty()).then_some(output_ordering)
+        (!self.orderings.is_empty()).then(|| {
+            self.orderings
+                .iter()
+                .flatten()
+                .cloned()
+                .collect::<LexOrdering>()
+                .collapse()
+        })
     }
 
     // Append orderings in `other` to all existing orderings in this equivalence
@@ -856,7 +856,7 @@ mod tests {
             // ------- TEST CASE 5 ---------
             // Empty ordering
             (
-                vec![vec![]],
+                vec![],
                 // No ordering in the state (empty ordering is ignored).
                 vec![],
             ),

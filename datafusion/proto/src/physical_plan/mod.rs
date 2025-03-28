@@ -828,8 +828,8 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     filter,
                     &join_type.into(),
                     sym_join.null_equals_null,
-                    left_sort_exprs,
-                    right_sort_exprs,
+                    left_sort_exprs.map(Into::into),
+                    right_sort_exprs.map(Into::into),
                     partition_mode,
                 )
                 .map(|e| Arc::new(e) as _)

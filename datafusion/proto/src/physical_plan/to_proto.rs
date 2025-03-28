@@ -21,7 +21,7 @@ use std::sync::Arc;
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::physical_plan::FileSink;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
@@ -53,8 +53,8 @@ pub fn serialize_physical_aggr_expr(
 ) -> Result<protobuf::PhysicalExprNode> {
     let expressions = serialize_physical_exprs(&aggr_expr.expressions(), codec)?;
     let ordering_req = match aggr_expr.order_bys() {
-        Some(order) => order.clone(),
-        None => LexOrdering::default(),
+        Some(order) => order.to_vec(),
+        None => vec![],
     };
     let ordering_req = serialize_physical_sort_exprs(ordering_req, codec)?;
 
@@ -146,7 +146,10 @@ pub fn serialize_physical_window_expr(
 
     let args = serialize_physical_exprs(&args, codec)?;
     let partition_by = serialize_physical_exprs(window_expr.partition_by(), codec)?;
-    let order_by = serialize_physical_sort_exprs(window_expr.order_by().to_vec(), codec)?;
+    let order_by = serialize_physical_sort_exprs(
+        window_expr.order_by().map_or_else(Vec::new, |o| o.to_vec()),
+        codec,
+    )?;
     let window_frame: protobuf::WindowFrame = window_frame
         .as_ref()
         .try_into()

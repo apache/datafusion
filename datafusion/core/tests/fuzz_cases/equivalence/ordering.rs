@@ -55,7 +55,7 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
             col("f", &test_schema)?,
         ];
 
-        for n_req in 0..=col_exprs.len() {
+        for n_req in 1..=col_exprs.len() {
             for exprs in col_exprs.iter().combinations(n_req) {
                 let requirement = exprs
                     .into_iter()
@@ -127,7 +127,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
             a_plus_b,
         ];
 
-        for n_req in 0..=exprs.len() {
+        for n_req in 1..=exprs.len() {
             for exprs in exprs.iter().combinations(n_req) {
                 let requirement = exprs
                     .into_iter()

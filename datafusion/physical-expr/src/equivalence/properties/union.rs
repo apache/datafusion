@@ -247,7 +247,7 @@ impl UnionEquivalentOrderingBuilder {
         existing_ordering: &LexOrdering,
         existing_constants: &[ConstExpr],
     ) -> Option<LexOrdering> {
-        let mut augmented_ordering = LexOrdering::default();
+        let mut augmented_ordering = vec![];
         let mut sort_expr_iter = ordering.iter().peekable();
         let mut existing_sort_expr_iter = existing_ordering.iter().peekable();
 
@@ -274,7 +274,7 @@ impl UnionEquivalentOrderingBuilder {
             }
         }
 
-        Some(augmented_ordering)
+        (!augmented_ordering.is_empty()).then(|| LexOrdering::new(augmented_ordering))
     }
 
     fn build(self) -> Vec<LexOrdering> {

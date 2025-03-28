@@ -93,7 +93,7 @@ mod sp_repartition_fuzz_tests {
         };
 
         while !remaining_exprs.is_empty() {
-            let n_sort_expr = rng.gen_range(0..remaining_exprs.len() + 1);
+            let n_sort_expr = rng.gen_range(1..remaining_exprs.len() + 1);
             remaining_exprs.shuffle(&mut rng);
 
             let ordering = remaining_exprs
@@ -237,10 +237,7 @@ mod sp_repartition_fuzz_tests {
                 .collect::<Vec<_>>();
 
             // Returns concatenated version of the all available orderings
-            let exprs = eq_properties
-                .oeq_class()
-                .output_ordering()
-                .unwrap_or_default();
+            let exprs = eq_properties.oeq_class().output_ordering().unwrap();
 
             let context = SessionContext::new().task_ctx();
             let mem_reservation =

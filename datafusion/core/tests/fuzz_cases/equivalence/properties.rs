@@ -90,14 +90,16 @@ fn test_find_longest_permutation_random() -> Result<()> {
                 assert_eq!(ordering.len(), indices.len(), "{}", err_msg);
                 // Since ordered section satisfies schema, we expect
                 // that result will be same after sort (e.g sort was unnecessary).
-                assert!(
-                    is_table_same_after_sort(
-                        ordering.into(),
-                        table_data_with_properties.clone(),
-                    )?,
-                    "{}",
-                    err_msg
-                );
+                if !ordering.is_empty() {
+                    assert!(
+                        is_table_same_after_sort(
+                            ordering.into(),
+                            table_data_with_properties.clone(),
+                        )?,
+                        "{}",
+                        err_msg
+                    );
+                }
             }
         }
     }

@@ -319,9 +319,9 @@ fn roundtrip_udwf() -> Result<()> {
         &[
             col("a", &schema)?
         ],
-        &LexOrdering::new(vec![
+        Some(LexOrdering::new(vec![
             PhysicalSortExpr::new(col("b", &schema)?, SortOptions::new(true, true)),
-        ]),
+        ])),
         Arc::new(WindowFrame::new(None)),
     ));
 
@@ -358,13 +358,13 @@ fn roundtrip_window() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         nth_value_window,
         &[col("b", &schema)?],
-        &LexOrdering::new(vec![PhysicalSortExpr {
+        Some(LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }]),
+        }])),
         Arc::new(window_frame),
     ));
 
@@ -378,7 +378,7 @@ fn roundtrip_window() -> Result<()> {
         .build()
         .map(Arc::new)?,
         &[],
-        &LexOrdering::default(),
+        None,
         Arc::new(WindowFrame::new(None)),
     ));
 
@@ -398,7 +398,7 @@ fn roundtrip_window() -> Result<()> {
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
         sum_expr,
         &[],
-        &LexOrdering::default(),
+        None,
         Arc::new(window_frame),
     ));
 
@@ -1105,7 +1105,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr.clone(),
             &[col("author", &schema)?],
-            &LexOrdering::default(),
+            None,
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
@@ -1150,13 +1150,13 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         udwf,
         &[col("b", &schema)?],
-        &LexOrdering::new(vec![PhysicalSortExpr {
+        Some(LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }]),
+        }])),
         Arc::new(window_frame),
     ));
 
@@ -1213,7 +1213,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr,
             &[col("author", &schema)?],
-            &LexOrdering::default(),
+            None,
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,

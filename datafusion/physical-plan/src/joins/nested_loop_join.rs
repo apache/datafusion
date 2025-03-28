@@ -1052,7 +1052,7 @@ pub(crate) mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     use rstest::rstest;
 
@@ -1082,7 +1082,7 @@ pub(crate) mod tests {
         let mut source =
             TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
         if !sorted_column_names.is_empty() {
-            let mut sort_info = LexOrdering::default();
+            let mut sort_info = vec![];
             for name in sorted_column_names {
                 let index = schema.index_of(name).unwrap();
                 let sort_expr = PhysicalSortExpr {
@@ -1094,7 +1094,9 @@ pub(crate) mod tests {
                 };
                 sort_info.push(sort_expr);
             }
-            source = source.try_with_sort_information(vec![sort_info]).unwrap();
+            source = source
+                .try_with_sort_information(vec![sort_info.into()])
+                .unwrap();
         }
 
         Arc::new(TestMemoryExec::update_cache(Arc::new(source)))

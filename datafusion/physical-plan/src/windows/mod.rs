@@ -101,7 +101,7 @@ pub fn create_window_expr(
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: &LexOrdering,
+    order_by: Option<LexOrdering>,
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
     ignore_nulls: bool,
@@ -133,7 +133,7 @@ pub fn create_window_expr(
 /// Creates an appropriate [`WindowExpr`] based on the window frame and
 fn window_expr_from_aggregate_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: &LexOrdering,
+    order_by: Option<LexOrdering>,
     window_frame: Arc<WindowFrame>,
     aggregate: Arc<AggregateFunctionExpr>,
 ) -> Arc<dyn WindowExpr> {
@@ -374,6 +374,7 @@ pub(crate) fn window_equivalence_properties(
             .map(|pb_order| sort_options_resolving_constant(Arc::clone(pb_order)));
         let all_satisfied_lexs = partition_by_orders
             .multi_cartesian_product()
+            .filter(|lex| !lex.is_empty())
             .map(LexOrdering::new)
             .filter(|lex| window_eq_properties.ordering_satisfy(lex))
             .collect::<Vec<_>>();
@@ -593,7 +594,7 @@ pub fn get_best_fitting_window(
 /// the mode this window operator should work in to accommodate the existing ordering.
 pub fn get_window_mode(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_keys: &LexOrdering,
+    orderby_keys: Option<&LexOrdering>,
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
@@ -608,11 +609,14 @@ pub fn get_window_mode(
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
-    let reverse_orderby_keys = reverse_order_bys(orderby_keys);
-    for (should_swap, orderbys) in [(false, orderby_keys), (true, &reverse_orderby_keys)]
+    let reverse_orderby_keys = orderby_keys.map(reverse_order_bys);
+    for (should_swap, orderbys) in
+        [(false, orderby_keys), (true, reverse_orderby_keys.as_ref())]
     {
         let mut req = partition_by_reqs.clone();
-        req.extend(orderbys.iter().cloned().map(Into::into));
+        if let Some(ob) = orderbys {
+            req.extend(ob.iter().cloned().map(Into::into));
+        }
         if req.is_empty()
             || partition_by_eqs
                 .ordering_satisfy_requirement(&LexRequirement::new(req).collapse())
@@ -817,7 +821,7 @@ mod tests {
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],
-                &LexOrdering::default(),
+                None,
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
                 false,
@@ -1014,7 +1018,7 @@ mod tests {
                 partition_by_exprs.push(col(col_name, &test_schema)?);
             }
 
-            let mut order_by_exprs = LexOrdering::default();
+            let mut order_by_exprs = vec![];
             for col_name in order_by_params {
                 let expr = col(col_name, &test_schema)?;
                 // Give default ordering, this is same with input ordering direction
@@ -1024,7 +1028,7 @@ mod tests {
             }
             let res = get_window_mode(
                 &partition_by_exprs,
-                order_by_exprs.as_ref(),
+                Some(&order_by_exprs.into()),
                 &exec_unbounded,
             );
             // Since reversibility is not important in this test. Convert Option<(bool, InputOrderMode)> to Option<InputOrderMode>
@@ -1179,7 +1183,7 @@ mod tests {
                 partition_by_exprs.push(col(col_name, &test_schema)?);
             }
 
-            let mut order_by_exprs = LexOrdering::default();
+            let mut order_by_exprs = vec![];
             for (col_name, descending, nulls_first) in order_by_params {
                 let expr = col(col_name, &test_schema)?;
                 let options = SortOptions {
@@ -1190,7 +1194,7 @@ mod tests {
             }
 
             assert_eq!(
-                get_window_mode(&partition_by_exprs, order_by_exprs.as_ref(), &exec_unbounded),
+                get_window_mode(&partition_by_exprs, Some(&order_by_exprs.into()), &exec_unbounded),
                 *expected,
                 "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );

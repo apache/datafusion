@@ -109,14 +109,17 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>];
 
     /// Expressions that's from the window function's order by clause, empty if absent
-    fn order_by(&self) -> &LexOrdering;
+    fn order_by(&self) -> Option<&LexOrdering>;
 
     /// Get order by columns, empty if absent
     fn order_by_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        self.order_by()
+        let Some(order_bys) = self.order_by() else {
+            return Ok(vec![]);
+        };
+        order_bys
             .iter()
             .map(|e| e.evaluate_to_sort_column(batch))
-            .collect::<Result<Vec<SortColumn>>>()
+            .collect()
     }
 
     /// Get the window frame of this [WindowExpr].
@@ -134,11 +137,13 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn all_expressions(&self) -> WindowPhysicalExpressions {
         let args = self.expressions();
         let partition_by_exprs = self.partition_by().to_vec();
-        let order_by_exprs = self
-            .order_by()
-            .iter()
-            .map(|sort_expr| Arc::clone(&sort_expr.expr))
-            .collect::<Vec<_>>();
+        let order_by_exprs = if let Some(ob) = self.order_by() {
+            ob.iter()
+                .map(|sort_expr| Arc::clone(&sort_expr.expr))
+                .collect()
+        } else {
+            vec![]
+        };
         WindowPhysicalExpressions {
             args,
             partition_by_exprs,
@@ -190,8 +195,11 @@ pub trait AggregateWindowExpr: WindowExpr {
     fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let mut accumulator = self.get_accumulator()?;
         let mut last_range = Range { start: 0, end: 0 };
-        let sort_options: Vec<SortOptions> =
-            self.order_by().iter().map(|o| o.options).collect();
+        let sort_options = if let Some(ob) = self.order_by() {
+            ob.iter().map(|sort_expr| sort_expr.options).collect()
+        } else {
+            vec![]
+        };
         let mut window_frame_ctx =
             WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options);
         self.get_result_column(
@@ -239,8 +247,11 @@ pub trait AggregateWindowExpr: WindowExpr {
 
             // If there is no window state context, initialize it.
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
-                let sort_options: Vec<SortOptions> =
-                    self.order_by().iter().map(|o| o.options).collect();
+                let sort_options = if let Some(ob) = self.order_by() {
+                    ob.iter().map(|sort_expr| sort_expr.options).collect()
+                } else {
+                    vec![]
+                };
                 WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options)
             });
             let out_col = self.get_result_column(
@@ -344,13 +355,13 @@ pub(crate) fn is_end_bound_safe(
     window_frame_ctx: &WindowFrameContext,
     order_bys: &[ArrayRef],
     most_recent_order_bys: Option<&[ArrayRef]>,
-    sort_exprs: &LexOrdering,
+    sort_exprs: Option<&LexOrdering>,
     idx: usize,
 ) -> Result<bool> {
-    if sort_exprs.is_empty() {
+    let Some(sort_exprs) = sort_exprs else {
         // Early return if no sort expressions are present:
         return Ok(false);
-    }
+    };
 
     match window_frame_ctx {
         WindowFrameContext::Rows(window_frame) => {

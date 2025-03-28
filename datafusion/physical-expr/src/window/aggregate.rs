@@ -43,7 +43,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 pub struct PlainAggregateWindowExpr {
     aggregate: Arc<AggregateFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
-    order_by: LexOrdering,
+    order_by: Option<LexOrdering>,
     window_frame: Arc<WindowFrame>,
 }
 
@@ -52,13 +52,13 @@ impl PlainAggregateWindowExpr {
     pub fn new(
         aggregate: Arc<AggregateFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: &LexOrdering,
+        order_by: Option<LexOrdering>,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             aggregate,
             partition_by: partition_by.to_vec(),
-            order_by: order_by.clone(),
+            order_by,
             window_frame,
         }
     }
@@ -141,7 +141,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> &LexOrdering {
+    fn order_by(&self) -> Option<&LexOrdering> {
         self.order_by.as_ref()
     }
 
@@ -156,14 +156,14 @@ impl WindowExpr for PlainAggregateWindowExpr {
                 Arc::new(PlainAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
+                    self.order_by.as_ref().map(reverse_order_bys),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             } else {
                 Arc::new(SlidingAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
+                    self.order_by.as_ref().map(reverse_order_bys),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             }
