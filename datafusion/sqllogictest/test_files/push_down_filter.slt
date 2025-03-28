@@ -188,6 +188,7 @@ select * from test_filter_with_limit where value = 2 limit 1;
 ----
 2 2
 
+
 # Tear down test_filter_with_limit table:
 statement ok
 DROP TABLE test_filter_with_limit;
@@ -195,3 +196,66 @@ DROP TABLE test_filter_with_limit;
 # Tear down src_table table:
 statement ok
 DROP TABLE src_table;
+
+
+query I
+COPY (VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10))
+TO 'test_files/scratch/push_down_filter/t.parquet'
+STORED AS PARQUET;
+----
+10
+
+statement ok
+CREATE EXTERNAL TABLE t
+(
+  a INT
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter/t.parquet';
+
+
+# The predicate should not have a column cast  when the value is a valid i32
+query TT
+explain select a from t where a = '100';
+----
+logical_plan TableScan: t projection=[a], full_filters=[t.a = Int32(100)]
+
+# The predicate should not have a column cast  when the value is a valid i32
+query TT
+explain select a from t where a != '100';
+----
+logical_plan TableScan: t projection=[a], full_filters=[t.a != Int32(100)]
+
+# The predicate should still have the column cast when the value is a NOT valid i32
+query TT
+explain select a from t where a = '99999999999';
+----
+logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("99999999999")]
+
+# The predicate should still have the column cast when the value is a NOT valid i32
+query TT
+explain select a from t where a = '99.99';
+----
+logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("99.99")]
+
+# The predicate should still have the column cast when the value is a NOT valid i32
+query TT
+explain select a from t where a = '';
+----
+logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("")]
+
+# The predicate should not have a column cast when the operator is = or != and the literal can be round-trip casted without losing information.
+query TT
+explain select a from t where cast(a as string) = '100';
+----
+logical_plan TableScan: t projection=[a], full_filters=[t.a = Int32(100)]
+
+# The predicate should still have the column cast when the literal alters its string representation after round-trip casting (leading zero lost).
+query TT
+explain select a from t where CAST(a AS string) = '0123';
+----
+logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("0123")]
+
+
+statement ok
+drop table t;

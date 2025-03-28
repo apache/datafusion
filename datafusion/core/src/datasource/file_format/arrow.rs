@@ -50,6 +50,7 @@ use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
@@ -297,7 +298,7 @@ impl DisplayAs for ArrowFileSink {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ArrowFileSink(file_groups=",)?;
-                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {

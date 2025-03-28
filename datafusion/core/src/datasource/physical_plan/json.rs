@@ -36,11 +36,10 @@ mod tests {
     use crate::prelude::{CsvReadOptions, NdJsonReadOptions, SessionContext};
     use crate::test::partitioned_file_groups;
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common::Result;
-    use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::PartitionedFile;
     use datafusion_datasource_json::JsonFormat;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::object_store::ObjectStoreUrl;
@@ -49,6 +48,8 @@ mod tests {
     use arrow::array::Array;
     use arrow::datatypes::SchemaRef;
     use arrow::datatypes::{Field, SchemaBuilder};
+    use datafusion_datasource::file_groups::FileGroup;
+    use insta::assert_snapshot;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
@@ -62,7 +63,7 @@ mod tests {
         state: &SessionState,
         file_compression_type: FileCompressionType,
         work_dir: &Path,
-    ) -> (ObjectStoreUrl, Vec<Vec<PartitionedFile>>, SchemaRef) {
+    ) -> (ObjectStoreUrl, Vec<FileGroup>, SchemaRef) {
         let store_url = ObjectStoreUrl::local_filesystem();
         let store = state.runtime_env().object_store(&store_url).unwrap();
 
@@ -79,6 +80,7 @@ mod tests {
         let meta = file_groups
             .first()
             .unwrap()
+            .files()
             .first()
             .unwrap()
             .clone()
@@ -113,6 +115,7 @@ mod tests {
         let path = file_groups
             .first()
             .unwrap()
+            .files()
             .first()
             .unwrap()
             .object_meta
@@ -134,19 +137,17 @@ mod tests {
         let frame = ctx.read_json(path, read_options).await.unwrap();
         let results = frame.collect().await.unwrap();
 
-        assert_batches_eq!(
-            &[
-                "+-----+------------------+---------------+------+",
-                "| a   | b                | c             | d    |",
-                "+-----+------------------+---------------+------+",
-                "| 1   | [2.0, 1.3, -6.1] | [false, true] | 4    |",
-                "| -10 | [2.0, 1.3, -6.1] | [true, true]  | 4    |",
-                "| 2   | [2.0, , -6.1]    | [false, ]     | text |",
-                "|     |                  |               |      |",
-                "+-----+------------------+---------------+------+",
-            ],
-            &results
-        );
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&results), @r###"
+            +-----+------------------+---------------+------+
+            | a   | b                | c             | d    |
+            +-----+------------------+---------------+------+
+            | 1   | [2.0, 1.3, -6.1] | [false, true] | 4    |
+            | -10 | [2.0, 1.3, -6.1] | [true, true]  | 4    |
+            | 2   | [2.0, , -6.1]    | [false, ]     | text |
+            |     |                  |               |      |
+            +-----+------------------+---------------+------+
+        "###);}
+
         Ok(())
     }
 
@@ -537,6 +538,7 @@ mod tests {
     async fn test_json_with_repartitioning(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        use datafusion_common::assert_batches_sorted_eq;
         use datafusion_execution::config::SessionConfig;
 
         let config = SessionConfig::new()
@@ -560,6 +562,7 @@ mod tests {
         let path = file_groups
             .first()
             .unwrap()
+            .files()
             .first()
             .unwrap()
             .object_meta

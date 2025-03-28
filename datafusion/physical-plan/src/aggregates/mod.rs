@@ -1427,10 +1427,8 @@ mod tests {
     };
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Int32Type};
-    use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, internal_err, DataFusionError,
-        ScalarValue,
-    };
+    use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
+    use datafusion_common::{internal_err, DataFusionError, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -1447,6 +1445,7 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use futures::{FutureExt, Stream};
+    use insta::{allow_duplicates, assert_snapshot};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -1603,56 +1602,63 @@ mod tests {
         let result =
             collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
-        let expected = if spill {
+        if spill {
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
             // we trigger the early emit rule, which turns out the partial aggregate result.
-            vec![
-                "+---+-----+---------------+-----------------+",
-                "| a | b   | __grouping_id | COUNT(1)[count] |",
-                "+---+-----+---------------+-----------------+",
-                "|   | 1.0 | 2             | 1               |",
-                "|   | 1.0 | 2             | 1               |",
-                "|   | 2.0 | 2             | 1               |",
-                "|   | 2.0 | 2             | 1               |",
-                "|   | 3.0 | 2             | 1               |",
-                "|   | 3.0 | 2             | 1               |",
-                "|   | 4.0 | 2             | 1               |",
-                "|   | 4.0 | 2             | 1               |",
-                "| 2 |     | 1             | 1               |",
-                "| 2 |     | 1             | 1               |",
-                "| 2 | 1.0 | 0             | 1               |",
-                "| 2 | 1.0 | 0             | 1               |",
-                "| 3 |     | 1             | 1               |",
-                "| 3 |     | 1             | 2               |",
-                "| 3 | 2.0 | 0             | 2               |",
-                "| 3 | 3.0 | 0             | 1               |",
-                "| 4 |     | 1             | 1               |",
-                "| 4 |     | 1             | 2               |",
-                "| 4 | 3.0 | 0             | 1               |",
-                "| 4 | 4.0 | 0             | 2               |",
-                "+---+-----+---------------+-----------------+",
-            ]
+            allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&result),
+            @r"
++---+-----+---------------+-----------------+
+| a | b   | __grouping_id | COUNT(1)[count] |
++---+-----+---------------+-----------------+
+|   | 1.0 | 2             | 1               |
+|   | 1.0 | 2             | 1               |
+|   | 2.0 | 2             | 1               |
+|   | 2.0 | 2             | 1               |
+|   | 3.0 | 2             | 1               |
+|   | 3.0 | 2             | 1               |
+|   | 4.0 | 2             | 1               |
+|   | 4.0 | 2             | 1               |
+| 2 |     | 1             | 1               |
+| 2 |     | 1             | 1               |
+| 2 | 1.0 | 0             | 1               |
+| 2 | 1.0 | 0             | 1               |
+| 3 |     | 1             | 1               |
+| 3 |     | 1             | 2               |
+| 3 | 2.0 | 0             | 2               |
+| 3 | 3.0 | 0             | 1               |
+| 4 |     | 1             | 1               |
+| 4 |     | 1             | 2               |
+| 4 | 3.0 | 0             | 1               |
+| 4 | 4.0 | 0             | 2               |
++---+-----+---------------+-----------------+
+            "
+            );
+            }
         } else {
-            vec![
-                "+---+-----+---------------+-----------------+",
-                "| a | b   | __grouping_id | COUNT(1)[count] |",
-                "+---+-----+---------------+-----------------+",
-                "|   | 1.0 | 2             | 2               |",
-                "|   | 2.0 | 2             | 2               |",
-                "|   | 3.0 | 2             | 2               |",
-                "|   | 4.0 | 2             | 2               |",
-                "| 2 |     | 1             | 2               |",
-                "| 2 | 1.0 | 0             | 2               |",
-                "| 3 |     | 1             | 3               |",
-                "| 3 | 2.0 | 0             | 2               |",
-                "| 3 | 3.0 | 0             | 1               |",
-                "| 4 |     | 1             | 3               |",
-                "| 4 | 3.0 | 0             | 1               |",
-                "| 4 | 4.0 | 0             | 2               |",
-                "+---+-----+---------------+-----------------+",
-            ]
+            allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&result),
+            @r"
++---+-----+---------------+-----------------+
+| a | b   | __grouping_id | COUNT(1)[count] |
++---+-----+---------------+-----------------+
+|   | 1.0 | 2             | 2               |
+|   | 2.0 | 2             | 2               |
+|   | 3.0 | 2             | 2               |
+|   | 4.0 | 2             | 2               |
+| 2 |     | 1             | 2               |
+| 2 | 1.0 | 0             | 2               |
+| 3 |     | 1             | 3               |
+| 3 | 2.0 | 0             | 2               |
+| 3 | 3.0 | 0             | 1               |
+| 4 |     | 1             | 3               |
+| 4 | 3.0 | 0             | 1               |
+| 4 | 4.0 | 0             | 2               |
++---+-----+---------------+-----------------+
+            "
+            );
+            }
         };
-        assert_batches_sorted_eq!(expected, &result);
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
@@ -1678,26 +1684,29 @@ mod tests {
         assert_eq!(batch.num_columns(), 4);
         assert_eq!(batch.num_rows(), 12);
 
-        let expected = vec![
-            "+---+-----+---------------+----------+",
-            "| a | b   | __grouping_id | COUNT(1) |",
-            "+---+-----+---------------+----------+",
-            "|   | 1.0 | 2             | 2        |",
-            "|   | 2.0 | 2             | 2        |",
-            "|   | 3.0 | 2             | 2        |",
-            "|   | 4.0 | 2             | 2        |",
-            "| 2 |     | 1             | 2        |",
-            "| 2 | 1.0 | 0             | 2        |",
-            "| 3 |     | 1             | 3        |",
-            "| 3 | 2.0 | 0             | 2        |",
-            "| 3 | 3.0 | 0             | 1        |",
-            "| 4 |     | 1             | 3        |",
-            "| 4 | 3.0 | 0             | 1        |",
-            "| 4 | 4.0 | 0             | 2        |",
-            "+---+-----+---------------+----------+",
-        ];
-
-        assert_batches_sorted_eq!(&expected, &result);
+        allow_duplicates! {
+        assert_snapshot!(
+            batches_to_sort_string(&result),
+            @r"
+            +---+-----+---------------+----------+
+            | a | b   | __grouping_id | COUNT(1) |
+            +---+-----+---------------+----------+
+            |   | 1.0 | 2             | 2        |
+            |   | 2.0 | 2             | 2        |
+            |   | 3.0 | 2             | 2        |
+            |   | 4.0 | 2             | 2        |
+            | 2 |     | 1             | 2        |
+            | 2 | 1.0 | 0             | 2        |
+            | 3 |     | 1             | 3        |
+            | 3 | 2.0 | 0             | 2        |
+            | 3 | 3.0 | 0             | 1        |
+            | 4 |     | 1             | 3        |
+            | 4 | 3.0 | 0             | 1        |
+            | 4 | 4.0 | 0             | 2        |
+            +---+-----+---------------+----------+
+            "
+        );
+        }
 
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
@@ -1742,30 +1751,33 @@ mod tests {
         let result =
             collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
-        let expected = if spill {
-            vec![
-                "+---+---------------+-------------+",
-                "| a | AVG(b)[count] | AVG(b)[sum] |",
-                "+---+---------------+-------------+",
-                "| 2 | 1             | 1.0         |",
-                "| 2 | 1             | 1.0         |",
-                "| 3 | 1             | 2.0         |",
-                "| 3 | 2             | 5.0         |",
-                "| 4 | 3             | 11.0        |",
-                "+---+---------------+-------------+",
-            ]
+        if spill {
+            allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&result), @r"
+                +---+---------------+-------------+
+                | a | AVG(b)[count] | AVG(b)[sum] |
+                +---+---------------+-------------+
+                | 2 | 1             | 1.0         |
+                | 2 | 1             | 1.0         |
+                | 3 | 1             | 2.0         |
+                | 3 | 2             | 5.0         |
+                | 4 | 3             | 11.0        |
+                +---+---------------+-------------+
+            ");
+            }
         } else {
-            vec![
-                "+---+---------------+-------------+",
-                "| a | AVG(b)[count] | AVG(b)[sum] |",
-                "+---+---------------+-------------+",
-                "| 2 | 2             | 2.0         |",
-                "| 3 | 3             | 7.0         |",
-                "| 4 | 3             | 11.0        |",
-                "+---+---------------+-------------+",
-            ]
+            allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&result), @r"
+                +---+---------------+-------------+
+                | a | AVG(b)[count] | AVG(b)[sum] |
+                +---+---------------+-------------+
+                | 2 | 2             | 2.0         |
+                | 3 | 3             | 7.0         |
+                | 4 | 3             | 11.0        |
+                +---+---------------+-------------+
+            ");
+            }
         };
-        assert_batches_sorted_eq!(expected, &result);
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
@@ -1791,17 +1803,19 @@ mod tests {
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.num_rows(), 3);
 
-        let expected = vec![
-            "+---+--------------------+",
-            "| a | AVG(b)             |",
-            "+---+--------------------+",
-            "| 2 | 1.0                |",
-            "| 3 | 2.3333333333333335 |", // 3, (2 + 3 + 2) / 3
-            "| 4 | 3.6666666666666665 |", // 4, (3 + 4 + 4) / 3
-            "+---+--------------------+",
-        ];
-
-        assert_batches_sorted_eq!(&expected, &result);
+        allow_duplicates! {
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+            +---+--------------------+
+            | a | AVG(b)             |
+            +---+--------------------+
+            | 2 | 1.0                |
+            | 3 | 2.3333333333333335 |
+            | 4 | 3.6666666666666665 |
+            +---+--------------------+
+            ");
+            // For row 2: 3, (2 + 3 + 2) / 3
+            // For row 3: 4, (3 + 4 + 4) / 3
+        }
 
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
@@ -2315,27 +2329,29 @@ mod tests {
 
         let result = crate::collect(aggregate_final, task_ctx).await?;
         if is_first_acc {
-            let expected = [
-                "+---+--------------------------------------------+",
-                "| a | first_value(b) ORDER BY [b ASC NULLS LAST] |",
-                "+---+--------------------------------------------+",
-                "| 2 | 0.0                                        |",
-                "| 3 | 1.0                                        |",
-                "| 4 | 3.0                                        |",
-                "+---+--------------------------------------------+",
-            ];
-            assert_batches_eq!(expected, &result);
+            allow_duplicates! {
+            assert_snapshot!(batches_to_string(&result), @r"
+                +---+--------------------------------------------+
+                | a | first_value(b) ORDER BY [b ASC NULLS LAST] |
+                +---+--------------------------------------------+
+                | 2 | 0.0                                        |
+                | 3 | 1.0                                        |
+                | 4 | 3.0                                        |
+                +---+--------------------------------------------+
+                ");
+            }
         } else {
-            let expected = [
-                "+---+-------------------------------------------+",
-                "| a | last_value(b) ORDER BY [b ASC NULLS LAST] |",
-                "+---+-------------------------------------------+",
-                "| 2 | 3.0                                       |",
-                "| 3 | 5.0                                       |",
-                "| 4 | 6.0                                       |",
-                "+---+-------------------------------------------+",
-            ];
-            assert_batches_eq!(expected, &result);
+            allow_duplicates! {
+            assert_snapshot!(batches_to_string(&result), @r"
+                +---+-------------------------------------------+
+                | a | last_value(b) ORDER BY [b ASC NULLS LAST] |
+                +---+-------------------------------------------+
+                | 2 | 3.0                                       |
+                | 3 | 5.0                                       |
+                | 4 | 6.0                                       |
+                +---+-------------------------------------------+
+                ");
+            }
         };
         Ok(())
     }
@@ -2528,16 +2544,17 @@ mod tests {
         let output =
             collect(aggregate_exec.execute(0, Arc::new(TaskContext::default()))?).await?;
 
-        let expected = [
-            "+-----+-----+-------+---------------+-------+",
-            "| a   | b   | const | __grouping_id | 1     |",
-            "+-----+-----+-------+---------------+-------+",
-            "|     |     | 1     | 6             | 32768 |",
-            "|     | 0.0 |       | 5             | 32768 |",
-            "| 0.0 |     |       | 3             | 32768 |",
-            "+-----+-----+-------+---------------+-------+",
-        ];
-        assert_batches_sorted_eq!(expected, &output);
+        allow_duplicates! {
+        assert_snapshot!(batches_to_sort_string(&output), @r"
+            +-----+-----+-------+---------------+-------+
+            | a   | b   | const | __grouping_id | 1     |
+            +-----+-----+-------+---------------+-------+
+            |     |     | 1     | 6             | 32768 |
+            |     | 0.0 |       | 5             | 32768 |
+            | 0.0 |     |       | 3             | 32768 |
+            +-----+-----+-------+---------------+-------+
+        ");
+        }
 
         Ok(())
     }
@@ -2643,15 +2660,16 @@ mod tests {
         let ctx = TaskContext::default().with_session_config(session_config);
         let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
 
-        let expected = [
-            "+--------------+------------+",
-            "| labels       | SUM(value) |",
-            "+--------------+------------+",
-            "| {a: a, b: b} | 2          |",
-            "| {a: , b: c}  | 1          |",
-            "+--------------+------------+",
-        ];
-        assert_batches_eq!(expected, &output);
+        allow_duplicates! {
+        assert_snapshot!(batches_to_string(&output), @r"
+            +--------------+------------+
+            | labels       | SUM(value) |
+            +--------------+------------+
+            | {a: a, b: b} | 2          |
+            | {a: , b: c}  | 1          |
+            +--------------+------------+
+            ");
+        }
 
         Ok(())
     }
@@ -2718,19 +2736,20 @@ mod tests {
         let ctx = TaskContext::default().with_session_config(session_config);
         let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
 
-        let expected = [
-            "+-----+-------------------+",
-            "| key | COUNT(val)[count] |",
-            "+-----+-------------------+",
-            "| 1   | 1                 |",
-            "| 2   | 1                 |",
-            "| 3   | 1                 |",
-            "| 2   | 1                 |",
-            "| 3   | 1                 |",
-            "| 4   | 1                 |",
-            "+-----+-------------------+",
-        ];
-        assert_batches_eq!(expected, &output);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&output), @r"
+            +-----+-------------------+
+            | key | COUNT(val)[count] |
+            +-----+-------------------+
+            | 1   | 1                 |
+            | 2   | 1                 |
+            | 3   | 1                 |
+            | 2   | 1                 |
+            | 3   | 1                 |
+            | 4   | 1                 |
+            +-----+-------------------+
+            ");
+        }
 
         Ok(())
     }
@@ -2805,20 +2824,21 @@ mod tests {
         let ctx = TaskContext::default().with_session_config(session_config);
         let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
 
-        let expected = [
-            "+-----+-------------------+",
-            "| key | COUNT(val)[count] |",
-            "+-----+-------------------+",
-            "| 1   | 1                 |",
-            "| 2   | 2                 |",
-            "| 3   | 2                 |",
-            "| 4   | 1                 |",
-            "| 2   | 1                 |",
-            "| 3   | 1                 |",
-            "| 4   | 1                 |",
-            "+-----+-------------------+",
-        ];
-        assert_batches_eq!(expected, &output);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&output), @r"
+            +-----+-------------------+
+            | key | COUNT(val)[count] |
+            +-----+-------------------+
+            | 1   | 1                 |
+            | 2   | 2                 |
+            | 3   | 2                 |
+            | 4   | 1                 |
+            | 2   | 1                 |
+            | 3   | 1                 |
+            | 4   | 1                 |
+            +-----+-------------------+
+            ");
+        }
 
         Ok(())
     }
@@ -2949,19 +2969,17 @@ mod tests {
 
         assert_spill_count_metric(expect_spill, single_aggregate);
 
-        #[rustfmt::skip]
-        assert_batches_sorted_eq!(
-            [
-                "+---+--------+--------+",
-                "| a | MIN(b) | AVG(b) |",
-                "+---+--------+--------+",
-                "| 2 | 1.0    | 1.0    |",
-                "| 3 | 2.0    | 2.0    |",
-                "| 4 | 3.0    | 3.5    |",
-                "+---+--------+--------+",
-            ],
-            &result
-        );
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&result), @r"
+                +---+--------+--------+
+                | a | MIN(b) | AVG(b) |
+                +---+--------+--------+
+                | 2 | 1.0    | 1.0    |
+                | 3 | 2.0    | 2.0    |
+                | 4 | 3.0    | 3.5    |
+                +---+--------+--------+
+            ");
+        }
 
         Ok(())
     }

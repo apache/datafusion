@@ -33,7 +33,7 @@ use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
@@ -793,8 +793,13 @@ impl BinaryExpr {
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
             StringConcat => concat_elements(left, right),
-            AtArrow | ArrowAt => {
-                unreachable!("ArrowAt and AtArrow should be rewritten to function")
+            AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
+            | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
+            | IntegerDivide => {
+                not_impl_err!(
+                    "Binary operator '{:?}' is not supported in the physical expr",
+                    self.op
+                )
             }
         }
     }
@@ -1020,9 +1025,9 @@ mod tests {
             DataType::UInt32,
             vec![1u32, 2u32],
             Operator::Plus,
-            Int32Array,
-            DataType::Int32,
-            [2i32, 4i32],
+            Int64Array,
+            DataType::Int64,
+            [2i64, 4i64],
         );
         test_coercion!(
             Int32Array,

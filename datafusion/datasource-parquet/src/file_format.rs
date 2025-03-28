@@ -23,20 +23,13 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::can_expr_be_pushed_down_with_schemas;
+use crate::source::ParquetSource;
+
 use arrow::array::RecordBatch;
-use arrow::datatypes::{Fields, Schema, SchemaRef};
-use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
-use datafusion_datasource::write::{create_writer, get_writer_schema, SharedBuffer};
-
-use datafusion_datasource::file_format::{
-    FileFormat, FileFormatFactory, FilePushdownSupport,
-};
-use datafusion_datasource::write::demux::DemuxedStreamReceiver;
-
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_catalog::Session;
+use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
@@ -48,7 +41,15 @@ use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::file_format::{
+    FileFormat, FileFormatFactory, FilePushdownSupport,
+};
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
+use datafusion_datasource::write::demux::DemuxedStreamReceiver;
+use datafusion_datasource::write::{create_writer, get_writer_schema, SharedBuffer};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
@@ -57,11 +58,11 @@ use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::Accumulator;
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_session::Session;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::debug;
@@ -82,9 +83,6 @@ use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-
-use crate::can_expr_be_pushed_down_with_schemas;
-use crate::source::ParquetSource;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -796,10 +794,34 @@ pub async fn fetch_statistics(
     statistics_from_parquet_meta_calc(&metadata, table_schema)
 }
 
-/// Convert statistics in  [`ParquetMetaData`] into [`Statistics`] using ['StatisticsConverter`]
+/// Convert statistics in [`ParquetMetaData`] into [`Statistics`] using [`StatisticsConverter`]
 ///
 /// The statistics are calculated for each column in the table schema
 /// using the row group statistics in the parquet metadata.
+///
+/// # Key behaviors:
+///
+/// 1. Extracts row counts and byte sizes from all row groups
+/// 2. Applies schema type coercions to align file schema with table schema
+/// 3. Collects and aggregates statistics across row groups when available
+///
+/// # When there are no statistics:
+///
+/// If the Parquet file doesn't contain any statistics (has_statistics is false), the function returns a Statistics object with:
+/// - Exact row count
+/// - Exact byte size
+/// - All column statistics marked as unknown via Statistics::unknown_column(&table_schema)
+/// # When only some columns have statistics:
+///
+/// For columns with statistics:
+/// - Min/max values are properly extracted and represented as Precision::Exact
+/// - Null counts are calculated by summing across row groups
+///
+/// For columns without statistics,
+/// - For min/max, there are two situations:
+///     1. The column isn't in arrow schema, then min/max values are set to Precision::Absent
+///     2. The column is in arrow schema, but not in parquet schema due to schema revolution, min/max values are set to Precision::Exact(null)
+/// - Null counts are set to Precision::Exact(num_rows) (conservatively assuming all values could be null)
 pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
@@ -815,9 +837,10 @@ pub fn statistics_from_parquet_meta_calc(
         total_byte_size += row_group_meta.total_byte_size() as usize;
 
         if !has_statistics {
-            row_group_meta.columns().iter().for_each(|column| {
-                has_statistics = column.statistics().is_some();
-            });
+            has_statistics = row_group_meta
+                .columns()
+                .iter()
+                .any(|column| column.statistics().is_some());
         }
     }
     statistics.num_rows = Precision::Exact(num_rows);
@@ -958,7 +981,7 @@ impl DisplayAs for ParquetSink {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ParquetSink(file_groups=",)?;
-                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {

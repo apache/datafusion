@@ -1223,9 +1223,8 @@ mod tests {
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{
-        assert_batches_eq, exec_datafusion_err, Result, ScalarValue,
-    };
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::{exec_datafusion_err, Result, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::{
         RecordBatchStream, SendableRecordBatchStream, TaskContext,
@@ -1242,6 +1241,7 @@ mod tests {
 
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
+    use insta::assert_snapshot;
     use itertools::Itertools;
     use tokio::time::timeout;
 
@@ -1665,22 +1665,21 @@ mod tests {
             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
-        let expected = [
-            "+---+------+---------------+---------------+",
-            "| a | last | nth_value(-1) | nth_value(-2) |",
-            "+---+------+---------------+---------------+",
-            "| 1 | 1    | 1             |               |",
-            "| 2 | 2    | 2             | 1             |",
-            "| 3 | 3    | 3             | 2             |",
-            "| 1 | 1    | 1             | 3             |",
-            "| 2 | 2    | 2             | 1             |",
-            "| 3 | 3    | 3             | 2             |",
-            "| 1 | 1    | 1             | 3             |",
-            "| 2 | 2    | 2             | 1             |",
-            "| 3 | 3    | 3             | 2             |",
-            "+---+------+---------------+---------------+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +---+------+---------------+---------------+
+            | a | last | nth_value(-1) | nth_value(-2) |
+            +---+------+---------------+---------------+
+            | 1 | 1    | 1             |               |
+            | 2 | 2    | 2             | 1             |
+            | 3 | 3    | 3             | 2             |
+            | 1 | 1    | 1             | 3             |
+            | 2 | 2    | 2             | 1             |
+            | 3 | 3    | 3             | 2             |
+            | 1 | 1    | 1             | 3             |
+            | 2 | 2    | 2             | 1             |
+            | 3 | 3    | 3             | 2             |
+            +---+------+---------------+---------------+
+            "#);
         Ok(())
     }
 
@@ -1793,21 +1792,20 @@ mod tests {
         let task_ctx = task_context();
         let batches = collect_with_timeout(plan, task_ctx, timeout_duration).await?;
 
-        let expected = [
-            "+----+------+-------+",
-            "| sn | hash | col_2 |",
-            "+----+------+-------+",
-            "| 0  | 2    | 2     |",
-            "| 1  | 2    | 2     |",
-            "| 2  | 2    | 2     |",
-            "| 3  | 2    | 1     |",
-            "| 4  | 1    | 2     |",
-            "| 5  | 1    | 2     |",
-            "| 6  | 1    | 2     |",
-            "| 7  | 1    | 1     |",
-            "+----+------+-------+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+------+-------+
+            | sn | hash | col_2 |
+            +----+------+-------+
+            | 0  | 2    | 2     |
+            | 1  | 2    | 2     |
+            | 2  | 2    | 2     |
+            | 3  | 2    | 1     |
+            | 4  | 1    | 2     |
+            | 5  | 1    | 2     |
+            | 6  | 1    | 2     |
+            | 7  | 1    | 1     |
+            +----+------+-------+
+            "#);
 
         Ok(())
     }

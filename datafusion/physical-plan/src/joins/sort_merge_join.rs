@@ -43,12 +43,14 @@ use crate::joins::utils::{
     reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
     JoinOnRef,
 };
-use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use crate::metrics::{
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics,
+};
 use crate::projection::{
     join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_on, ProjectionExec,
 };
-use crate::spill::spill_record_batches;
+use crate::spill::spill_manager::SpillManager;
 use crate::{
     metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
@@ -598,12 +600,8 @@ struct SortMergeJoinMetrics {
     /// Peak memory used for buffered data.
     /// Calculated as sum of peak memory values across partitions
     peak_mem_used: metrics::Gauge,
-    /// count of spills during the execution of the operator
-    spill_count: Count,
-    /// total spilled bytes during the execution of the operator
-    spilled_bytes: Count,
-    /// total spilled rows during the execution of the operator
-    spilled_rows: Count,
+    /// Metrics related to spilling
+    spill_metrics: SpillMetrics,
 }
 
 impl SortMergeJoinMetrics {
@@ -617,9 +615,7 @@ impl SortMergeJoinMetrics {
             MetricBuilder::new(metrics).counter("output_batches", partition);
         let output_rows = MetricBuilder::new(metrics).output_rows(partition);
         let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
-        let spill_count = MetricBuilder::new(metrics).spill_count(partition);
-        let spilled_bytes = MetricBuilder::new(metrics).spilled_bytes(partition);
-        let spilled_rows = MetricBuilder::new(metrics).spilled_rows(partition);
+        let spill_metrics = SpillMetrics::new(metrics, partition);
 
         Self {
             join_time,
@@ -628,9 +624,7 @@ impl SortMergeJoinMetrics {
             output_batches,
             output_rows,
             peak_mem_used,
-            spill_count,
-            spilled_bytes,
-            spilled_rows,
+            spill_metrics,
         }
     }
 }
@@ -886,6 +880,8 @@ struct SortMergeJoinStream {
     pub reservation: MemoryReservation,
     /// Runtime env
     pub runtime_env: Arc<RuntimeEnv>,
+    /// Manages the process of spilling and reading back intermediate data
+    pub spill_manager: SpillManager,
     /// A unique number for each batch
     pub streamed_batch_counter: AtomicUsize,
 }
@@ -1303,6 +1299,11 @@ impl SortMergeJoinStream {
     ) -> Result<Self> {
         let streamed_schema = streamed.schema();
         let buffered_schema = buffered.schema();
+        let spill_manager = SpillManager::new(
+            Arc::clone(&runtime_env),
+            join_metrics.spill_metrics.clone(),
+            Arc::clone(&buffered_schema),
+        );
         Ok(Self {
             state: SortMergeJoinState::Init,
             sort_options,
@@ -1335,6 +1336,7 @@ impl SortMergeJoinStream {
             join_metrics,
             reservation,
             runtime_env,
+            spill_manager,
             streamed_batch_counter: AtomicUsize::new(0),
         })
     }
@@ -1404,27 +1406,19 @@ impl SortMergeJoinStream {
                 Ok(())
             }
             Err(_) if self.runtime_env.disk_manager.tmp_files_enabled() => {
-                // spill buffered batch to disk
-                let spill_file = self
-                    .runtime_env
-                    .disk_manager
-                    .create_tmp_file("sort_merge_join_buffered_spill")?;
-
+                // Spill buffered batch to disk
                 if let Some(batch) = buffered_batch.batch {
-                    spill_record_batches(
-                        &[batch],
-                        spill_file.path().into(),
-                        Arc::clone(&self.buffered_schema),
-                    )?;
+                    let spill_file = self
+                        .spill_manager
+                        .spill_record_batch_and_finish(
+                            &[batch],
+                            "sort_merge_join_buffered_spill",
+                        )?
+                        .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
+
                     buffered_batch.spill_file = Some(spill_file);
                     buffered_batch.batch = None;
 
-                    // update metrics to register spill
-                    self.join_metrics.spill_count.add(1);
-                    self.join_metrics
-                        .spilled_bytes
-                        .add(buffered_batch.size_estimation);
-                    self.join_metrics.spilled_rows.add(buffered_batch.num_rows);
                     Ok(())
                 } else {
                     internal_err!("Buffered batch has empty body")
@@ -2296,8 +2290,8 @@ fn fetch_right_columns_from_batch_by_idxs(
                 });
             }
 
-            Ok(buffered_cols)
-        }
+                Ok(buffered_cols)
+            }
         // Invalid combination
         (spill, batch) => internal_err!("Unexpected buffered batch spill status. Spill exists: {}. In-memory exists: {}", spill.is_some(), batch.is_some()),
     }
@@ -2549,10 +2543,11 @@ mod tests {
     use arrow::compute::{concat_batches, filter_record_batch, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema};
 
-    use datafusion_common::JoinSide;
     use datafusion_common::JoinType::*;
+    use datafusion_common::{assert_batches_eq, assert_contains, JoinType, Result};
     use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, assert_contains, JoinType, Result,
+        test_util::{batches_to_sort_string, batches_to_string},
+        JoinSide,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::disk_manager::DiskManagerConfig;
@@ -2560,6 +2555,7 @@ mod tests {
     use datafusion_execution::TaskContext;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::BinaryExpr;
+    use insta::{allow_duplicates, assert_snapshot};
 
     use crate::expressions::Column;
     use crate::joins::sort_merge_join::{get_corrected_filter_mask, JoinedRecordBatches};
@@ -2805,17 +2801,16 @@ mod tests {
 
         let (_, batches) = join_collect(left, right, on, Inner).await?;
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 3  | 5  | 9  | 20 | 5  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 5  | 9  | 20 | 5  | 80 |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -2843,17 +2838,17 @@ mod tests {
         ];
 
         let (_columns, batches) = join_collect(left, right, on, Inner).await?;
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b2 | c1 | a1 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 1  | 7  | 1  | 1  | 70 |",
-            "| 2  | 2  | 8  | 2  | 2  | 80 |",
-            "| 2  | 2  | 9  | 2  | 2  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
+
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b2 | c1 | a1 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 1  | 7  | 1  | 1  | 70 |
+            | 2  | 2  | 8  | 2  | 2  | 80 |
+            | 2  | 2  | 9  | 2  | 2  | 80 |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -2881,18 +2876,18 @@ mod tests {
         ];
 
         let (_columns, batches) = join_collect(left, right, on, Inner).await?;
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b2 | c1 | a1 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 1  | 7  | 1  | 1  | 70 |",
-            "| 1  | 1  | 7  | 1  | 1  | 80 |",
-            "| 1  | 1  | 8  | 1  | 1  | 70 |",
-            "| 1  | 1  | 8  | 1  | 1  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
+
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b2 | c1 | a1 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 1  | 7  | 1  | 1  | 70 |
+            | 1  | 1  | 7  | 1  | 1  | 80 |
+            | 1  | 1  | 8  | 1  | 1  | 70 |
+            | 1  | 1  | 8  | 1  | 1  | 80 |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -2920,17 +2915,16 @@ mod tests {
         ];
 
         let (_, batches) = join_collect(left, right, on, Inner).await?;
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b2 | c1 | a1 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 1  |    | 1  | 1  | 70 |",
-            "| 2  | 2  | 8  | 2  | 2  | 80 |",
-            "| 2  | 2  | 9  | 2  | 2  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b2 | c1 | a1 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 1  |    | 1  | 1  | 70 |
+            | 2  | 2  | 8  | 2  | 2  | 80 |
+            | 2  | 2  | 9  | 2  | 2  | 80 |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -2971,18 +2965,17 @@ mod tests {
             true,
         )
         .await?;
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b2 | c1 | a1 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 2  | 2  | 9  | 2  | 2  | 80 |",
-            "| 2  | 2  | 8  | 2  | 2  | 80 |",
-            "| 1  | 1  |    | 1  | 1  | 70 |",
-            "| 1  |    | 1  | 1  |    | 10 |",
-            "+----+----+----+----+----+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b2 | c1 | a1 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 2  | 2  | 9  | 2  | 2  | 80 |
+            | 2  | 2  | 8  | 2  | 2  | 80 |
+            | 1  | 1  |    | 1  | 1  | 70 |
+            | 1  |    | 1  | 1  |    | 10 |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3011,20 +3004,19 @@ mod tests {
 
         let (_, batches) =
             join_collect_batch_size_equals_two(left, right, on, Inner).await?;
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b2 | c1 | a1 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 1  | 7  | 1  | 1  | 70 |",
-            "| 2  | 2  | 8  | 2  | 2  | 80 |",
-            "| 2  | 2  | 9  | 2  | 2  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].num_rows(), 2);
         assert_eq!(batches[1].num_rows(), 1);
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b2 | c1 | a1 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 1  | 7  | 1  | 1  | 70 |
+            | 2  | 2  | 8  | 2  | 2  | 80 |
+            | 2  | 2  | 9  | 2  | 2  | 80 |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3046,17 +3038,16 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, Left).await?;
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 3  | 7  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 7  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3078,17 +3069,16 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, Right).await?;
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "|    |    |    | 30 | 6  | 90 |",
-            "+----+----+----+----+----+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            |    |    |    | 30 | 6  | 90 |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3110,17 +3100,17 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, Full).await?;
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "|    |    |    | 30 | 6  | 90 |",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 3  | 7  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        // The output order is important as SMJ preserves sortedness
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            |    |    |    | 30 | 6  | 90 |
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 7  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3142,16 +3132,16 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, LeftAnti).await?;
-        let expected = [
-            "+----+----+----+",
-            "| a1 | b1 | c1 |",
-            "+----+----+----+",
-            "| 3  | 7  | 9  |",
-            "| 5  | 7  | 11 |",
-            "+----+----+----+",
-        ];
+
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+
+            | a1 | b1 | c1 |
+            +----+----+----+
+            | 3  | 7  | 9  |
+            | 5  | 7  | 11 |
+            +----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3170,15 +3160,14 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, RightAnti).await?;
-        let expected = [
-            "+----+----+",
-            "| a2 | b1 |",
-            "+----+----+",
-            "| 30 | 6  |",
-            "+----+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+
+            | a2 | b1 |
+            +----+----+
+            | 30 | 6  |
+            +----+----+
+            "#);
 
         let left2 = build_table(
             ("a1", &vec![1, 2, 2]),
@@ -3197,15 +3186,14 @@ mod tests {
         )];
 
         let (_, batches2) = join_collect(left2, right2, on, RightAnti).await?;
-        let expected2 = [
-            "+----+----+----+",
-            "| a2 | b1 | c2 |",
-            "+----+----+----+",
-            "| 30 | 6  | 90 |",
-            "+----+----+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected2, &batches2);
+        assert_snapshot!(batches_to_string(&batches2), @r#"
+            +----+----+----+
+            | a2 | b1 | c2 |
+            +----+----+----+
+            | 30 | 6  | 90 |
+            +----+----+----+
+            "#);
 
         Ok(())
     }
@@ -3231,17 +3219,16 @@ mod tests {
         ];
 
         let (_, batches) = join_collect(left, right, on, RightAnti).await?;
-        let expected = [
-            "+----+----+",
-            "| a2 | b1 |",
-            "+----+----+",
-            "| 10 | 4  |",
-            "| 20 | 5  |",
-            "| 30 | 6  |",
-            "+----+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+
+            | a2 | b1 |
+            +----+----+
+            | 10 | 4  |
+            | 20 | 5  |
+            | 30 | 6  |
+            +----+----+
+            "#);
 
         let left = build_table(
             ("a1", &vec![1, 2, 2]),
@@ -3318,14 +3305,13 @@ mod tests {
         );
         let (_, batches) =
             join_collect_with_filter(left, right, on, filter, RightAnti).await?;
-        let expected = [
-            "+----+----+----+",
-            "| a1 | b1 | c2 |",
-            "+----+----+----+",
-            "| 1  | 10 | 20 |",
-            "+----+----+----+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+
+            | a1 | b1 | c2 |
+            +----+----+----+
+            | 1  | 10 | 20 |
+            +----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3353,15 +3339,14 @@ mod tests {
         ];
 
         let (_, batches) = join_collect(left, right, on, RightAnti).await?;
-        let expected = [
-            "+----+----+----+",
-            "| a1 | b1 | c2 |",
-            "+----+----+----+",
-            "| 2  |    | 8  |",
-            "+----+----+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+
+            | a1 | b1 | c2 |
+            +----+----+----+
+            | 2  |    | 8  |
+            +----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3404,17 +3389,16 @@ mod tests {
         )
         .await?;
 
-        let expected = [
-            "+----+----+----+",
-            "| a1 | b1 | c2 |",
-            "+----+----+----+",
-            "| 3  |    | 9  |",
-            "| 2  | 5  |    |",
-            "| 2  | 5  | 8  |",
-            "+----+----+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+
+            | a1 | b1 | c2 |
+            +----+----+----+
+            | 3  |    | 9  |
+            | 2  | 5  |    |
+            | 2  | 5  | 8  |
+            +----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3443,19 +3427,18 @@ mod tests {
 
         let (_, batches) =
             join_collect_batch_size_equals_two(left, right, on, LeftAnti).await?;
-        let expected = [
-            "+----+----+----+",
-            "| a1 | b1 | c1 |",
-            "+----+----+----+",
-            "| 1  | 4  | 7  |",
-            "| 2  | 5  | 8  |",
-            "| 2  | 5  | 8  |",
-            "+----+----+----+",
-        ];
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].num_rows(), 2);
         assert_eq!(batches[1].num_rows(), 1);
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+
+            | a1 | b1 | c1 |
+            +----+----+----+
+            | 1  | 4  | 7  |
+            | 2  | 5  | 8  |
+            | 2  | 5  | 8  |
+            +----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3477,17 +3460,16 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, LeftSemi).await?;
-        let expected = [
-            "+----+----+----+",
-            "| a1 | b1 | c1 |",
-            "+----+----+----+",
-            "| 1  | 4  | 7  |",
-            "| 2  | 5  | 8  |",
-            "| 2  | 5  | 8  |",
-            "+----+----+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+
+            | a1 | b1 | c1 |
+            +----+----+----+
+            | 1  | 4  | 7  |
+            | 2  | 5  | 8  |
+            | 2  | 5  | 8  |
+            +----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3509,18 +3491,17 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, LeftMark).await?;
-        let expected = [
-            "+----+----+----+-------+",
-            "| a1 | b1 | c1 | mark  |",
-            "+----+----+----+-------+",
-            "| 1  | 4  | 7  | true  |",
-            "| 2  | 5  | 8  | true  |",
-            "| 2  | 5  | 8  | true  |",
-            "| 3  | 7  | 9  | false |",
-            "+----+----+----+-------+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+-------+
+            | a1 | b1 | c1 | mark  |
+            +----+----+----+-------+
+            | 1  | 4  | 7  | true  |
+            | 2  | 5  | 8  | true  |
+            | 2  | 5  | 8  | true  |
+            | 3  | 7  | 9  | false |
+            +----+----+----+-------+
+            "#);
         Ok(())
     }
 
@@ -3543,16 +3524,15 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, Inner).await?;
-        let expected = [
-            "+---+---+---+----+---+----+",
-            "| a | b | c | a  | b | c  |",
-            "+---+---+---+----+---+----+",
-            "| 1 | 4 | 7 | 10 | 1 | 70 |",
-            "| 2 | 5 | 8 | 20 | 2 | 80 |",
-            "+---+---+---+----+---+----+",
-        ];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +---+---+---+----+---+----+
+            | a | b | c | a  | b | c  |
+            +---+---+---+----+---+----+
+            | 1 | 4 | 7 | 10 | 1 | 70 |
+            | 2 | 5 | 8 | 20 | 2 | 80 |
+            +---+---+---+----+---+----+
+            "#);
         Ok(())
     }
 
@@ -3576,15 +3556,16 @@ mod tests {
 
         let (_, batches) = join_collect(left, right, on, Inner).await?;
 
-        let expected = ["+------------+------------+------------+------------+------------+------------+",
-            "| a1         | b1         | c1         | a2         | b1         | c2         |",
-            "+------------+------------+------------+------------+------------+------------+",
-            "| 1970-01-02 | 2022-04-25 | 1970-01-08 | 1970-01-11 | 2022-04-25 | 1970-03-12 |",
-            "| 1970-01-03 | 2022-04-26 | 1970-01-09 | 1970-01-21 | 2022-04-26 | 1970-03-22 |",
-            "| 1970-01-04 | 2022-04-26 | 1970-01-10 | 1970-01-21 | 2022-04-26 | 1970-03-22 |",
-            "+------------+------------+------------+------------+------------+------------+"];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +------------+------------+------------+------------+------------+------------+
+            | a1         | b1         | c1         | a2         | b1         | c2         |
+            +------------+------------+------------+------------+------------+------------+
+            | 1970-01-02 | 2022-04-25 | 1970-01-08 | 1970-01-11 | 2022-04-25 | 1970-03-12 |
+            | 1970-01-03 | 2022-04-26 | 1970-01-09 | 1970-01-21 | 2022-04-26 | 1970-03-22 |
+            | 1970-01-04 | 2022-04-26 | 1970-01-10 | 1970-01-21 | 2022-04-26 | 1970-03-22 |
+            +------------+------------+------------+------------+------------+------------+
+            "#);
         Ok(())
     }
 
@@ -3608,15 +3589,16 @@ mod tests {
 
         let (_, batches) = join_collect(left, right, on, Inner).await?;
 
-        let expected = ["+-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+",
-            "| a1                      | b1                  | c1                      | a2                      | b1                  | c2                      |",
-            "+-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+",
-            "| 1970-01-01T00:00:00.001 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.007 | 1970-01-01T00:00:00.010 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.070 |",
-            "| 1970-01-01T00:00:00.002 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.008 | 1970-01-01T00:00:00.030 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |",
-            "| 1970-01-01T00:00:00.003 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.009 | 1970-01-01T00:00:00.030 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |",
-            "+-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+"];
         // The output order is important as SMJ preserves sortedness
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
+            | a1                      | b1                  | c1                      | a2                      | b1                  | c2                      |
+            +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
+            | 1970-01-01T00:00:00.001 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.007 | 1970-01-01T00:00:00.010 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.070 |
+            | 1970-01-01T00:00:00.002 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.008 | 1970-01-01T00:00:00.030 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
+            | 1970-01-01T00:00:00.003 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.009 | 1970-01-01T00:00:00.030 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
+            +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
+            "#);
         Ok(())
     }
 
@@ -3638,21 +3620,20 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, Left).await?;
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 0  | 3  | 4  |    |    |    |",
-            "| 1  | 4  | 5  | 10 | 4  | 60 |",
-            "| 2  | 5  | 6  |    |    |    |",
-            "| 3  | 6  | 7  | 20 | 6  | 70 |",
-            "| 3  | 6  | 7  | 30 | 6  | 80 |",
-            "| 4  | 6  | 8  | 20 | 6  | 70 |",
-            "| 4  | 6  | 8  | 30 | 6  | 80 |",
-            "| 5  | 7  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 0  | 3  | 4  |    |    |    |
+            | 1  | 4  | 5  | 10 | 4  | 60 |
+            | 2  | 5  | 6  |    |    |    |
+            | 3  | 6  | 7  | 20 | 6  | 70 |
+            | 3  | 6  | 7  | 30 | 6  | 80 |
+            | 4  | 6  | 8  | 20 | 6  | 70 |
+            | 4  | 6  | 8  | 30 | 6  | 80 |
+            | 5  | 7  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3674,17 +3655,16 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, Right).await?;
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "|    |    |    | 0  | 2  | 60 |",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "|    |    |    | 30 | 6  | 90 |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            |    |    |    | 0  | 2  | 60 |
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            |    |    |    | 30 | 6  | 90 |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3718,22 +3698,21 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, Left).await?;
-        let expected = vec![
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 0  | 3  | 4  |    |    |    |",
-            "| 1  | 4  | 5  | 10 | 4  | 60 |",
-            "| 2  | 5  | 6  |    |    |    |",
-            "| 3  | 6  | 7  | 20 | 6  | 70 |",
-            "| 3  | 6  | 7  | 30 | 6  | 80 |",
-            "| 4  | 6  | 8  | 20 | 6  | 70 |",
-            "| 4  | 6  | 8  | 30 | 6  | 80 |",
-            "| 5  | 7  | 9  |    |    |    |",
-            "| 6  | 9  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 0  | 3  | 4  |    |    |    |
+            | 1  | 4  | 5  | 10 | 4  | 60 |
+            | 2  | 5  | 6  |    |    |    |
+            | 3  | 6  | 7  | 20 | 6  | 70 |
+            | 3  | 6  | 7  | 30 | 6  | 80 |
+            | 4  | 6  | 8  | 20 | 6  | 70 |
+            | 4  | 6  | 8  | 30 | 6  | 80 |
+            | 5  | 7  | 9  |    |    |    |
+            | 6  | 9  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3767,22 +3746,21 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, Right).await?;
-        let expected = vec![
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "|    |    |    | 0  | 3  | 4  |",
-            "| 10 | 4  | 60 | 1  | 4  | 5  |",
-            "|    |    |    | 2  | 5  | 6  |",
-            "| 20 | 6  | 70 | 3  | 6  | 7  |",
-            "| 30 | 6  | 80 | 3  | 6  | 7  |",
-            "| 20 | 6  | 70 | 4  | 6  | 8  |",
-            "| 30 | 6  | 80 | 4  | 6  | 8  |",
-            "|    |    |    | 5  | 7  | 9  |",
-            "|    |    |    | 6  | 9  | 9  |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            |    |    |    | 0  | 3  | 4  |
+            | 10 | 4  | 60 | 1  | 4  | 5  |
+            |    |    |    | 2  | 5  | 6  |
+            | 20 | 6  | 70 | 3  | 6  | 7  |
+            | 30 | 6  | 80 | 3  | 6  | 7  |
+            | 20 | 6  | 70 | 4  | 6  | 8  |
+            | 30 | 6  | 80 | 4  | 6  | 8  |
+            |    |    |    | 5  | 7  | 9  |
+            |    |    |    | 6  | 9  | 9  |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -3816,24 +3794,23 @@ mod tests {
         )];
 
         let (_, batches) = join_collect(left, right, on, Full).await?;
-        let expected = vec![
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "|    |    |    | 0  | 2  | 50 |",
-            "|    |    |    | 40 | 8  | 90 |",
-            "| 0  | 3  | 4  |    |    |    |",
-            "| 1  | 4  | 5  | 10 | 4  | 60 |",
-            "| 2  | 5  | 6  |    |    |    |",
-            "| 3  | 6  | 7  | 20 | 6  | 70 |",
-            "| 3  | 6  | 7  | 30 | 6  | 80 |",
-            "| 4  | 6  | 8  | 20 | 6  | 70 |",
-            "| 4  | 6  | 8  | 30 | 6  | 80 |",
-            "| 5  | 7  | 9  |    |    |    |",
-            "| 6  | 9  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            |    |    |    | 0  | 2  | 50 |
+            |    |    |    | 40 | 8  | 90 |
+            | 0  | 3  | 4  |    |    |    |
+            | 1  | 4  | 5  | 10 | 4  | 60 |
+            | 2  | 5  | 6  |    |    |    |
+            | 3  | 6  | 7  | 20 | 6  | 70 |
+            | 3  | 6  | 7  | 30 | 6  | 80 |
+            | 4  | 6  | 8  | 20 | 6  | 70 |
+            | 4  | 6  | 8  | 30 | 6  | 80 |
+            | 5  | 7  | 9  |    |    |    |
+            | 6  | 9  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+            "#);
         Ok(())
     }
 
@@ -4433,18 +4410,15 @@ mod tests {
 
         let filtered_rb = filter_record_batch(&output, &corrected_mask)?;
 
-        assert_batches_eq!(
-            &[
-                "+---+----+---+----+",
-                "| a | b  | x | y  |",
-                "+---+----+---+----+",
-                "| 1 | 10 | 1 | 11 |",
-                "| 1 | 11 | 1 | 12 |",
-                "| 1 | 12 | 1 | 13 |",
-                "+---+----+---+----+",
-            ],
-            &[filtered_rb]
-        );
+        assert_snapshot!(batches_to_string(&[filtered_rb]), @r#"
+                +---+----+---+----+
+                | a | b  | x | y  |
+                +---+----+---+----+
+                | 1 | 10 | 1 | 11 |
+                | 1 | 11 | 1 | 12 |
+                | 1 | 12 | 1 | 13 |
+                +---+----+---+----+
+            "#);
 
         // output null rows
 
@@ -4465,17 +4439,14 @@ mod tests {
 
         let null_joined_batch = filter_record_batch(&output, &null_mask)?;
 
-        assert_batches_eq!(
-            &[
-                "+---+----+---+----+",
-                "| a | b  | x | y  |",
-                "+---+----+---+----+",
-                "| 1 | 13 | 1 | 12 |",
-                "| 1 | 14 | 1 | 11 |",
-                "+---+----+---+----+",
-            ],
-            &[null_joined_batch]
-        );
+        assert_snapshot!(batches_to_string(&[null_joined_batch]), @r#"
+                +---+----+---+----+
+                | a | b  | x | y  |
+                +---+----+---+----+
+                | 1 | 13 | 1 | 12 |
+                | 1 | 14 | 1 | 11 |
+                +---+----+---+----+
+            "#);
         Ok(())
     }
 
@@ -4609,18 +4580,15 @@ mod tests {
 
         let filtered_rb = filter_record_batch(&output, &corrected_mask)?;
 
-        assert_batches_eq!(
-            &[
-                "+---+----+---+----+",
-                "| a | b  | x | y  |",
-                "+---+----+---+----+",
-                "| 1 | 10 | 1 | 11 |",
-                "| 1 | 11 | 1 | 12 |",
-                "| 1 | 12 | 1 | 13 |",
-                "+---+----+---+----+",
-            ],
-            &[filtered_rb]
-        );
+        assert_snapshot!(batches_to_string(&[filtered_rb]), @r#"
+                +---+----+---+----+
+                | a | b  | x | y  |
+                +---+----+---+----+
+                | 1 | 10 | 1 | 11 |
+                | 1 | 11 | 1 | 12 |
+                | 1 | 12 | 1 | 13 |
+                +---+----+---+----+
+            "#);
 
         // output null rows
         let null_mask = arrow::compute::not(&corrected_mask)?;
@@ -4640,15 +4608,12 @@ mod tests {
 
         let null_joined_batch = filter_record_batch(&output, &null_mask)?;
 
-        assert_batches_eq!(
-            &[
-                "+---+---+---+---+",
-                "| a | b | x | y |",
-                "+---+---+---+---+",
-                "+---+---+---+---+",
-            ],
-            &[null_joined_batch]
-        );
+        assert_snapshot!(batches_to_string(&[null_joined_batch]), @r#"
+                +---+---+---+---+
+                | a | b | x | y |
+                +---+---+---+---+
+                +---+---+---+---+
+            "#);
         Ok(())
     }
 
@@ -4783,17 +4748,16 @@ mod tests {
 
             let filtered_rb = filter_record_batch(&output, &corrected_mask)?;
 
-            assert_batches_eq!(
-                &[
-                    "+---+----+---+----+",
-                    "| a | b  | x | y  |",
-                    "+---+----+---+----+",
-                    "| 1 | 13 | 1 | 12 |",
-                    "| 1 | 14 | 1 | 11 |",
-                    "+---+----+---+----+",
-                ],
-                &[filtered_rb]
-            );
+            allow_duplicates! {
+                assert_snapshot!(batches_to_string(&[filtered_rb]), @r#"
+                    +---+----+---+----+
+                    | a | b  | x | y  |
+                    +---+----+---+----+
+                    | 1 | 13 | 1 | 12 |
+                    | 1 | 14 | 1 | 11 |
+                    +---+----+---+----+
+            "#);
+            }
 
             // output null rows
             let null_mask = arrow::compute::not(&corrected_mask)?;
@@ -4813,15 +4777,14 @@ mod tests {
 
             let null_joined_batch = filter_record_batch(&output, &null_mask)?;
 
-            assert_batches_eq!(
-                &[
-                    "+---+---+---+---+",
-                    "| a | b | x | y |",
-                    "+---+---+---+---+",
-                    "+---+---+---+---+",
-                ],
-                &[null_joined_batch]
-            );
+            allow_duplicates! {
+                assert_snapshot!(batches_to_string(&[null_joined_batch]), @r#"
+                        +---+---+---+---+
+                        | a | b | x | y |
+                        +---+---+---+---+
+                        +---+---+---+---+
+                "#);
+            }
         }
         Ok(())
     }

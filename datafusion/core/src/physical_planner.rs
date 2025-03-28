@@ -39,7 +39,6 @@ use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
@@ -78,7 +77,7 @@ use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
     Analyze, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, RecursiveQuery, SkipType, SortExpr, StringifiedPlan, WindowFrame,
+    Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
@@ -91,6 +90,7 @@ use datafusion_physical_plan::unnest::ListUnnest;
 
 use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
+use datafusion_datasource::file_groups::FileGroup;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
@@ -533,7 +533,7 @@ impl DefaultPhysicalPlanner {
                     original_url,
                     object_store_url,
                     table_paths: vec![parsed_url],
-                    file_groups: vec![],
+                    file_group: FileGroup::default(),
                     output_schema: Arc::new(schema),
                     table_partition_cols,
                     insert_op: InsertOp::Append,
@@ -1135,13 +1135,6 @@ impl DefaultPhysicalPlanner {
                     && session_state.config().repartition_joins()
                     && prefer_hash_join
                 {
-                    let partition_mode = {
-                        if session_state.config().collect_statistics() {
-                            PartitionMode::Auto
-                        } else {
-                            PartitionMode::Partitioned
-                        }
-                    };
                     Arc::new(HashJoinExec::try_new(
                         physical_left,
                         physical_right,
@@ -1149,7 +1142,7 @@ impl DefaultPhysicalPlanner {
                         join_filter,
                         join_type,
                         None,
-                        partition_mode,
+                        PartitionMode::Auto,
                         null_equals_null,
                     )?)
                 } else {
@@ -1687,6 +1680,14 @@ pub fn create_aggregate_expr_and_maybe_filter(
         execution_props,
     )
 }
+
+#[deprecated(
+    since = "47.0.0",
+    note = "use datafusion::create_physical_sort_expr"
+)]
+pub use datafusion_physical_expr::{
+    create_physical_sort_expr,
+};
 
 /// Create a physical sort expression from a logical expression
 pub fn create_physical_sort_expr(
