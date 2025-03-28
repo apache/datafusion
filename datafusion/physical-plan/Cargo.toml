@@ -85,4 +85,4 @@ name = "partial_ordering"
 
 [[bench]]
 harness = false
-name = "read_spill"
+name = "spill_io"
