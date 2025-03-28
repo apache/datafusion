@@ -109,7 +109,8 @@ Example: Profile Q22 query from TPC-H benchmark.
 Note: `--profile profiling` to profile release optimized artifact with debug symbols
 
 ```shell
-samply record cargo run --profile profiling --bin tpch -- benchmark datafusion --iterations 5 --path datafusion/benchmarks/data/tpch_sf10 --prefer_hash_join true --format parquet -o datafusion/benchmarks/results/dev2/tpch_sf10.json --query 22
+cargo build --profile profiling --bin tpch
+samply record ./target/debug/tpch benchmark datafusion --iterations 5 --path datafusion/benchmarks/data/tpch_sf10 --prefer_hash_join true --format parquet -o datafusion/benchmarks/results/dev2/tpch_sf10.json --query 22
 ```
 
 After sampling has completed the Samply starts a local server and navigates to the profiler
