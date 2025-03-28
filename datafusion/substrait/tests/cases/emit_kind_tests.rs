@@ -126,8 +126,6 @@ mod tests {
 
         let plan1str = format!("{plan}");
         let plan2str = format!("{plan2}");
-        println!("{}", plan1str);
-        println!("{}", plan2str);
         assert_eq!(plan1str, plan2str);
 
         Ok(())

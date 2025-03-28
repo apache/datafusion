@@ -1504,11 +1504,6 @@ async fn assert_expected_plan(
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
-    println!("{plan}");
-    println!("{plan2}");
-
-    println!("{proto:?}");
-
     if assert_schema {
         assert_eq!(plan.schema(), plan2.schema());
     }
@@ -1577,9 +1572,6 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     let proto = to_substrait_plan(&df.into_optimized_plan()?, &ctx.state())?;
     let plan = from_substrait_plan(&ctx.state(), &proto).await?;
 
-    println!("{plan_with_alias}");
-    println!("{plan}");
-
     let plan1str = format!("{plan_with_alias}");
     let plan2str = format!("{plan}");
     assert_eq!(plan1str, plan2str);
@@ -1595,11 +1587,6 @@ async fn roundtrip_logical_plan_with_ctx(
     let proto = to_substrait_plan(&plan, &ctx.state())?;
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
-
-    println!("{plan}");
-    println!("{plan2}");
-
-    println!("{proto:?}");
 
     let plan1str = format!("{plan}");
     let plan2str = format!("{plan2}");
