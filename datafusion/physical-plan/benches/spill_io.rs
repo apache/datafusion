@@ -84,7 +84,7 @@ fn bench_spill_io(c: &mut Criterion) {
     ]));
     let spill_manager = SpillManager::new(env, metrics, schema);
 
-    let mut group = c.benchmark_group("spill_manager");
+    let mut group = c.benchmark_group("spill_io");
     let rt = Runtime::new().unwrap();
 
     group.bench_with_input(
@@ -97,11 +97,10 @@ fn bench_spill_io(c: &mut Criterion) {
                 // This ensures each iteration starts with clean resources.
                 || {
                     let batch = create_batch(8192, true);
-                    let spill_file = spill_manager
+                    spill_manager
                         .spill_record_batch_and_finish(&vec![batch; 100], "Test")
                         .unwrap()
-                        .unwrap();
-                    spill_file
+                        .unwrap()
                 },
                 // Benchmark phase:
                 // - Execute the read operation via SpillManager
