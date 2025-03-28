@@ -2020,6 +2020,7 @@ dependencies = [
  "bytes",
  "bzip2 0.5.2",
  "chrono",
+ "criterion",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-execution",

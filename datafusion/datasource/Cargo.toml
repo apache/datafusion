@@ -72,6 +72,7 @@ xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
+criterion = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
@@ -80,3 +81,7 @@ workspace = true
 [lib]
 name = "datafusion_datasource"
 path = "src/mod.rs"
+
+[[bench]]
+name = "split_groups_by_statistics"
+harness = false
