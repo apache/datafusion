@@ -353,12 +353,12 @@ impl TableProvider for StreamTable {
         let schema = self.0.source.schema();
         let orders = create_ordering(schema, &self.0.order)?;
         // It is sufficient to pass only one of the equivalent orderings:
-        let order_requirements = orders.into_iter().next().map(Into::into);
+        let ordering = orders.into_iter().next().map(Into::into);
 
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(StreamWrite(Arc::clone(&self.0))),
-            order_requirements,
+            ordering,
         )))
     }
 }

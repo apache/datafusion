@@ -155,10 +155,8 @@ impl AggregateUDFImpl for ArrayAgg {
             // ARRAY_AGG(DISTINCT col ORDER BY concat(col, ''))             <- Invalid
             let mut sort_option: Option<SortOptions> = None;
             if let Some(ordering_req) = acc_args.ordering_req {
-                if ordering_req.len() > 1 {
-                    return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
-                }
-                if !ordering_req[0].expr.eq(&acc_args.exprs[0]) {
+                if ordering_req.len() > 1 || !ordering_req[0].expr.eq(&acc_args.exprs[0])
+                {
                     return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
                 }
                 sort_option = Some(ordering_req[0].options)
@@ -968,9 +966,8 @@ mod tests {
                 ),
                 sort_options,
             );
-            if let Some(mut existing_ordering) = self.ordering {
+            if let Some(existing_ordering) = self.ordering.as_mut() {
                 existing_ordering.extend([new_order]);
-                self.ordering = Some(existing_ordering);
             } else {
                 self.ordering = Some(LexOrdering::from(vec![new_order]));
             }
