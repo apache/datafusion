@@ -114,11 +114,11 @@ use std::sync::Arc;
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
-    /// Allocate rows based on a hash of one of more expressions and the specified number of
+    /// Allocate rows based on a hash of one or more expressions and the specified number of
     /// partitions
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
-    /// Allocate rows based on a hash of one of more expressions and the specified number
-    /// of partitions with a selection vecotr column.
+    /// Allocate rows based on a hash of one or more expressions and the specified number
+    /// of partitions with a selection vector column.
     ///
     /// The column is a boolean column called `__selection` that is used to filter out rows
     /// that should not be included in the partition. `true` means the row should be included
