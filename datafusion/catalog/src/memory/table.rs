@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::fmt::{self, Debug};
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::TableProvider;
@@ -29,8 +29,7 @@ use datafusion_expr::TableType;
 use datafusion_physical_expr::create_physical_sort_exprs;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{
-    common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, SendableRecordBatchStream,
+    common, ExecutionPlan, ExecutionPlanProperties, Partitioning,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -38,9 +37,9 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::memory::MemorySourceConfig;
-use datafusion_datasource::sink::{DataSink, DataSinkExec};
+use datafusion_datasource::memory::{MemSink, PartitionData};
+use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::SortExpr;
 use datafusion_session::Session;
@@ -50,9 +49,6 @@ use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
-
-/// Type alias for partition data
-pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
 
 /// In-memory data source for presenting a `Vec<RecordBatch>` as a
 /// data source that can be queried by DataFusion. This allows data to
@@ -293,85 +289,5 @@ impl TableProvider for MemTable {
 
     fn get_column_default(&self, column: &str) -> Option<&Expr> {
         self.column_defaults.get(column)
-    }
-}
-
-/// Implements for writing to a [`MemTable`]
-struct MemSink {
-    /// Target locations for writing data
-    batches: Vec<PartitionData>,
-    schema: SchemaRef,
-}
-
-impl Debug for MemSink {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MemSink")
-            .field("num_partitions", &self.batches.len())
-            .finish()
-    }
-}
-
-impl DisplayAs for MemSink {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let partition_count = self.batches.len();
-                write!(f, "MemoryTable (partitions={partition_count})")
-            }
-            DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
-            }
-        }
-    }
-}
-
-impl MemSink {
-    /// Creates a new [`MemSink`].
-    ///
-    /// The caller is responsible for ensuring that there is at least one partition to insert into.
-    fn try_new(batches: Vec<PartitionData>, schema: SchemaRef) -> Result<Self> {
-        if batches.is_empty() {
-            return plan_err!("Cannot insert into MemTable with zero partitions");
-        }
-        Ok(Self { batches, schema })
-    }
-}
-
-#[async_trait]
-impl DataSink for MemSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-
-    async fn write_all(
-        &self,
-        mut data: SendableRecordBatchStream,
-        _context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        let num_partitions = self.batches.len();
-
-        // buffer up the data round robin style into num_partitions
-
-        let mut new_batches = vec![vec![]; num_partitions];
-        let mut i = 0;
-        let mut row_count = 0;
-        while let Some(batch) = data.next().await.transpose()? {
-            row_count += batch.num_rows();
-            new_batches[i].push(batch);
-            i = (i + 1) % num_partitions;
-        }
-
-        // write the outputs into the batches
-        for (target, mut batches) in self.batches.iter().zip(new_batches.into_iter()) {
-            // Append all the new batches in one go to minimize locking overhead
-            target.write().await.append(&mut batches);
-        }
-
-        Ok(row_count as u64)
     }
 }
