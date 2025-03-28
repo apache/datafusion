@@ -301,9 +301,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-buffer"
-version = "54.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e899dade2c3b7f5642eb8366cfd898958bcca099cde6dfea543c7e8d3ad88d4"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
 dependencies = [
  "bytes",
  "half",
@@ -349,9 +348,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "54.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a329fb064477c9ec5f0870d2f5130966f91055c7c5bce2b3a084f116bc28c3b"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -448,9 +446,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "54.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85934a9d0261e0fa5d4e2a5295107d743b543a6e0484a835d4b8db2da15306f9"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
 dependencies = [
  "bitflags 2.8.0",
  "serde",
@@ -3897,7 +3894,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -7046,7 +7043,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -7501,3 +7498,48 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "arrow"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+
+[[patch.unused]]
+name = "arrow-array"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+
+[[patch.unused]]
+name = "arrow-cast"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+
+[[patch.unused]]
+name = "arrow-flight"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+
+[[patch.unused]]
+name = "arrow-ipc"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+
+[[patch.unused]]
+name = "arrow-ord"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+
+[[patch.unused]]
+name = "arrow-select"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+
+[[patch.unused]]
+name = "arrow-string"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+
+[[patch.unused]]
+name = "parquet"
+version = "54.3.1"
+source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
