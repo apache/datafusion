@@ -794,8 +794,7 @@ impl ExecutionPlan for HashJoinExec {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => {
-                let left = coalesce_partitions_if_needed(Arc::clone(&self.left));
-                let left_stream = left.execute(0, Arc::clone(&context))?;
+                let left_stream = self.left.execute(0, Arc::clone(&context))?;
 
                 self.left_fut.once(|| {
                     let reservation = MemoryConsumer::new("HashJoinInput")
@@ -928,14 +927,6 @@ impl ExecutionPlan for HashJoinExec {
         } else {
             try_embed_projection(projection, self)
         }
-    }
-}
-
-fn coalesce_partitions_if_needed(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    if plan.output_partitioning().partition_count() == 1 {
-        plan
-    } else {
-        Arc::new(CoalescePartitionsExec::new(plan))
     }
 }
 
