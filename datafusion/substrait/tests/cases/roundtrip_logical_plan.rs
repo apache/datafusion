@@ -192,11 +192,12 @@ async fn wildcard_select() -> Result<()> {
     let plan = assert_and_generate_plan("SELECT * FROM data", true, false).await?;
 
     assert_snapshot!(
-        plan, 
-        @r#"
+    plan,
+    @r#"
     Projection: data.a, data.b, data.c, data.d, data.e, data.f
       TableScan: data
-    "#);
+    "#
+    );
     Ok(())
 }
 
@@ -522,7 +523,7 @@ async fn roundtrip_inlist_4() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_inlist_5() -> Result<()> {
     // on roundtrip there is an additional projection during TableScan which includes all column of the table,
-    // using assert_expected_plan here as a workaround
+    // using assert_and_generate_plan and assert_snapshot! here as a workaround
     let plan = assert_and_generate_plan(
         "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
         true,
@@ -1078,7 +1079,7 @@ async fn roundtrip_literal_struct() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_values() -> Result<()> {
     // TODO: would be nice to have a struct inside the LargeList, but arrow_cast doesn't support that currently
-    assert_expected_plan(
+    let plan = assert_and_generate_plan(
         "VALUES \
             (\
                 1, \
@@ -1089,41 +1090,18 @@ async fn roundtrip_values() -> Result<()> {
                 [STRUCT(STRUCT('a' AS string_field) AS struct_field), STRUCT(STRUCT('b' AS string_field) AS struct_field)]\
             ), \
             (NULL, NULL, NULL, NULL, NULL, NULL)",
-        "Values: \
-            (\
-                Int64(1), \
-                Utf8(\"a\"), \
-                List([[-213.1, , 5.5, 2.0, 1.0], []]), \
-                LargeList([1, 2, 3]), \
-                Struct({c0:true,int_field:1,c2:}), \
-                List([{struct_field: {string_field: a}}, {struct_field: {string_field: b}}])\
-            ), \
-            (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())",
-    true).await
+        true,
+        true,
+    )
+    .await?;
 
-    // let plan = assert_and_generate_plan(
-    //     "VALUES \
-    //         (\
-    //             1, \
-    //             'a', \
-    //             [[-213.1, NULL, 5.5, 2.0, 1.0], []], \
-    //             arrow_cast([1,2,3], 'LargeList(Int64)'), \
-    //             STRUCT(true, 1 AS int_field, CAST(NULL AS STRING)), \
-    //             [STRUCT(STRUCT('a' AS string_field) AS struct_field), STRUCT(STRUCT('b' AS string_field) AS struct_field)]\
-    //         ), \
-    //         (NULL, NULL, NULL, NULL, NULL, NULL)",
-    //     true,
-    //     true,
-    // )
-    // .await?;
-
-    // assert_snapshot!(
-    // plan,
-    // @r#"
-    // Values:             (Int64(1),                 Utf8("a"),                 List([[-213.1, , 5.5, 2.0, 1.0], []]),                 LargeList([1, 2, 3]),                 Struct({c0:true,int_field:1,c2:}),                 List([{struct_field: {string_field: a}}, {struct_field: {string_field: b}}])            ),             (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())
-    // "#
-    //         );
-    // Ok(())
+    assert_snapshot!(
+    plan,
+    @r#"
+    Values: (Int64(1), Utf8("a"), List([[-213.1, , 5.5, 2.0, 1.0], []]), LargeList([1, 2, 3]), Struct({c0:true,int_field:1,c2:}), List([{struct_field: {string_field: a}}, {struct_field: {string_field: b}}])), (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())
+    "#
+            );
+    Ok(())
 }
 
 #[tokio::test]
