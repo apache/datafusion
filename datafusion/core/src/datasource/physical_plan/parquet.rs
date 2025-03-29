@@ -2085,7 +2085,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_topk_predicate_pushdown_nulls_fist() {
+    async fn test_topk_predicate_pushdown_nulls_first() {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().to_str().unwrap().to_string();
 

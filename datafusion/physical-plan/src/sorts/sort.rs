@@ -39,9 +39,9 @@ use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, Distribution, DynamicFilterSource,
+    EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{
@@ -1244,6 +1244,28 @@ impl ExecutionPlan for SortExec {
                 .with_fetch(self.fetch())
                 .with_preserve_partitioning(self.preserve_partitioning()),
         )))
+    }
+
+    // Pass though filter pushdown.
+    // This often happens in partitioned plans with a TopK because we end up with 1 TopK per partition + a final TopK at the end.
+    // Implementing this pass-through allows global/top/final TopK to push down filters to the partitions.
+    fn push_down_dynamic_filter(
+        &self,
+        dynamic_filter: Arc<dyn DynamicFilterSource>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let new_input = self.input.push_down_dynamic_filter(dynamic_filter)?;
+        if let Some(new_input) = new_input {
+            Ok(Some(Arc::new(SortExec {
+                input: new_input,
+                expr: self.expr.clone(),
+                metrics_set: self.metrics_set.clone(),
+                preserve_partitioning: self.preserve_partitioning,
+                fetch: self.fetch,
+                cache: self.cache.clone(),
+            })))
+        } else {
+            Ok(None)
+        }
     }
 }
 
