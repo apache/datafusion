@@ -882,12 +882,12 @@ fn join_after_agg_alias() -> Result<()> {
     // Only two RepartitionExecs added
     let expected = &[
         "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, a2@0)]",
-        "  AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
+        "  AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a1@0 as a1], aggr=[]",
         "    RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
         "      AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "  AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]",
+        "  AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a2@0 as a2], aggr=[]",
         "    RepartitionExec: partitioning=Hash([a2@0], 10), input_partitions=10",
         "      AggregateExec: mode=Partial, gby=[a@0 as a2], aggr=[]",
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -936,12 +936,12 @@ fn hash_join_key_ordering() -> Result<()> {
     let expected = &[
         "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b1@1, b@0), (a1@0, a@1)]",
         "  ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
-        "    AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
+        "    AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
         "      RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10",
         "        AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
         "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "  AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
+        "  AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[b@0 as b, a@1 as a], aggr=[]",
         "    RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10",
         "      AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -1694,14 +1694,14 @@ fn smj_join_key_ordering() -> Result<()> {
         "  SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[true]",
         "    ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]",
         "      ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
-        "        AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
+        "        AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
         "          RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10",
         "            AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
         "              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
         "  SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[true]",
         "    ProjectionExec: expr=[a@1 as a2, b@0 as b2]",
-        "      AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
+        "      AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[b@0 as b, a@1 as a], aggr=[]",
         "        RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10",
         "          AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
         "            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -1718,7 +1718,7 @@ fn smj_join_key_ordering() -> Result<()> {
         "        CoalescePartitionsExec",
         "          ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]",
         "            ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
-        "              AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
+        "              AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
         "                RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10",
         "                  AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
         "                    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -1728,7 +1728,7 @@ fn smj_join_key_ordering() -> Result<()> {
         "      SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[false]",
         "        CoalescePartitionsExec",
         "          ProjectionExec: expr=[a@1 as a2, b@0 as b2]",
-        "            AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
+        "            AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[b@0 as b, a@1 as a], aggr=[]",
         "              RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10",
         "                AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
         "                  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -1809,15 +1809,15 @@ fn union_to_interleave() -> Result<()> {
 
     // Only two RepartitionExecs added, no final RepartitionExec required
     let expected = &[
-        "AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a2@0 as a2], aggr=[]",
         "  AggregateExec: mode=Partial, gby=[a1@0 as a2], aggr=[]",
         "    InterleaveExec",
-        "      AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
+        "      AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a1@0 as a1], aggr=[]",
         "        RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
         "          AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
         "            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "      AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
+        "      AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a1@0 as a1], aggr=[]",
         "        RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
         "          AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
         "            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -1853,16 +1853,16 @@ fn union_not_to_interleave() -> Result<()> {
 
     // Only two RepartitionExecs added, no final RepartitionExec required
     let expected = &[
-        "AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a2@0 as a2], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a2@0], 10), input_partitions=20",
         "    AggregateExec: mode=Partial, gby=[a1@0 as a2], aggr=[]",
         "      UnionExec",
-        "        AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
+        "        AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a1@0 as a1], aggr=[]",
         "          RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
         "            AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
         "              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "        AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
+        "        AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a1@0 as a1], aggr=[]",
         "          RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
         "            AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
         "              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -1884,7 +1884,7 @@ fn added_repartition_to_single_partition() -> Result<()> {
     let plan = aggregate_exec_with_alias(parquet_exec(), alias);
 
     let expected = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -1904,7 +1904,7 @@ fn repartition_deepest_node() -> Result<()> {
     let plan = aggregate_exec_with_alias(filter_exec(parquet_exec()), alias);
 
     let expected = &[
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "      FilterExec: c@2 = 0",
@@ -2002,7 +2002,7 @@ fn repartition_ignores_limit() -> Result<()> {
     );
 
     let expected = &[
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -2426,7 +2426,7 @@ fn parallelization_single_partition() -> Result<()> {
 
     // Test: with parquet
     let expected_parquet = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=parquet",
@@ -2440,7 +2440,7 @@ fn parallelization_single_partition() -> Result<()> {
 
     // Test: with csv
     let expected_csv = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
@@ -2520,7 +2520,7 @@ fn parallelization_compressed_csv() -> Result<()> {
     ];
 
     let expected_not_partitioned = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -2528,7 +2528,7 @@ fn parallelization_compressed_csv() -> Result<()> {
     ];
 
     let expected_partitioned = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
@@ -2575,7 +2575,7 @@ fn parallelization_two_partitions() -> Result<()> {
 
     // Test: with parquet
     let expected_parquet = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         // Plan already has two partitions
@@ -2590,7 +2590,7 @@ fn parallelization_two_partitions() -> Result<()> {
 
     // Test: with csv
     let expected_csv = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         // Plan already has two partitions
@@ -2614,7 +2614,7 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
 
     // Test: with parquet
     let expected_parquet = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         // Multiple source files splitted across partitions
@@ -2629,7 +2629,7 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
 
     // Test: with csv
     let expected_csv = [
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         // Multiple source files splitted across partitions
@@ -2753,7 +2753,7 @@ fn parallelization_ignores_limit() -> Result<()> {
 
     // Test: with parquet
     let expected_parquet = &[
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -2777,7 +2777,7 @@ fn parallelization_ignores_limit() -> Result<()> {
 
     // Test: with csv
     let expected_csv = &[
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -3388,7 +3388,7 @@ fn do_not_add_unnecessary_hash() -> Result<()> {
     let test_config = TestConfig::default().with_query_execution_partitions(1);
 
     let expected = &[
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "  AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
@@ -3415,11 +3415,11 @@ fn do_not_add_unnecessary_hash2() -> Result<()> {
     let test_config = TestConfig::default().with_query_execution_partitions(4);
 
     let expected = &[
-        "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         // Since hash requirements of this operator is satisfied. There shouldn't be
         // a hash repartition here
         "  AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
-        "    AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+        "    AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[a@0 as a], aggr=[]",
         "      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
         "        AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2",
