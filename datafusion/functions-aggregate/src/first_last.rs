@@ -197,10 +197,12 @@ impl AggregateUDFImpl for FirstValue {
             T: ArrowPrimitiveType + Send,
         {
             let Some(ordering_req) = args.ordering_req else {
-                // return TrivialFirstValueAccumulator::try_new(args.return_type, args.ignore_nulls)
-                //     .map(|acc| Box::new(acc) as _)
-                // TODO Fix
-                return internal_err!("Order by is a must!");
+                return Ok(Box::new(
+                    TrivialFirstPrimitiveGroupsAccumulator::<T>::try_new(
+                        args.ignore_nulls,
+                        args.return_type,
+                    )?,
+                ));
             };
 
             let ordering_dtypes = ordering_req
@@ -744,6 +746,285 @@ where
         }
     }
 }
+
+/// See [`FirstPrimitiveGroupsAccumulator`] for original, this is a copy of it with no orderings
+struct TrivialFirstPrimitiveGroupsAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+{
+    vals: Vec<T::Native>,
+    is_sets: BooleanBufferBuilder,
+    null_builder: BooleanBufferBuilder,
+    min_of_each_group_buf: (Vec<usize>, BooleanBufferBuilder),
+
+    ignore_nulls: bool,
+    data_type: DataType,
+}
+
+impl<T> TrivialFirstPrimitiveGroupsAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+{
+    fn try_new(ignore_nulls: bool, data_type: &DataType) -> Result<Self> {
+        Ok(Self {
+            null_builder: BooleanBufferBuilder::new(0),
+            ignore_nulls,
+            data_type: data_type.clone(),
+            vals: Vec::new(),
+            is_sets: BooleanBufferBuilder::new(0),
+            min_of_each_group_buf: (Vec::new(), BooleanBufferBuilder::new(0)),
+        })
+    }
+
+    fn need_update(&self, group_idx: usize) -> bool {
+        if !self.is_sets.get_bit(group_idx) {
+            return true;
+        }
+
+        if self.ignore_nulls && !self.null_builder.get_bit(group_idx) {
+            return true;
+        }
+
+        false
+    }
+
+    fn should_update_state(&self, group_idx: usize) -> Result<bool> {
+        if !self.is_sets.get_bit(group_idx) {
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    fn take_need(
+        bool_buf_builder: &mut BooleanBufferBuilder,
+        emit_to: EmitTo,
+    ) -> BooleanBuffer {
+        let bool_buf = bool_buf_builder.finish();
+        match emit_to {
+            EmitTo::All => bool_buf,
+            EmitTo::First(n) => {
+                // split off the first N values in seen_values
+                //
+                // TODO make this more efficient rather than two
+                // copies and bitwise manipulation
+                let first_n: BooleanBuffer = bool_buf.iter().take(n).collect();
+                // reset the existing buffer
+                for b in bool_buf.iter().skip(n) {
+                    bool_buf_builder.append(b);
+                }
+                first_n
+            }
+        }
+    }
+
+    fn resize_states(&mut self, new_size: usize) {
+        self.vals.resize(new_size, T::default_value());
+        self.null_builder.resize(new_size);
+
+        self.is_sets.resize(new_size);
+
+        self.min_of_each_group_buf.0.resize(new_size, 0);
+        self.min_of_each_group_buf.1.resize(new_size);
+    }
+
+    fn update_state(&mut self, group_idx: usize, new_val: T::Native, is_null: bool) {
+        self.vals[group_idx] = new_val;
+        self.is_sets.set_bit(group_idx, true);
+
+        self.null_builder.set_bit(group_idx, !is_null);
+    }
+
+    fn take_state(&mut self, emit_to: EmitTo) -> (ArrayRef, BooleanBuffer) {
+        emit_to.take_needed(&mut self.min_of_each_group_buf.0);
+        self.min_of_each_group_buf
+            .1
+            .truncate(self.min_of_each_group_buf.0.len());
+
+        (
+            self.take_vals_and_null_buf(emit_to),
+            Self::take_need(&mut self.is_sets, emit_to),
+        )
+    }
+
+    fn get_filtered_min_of_each_group(
+        &mut self,
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        vals: &PrimitiveArray<T>,
+        is_set_arr: Option<&BooleanArray>,
+    ) -> Result<Vec<(usize, usize)>> {
+        self.min_of_each_group_buf.1.truncate(0);
+        self.min_of_each_group_buf
+            .1
+            .append_n(self.vals.len(), false);
+
+        for (idx_in_val, group_idx) in group_indices.iter().enumerate() {
+            let group_idx = *group_idx;
+
+            let passed_filter = opt_filter.is_none_or(|x| x.value(idx_in_val));
+
+            let is_set = is_set_arr.is_none_or(|x| x.value(idx_in_val));
+
+            if !passed_filter || !is_set {
+                continue;
+            }
+
+            if !self.need_update(group_idx) {
+                continue;
+            }
+
+            if self.ignore_nulls && vals.is_null(idx_in_val) {
+                continue;
+            }
+
+            let is_valid = self.min_of_each_group_buf.1.get_bit(group_idx);
+            if is_valid {
+                self.min_of_each_group_buf.0[group_idx] = idx_in_val;
+            } else if !is_valid {
+                self.min_of_each_group_buf.1.set_bit(group_idx, true);
+                self.min_of_each_group_buf.0[group_idx] = idx_in_val;
+            }
+        }
+
+        Ok(self
+            .min_of_each_group_buf
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(group_idx, _)| self.min_of_each_group_buf.1.get_bit(*group_idx))
+            .map(|(group_idx, idx_in_val)| (group_idx, *idx_in_val))
+            .collect::<Vec<_>>())
+    }
+
+    fn take_vals_and_null_buf(&mut self, emit_to: EmitTo) -> ArrayRef {
+        let r = emit_to.take_needed(&mut self.vals);
+
+        let null_buf = NullBuffer::new(Self::take_need(&mut self.null_builder, emit_to));
+
+        let values = PrimitiveArray::<T>::new(r.into(), Some(null_buf)) // no copy
+            .with_data_type(self.data_type.clone());
+        Arc::new(values)
+    }
+}
+
+impl<T> GroupsAccumulator for TrivialFirstPrimitiveGroupsAccumulator<T>
+where
+    T: ArrowPrimitiveType + Send,
+{
+    fn update_batch(
+        &mut self,
+        values_and_order_cols: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.resize_states(total_num_groups);
+
+        let vals = values_and_order_cols[0].as_primitive::<T>();
+
+        let mut ordering_buf = Vec::with_capacity(0);
+
+        for (group_idx, idx) in self
+            .get_filtered_min_of_each_group(group_indices, opt_filter, vals, None)?
+            .into_iter()
+        {
+            extract_row_at_idx_to_buf(
+                &values_and_order_cols[1..],
+                idx,
+                &mut ordering_buf,
+            )?;
+
+            if self.should_update_state(group_idx)? {
+                self.update_state(group_idx, vals.value(idx), vals.is_null(idx));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        Ok(self.take_state(emit_to).0)
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let (val_arr, is_sets) = self.take_state(emit_to);
+        let mut result = Vec::with_capacity(2);
+
+        result.push(val_arr);
+        result.push(Arc::new(BooleanArray::new(is_sets, None)));
+
+        Ok(result)
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.resize_states(total_num_groups);
+
+        let mut ordering_buf = Vec::with_capacity(0);
+
+        let (is_set_arr, val_and_order_cols) = match values.split_last() {
+            Some(result) => result,
+            None => return internal_err!("Empty row in FISRT_VALUE"),
+        };
+
+        let is_set_arr = as_boolean_array(is_set_arr)?;
+
+        let vals = values[0].as_primitive::<T>();
+        let groups = self.get_filtered_min_of_each_group(
+            group_indices,
+            opt_filter,
+            vals,
+            Some(is_set_arr),
+        )?;
+
+        for (group_idx, idx) in groups.into_iter() {
+            extract_row_at_idx_to_buf(&val_and_order_cols[1..], idx, &mut ordering_buf)?;
+
+            if self.should_update_state(group_idx)? {
+                self.update_state(group_idx, vals.value(idx), vals.is_null(idx));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn size(&self) -> usize {
+        self.vals.capacity() * size_of::<T::Native>()
+            + self.null_builder.capacity() / 8
+            + self.is_sets.capacity() / 8
+            + self.min_of_each_group_buf.0.capacity() * size_of::<usize>()
+            + self.min_of_each_group_buf.1.capacity() / 8
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let mut result = values.to_vec();
+        match opt_filter {
+            Some(f) => {
+                result.push(Arc::new(f.clone()));
+                Ok(result)
+            }
+            None => {
+                result.push(Arc::new(BooleanArray::from(vec![true; values[0].len()])));
+                Ok(result)
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TrivialFirstValueAccumulator {
     first: ScalarValue,
@@ -1293,6 +1574,7 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        println!("Last value eval {:?}", self.last);
         Ok(self.last.clone())
     }
 
