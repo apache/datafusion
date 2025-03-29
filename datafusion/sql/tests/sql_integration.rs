@@ -48,7 +48,7 @@ use datafusion_functions_aggregate::{
 use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::rank::rank_udwf;
-use insta::assert_snapshot;
+use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
@@ -1786,15 +1786,19 @@ fn create_external_table_with_compression_type() {
         "CREATE EXTERNAL TABLE t STORED AS ARROW LOCATION 'foo.arrow' OPTIONS ('format.compression' 'gzip')",
         "CREATE EXTERNAL TABLE t STORED AS ARROW LOCATION 'foo.arrow' OPTIONS ('format.compression' 'bzip2')",
     ];
-    for sql in sqls {
-        let err = logical_plan(sql).expect_err("query should have failed");
 
-        assert_snapshot!(
-            err.strip_backtrace(),
-            @r#"
-            Error during planning: File compression type cannot be set for PARQUET, AVRO, or ARROW files.
-            "#
-        );
+    allow_duplicates! {
+        for sql in sqls {
+            let err = logical_plan(sql).expect_err("query should have failed");
+
+            assert_snapshot!(
+                err.strip_backtrace(),
+                @r#"
+                Error during planning: File compression type cannot be set for PARQUET, AVRO, or ARROW files.
+                "#
+            );
+
+        }
     }
 }
 
