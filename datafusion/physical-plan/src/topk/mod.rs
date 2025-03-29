@@ -164,7 +164,8 @@ impl TopK {
         match self.filters {
             Some(ref filters) => filters.clone(),
             None => {
-                let children = self.expr.iter().map(|e| e.expr.clone()).collect::<Vec<_>>();
+                let children =
+                    self.expr.iter().map(|e| e.expr.clone()).collect::<Vec<_>>();
                 let filters = Arc::new(TopKDynamicFilterSource::new(children));
                 self.filters = Some(filters.clone());
                 filters
@@ -215,7 +216,8 @@ impl TopK {
         if need_to_update_dynamic_filters {
             if let Some(filters) = self.filters.as_ref() {
                 if let Some(threasholds) = self.heap.get_threshold_values(&self.expr)? {
-                    if let Some(predicate) = Self::calculate_dynamic_filters(threasholds)? {
+                    if let Some(predicate) = Self::calculate_dynamic_filters(threasholds)?
+                    {
                         filters.update_filters(predicate)?;
                     }
                 }
