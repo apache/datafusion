@@ -45,7 +45,7 @@ use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{HashPartitionMode, PhysicalExpr};
 use datafusion_physical_expr::{
     expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
 };
@@ -281,7 +281,7 @@ fn aggregate_exec_with_alias(
 
     Arc::new(
         AggregateExec::try_new(
-            AggregateMode::FinalPartitioned,
+            AggregateMode::FinalPartitioned(HashPartitionMode::HashPartitioned),
             final_grouping,
             vec![],
             vec![],
