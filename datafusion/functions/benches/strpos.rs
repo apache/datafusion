@@ -20,6 +20,7 @@ extern crate criterion;
 use arrow::array::{StringArray, StringViewArray};
 use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use rand::distributions::Alphanumeric;
 use rand::prelude::StdRng;
@@ -106,7 +107,7 @@ fn random_substring(chars: Chars) -> String {
 fn criterion_benchmark(c: &mut Criterion) {
     // All benches are single batch run with 8192 rows
     let strpos = datafusion_functions::unicode::strpos();
-
+    let config_options = ConfigOptions::default_singleton_arc();
     let n_rows = 8192;
     for str_len in [8, 32, 128, 4096] {
         // StringArray ASCII only
@@ -119,6 +120,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_ascii.clone(),
                         number_rows: n_rows,
                         return_type: &DataType::Int32,
+                        config_options,
                     }))
                 })
             },
@@ -134,6 +136,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_utf8.clone(),
                         number_rows: n_rows,
                         return_type: &DataType::Int32,
+                        config_options,
                     }))
                 })
             },
@@ -149,6 +152,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_view_ascii.clone(),
                         number_rows: n_rows,
                         return_type: &DataType::Int32,
+                        config_options,
                     }))
                 })
             },
@@ -164,6 +168,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_view_utf8.clone(),
                         number_rows: n_rows,
                         return_type: &DataType::Int32,
+                        config_options,
                     }))
                 })
             },

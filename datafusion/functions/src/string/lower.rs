@@ -98,6 +98,7 @@ impl ScalarUDFImpl for LowerFunc {
 mod tests {
     use super::*;
     use arrow::array::{Array, ArrayRef, StringArray};
+    use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
@@ -107,6 +108,7 @@ mod tests {
             number_rows: input.len(),
             args: vec![ColumnarValue::Array(input)],
             return_type: &DataType::Utf8,
+            config_options: ConfigOptions::default_singleton(),
         };
 
         let result = match func.invoke_with_args(args)? {

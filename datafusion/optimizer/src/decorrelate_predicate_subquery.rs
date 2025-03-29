@@ -26,6 +26,7 @@ use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, plan_err, Column, Result};
 use datafusion_expr::expr::{Exists, InSubquery};
@@ -91,8 +92,12 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             match extract_subquery_info(subquery_expr) {
                 // The subquery expression is at the top level of the filter
                 SubqueryPredicate::Top(subquery) => {
-                    match build_join_top(&subquery, &cur_input, config.alias_generator())?
-                    {
+                    match build_join_top(
+                        &subquery,
+                        &cur_input,
+                        config.alias_generator(),
+                        config.options(),
+                    )? {
                         Some(plan) => cur_input = plan,
                         // If the subquery can not be converted to a Join, reconstruct the subquery expression and add it to the Filter
                         None => other_exprs.push(subquery.expr()),
@@ -136,7 +141,14 @@ fn rewrite_inner_subqueries(
         Expr::Exists(Exists {
             subquery: Subquery { subquery, .. },
             negated,
-        }) => match mark_join(&cur_input, Arc::clone(&subquery), None, negated, alias)? {
+        }) => match mark_join(
+            &cur_input,
+            Arc::clone(&subquery),
+            None,
+            negated,
+            alias,
+            config.options(),
+        )? {
             Some((plan, exists_expr)) => {
                 cur_input = plan;
                 Ok(Transformed::yes(exists_expr))
@@ -160,6 +172,7 @@ fn rewrite_inner_subqueries(
                 Some(in_predicate),
                 negated,
                 alias,
+                config.options(),
             )? {
                 Some((plan, exists_expr)) => {
                     cur_input = plan;
@@ -254,6 +267,7 @@ fn build_join_top(
     query_info: &SubqueryInfo,
     left: &LogicalPlan,
     alias: &Arc<AliasGenerator>,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<Option<LogicalPlan>> {
     let where_in_expr_opt = &query_info.where_in_expr;
     let in_predicate_opt = where_in_expr_opt
@@ -275,7 +289,14 @@ fn build_join_top(
     };
     let subquery = query_info.query.subquery.as_ref();
     let subquery_alias = alias.next("__correlated_sq");
-    build_join(left, subquery, in_predicate_opt, join_type, subquery_alias)
+    build_join(
+        left,
+        subquery,
+        in_predicate_opt,
+        join_type,
+        subquery_alias,
+        config_options,
+    )
 }
 
 /// This is used to handle the case when the subquery is embedded in a more complex boolean
@@ -299,16 +320,22 @@ fn mark_join(
     in_predicate_opt: Option<Expr>,
     negated: bool,
     alias_generator: &Arc<AliasGenerator>,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<Option<(LogicalPlan, Expr)>> {
     let alias = alias_generator.next("__correlated_sq");
 
     let exists_col = Expr::Column(Column::new(Some(alias.clone()), "mark"));
     let exists_expr = if negated { !exists_col } else { exists_col };
 
-    Ok(
-        build_join(left, &subquery, in_predicate_opt, JoinType::LeftMark, alias)?
-            .map(|plan| (plan, exists_expr)),
-    )
+    Ok(build_join(
+        left,
+        &subquery,
+        in_predicate_opt,
+        JoinType::LeftMark,
+        alias,
+        config_options,
+    )?
+    .map(|plan| (plan, exists_expr)))
 }
 
 fn build_join(
@@ -317,8 +344,9 @@ fn build_join(
     in_predicate_opt: Option<Expr>,
     join_type: JoinType,
     alias: String,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<Option<LogicalPlan>> {
-    let mut pull_up = PullUpCorrelatedExpr::new()
+    let mut pull_up = PullUpCorrelatedExpr::new(config_options)
         .with_in_predicate_opt(in_predicate_opt.clone())
         .with_exists_sub_query(in_predicate_opt.is_none());
 

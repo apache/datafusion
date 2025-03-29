@@ -892,6 +892,8 @@ impl TableProvider for ListingTable {
         }
 
         let output_ordering = self.try_create_output_ordering()?;
+        let config_options = Arc::new(session_state.config_options().clone());
+
         match state
             .config_options()
             .execution
@@ -925,6 +927,7 @@ impl TableProvider for ListingTable {
                     &expr,
                     &table_df_schema,
                     state.execution_props(),
+                    &config_options,
                 )?;
                 Some(filters)
             }
@@ -1023,6 +1026,7 @@ impl TableProvider for ListingTable {
 
         // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
         let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
+        let config_options = Arc::new(state.config_options().clone());
         let file_list_stream = pruned_partition_list(
             session_state,
             store.as_ref(),
@@ -1030,6 +1034,7 @@ impl TableProvider for ListingTable {
             &[],
             &self.options.file_extension,
             &self.options.table_partition_cols,
+            &config_options,
         )
         .await?;
 
@@ -1097,6 +1102,7 @@ impl ListingTable {
             return Ok((vec![], Statistics::new_unknown(&self.file_schema)));
         };
         // list files (with partitions)
+        let config_options = Arc::new(ctx.config_options().clone());
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
             pruned_partition_list(
                 ctx,
@@ -1105,6 +1111,7 @@ impl ListingTable {
                 filters,
                 &self.options.file_extension,
                 &self.options.table_partition_cols,
+                &config_options,
             )
         }))
         .await?;

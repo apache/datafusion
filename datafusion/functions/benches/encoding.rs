@@ -20,12 +20,15 @@ extern crate criterion;
 use arrow::datatypes::DataType;
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::encoding;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let decode = encoding::decode();
+    let config_options = ConfigOptions::default_singleton_arc();
+
     for size in [1024, 4096, 8192] {
         let str_array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, 32));
         c.bench_function(&format!("base64_decode/{size}"), |b| {
@@ -35,6 +38,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: vec![ColumnarValue::Array(str_array.clone()), method.clone()],
                     number_rows: size,
                     return_type: &DataType::Utf8,
+                    config_options,
                 })
                 .unwrap();
 
@@ -46,6 +50,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             number_rows: size,
                             return_type: &DataType::Utf8,
+                            config_options,
                         })
                         .unwrap(),
                 )
@@ -59,6 +64,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: vec![ColumnarValue::Array(str_array.clone()), method.clone()],
                     number_rows: size,
                     return_type: &DataType::Utf8,
+                    config_options,
                 })
                 .unwrap();
 
@@ -70,6 +76,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             number_rows: size,
                             return_type: &DataType::Utf8,
+                            config_options,
                         })
                         .unwrap(),
                 )

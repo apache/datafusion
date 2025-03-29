@@ -26,6 +26,7 @@ use abi_stable::{
 };
 use arrow::datatypes::SchemaRef;
 use datafusion::{
+    config::ConfigOptions,
     error::{DataFusionError, Result},
     physical_expr::EquivalenceProperties,
     physical_plan::{
@@ -179,9 +180,10 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let ffi_schema = unsafe { (ffi_props.schema)(&ffi_props) };
         let schema = (&ffi_schema.0).try_into()?;
 
-        // TODO Extend FFI to get the registry and codex
+        // TODO Extend FFI to get the registry, config_options and codex
         let default_ctx = SessionContext::new();
         let codex = DefaultPhysicalExtensionCodec {};
+        let config_options = ConfigOptions::new();
 
         let ffi_orderings = unsafe { (ffi_props.output_ordering)(&ffi_props) };
 
@@ -191,6 +193,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let orderings = Some(parse_physical_sort_exprs(
             &proto_output_ordering.physical_sort_expr_nodes,
             &default_ctx,
+            &config_options,
             &schema,
             &codex,
         )?);
@@ -203,6 +206,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let partitioning = parse_protobuf_partitioning(
             Some(&proto_output_partitioning),
             &default_ctx,
+            &config_options,
             &schema,
             &codex,
         )?

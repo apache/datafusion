@@ -129,6 +129,7 @@ fn test_update_matching_exprs() -> Result<()> {
                 )),
             ],
             DataType::Int32,
+            Arc::clone(ConfigOptions::default_singleton_arc()),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 2))),
@@ -194,6 +195,7 @@ fn test_update_matching_exprs() -> Result<()> {
                 )),
             ],
             DataType::Int32,
+            Arc::clone(ConfigOptions::default_singleton_arc()),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 3))),
@@ -262,6 +264,7 @@ fn test_update_projected_exprs() -> Result<()> {
                 )),
             ],
             DataType::Int32,
+            Arc::clone(ConfigOptions::default_singleton_arc()),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 2))),
@@ -327,6 +330,7 @@ fn test_update_projected_exprs() -> Result<()> {
                 )),
             ],
             DataType::Int32,
+            Arc::clone(ConfigOptions::default_singleton_arc()),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d_new", 3))),
@@ -433,8 +437,8 @@ fn test_csv_after_projection() -> Result<()> {
     ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected =
         ["DataSourceExec: file_groups={1 group: [[x]]}, projection=[b, d], file_type=csv, has_header=false"];
@@ -461,8 +465,8 @@ fn test_memory_after_projection() -> Result<()> {
     ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected = ["DataSourceExec: partitions=0, partition_sizes=[]"];
     assert_eq!(get_plan_string(&after_optimize), expected);
@@ -547,8 +551,8 @@ fn test_streaming_table_after_projection() -> Result<()> {
         Arc::new(streaming_table) as _,
     )?) as _;
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let result = after_optimize
         .as_any()
@@ -636,8 +640,8 @@ fn test_projection_after_projection() -> Result<()> {
             ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(top_projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(top_projection, ConfigOptions::default_singleton())?;
 
     let expected = [
             "ProjectionExec: expr=[b@1 as new_b, c@2 + e@4 as binary, b@1 as newest_b]",
@@ -689,8 +693,8 @@ fn test_output_req_after_projection() -> Result<()> {
             ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected: [&str; 3] = [
             "OutputRequirementExec",
@@ -766,8 +770,8 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
         ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected = [
                 "CoalescePartitionsExec",
@@ -813,8 +817,8 @@ fn test_filter_after_projection() -> Result<()> {
         ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected = [
                 "FilterExec: b@1 - a_new@0 > d@2 - a_new@0",
@@ -899,8 +903,8 @@ fn test_join_after_projection() -> Result<()> {
             ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected = [
             "SymmetricHashJoinExec: mode=SinglePartition, join_type=Inner, on=[(b_from_left@1, c_from_right@1)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2",
@@ -1018,8 +1022,8 @@ fn test_join_after_required_projection() -> Result<()> {
             ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected = [
             "ProjectionExec: expr=[a@5 as a, b@6 as b, c@7 as c, d@8 as d, e@9 as e, a@0 as a, b@1 as b, c@2 as c, d@3 as d, e@4 as e]",
@@ -1086,8 +1090,8 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
             ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
     let expected = [
             "NestedLoopJoinExec: join_type=Inner, filter=a@0 < b@1, projection=[c@2]",
             "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
@@ -1167,8 +1171,8 @@ fn test_hash_join_after_projection() -> Result<()> {
             ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     // HashJoinExec only returns result after projection. Because there are some alias columns in the projection, the ProjectionExec is not removed.
     let expected = ["ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@3 as c_from_right]", "  HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]", "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false", "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"];
@@ -1184,8 +1188,8 @@ fn test_hash_join_after_projection() -> Result<()> {
         join.clone(),
     )?);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     // Comparing to the previous result, this projection don't have alias columns either change the order of output fields. So the ProjectionExec is removed.
     let expected = ["HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]", "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false", "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"];
@@ -1224,8 +1228,8 @@ fn test_repartition_after_projection() -> Result<()> {
         ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected = [
                 "RepartitionExec: partitioning=Hash([a@1, b_new@0, d_new@2], 6), input_partitions=1",
@@ -1291,8 +1295,8 @@ fn test_sort_after_projection() -> Result<()> {
             ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected = [
             "SortExec: expr=[b@2 ASC, c@0 + new_a@1 ASC], preserve_partitioning=[false]",
@@ -1341,8 +1345,8 @@ fn test_sort_preserving_after_projection() -> Result<()> {
             ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected = [
             "SortPreservingMergeExec: [b@2 ASC, c@0 + new_a@1 ASC]",
@@ -1378,8 +1382,8 @@ fn test_union_after_projection() -> Result<()> {
             ];
     assert_eq!(initial, expected_initial);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected = [
             "UnionExec",
@@ -1439,8 +1443,8 @@ fn test_partition_col_projection_pushdown() -> Result<()> {
         source,
     )?);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected = [
         "ProjectionExec: expr=[string_col@1 as string_col, partition_col@2 as partition_col, int_col@0 as int_col]",
@@ -1479,8 +1483,8 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
         source,
     )?);
 
-    let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, ConfigOptions::default_singleton())?;
 
     let expected = [
         "ProjectionExec: expr=[string_col@1 as string_col, CAST(partition_col@2 AS Utf8View) as partition_col, int_col@0 as int_col]",

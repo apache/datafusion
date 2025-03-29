@@ -19,6 +19,7 @@ extern crate criterion;
 
 use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::ScalarFunctionArgs;
 use helper::gen_string_array;
 
@@ -34,6 +35,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     for str_len in [8, 32, 128, 4096] {
         // StringArray ASCII only
         let args_string_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, false);
+        let config_options = ConfigOptions::default_singleton_arc();
+
         c.bench_function(
             &format!("character_length_StringArray_ascii_str_len_{}", str_len),
             |b| {
@@ -42,6 +45,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_ascii.clone(),
                         number_rows: n_rows,
                         return_type: &return_type,
+                        config_options,
                     }))
                 })
             },
@@ -57,6 +61,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_utf8.clone(),
                         number_rows: n_rows,
                         return_type: &return_type,
+                        config_options,
                     }))
                 })
             },
@@ -72,6 +77,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_view_ascii.clone(),
                         number_rows: n_rows,
                         return_type: &return_type,
+                        config_options,
                     }))
                 })
             },
@@ -87,6 +93,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_view_utf8.clone(),
                         number_rows: n_rows,
                         return_type: &return_type,
+                        config_options,
                     }))
                 })
             },
