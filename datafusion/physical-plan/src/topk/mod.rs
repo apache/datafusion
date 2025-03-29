@@ -96,7 +96,7 @@ pub struct TopK {
     /// scratch space for converting rows
     scratch_rows: Rows,
     /// stores the top k values and their sort key values, in order
-    heap: Arc<RwLock<TopKHeap>>,
+    heap: TopKHeap,
     /// stores the current filters derived from this TopK that can be pushed down
     filters: Arc<TopKDynamicFilterSource>,
 }
@@ -157,7 +157,7 @@ impl TopK {
             expr,
             row_converter,
             scratch_rows,
-            heap: Arc::new(RwLock::new(TopKHeap::new(k, batch_size, schema))),
+            heap: TopKHeap::new(k, batch_size, schema),
             filters: Arc::new(TopKDynamicFilterSource::new(children)),
         })
     }
@@ -189,30 +189,25 @@ impl TopK {
         // TODO make this algorithmically better?:
         // Idea: filter out rows >= self.heap.max() early (before passing to `RowConverter`)
         //       this avoids some work and also might be better vectorizable.
-        let mut heap = self.heap.try_write().map_err(|_| {
-            DataFusionError::Internal(
-                "Failed to acquire write lock on TopK heap".to_string(),
-            )
-        })?;
-        let mut batch_entry = heap.register_batch(batch);
+        let mut batch_entry = self.heap.register_batch(batch);
         let mut need_to_update_dynamic_filters = false;
         for (index, row) in rows.iter().enumerate() {
-            match heap.max() {
+            match self.heap.max() {
                 // heap has k items, and the new row is greater than the
                 // current max in the heap ==> it is not a new topk
                 Some(max_row) if row.as_ref() >= max_row.row() => {}
                 // don't yet have k items or new item is lower than the currently k low values
                 None | Some(_) => {
-                    heap.add(&mut batch_entry, row, index);
+                    self.heap.add(&mut batch_entry, row, index);
                     self.metrics.row_replacements.add(1);
                     need_to_update_dynamic_filters = true;
                 }
             }
         }
-        heap.insert_batch_entry(batch_entry);
+        self.heap.insert_batch_entry(batch_entry);
 
         if need_to_update_dynamic_filters {
-            if let Some(threasholds) = heap.get_threshold_values(&self.expr)? {
+            if let Some(threasholds) = self.heap.get_threshold_values(&self.expr)? {
                 if let Some(predicate) = Self::calculate_dynamic_filters(threasholds)? {
                     self.filters.update_filters(predicate)?;
                 }
@@ -220,11 +215,10 @@ impl TopK {
         }
 
         // conserve memory
-        heap.maybe_compact()?;
+        self.heap.maybe_compact()?;
 
         // update memory reservation
-        let heap_size = heap.size();
-        self.reservation.try_resize(self.size(heap_size))?;
+        self.reservation.try_resize(self.size())?;
         Ok(())
     }
 
@@ -322,18 +316,13 @@ impl TopK {
             expr: _,
             row_converter: _,
             scratch_rows: _,
-            heap,
+            mut heap,
             filters: _,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
         // break into record batches as needed
         let mut batches = vec![];
-        let mut heap = heap.write().map_err(|_| {
-            DataFusionError::Internal(
-                "Failed to acquire write lock on TopK heap".to_string(),
-            )
-        })?;
         if let Some(mut batch) = heap.emit()? {
             metrics.baseline.output_rows().add(batch.num_rows());
 
@@ -355,11 +344,11 @@ impl TopK {
     }
 
     /// return the size of memory used by this operator, in bytes
-    fn size(&self, heap_size: usize) -> usize {
+    fn size(&self) -> usize {
         size_of::<Self>()
             + self.row_converter.size()
             + self.scratch_rows.size()
-            + heap_size
+            + self.heap.size()
     }
 }
 
