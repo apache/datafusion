@@ -93,12 +93,14 @@ LIMIT 10;
 
 Results look like
 
+```
 +-------------+---------------------+---+------+------+------+
 | ClientIP    | WatchID             | c | tmin | tmed | tmax |
 +-------------+---------------------+---+------+------+------+
 | 1611957945  | 6655575552203051303 | 2 | 0    | 0    | 0    |
 | -1402644643 | 8566928176839891583 | 2 | 0    | 0    | 0    |
 +-------------+---------------------+---+------+------+------+
+```
 
 
 ### Q5: Response start time distribution analysis (p95)
@@ -120,13 +122,42 @@ LIMIT 10;
 ```
 
 Results look like
-
+```
 +-------------+---------------------+---+------+------+------+
 | ClientIP    | WatchID             | c | tmin | tp95 | tmax |
 +-------------+---------------------+---+------+------+------+
 | 1611957945  | 6655575552203051303 | 2 | 0    | 0    | 0    |
 | -1402644643 | 8566928176839891583 | 2 | 0    | 0    | 0    |
 +-------------+---------------------+---+------+------+------+
+```
+
+### Q6: How many social shares meet complex multi-stage filtering criteria?
+**Question**: What is the count of sharing actions from iPhone mobile users on specific social networks, within common timezones, participating in seasonal campaigns, with high screen resolutions and closely matched UTM parameters?
+**Important Query Properties**: Simple filter with high-selectivity, Costly string matching, A large number of filters with high overhead are positioned relatively later in the process
+
+```sql
+SELECT COUNT(*) AS ShareCount
+FROM hits
+WHERE
+	-- Stage 1: High-selectivity filters (fast)
+    "IsMobile" = 1 -- Filter mobile users
+    AND "MobilePhoneModel" LIKE 'iPhone%' -- Match iPhone models
+    AND "SocialAction" = 'share' -- Identify social sharing actions
+
+	-- Stage 2: Moderate filters (cheap)
+    AND "SocialSourceNetworkID" IN (5, 12) -- Filter specific social networks
+    AND "ClientTimeZone" BETWEEN -5 AND 5 -- Restrict to common timezones
+
+	-- Stage 3: Heavy computations (expensive)
+    AND regexp_match("Referer", '\/campaign\/(spring|summer)_promo') IS NOT NULL -- Find campaign-specific referrers
+    AND CASE 
+        WHEN split_part(split_part("URL", 'resolution=', 2), '&', 1) ~ '^\d+$' 
+        THEN split_part(split_part("URL", 'resolution=', 2), '&', 1)::INT 
+        ELSE 0 
+    END > 1920 -- Extract and validate resolution parameter
+    AND levenshtein("UTMSource", "UTMCampaign") < 3 -- Verify UTM parameter similarity
+```
+Result is empty,Since it has already been filtered by `"SocialAction" = 'share'`.
 
 
 ## Data Notes
