@@ -77,7 +77,7 @@ physical_plan
 01)SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 02)--SortExec: expr=[cntrycode@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[cntrycode@0 as cntrycode, count(Int64(1))@1 as numcust, sum(custsale.c_acctbal)@2 as totacctbal]
-04)------AggregateExec: mode=FinalPartitioned, gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)]
+04)------AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([cntrycode@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[count(Int64(1)), sum(custsale.c_acctbal)]

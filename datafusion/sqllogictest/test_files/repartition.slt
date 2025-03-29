@@ -43,7 +43,7 @@ logical_plan
 01)Aggregate: groupBy=[[parquet_table.column1]], aggr=[[sum(CAST(parquet_table.column2 AS Int64))]]
 02)--TableScan: parquet_table projection=[column1, column2]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
+01)AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
 04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
@@ -61,7 +61,7 @@ logical_plan
 01)Aggregate: groupBy=[[parquet_table.column1]], aggr=[[sum(CAST(parquet_table.column2 AS Int64))]]
 02)--TableScan: parquet_table projection=[column1, column2]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
+01)AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=1
 04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]

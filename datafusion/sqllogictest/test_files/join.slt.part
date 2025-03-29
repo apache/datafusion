@@ -1459,18 +1459,18 @@ physical_plan
 04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[a@0, col0@2, col1@3]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=HashSelectionVector([CAST(f.a AS Int64)@1], 16), input_partitions=1
+07)------------RepartitionExec: partitioning=Hash([CAST(f.a AS Int64)@1], 16), input_partitions=1
 08)--------------ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
 09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 10)----------CoalesceBatchesExec: target_batch_size=8192
-11)------------RepartitionExec: partitioning=HashSelectionVector([col0@0], 16), input_partitions=16
+11)------------RepartitionExec: partitioning=Hash([col0@0], 16), input_partitions=16
 12)--------------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
 13)----------------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
 14)------------------CoalesceBatchesExec: target_batch_size=8192
 15)--------------------FilterExec: y@1 = x@0
 16)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
 17)----CoalesceBatchesExec: target_batch_size=8192
-18)------RepartitionExec: partitioning=HashSelectionVector([CAST(s.b AS Int64)@1], 16), input_partitions=1
+18)------RepartitionExec: partitioning=Hash([CAST(s.b AS Int64)@1], 16), input_partitions=1
 19)--------ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
 20)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1486,38 +1486,8 @@ ON col0 = f.a
 JOIN s
 ON col1 = s.b
 ----
-2 2 2 2
 3 3 3 3
 2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
-2 2 2 2
-3 3 3 3
 
 # reset the config
 statement ok

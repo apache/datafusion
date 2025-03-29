@@ -56,7 +56,7 @@ physical_plan
 01)SortPreservingMergeExec: [custdist@1 DESC, c_count@0 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[custdist@1 DESC, c_count@0 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[c_count@0 as c_count, count(Int64(1))@1 as custdist]
-04)------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[count(Int64(1))]
+04)------AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[c_count@0 as c_count], aggr=[count(Int64(1))]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([c_count@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[c_count@0 as c_count], aggr=[count(Int64(1))]

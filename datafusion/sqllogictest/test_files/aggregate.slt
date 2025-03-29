@@ -374,7 +374,7 @@ logical_plan
 15)------------EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[array_length(array_agg(DISTINCT a.foo)@1) as array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+02)--AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
 05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
@@ -1112,7 +1112,7 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[median(alias1)]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+05)--------AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[alias1@0 as alias1], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
 07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=4
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -1135,7 +1135,7 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[median(alias1)]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+05)--------AggregateExec: mode=FinalPartitioned(SelectionVector), gby=[alias1@0 as alias1], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
 07)------------RepartitionExec: partitioning=HashSelectionVector([alias1@0], 4), input_partitions=4
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -5282,11 +5282,11 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c1, c3]
 physical_plan
 01)CoalescePartitionsExec: fetch=5
-02)--AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
+02)--AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------RepartitionExec: partitioning=Hash([c3@0, min(aggregate_test_100.c1)@1], 4), input_partitions=4
 05)--------AggregateExec: mode=Partial, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
-06)----------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
+06)----------AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
 07)------------CoalesceBatchesExec: target_batch_size=8192
 08)--------------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
 09)----------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
@@ -6387,7 +6387,7 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
-03)----AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+03)----AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
 04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -6536,7 +6536,7 @@ logical_plan
 15)------------EmptyRelation
 physical_plan
 01)ProjectionExec: expr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST]@1 as last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
+02)--AggregateExec: mode=FinalPartitioned(HashPartitioned), gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
 05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted

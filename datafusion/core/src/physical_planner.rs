@@ -741,8 +741,13 @@ impl DefaultPhysicalPlanner {
                 let updated_aggregates = initial_aggr.aggr_expr().to_vec();
 
                 let next_partition_mode = if can_repartition {
+                    let mode = if session_state.config_options().optimizer.prefer_hash_selection_vector_partitioning {
+                        HashPartitionMode::SelectionVector
+                    } else {
+                        HashPartitionMode::HashPartitioned
+                    };
                     // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                    AggregateMode::FinalPartitioned(HashPartitionMode::HashPartitioned)
+                    AggregateMode::FinalPartitioned(mode)
                 } else {
                     // construct a second aggregation, keeping the final column name equal to the
                     // first aggregation and the expressions corresponding to the respective aggregate
