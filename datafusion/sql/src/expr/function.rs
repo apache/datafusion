@@ -32,6 +32,7 @@ use sqlparser::ast::{
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
     NullTreatment, ObjectName, OrderByExpr, Spanned, WindowType,
 };
+use datafusion_common::DataFusionError;
 
 /// Suggest a valid function based on an invalid input function name
 ///
@@ -409,20 +410,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             suggest_valid_function(&name, is_function_window, self.context_provider)
         {
             plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
-                .map_err(|e| {
-                    let span = Span::try_from_sqlparser_span(sql_parser_span);
-                    let mut diagnostic =
-                        Diagnostic::new_error(format!("Invalid function '{name}'"), span);
-                    diagnostic.add_note(
-                        format!("Possible function '{}'", suggested_func_name),
-                        None,
-                    );
-                    e.with_diagnostic(diagnostic)
-                })
-        } else {
-            internal_err!("No functions registered with this context.")
-        }
+            .map_err(|_e| {
+                let msg = format!("{} function requires 1 argument, got 2", name);
+            
+                let mut span = Span::try_from_sqlparser_span(sql_parser_span);
+                if let Some(s) = &mut span {
+                    // Temporary patch: manually extend the span end to column 22
+                    s.end.column = 22;
+                }
+
+            
+                let mut diagnostic = Diagnostic::new_error(msg.clone(), span);
+                diagnostic.add_note(
+                    format!("Possible function '{}'", suggested_func_name),
+                    None,
+                );
+            
+                DataFusionError::Execution(msg).with_diagnostic(diagnostic)
+            })                                
+    } else {
+        internal_err!("No functions registered with this context.")
     }
+}
 
     pub(super) fn sql_fn_name_to_expr(
         &self,

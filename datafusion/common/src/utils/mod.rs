@@ -41,6 +41,8 @@ use std::num::NonZero;
 use std::ops::Range;
 use std::sync::Arc;
 use std::thread::available_parallelism;
+use crate::diagnostic::Diagnostic; 
+
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -979,15 +981,18 @@ pub fn take_function_args<const N: usize, T>(
 ) -> Result<[T; N]> {
     let args = args.into_iter().collect::<Vec<_>>();
     args.try_into().map_err(|v: Vec<T>| {
-        _exec_datafusion_err!(
+        let msg = format!(
             "{} function requires {} {}, got {}",
             function_name,
             N,
             if N == 1 { "argument" } else { "arguments" },
             v.len()
-        )
+        );
+        let diag = Diagnostic::new_error(msg.clone(), None);
+        DataFusionError::Execution(msg).with_diagnostic(diag)
     })
 }
+
 
 #[cfg(test)]
 mod tests {
