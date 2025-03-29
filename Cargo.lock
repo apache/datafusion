@@ -2564,6 +2564,7 @@ dependencies = [
  "datafusion-functions-window",
  "env_logger",
  "indexmap 2.8.0",
+ "insta",
  "log",
  "paste",
  "recursive",
