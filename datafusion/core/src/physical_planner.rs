@@ -741,7 +741,11 @@ impl DefaultPhysicalPlanner {
                 let updated_aggregates = initial_aggr.aggr_expr().to_vec();
 
                 let next_partition_mode = if can_repartition {
-                    let mode = if session_state.config_options().optimizer.prefer_hash_selection_vector_partitioning {
+                    let mode = if session_state
+                        .config_options()
+                        .optimizer
+                        .prefer_hash_selection_vector_partitioning
+                    {
                         HashPartitionMode::SelectionVector
                     } else {
                         HashPartitionMode::HashPartitioned
