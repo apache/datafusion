@@ -1749,7 +1749,7 @@ fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_resolva
     assert_snapshot!(
         plan,
         @r#"
-        Projection: (person.age + Int64(1)) / Int64(2) * (person.age + Int64(1)), min(person.first_name)
+        Projection: person.age + Int64(1) / Int64(2) * person.age + Int64(1), min(person.first_name)
           Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]
             TableScan: person
         "#
