@@ -687,7 +687,7 @@ impl DataFrame {
 
     /// Calculate the union of two [`DataFrame`]s using column names, preserving duplicate rows.
     ///
-    /// The two [`DataFrame`]s are combined using column names rather than position, 
+    /// The two [`DataFrame`]s are combined using column names rather than position,
     /// filling missing columns with null.
     ///
     ///
@@ -724,7 +724,7 @@ impl DataFrame {
             projection_requires_validation: true,
         })
     }
-    
+
     /// Calculate the distinct union of two [`DataFrame`]s.
     ///
     /// The two [`DataFrame`]s must have exactly the same schema. Any duplicate
@@ -766,7 +766,7 @@ impl DataFrame {
 
     /// Calculate the union of two [`DataFrame`]s using column names, preserving duplicate rows.
     ///
-    /// The two [`DataFrame`]s are combined using column names rather than position, 
+    /// The two [`DataFrame`]s are combined using column names rather than position,
     /// filling missing columns with null.
     ///
     ///
@@ -802,7 +802,7 @@ impl DataFrame {
             projection_requires_validation: true,
         })
     }
-    
+
     /// Return a new `DataFrame` with all duplicated rows removed.
     ///
     /// # Example

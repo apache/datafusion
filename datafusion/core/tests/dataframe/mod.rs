@@ -5211,12 +5211,10 @@ async fn union_literal_is_null_and_not_null() -> Result<()> {
     let str_array_1 = StringArray::from(vec![None::<String>]);
     let str_array_2 = StringArray::from(vec![Some("a")]);
 
-    let batch_1 = RecordBatch::try_from_iter(vec![
-        ("arr", Arc::new(str_array_1) as ArrayRef),
-    ])?;
-    let batch_2 = RecordBatch::try_from_iter(vec![
-        ("arr", Arc::new(str_array_2) as ArrayRef),
-    ])?;
+    let batch_1 =
+        RecordBatch::try_from_iter(vec![("arr", Arc::new(str_array_1) as ArrayRef)])?;
+    let batch_2 =
+        RecordBatch::try_from_iter(vec![("arr", Arc::new(str_array_2) as ArrayRef)])?;
 
     let ctx = SessionContext::new();
     ctx.register_batch("union_batch_1", batch_1)?;
@@ -5231,13 +5229,11 @@ async fn union_literal_is_null_and_not_null() -> Result<()> {
     for batch in batches {
         // Verify schema is the same for all batches
         if !schema.contains(&batch.schema()) {
-            return Err(DataFusionError::Internal(
-                format!(
-                    "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
-                    &schema,
-                    batch.schema()
-                ),
-            ));
+            return Err(DataFusionError::Internal(format!(
+                "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
+                &schema,
+                batch.schema()
+            )));
         }
     }
 
@@ -5524,7 +5520,7 @@ async fn test_union_by_name() -> Result<()> {
 
     let df2 = df.clone().select_columns(&["c", "b", "a"])?;
     let result = df.union_by_name(df2)?.sort_by(vec![col("a"), col("b")])?;
-    
+
     assert_snapshot!(
         batches_to_sort_string(&result.collect().await?),
         @r"
@@ -5553,7 +5549,9 @@ async fn test_union_by_name_distinct() -> Result<()> {
         .alias("table_alias")?;
 
     let df2 = df.clone().select_columns(&["c", "b", "a"])?;
-    let result = df.union_by_name_distinct(df2)?.sort_by(vec![col("a"), col("b")])?;
+    let result = df
+        .union_by_name_distinct(df2)?
+        .sort_by(vec![col("a"), col("b")])?;
 
     assert_snapshot!(
         batches_to_sort_string(&result.collect().await?),
