@@ -654,12 +654,16 @@ impl DefaultPhysicalPlanner {
                 let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
                 let physical_input_schema_from_logical = logical_input_schema.inner();
-
-                if !options.execution.skip_physical_aggregate_schema_check
-                    && !schema_satisfied_by(
+                // If the physical input schema has only one field and the logical input schema has no fields, we skip the schema check
+                // This is because the physical plan may add a dummy column to the input schema to represent the row,
+                // e.g. with test AS (SELECT i as v FROM generate_series(1, 10) t(i)) select count(1) from test WHERE 1 = 1;
+                if !(options.execution.skip_physical_aggregate_schema_check
+                    || schema_satisfied_by(
                         physical_input_schema_from_logical,
                         &physical_input_schema,
                     )
+                    || (physical_input_schema.fields().len() == 1
+                        && physical_input_schema_from_logical.fields().len() == 0))
                 {
                     let mut differences = Vec::new();
                     if physical_input_schema.fields().len()
