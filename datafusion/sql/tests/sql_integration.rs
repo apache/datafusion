@@ -2925,7 +2925,7 @@ fn order_by_unaliased_name() {
 #[test]
 fn order_by_ambiguous_name() {
     let sql = "select * from person a join person b using (id) order by age";
-    let err = logical_plan(sql).unwrap_err();
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
 
     assert_snapshot!(
         err,
@@ -2938,7 +2938,7 @@ fn order_by_ambiguous_name() {
 #[test]
 fn group_by_ambiguous_name() {
     let sql = "select max(id) from person a join person b using (id) group by age";
-    let err = logical_plan(sql).unwrap_err();
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
 
     assert_snapshot!(
         err,
@@ -3289,7 +3289,7 @@ fn test_ambiguous_column_references_in_on_join() {
     // It should return error.
     let result = logical_plan(sql);
     assert!(result.is_err());
-    let err = result.err().unwrap();
+    let err = result.err().unwrap().strip_backtrace();
 
     assert_snapshot!(
         err,
@@ -3994,7 +3994,9 @@ fn test_multi_grouping_sets() {
 #[test]
 fn test_field_not_found_window_function() {
     let order_by_sql = "SELECT count() OVER (order by a);";
-    let order_by_err = logical_plan(order_by_sql).expect_err("query should have failed");
+    let order_by_err = logical_plan(order_by_sql)
+        .expect_err("query should have failed")
+        .strip_backtrace();
 
     assert_snapshot!(
         order_by_err,
@@ -4004,8 +4006,9 @@ fn test_field_not_found_window_function() {
     );
 
     let partition_by_sql = "SELECT count() OVER (PARTITION BY a);";
-    let partition_by_err =
-        logical_plan(partition_by_sql).expect_err("query should have failed");
+    let partition_by_err = logical_plan(partition_by_sql)
+        .expect_err("query should have failed")
+        .strip_backtrace();
 
     assert_snapshot!(
         partition_by_err,
