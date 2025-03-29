@@ -49,7 +49,7 @@ pub fn data_types_with_scalar_udf(
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
-    if current_types.is_empty() {
+    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
         if type_signature.supports_zero_argument() {
             return Ok(vec![]);
         } else if type_signature.used_to_support_zero_arguments() {
