@@ -358,43 +358,6 @@ impl PhysicalExpr for BinaryExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         use arrow::compute::kernels::numeric::*;
 
-        fn check_short_circuit(arg: &ColumnarValue, op: &Operator) -> bool {
-            let data_type = arg.data_type();
-            match (data_type, op) {
-                (DataType::Boolean, Operator::And) => {
-                    match arg {
-                        ColumnarValue::Array(array) => {
-                            if let Ok(array) = as_boolean_array(&array) {
-                                return array.false_count() == array.len();
-                            }
-                        }
-                        ColumnarValue::Scalar(scalar) => {
-                            if let ScalarValue::Boolean(Some(value)) = scalar {
-                                return !value;
-                            }
-                        }
-                    }
-                    false
-                }
-                (DataType::Boolean, Operator::Or) => {
-                    match arg {
-                        ColumnarValue::Array(array) => {
-                            if let Ok(array) = as_boolean_array(&array) {
-                                return array.true_count() == array.len();
-                            }
-                        }
-                        ColumnarValue::Scalar(scalar) => {
-                            if let ScalarValue::Boolean(Some(value)) = scalar {
-                                return *value;
-                            }
-                        }
-                    }
-                    false
-                }
-                _ => false,
-            }
-        }
-
         let lhs = self.left.evaluate(batch)?;
 
         // Optimize for short-circuiting `Operator::And` or `Operator::Or` operations and return early.
@@ -845,6 +808,47 @@ impl BinaryExpr {
                 )
             }
         }
+    }
+}
+
+/// Check if it meets the short-circuit condition
+/// 1. For the `AND` operator, if the `lhs` result all are `false`
+/// 2. For the `OR` operator, if the `lhs` result all are `true`
+/// 3. Otherwise, it does not meet the short-circuit condition
+fn check_short_circuit(arg: &ColumnarValue, op: &Operator) -> bool {
+    let data_type = arg.data_type();
+    match (data_type, op) {
+        (DataType::Boolean, Operator::And) => {
+            match arg {
+                ColumnarValue::Array(array) => {
+                    if let Ok(array) = as_boolean_array(&array) {
+                        return array.false_count() == array.len();
+                    }
+                }
+                ColumnarValue::Scalar(scalar) => {
+                    if let ScalarValue::Boolean(Some(value)) = scalar {
+                        return !value;
+                    }
+                }
+            }
+            false
+        }
+        (DataType::Boolean, Operator::Or) => {
+            match arg {
+                ColumnarValue::Array(array) => {
+                    if let Ok(array) = as_boolean_array(&array) {
+                        return array.true_count() == array.len();
+                    }
+                }
+                ColumnarValue::Scalar(scalar) => {
+                    if let ScalarValue::Boolean(Some(value)) = scalar {
+                        return *value;
+                    }
+                }
+            }
+            false
+        }
+        _ => false,
     }
 }
 
@@ -4874,5 +4878,40 @@ mod tests {
         assert_eq!(sql_string, "a = 42");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_check_short_circuit() {
+        use crate::planner::logical2physical;
+        use datafusion_expr::col as logical_col;
+        use datafusion_expr::lit;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let a_array = Int32Array::from(vec![1, 3, 4, 5, 6]);
+        let b_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(a_array), Arc::new(b_array)],
+        )
+        .unwrap();
+
+        // op: AND left: all false
+        let left_expr = logical2physical(&logical_col("a").eq(lit(2)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(check_short_circuit(&left_value, &Operator::And));
+        // op: AND left: not all false
+        let left_expr = logical2physical(&logical_col("a").eq(lit(3)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(!check_short_circuit(&left_value, &Operator::And));
+        // op: OR left: all true
+        let left_expr = logical2physical(&logical_col("a").gt(lit(0)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(check_short_circuit(&left_value, &Operator::Or));
+        // op: OR left: not all true
+        let left_expr = logical2physical(&logical_col("a").gt(lit(2)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(!check_short_circuit(&left_value, &Operator::Or));
     }
 }
