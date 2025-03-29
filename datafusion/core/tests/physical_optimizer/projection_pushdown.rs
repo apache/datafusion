@@ -35,10 +35,10 @@ use datafusion_expr::{
 use datafusion_physical_expr::expressions::{
     binary, cast, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
 };
-use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::{
     Distribution, Partitioning, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_expr::{HashPartitionMode, ScalarFunctionExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
@@ -667,10 +667,10 @@ fn test_output_req_after_projection() -> Result<()> {
                 options: Some(SortOptions::default()),
             },
         ])),
-        Distribution::HashPartitioned(vec![
-            Arc::new(Column::new("a", 0)),
-            Arc::new(Column::new("b", 1)),
-        ]),
+        Distribution::HashPartitioned(
+            vec![Arc::new(Column::new("a", 0)), Arc::new(Column::new("b", 1))],
+            HashPartitionMode::HashPartitioned,
+        ),
     ));
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
@@ -727,12 +727,13 @@ fn test_output_req_after_projection() -> Result<()> {
         Arc::new(Column::new("new_a", 1)),
         Arc::new(Column::new("b", 2)),
     ];
-    if let Distribution::HashPartitioned(vec) = after_optimize
-        .as_any()
-        .downcast_ref::<OutputRequirementExec>()
-        .unwrap()
-        .required_input_distribution()[0]
-        .clone()
+    if let Distribution::HashPartitioned(vec, HashPartitionMode::HashPartitioned) =
+        after_optimize
+            .as_any()
+            .downcast_ref::<OutputRequirementExec>()
+            .unwrap()
+            .required_input_distribution()[0]
+            .clone()
     {
         assert!(vec
             .iter()

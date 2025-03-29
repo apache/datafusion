@@ -177,8 +177,8 @@ impl Partitioning {
             Distribution::UnspecifiedDistribution => true,
             Distribution::SinglePartition if self.partition_count() == 1 => true,
             // When partition count is 1, hash requirement is satisfied.
-            Distribution::HashPartitioned(_) if self.partition_count() == 1 => true,
-            Distribution::HashPartitioned(required_exprs) => {
+            Distribution::HashPartitioned(_, _) if self.partition_count() == 1 => true,
+            Distribution::HashPartitioned(required_exprs, _) => {
                 match self {
                     // Here we do not check the partition count for hash partitioning and assumes the partition count
                     // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
@@ -266,27 +266,22 @@ pub enum Distribution {
     SinglePartition,
     /// Requires children to be distributed in such a way that the same
     /// values of the keys end up in the same partition
-    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
+    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>, HashPartitionMode),
 }
 
 impl Distribution {
     /// Creates a `Partitioning` that satisfies this `Distribution`
-    pub fn create_partitioning(
-        self,
-        partition_count: usize,
-        prefer_selection_vector: bool,
-    ) -> Partitioning {
+    pub fn create_partitioning(self, partition_count: usize) -> Partitioning {
         match self {
             Distribution::UnspecifiedDistribution => {
                 Partitioning::UnknownPartitioning(partition_count)
             }
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
-            Distribution::HashPartitioned(expr) => {
-                if prefer_selection_vector {
-                    Partitioning::HashSelectionVector(expr, partition_count)
-                } else {
-                    Partitioning::Hash(expr, partition_count)
-                }
+            Distribution::HashPartitioned(expr, HashPartitionMode::HashPartitioned) => {
+                Partitioning::Hash(expr, partition_count)
+            }
+            Distribution::HashPartitioned(expr, HashPartitionMode::SelectionVector) => {
+                Partitioning::HashSelectionVector(expr, partition_count)
             }
         }
     }
@@ -297,9 +292,31 @@ impl Display for Distribution {
         match self {
             Distribution::UnspecifiedDistribution => write!(f, "Unspecified"),
             Distribution::SinglePartition => write!(f, "SinglePartition"),
-            Distribution::HashPartitioned(exprs) => {
-                write!(f, "HashPartitioned[{}])", format_physical_expr_list(exprs))
+            Distribution::HashPartitioned(exprs, mode) => {
+                write!(
+                    f,
+                    "HashPartitioned[{}, {}])",
+                    format_physical_expr_list(exprs),
+                    mode
+                )
             }
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum HashPartitionMode {
+    /// Hash partitioning with a selection vector
+    SelectionVector,
+    /// The default hash partitioning
+    HashPartitioned,
+}
+
+impl Display for HashPartitionMode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            HashPartitionMode::SelectionVector => write!(f, "SelectionVector"),
+            HashPartitionMode::HashPartitioned => write!(f, "HashPartitioned"),
         }
     }
 }
@@ -333,7 +350,10 @@ mod tests {
         let distribution_types = vec![
             Distribution::UnspecifiedDistribution,
             Distribution::SinglePartition,
-            Distribution::HashPartitioned(partition_exprs1.clone()),
+            Distribution::HashPartitioned(
+                partition_exprs1.clone(),
+                HashPartitionMode::HashPartitioned,
+            ),
         ];
 
         let single_partition = Partitioning::UnknownPartitioning(1);
@@ -359,7 +379,7 @@ mod tests {
                 Distribution::SinglePartition => {
                     assert_eq!(result, (true, false, false, false, false))
                 }
-                Distribution::HashPartitioned(_) => {
+                Distribution::HashPartitioned(_, _) => {
                     assert_eq!(result, (true, false, false, true, false))
                 }
             }

@@ -82,7 +82,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{Column, Literal};
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{HashPartitionMode, LexOrdering};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
@@ -742,7 +742,7 @@ impl DefaultPhysicalPlanner {
 
                 let next_partition_mode = if can_repartition {
                     // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                    AggregateMode::FinalPartitioned
+                    AggregateMode::FinalPartitioned(HashPartitionMode::HashPartitioned)
                 } else {
                     // construct a second aggregation, keeping the final column name equal to the
                     // first aggregation and the expressions corresponding to the respective aggregate

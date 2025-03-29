@@ -58,7 +58,9 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
+use datafusion::physical_expr::{
+    HashPartitionMode, LexOrdering, LexRequirement, PhysicalExprRef,
+};
 use datafusion::physical_plan::aggregates::AggregateMode;
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
@@ -933,7 +935,9 @@ impl protobuf::PhysicalPlanNode {
         let agg_mode: AggregateMode = match mode {
             protobuf::AggregateMode::Partial => AggregateMode::Partial,
             protobuf::AggregateMode::Final => AggregateMode::Final,
-            protobuf::AggregateMode::FinalPartitioned => AggregateMode::FinalPartitioned,
+            protobuf::AggregateMode::FinalPartitioned => AggregateMode::FinalPartitioned(
+                            HashPartitionMode::HashPartitioned,
+                        ),
             protobuf::AggregateMode::Single => AggregateMode::Single,
             protobuf::AggregateMode::SinglePartitioned => {
                 AggregateMode::SinglePartitioned
@@ -2148,7 +2152,7 @@ impl protobuf::PhysicalPlanNode {
         let agg_mode = match exec.mode() {
             AggregateMode::Partial => protobuf::AggregateMode::Partial,
             AggregateMode::Final => protobuf::AggregateMode::Final,
-            AggregateMode::FinalPartitioned => protobuf::AggregateMode::FinalPartitioned,
+            AggregateMode::FinalPartitioned(_) => protobuf::AggregateMode::FinalPartitioned,
             AggregateMode::Single => protobuf::AggregateMode::Single,
             AggregateMode::SinglePartitioned => {
                 protobuf::AggregateMode::SinglePartitioned
