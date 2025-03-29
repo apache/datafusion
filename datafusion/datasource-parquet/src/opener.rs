@@ -17,6 +17,7 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::page_filter::PagePruningAccessPlanFilter;
@@ -25,16 +26,22 @@ use crate::{
     apply_file_schema_type_coercions, row_filter, should_enable_page_index,
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
+};
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, Result};
+use datafusion_physical_expr::expressions::{lit, Column};
+use datafusion_physical_expr::utils::conjunction;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
-use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
+use datafusion_physical_plan::DynamicFilterSource;
 
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
@@ -54,6 +61,8 @@ pub(super) struct ParquetOpener {
     pub limit: Option<usize>,
     /// Optional predicate to apply during the scan
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// Optional sources for dynamic filtes (e.g. joins, top-k filters)
+    pub dynamic_filter_sources: Vec<Arc<dyn DynamicFilterSource>>,
     /// Optional pruning predicate applied to row group statistics
     pub pruning_predicate: Option<Arc<PruningPredicate>>,
     /// Optional pruning predicate applied to data page statistics
@@ -102,24 +111,57 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
 
+        let dynamic_filter_sources = self.dynamic_filter_sources.clone();
+        let dynamic_filters = self
+            .dynamic_filter_sources
+            .iter()
+            .map(|f| f.snapshot_current_filters())
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        // Using the AND operator to combine the dynamic filters with the static predicate means that
+        // a row (or a row group) must satisfy both conditions before it's read from disk.
+        // The approach assumes that the static predicate and dynamic filters are independent and complementary.
+        // In other words, the dynamic filters are not meant to replace or override the original predicate; they refine the set of rows even further.
+        // If they were combined using OR, you might end up with more rows than necessary, which would negate the benefits of dynamic filtering.
+        // Since the dynamic filters are calculated at runtime, they might sometimes be conservative estimates.
+        // By combining them with AND, the system errs on the side of safety—only excluding data when it’s reasonably certain that the rows won’t match the overall query conditions.
+        let dynamic_predicate_snapshot = if dynamic_filters.is_empty() {
+            None
+        } else {
+            Some(conjunction(dynamic_filters))
+        };
+        let enable_page_index = should_enable_page_index(
+            self.enable_page_index,
+            &self.page_pruning_predicate,
+            dynamic_predicate_snapshot.is_some(),
+        );
+        let static_predicate = self.predicate.clone();
+        let predicate_with_dynamic_predicate_snapshot =
+            match (static_predicate.clone(), dynamic_predicate_snapshot) {
+                (Some(p), None) => Some(p),
+                (None, Some(d)) => Some(d),
+                (Some(p), Some(d)) => Some(conjunction([p, d])),
+                (None, None) => None,
+            };
+
         let projected_schema =
             SchemaRef::from(self.table_schema.project(&self.projection)?);
         let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
         let schema_adapter = self
             .schema_adapter_factory
             .create(projected_schema, Arc::clone(&self.table_schema));
-        let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
         let page_pruning_predicate = self.page_pruning_predicate.clone();
         let table_schema = Arc::clone(&self.table_schema);
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
-        let enable_page_index = should_enable_page_index(
-            self.enable_page_index,
-            &self.page_pruning_predicate,
-        );
         let enable_bloom_filter = self.enable_bloom_filter;
         let limit = self.limit;
+
+        let predicate_creation_errors = MetricBuilder::new(&self.metrics)
+            .global_counter("num_predicate_creation_errors");
 
         Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
@@ -148,6 +190,26 @@ impl FileOpener for ParquetOpener {
 
             let file_schema = Arc::clone(builder.schema());
 
+            let mut pruning_predicate = pruning_predicate;
+            let mut page_pruning_predicate = page_pruning_predicate;
+
+            if let Some(predicate) = predicate_with_dynamic_predicate_snapshot.as_ref() {
+                let mut filter_schema_builder: FilterSchemaBuilder<'_> =
+                    FilterSchemaBuilder::new(&file_schema, &table_schema);
+                let predicate = Arc::clone(predicate)
+                    .rewrite(&mut filter_schema_builder)
+                    .data()?;
+                let filter_schema = filter_schema_builder.build();
+
+                pruning_predicate = build_pruning_predicate(
+                    Arc::clone(&predicate),
+                    &filter_schema,
+                    &predicate_creation_errors,
+                );
+                page_pruning_predicate =
+                    Some(build_page_pruning_predicate(&predicate, &filter_schema));
+            }
+
             let (schema_mapping, adapted_projections) =
                 schema_adapter.map_schema(&file_schema)?;
 
@@ -156,36 +218,10 @@ impl FileOpener for ParquetOpener {
                 adapted_projections.iter().cloned(),
             );
 
-            // Filter pushdown: evaluate predicates during scan
-            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
-                let row_filter = row_filter::build_row_filter(
-                    &predicate,
-                    &file_schema,
-                    &table_schema,
-                    builder.metadata(),
-                    reorder_predicates,
-                    &file_metrics,
-                    &schema_adapter_factory,
-                );
-
-                match row_filter {
-                    Ok(Some(filter)) => {
-                        builder = builder.with_row_filter(filter);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        debug!(
-                            "Ignoring error building row filter for '{:?}': {}",
-                            predicate, e
-                        );
-                    }
-                };
-            };
-
             // Determine which row groups to actually read. The idea is to skip
             // as many row groups as possible based on the metadata and query
             let file_metadata = Arc::clone(builder.metadata());
-            let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
+            let pruning_predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
             let rg_metadata = file_metadata.row_groups();
             // track which row groups to actually read
             let access_plan =
@@ -196,7 +232,7 @@ impl FileOpener for ParquetOpener {
                 row_groups.prune_by_range(rg_metadata, range);
             }
             // If there is a predicate that can be evaluated against the metadata
-            if let Some(predicate) = predicate.as_ref() {
+            if let Some(predicate) = pruning_predicate.as_ref() {
                 row_groups.prune_by_statistics(
                     &file_schema,
                     builder.parquet_schema(),
@@ -234,6 +270,7 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
+            let is_empty = access_plan.is_empty();
             let row_group_indexes = access_plan.row_group_indexes();
             if let Some(row_selection) =
                 access_plan.into_overall_row_selection(rg_metadata)?
@@ -243,6 +280,57 @@ impl FileOpener for ParquetOpener {
 
             if let Some(limit) = limit {
                 builder = builder.with_limit(limit)
+            }
+
+            // If we still have rows to scan wire up filter pushdown.
+            // If this plan is a no-op because we filtered out all of the rows there's no point in doing the work
+            // of building the filter pushdown machinery.
+            if !is_empty {
+                // Filter pushdown: evaluate predicates during scan
+                // At this point we pacakge up our dynamic filters into a `PhysicalExpr` that can be evaluated
+                // during the scan.
+                // This `PhysicalExpr` is expected to hold onto the current state of the dynamic filters
+                // and refresh them for every batch it processes.
+                let dynamic_filters_physical_expr = dynamic_filter_sources
+                    .iter()
+                    .map(|f| f.as_dynamic_physical_expr())
+                    .collect::<Vec<_>>();
+                let pushdown_predicate = if dynamic_filters_physical_expr.is_empty() {
+                    static_predicate
+                } else {
+                    Some(conjunction(
+                        dynamic_filters_physical_expr
+                            .iter()
+                            .chain(static_predicate.iter())
+                            .cloned(),
+                    ))
+                };
+                if let Some(predicate) =
+                    pushdown_filters.then_some(pushdown_predicate).flatten()
+                {
+                    let row_filter = row_filter::build_row_filter(
+                        &predicate,
+                        &file_schema,
+                        &table_schema,
+                        builder.metadata(),
+                        reorder_predicates,
+                        &file_metrics,
+                        &schema_adapter_factory,
+                    );
+
+                    match row_filter {
+                        Ok(Some(filter)) => {
+                            builder = builder.with_row_filter(filter);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            debug!(
+                                "Ignoring error building row filter for '{:?}': {}",
+                                predicate, e
+                            );
+                        }
+                    };
+                };
             }
 
             let stream = builder
@@ -294,4 +382,105 @@ fn create_initial_plan(
 
     // default to scanning all row groups
     Ok(ParquetAccessPlan::new_all(row_group_count))
+}
+
+/// Build a pruning predicate from an optional predicate expression.
+/// If the predicate is None or the predicate cannot be converted to a pruning
+/// predicate, return None.
+/// If there is an error creating the pruning predicate it is recorded by incrementing
+/// the `predicate_creation_errors` counter.
+pub(crate) fn build_pruning_predicate(
+    predicate: Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+    predicate_creation_errors: &Count,
+) -> Option<Arc<PruningPredicate>> {
+    match PruningPredicate::try_new(predicate, Arc::clone(file_schema)) {
+        Ok(pruning_predicate) => {
+            if !pruning_predicate.always_true() {
+                return Some(Arc::new(pruning_predicate));
+            }
+        }
+        Err(e) => {
+            debug!("Could not create pruning predicate for: {e}");
+            predicate_creation_errors.add(1);
+        }
+    }
+    None
+}
+
+/// Build a page pruning predicate from an optional predicate expression.
+/// If the predicate is None or the predicate cannot be converted to a page pruning
+/// predicate, return None.
+pub(crate) fn build_page_pruning_predicate(
+    predicate: &Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+) -> Arc<PagePruningAccessPlanFilter> {
+    Arc::new(PagePruningAccessPlanFilter::new(
+        predicate,
+        Arc::clone(file_schema),
+    ))
+}
+
+/// A vistor for a PhysicalExpr that collects all column references to determine what columns the expression needs to be evaluated.
+struct FilterSchemaBuilder<'schema> {
+    filter_schema_fields: BTreeSet<Arc<Field>>,
+    file_schema: &'schema Schema,
+    table_schema: &'schema Schema,
+}
+
+impl<'schema> FilterSchemaBuilder<'schema> {
+    fn new(file_schema: &'schema Schema, table_schema: &'schema Schema) -> Self {
+        Self {
+            filter_schema_fields: BTreeSet::new(),
+            file_schema,
+            table_schema,
+        }
+    }
+
+    fn sort_fields(
+        fields: &mut Vec<Arc<Field>>,
+        table_schema: &Schema,
+        file_schema: &Schema,
+    ) {
+        fields.sort_by_key(|f| f.name().to_string());
+        fields.dedup_by_key(|f| f.name().to_string());
+        fields.sort_by_key(|f| {
+            let table_schema_index =
+                table_schema.index_of(f.name()).unwrap_or(usize::MAX);
+            let file_schema_index = file_schema.index_of(f.name()).unwrap_or(usize::MAX);
+            (table_schema_index, file_schema_index)
+        });
+    }
+
+    fn build(self) -> SchemaRef {
+        let mut fields = self.filter_schema_fields.into_iter().collect::<Vec<_>>();
+        FilterSchemaBuilder::sort_fields(
+            &mut fields,
+            self.table_schema,
+            self.file_schema,
+        );
+        Arc::new(Schema::new(fields))
+    }
+}
+
+impl TreeNodeRewriter for FilterSchemaBuilder<'_> {
+    type Node = Arc<dyn PhysicalExpr>;
+
+    fn f_down(&mut self, node: Arc<dyn PhysicalExpr>) -> Result<Transformed<Self::Node>> {
+        if let Some(column) = node.as_any().downcast_ref::<Column>() {
+            if let Ok(field) = self.table_schema.field_with_name(column.name()) {
+                self.filter_schema_fields.insert(Arc::new(field.clone()));
+            } else if let Ok(field) = self.file_schema.field_with_name(column.name()) {
+                self.filter_schema_fields.insert(Arc::new(field.clone()));
+            } else {
+                // If it's not in either schema it must be a partition column
+                // (as in a column generated from hive partitioning) so we ignore it by:
+                // - Not adding it to the filter schema
+                // - Rewriting the filter to `true` so it doesn't affect the pruning
+                return Ok(Transformed::yes(lit(true)));
+            }
+        }
+
+        Ok(Transformed::no(node))
+    }
 }

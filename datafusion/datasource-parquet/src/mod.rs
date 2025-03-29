@@ -541,11 +541,17 @@ impl ExecutionPlan for ParquetExec {
 fn should_enable_page_index(
     enable_page_index: bool,
     page_pruning_predicate: &Option<Arc<PagePruningAccessPlanFilter>>,
+    has_dynamic_filters: bool,
 ) -> bool {
     enable_page_index
-        && page_pruning_predicate.is_some()
-        && page_pruning_predicate
-            .as_ref()
-            .map(|p| p.filter_number() > 0)
-            .unwrap_or(false)
+        && (page_pruning_predicate.is_some()
+            && page_pruning_predicate
+                .as_ref()
+                .map(|p| p.filter_number() > 0)
+                .unwrap_or(false))
+        // If dynamic filter pushdwon is enabled we should always enable the page index
+        // unless explicitly disabled by users.
+        // Since filters will be generated dynamically as the query is evaluated we cannot
+        // know ahead of time if the filters will be used to prune pages or not.
+        || has_dynamic_filters
 }

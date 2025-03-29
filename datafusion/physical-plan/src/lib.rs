@@ -40,6 +40,7 @@ pub use datafusion_physical_expr::{
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+pub use crate::dynamic_filters::{DynamicFilterPhysicalExpr, DynamicFilterSource};
 pub use crate::execution_plan::{
     collect, collect_partitioned, displayable, execute_input_stream, execute_stream,
     execute_stream_partitioned, get_plan_string, with_new_children_if_necessary,
@@ -51,6 +52,7 @@ pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
+mod dynamic_filters;
 mod ordering;
 mod render_tree;
 mod topk;

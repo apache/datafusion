@@ -44,7 +44,7 @@ use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     metrics::ExecutionPlanMetricsSet,
     projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
-    DisplayAs, DisplayFormatType, ExecutionPlan,
+    DisplayAs, DisplayFormatType, DynamicFilterSource, ExecutionPlan,
 };
 use log::{debug, warn};
 
@@ -583,6 +583,22 @@ impl DataSource for FileScanConfig {
                     .build(),
             ) as _
         }))
+    }
+
+    fn push_down_dynamic_filter(
+        &self,
+        dynamic_filter: Arc<dyn DynamicFilterSource>,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        // Try to push down to the file source
+        if let Some(file_source) =
+            self.file_source.push_down_dynamic_filter(dynamic_filter)?
+        {
+            return Ok(Some(Arc::new(Self {
+                file_source,
+                ..self.clone()
+            })));
+        }
+        Ok(None)
     }
 }
 
