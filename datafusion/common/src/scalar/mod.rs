@@ -294,7 +294,7 @@ pub enum ScalarValue {
     /// `.1`: the list of fields, zero-to-one of which will by set in `.0`
     /// `.2`: the physical storage of the source/destination UnionArray from which this Scalar came
     Union(Option<(i8, Box<ScalarValue>)>, UnionFields, UnionMode),
-    /// Dictionary type: indxex type and value
+    /// Dictionary type: index type and value
     Dictionary(Box<DataType>, Box<ScalarValue>),
 }
 

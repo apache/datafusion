@@ -635,7 +635,7 @@ mod tests {
 
     use arrow::array::types::Int64Type;
     use arrow::array::{
-        Array, Float64Array, PrimitiveArray, TimestampMicrosecondArray,
+        Array, PrimitiveArray, TimestampMicrosecondArray,
         TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
     };
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
