@@ -3194,7 +3194,7 @@ fn test_select_distinct_order_by() {
     // It should return error.
     let result = logical_plan(sql);
     assert!(result.is_err());
-    let err = result.err().unwrap();
+    let err = result.err().unwrap().strip_backtrace();
 
     assert_snapshot!(
         err,
