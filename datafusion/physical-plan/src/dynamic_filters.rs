@@ -123,7 +123,7 @@ impl DynamicFilterPhysicalExpr {
                     {
                         // If so, remap it to the current children
                         // of the expression.
-                        let new_child = remapped_children[pos].clone();
+                        let new_child = Arc::clone(&remapped_children[pos]);
                         Ok(Transformed::yes(new_child))
                     } else {
                         // Otherwise, just return the expression
@@ -158,7 +158,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         Ok(Arc::new(DynamicFilterPhysicalExpr {
             children: self.children.clone(),
             remapped_children: Some(children),
-            inner: self.inner.clone(),
+            inner: Arc::clone(&self.inner),
         }))
     }
 

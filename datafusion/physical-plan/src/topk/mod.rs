@@ -162,12 +162,15 @@ impl TopK {
 
     pub(crate) fn dynamic_filter_source(&mut self) -> Arc<dyn DynamicFilterSource> {
         match self.filters {
-            Some(ref filters) => filters.clone(),
+            Some(ref filters) => Arc::clone(filters) as Arc<dyn DynamicFilterSource>,
             None => {
-                let children =
-                    self.expr.iter().map(|e| e.expr.clone()).collect::<Vec<_>>();
+                let children = self
+                    .expr
+                    .iter()
+                    .map(|e| Arc::clone(&e.expr))
+                    .collect::<Vec<_>>();
                 let filters = Arc::new(TopKDynamicFilterSource::new(children));
-                self.filters = Some(filters.clone());
+                self.filters = Some(Arc::clone(&filters));
                 filters
             }
         }
