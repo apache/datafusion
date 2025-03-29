@@ -189,7 +189,7 @@ async fn simple_select() -> Result<()> {
 
 #[tokio::test]
 async fn wildcard_select() -> Result<()> {
-    let plan = assert_and_generate_plan("SELECT * FROM data", true, false).await?;
+    let plan = generate_plan_from_sql("SELECT * FROM data", true, false).await?;
 
     assert_snapshot!(
     plan,
@@ -303,7 +303,7 @@ async fn aggregate_grouping_sets() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_grouping_rollup() -> Result<()> {
-    let plan = assert_and_generate_plan(
+    let plan = generate_plan_from_sql(
         "SELECT a, c, e, avg(b) FROM data GROUP BY ROLLUP (a, c, e)",
         true,
         true,
@@ -323,7 +323,7 @@ async fn aggregate_grouping_rollup() -> Result<()> {
 
 #[tokio::test]
 async fn multilayer_aggregate() -> Result<()> {
-    let plan = assert_and_generate_plan(
+    let plan = generate_plan_from_sql(
         "SELECT a, sum(partial_count_b) FROM (SELECT a, count(b) as partial_count_b FROM data GROUP BY a) GROUP BY a",
         true,
         true,
@@ -476,7 +476,7 @@ async fn try_cast_decimal_to_string() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_case() -> Result<()> {
-    let plan = assert_and_generate_plan(
+    let plan = generate_plan_from_sql(
         "SELECT sum(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",
         true,
         true,
@@ -524,7 +524,7 @@ async fn roundtrip_inlist_4() -> Result<()> {
 async fn roundtrip_inlist_5() -> Result<()> {
     // on roundtrip there is an additional projection during TableScan which includes all column of the table,
     // using assert_and_generate_plan and assert_snapshot! here as a workaround
-    let plan = assert_and_generate_plan(
+    let plan = generate_plan_from_sql(
         "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
         true,
         true,
@@ -574,7 +574,7 @@ async fn roundtrip_non_equi_join() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_exists_filter() -> Result<()> {
-    let plan = assert_and_generate_plan(
+    let plan = generate_plan_from_sql(
         "SELECT b FROM data d1 WHERE EXISTS (SELECT * FROM data2 d2 WHERE d2.a = d1.a AND d2.e != d1.e)",
         false,
         true,
@@ -595,7 +595,7 @@ async fn roundtrip_exists_filter() -> Result<()> {
 
 #[tokio::test]
 async fn inner_join() -> Result<()> {
-    let plan = assert_and_generate_plan(
+    let plan = generate_plan_from_sql(
         "SELECT data.a FROM data JOIN data2 ON data.a = data2.a",
         true,
         true,
@@ -648,7 +648,7 @@ async fn roundtrip_self_implicit_cross_join() -> Result<()> {
 
 #[tokio::test]
 async fn self_join_introduces_aliases() -> Result<()> {
-    let plan = assert_and_generate_plan(
+    let plan = generate_plan_from_sql(
         "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.b = d2.b",
         false,
         true,
@@ -1059,7 +1059,7 @@ async fn roundtrip_literal_list() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_literal_struct() -> Result<()> {
-    let plan = assert_and_generate_plan(
+    let plan = generate_plan_from_sql(
         "SELECT STRUCT(1, true, CAST(NULL AS STRING)) FROM data",
         false,
         true,
@@ -1079,7 +1079,7 @@ async fn roundtrip_literal_struct() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_values() -> Result<()> {
     // TODO: would be nice to have a struct inside the LargeList, but arrow_cast doesn't support that currently
-    let plan = assert_and_generate_plan(
+    let plan = generate_plan_from_sql(
         "VALUES \
             (\
                 1, \
@@ -1143,7 +1143,7 @@ async fn duplicate_column() -> Result<()> {
     // only. DataFusion however, is strict about not having duplicate column names appear in the plan.
     // This test confirms that we generate aliases for columns in the plan which would otherwise have
     // colliding names.
-    let plan = assert_and_generate_plan(
+    let plan = generate_plan_from_sql(
         "SELECT a + 1 as sum_a, a + 1 as sum_a_2 FROM data",
         true,
         true,
@@ -1464,13 +1464,13 @@ async fn assert_read_filter_count(
     Ok(())
 }
 
-async fn assert_and_generate_plan(
+async fn generate_plan_from_sql(
     sql: &str,
     assert_schema: bool,
     optimized: bool,
-) -> Result<String> {
+) -> Result<LogicalPlan> {
     let ctx = create_context().await?;
-    let df = ctx.sql(sql).await?;
+    let df: DataFrame = ctx.sql(sql).await?;
 
     let plan = if optimized {
         df.into_optimized_plan()?
@@ -1489,7 +1489,7 @@ async fn assert_and_generate_plan(
         assert_eq!(plan.schema(), plan2.schema());
     }
 
-    Ok(format!("{}", plan2))
+    Ok(plan2)
 }
 
 async fn assert_expected_plan(
