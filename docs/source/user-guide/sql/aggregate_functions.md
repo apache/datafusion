@@ -57,6 +57,7 @@ Aggregate functions operate on a set of values to compute a single result.
 ### `array_agg`
 
 Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.
+This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the argument expression.
 
 ```sql
 array_agg(expression [ORDER BY expression])
@@ -75,6 +76,12 @@ array_agg(expression [ORDER BY expression])
 +-----------------------------------------------+
 | [element1, element2, element3]                |
 +-----------------------------------------------+
+> SELECT array_agg(DISTINCT column_name ORDER BY column_name) FROM table_name;
++--------------------------------------------------------+
+| array_agg(DISTINCT column_name ORDER BY column_name)  |
++--------------------------------------------------------+
+| [element1, element2, element3]                         |
++--------------------------------------------------------+
 ```
 
 ### `avg`
