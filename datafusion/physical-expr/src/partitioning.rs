@@ -304,9 +304,10 @@ impl Display for Distribution {
     }
 }
 
+/// The mode of hash partitioning
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum HashPartitionMode {
-    /// Hash partitioning with a selection vector
+    /// Hash partitioning with a selection vector. See [Partitioning::HashSelectionVector]
     SelectionVector,
     /// The default hash partitioning
     HashPartitioned,

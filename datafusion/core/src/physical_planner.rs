@@ -744,7 +744,7 @@ impl DefaultPhysicalPlanner {
                     let mode = if session_state
                         .config_options()
                         .optimizer
-                        .prefer_hash_selection_vector_partitioning
+                        .prefer_hash_selection_vector_partitioning_agg
                     {
                         HashPartitionMode::SelectionVector
                     } else {
@@ -816,7 +816,7 @@ impl DefaultPhysicalPlanner {
                         if session_state
                             .config_options()
                             .optimizer
-                            .prefer_hash_selection_vector_partitioning
+                            .prefer_hash_selection_vector_partitioning_agg
                         {
                             Partitioning::HashSelectionVector(runtime_expr, *n)
                         } else {

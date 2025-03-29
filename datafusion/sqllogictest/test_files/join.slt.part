@@ -1433,7 +1433,7 @@ physical_plan
 20)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
-set datafusion.optimizer.prefer_hash_selection_vector_partitioning = true;
+set datafusion.optimizer.prefer_hash_selection_vector_partitioning_agg = true;
 
 # TODO: The selection vector partitioning should be used for the hash join.
 # After fix https://github.com/apache/datafusion/issues/15382
@@ -1489,7 +1489,7 @@ ON col1 = s.b
 
 # reset the config
 statement ok
-set datafusion.optimizer.prefer_hash_selection_vector_partitioning = false;
+set datafusion.optimizer.prefer_hash_selection_vector_partitioning_agg = false;
 
 # reset the config
 statement ok
