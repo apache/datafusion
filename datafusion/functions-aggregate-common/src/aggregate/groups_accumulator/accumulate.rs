@@ -15,7 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`GroupsAccumulator`] helpers: [`NullState`] and [`accumulate_indices`]
+//! [`GroupsAccumulator`] helpers: [`NullState`] and [`accumulate_indices`]-like functions.
+//!
+//! This mod provides various kinds of helper functions to work with [`GroupsAccumulator`],
+//! here is a quick summary of the functions provided and their purpose/differences:
+//! - [`accumulate`]: Accumulate a single, primitive value per group.
+//! - [`accumulate_multiple`]: Accumulate multiple, primitive values per group.
+//! - [`accumulate_indices`]: Accumulate indices only (without actual value) per group.
 //!
 //! [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 
