@@ -98,7 +98,7 @@ pub struct TopK {
     /// stores the top k values and their sort key values, in order
     heap: TopKHeap,
     /// stores the current filters derived from this TopK that can be pushed down
-    filters: Arc<TopKDynamicFilterSource>,
+    filters: Option<Arc<TopKDynamicFilterSource>>,
 }
 
 impl std::fmt::Debug for TopK {
@@ -147,8 +147,6 @@ impl TopK {
             20 * batch_size, // guesstimate 20 bytes per row
         );
 
-        let children = expr.iter().map(|e| e.expr.clone()).collect::<Vec<_>>();
-
         Ok(Self {
             schema: Arc::clone(&schema),
             metrics: TopKMetrics::new(metrics, partition_id),
@@ -158,12 +156,20 @@ impl TopK {
             row_converter,
             scratch_rows,
             heap: TopKHeap::new(k, batch_size, schema),
-            filters: Arc::new(TopKDynamicFilterSource::new(children)),
+            filters: None,
         })
     }
 
-    pub(crate) fn dynamic_filter_source(&self) -> Arc<dyn DynamicFilterSource> {
-        self.filters.clone()
+    pub(crate) fn dynamic_filter_source(&mut self) -> Arc<dyn DynamicFilterSource> {
+        match self.filters {
+            Some(ref filters) => filters.clone(),
+            None => {
+                let children = self.expr.iter().map(|e| e.expr.clone()).collect::<Vec<_>>();
+                let filters = Arc::new(TopKDynamicFilterSource::new(children));
+                self.filters = Some(filters.clone());
+                filters
+            }
+        }
     }
 
     /// Insert `batch`, remembering if any of its values are among
@@ -207,9 +213,11 @@ impl TopK {
         self.heap.insert_batch_entry(batch_entry);
 
         if need_to_update_dynamic_filters {
-            if let Some(threasholds) = self.heap.get_threshold_values(&self.expr)? {
-                if let Some(predicate) = Self::calculate_dynamic_filters(threasholds)? {
-                    self.filters.update_filters(predicate)?;
+            if let Some(filters) = self.filters.as_ref() {
+                if let Some(threasholds) = self.heap.get_threshold_values(&self.expr)? {
+                    if let Some(predicate) = Self::calculate_dynamic_filters(threasholds)? {
+                        filters.update_filters(predicate)?;
+                    }
                 }
             }
         }
