@@ -4094,7 +4094,7 @@ fn test_error_message_invalid_scalar_function_signature() {
 fn test_error_message_invalid_aggregate_function_signature() {
     error_message_test(
         "select sum()",
-        "Error during planning: 'sum' does not support zero arguments",
+        "Error during planning: Execution error: Function 'sum' user-defined coercion failed with \"Execution error: sum function requires 1 argument, got 0\"",
     );
     // We keep two different prefixes because they clarify each other.
     // It might be incorrect, and we should consider keeping only one.
@@ -4116,7 +4116,7 @@ fn test_error_message_invalid_window_function_signature() {
 fn test_error_message_invalid_window_aggregate_function_signature() {
     error_message_test(
         "select sum() over()",
-        "Error during planning: 'sum' does not support zero arguments",
+        "Error during planning: Execution error: Function 'sum' user-defined coercion failed with \"Execution error: sum function requires 1 argument, got 0\"",
     );
 }
 

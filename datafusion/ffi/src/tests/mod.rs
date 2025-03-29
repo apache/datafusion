@@ -37,12 +37,13 @@ use datafusion::{
     common::record_batch,
 };
 use sync_provider::create_sync_table_provider;
-use udf_udaf_udwf::create_ffi_abs_func;
+use udf_udaf_udwf::{create_ffi_abs_func, create_ffi_random_func};
 
 mod async_provider;
 pub mod catalog;
 mod sync_provider;
 mod udf_udaf_udwf;
+pub mod utils;
 
 #[repr(C)]
 #[derive(StableAbi)]
@@ -59,6 +60,8 @@ pub struct ForeignLibraryModule {
 
     /// Create a scalar UDF
     pub create_scalar_udf: extern "C" fn() -> FFI_ScalarUDF,
+
+    pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -105,6 +108,7 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_catalog: create_catalog_provider,
         create_table: construct_table_provider,
         create_scalar_udf: create_ffi_abs_func,
+        create_nullary_udf: create_ffi_random_func,
         version: super::version,
     }
     .leak_into_prefix()
