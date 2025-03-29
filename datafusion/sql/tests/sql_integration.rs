@@ -3293,18 +3293,6 @@ fn prepare_stmt_quick_test(
     plan
 }
 
-fn prepare_stmt_replace_params_quick_test(
-    plan: LogicalPlan,
-    param_values: impl Into<ParamValues>,
-    expected_plan: &str,
-) -> LogicalPlan {
-    // replace params
-    let plan = plan.with_param_values(param_values).unwrap();
-    assert_eq!(format!("{plan}"), expected_plan);
-
-    plan
-}
-
 #[test]
 fn select_partially_qualified_column() {
     let sql = "SELECT person.first_name FROM public.person";
@@ -4334,11 +4322,15 @@ fn test_prepare_statement_to_plan_no_param() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan = "Projection: person.id, person.age\
-        \n  Filter: person.age = Int64(10)\
-        \n    TableScan: person";
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = Int64(10)
+        TableScan: person
+    "
+    );
 
     //////////////////////////////////////////
     // no embedded parameter and no declare it
@@ -4356,11 +4348,15 @@ fn test_prepare_statement_to_plan_no_param() {
     ///////////////////
     // replace params with values
     let param_values: Vec<ScalarValue> = vec![];
-    let expected_plan = "Projection: person.id, person.age\
-        \n  Filter: person.age = Int64(10)\
-        \n    TableScan: person";
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = Int64(10)
+        TableScan: person
+    "
+    );
 }
 
 #[test]
@@ -4429,9 +4425,14 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan = "Projection: Int32(10) AS $1\n  EmptyRelation";
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: Int32(10) AS $1
+      EmptyRelation
+    "
+    );
 
     ///////////////////////////////////////
     let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1";
@@ -4445,10 +4446,14 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan =
-        "Projection: Int64(1) + Int32(10) AS Int64(1) + $1\n  EmptyRelation";
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: Int64(1) + Int32(10) AS Int64(1) + $1
+      EmptyRelation
+    "
+    );
 
     ///////////////////////////////////////
     let sql = "PREPARE my_plan(INT, DOUBLE) AS SELECT 1 + $1 + $2";
@@ -4465,11 +4470,14 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         ScalarValue::Int32(Some(10)),
         ScalarValue::Float64(Some(10.0)),
     ];
-    let expected_plan =
-        "Projection: Int64(1) + Int32(10) + Float64(10) AS Int64(1) + $1 + $2\
-        \n  EmptyRelation";
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: Int64(1) + Int32(10) + Float64(10) AS Int64(1) + $1 + $2
+      EmptyRelation
+    "
+    );
 }
 
 #[test]
@@ -4493,17 +4501,18 @@ Projection: person.id, orders.order_id
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))].into();
-    let expected_plan = r#"
-Projection: person.id, orders.order_id
-  Inner Join:  Filter: person.id = orders.customer_id AND person.age = Int32(10)
-    TableScan: person
-    TableScan: orders
-    "#
-    .trim();
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
+    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, orders.order_id
+      Inner Join:  Filter: person.id = orders.customer_id AND person.age = Int32(10)
+        TableScan: person
+        TableScan: orders
+    "
+    );
 }
 
 #[test]
@@ -4525,16 +4534,17 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))].into();
-    let expected_plan = r#"
-Projection: person.id, person.age
-  Filter: person.age = Int32(10)
-    TableScan: person
-        "#
-    .trim();
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
+    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = Int32(10)
+        TableScan: person
+    "
+    );
 }
 
 #[test]
@@ -4559,17 +4569,17 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values =
-        vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(30))].into();
-    let expected_plan = r#"
-Projection: person.id, person.age
-  Filter: person.age BETWEEN Int32(10) AND Int32(30)
-    TableScan: person
-        "#
-    .trim();
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
+    let param_values = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(30))];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age BETWEEN Int32(10) AND Int32(30)
+        TableScan: person
+    "
+    );
 }
 
 #[test]
@@ -4596,21 +4606,22 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::UInt32(Some(10))].into();
-    let expected_plan = r#"
-Projection: person.id, person.age
-  Filter: person.age = (<subquery>)
-    Subquery:
-      Projection: max(person.age)
-        Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
-          Filter: person.id = UInt32(10)
-            TableScan: person
-    TableScan: person
-        "#
-    .trim();
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
+    let param_values = vec![ScalarValue::UInt32(Some(10))];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = (<subquery>)
+        Subquery:
+          Projection: max(person.age)
+            Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
+              Filter: person.id = UInt32(10)
+                TableScan: person
+        TableScan: person
+        "
+    );
 }
 
 #[test]
@@ -4636,18 +4647,18 @@ Dml: op=[Update] table=[person]
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values =
-        vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))].into();
-    let expected_plan = r#"
-Dml: op=[Update] table=[person]
-  Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: person.id = UInt32(1)
-      TableScan: person
-        "#
-        .trim();
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
+    let param_values = vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Dml: op=[Update] table=[person]
+      Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+        Filter: person.id = UInt32(1)
+          TableScan: person
+        "
+    );
 }
 
 #[test]
@@ -4676,16 +4687,16 @@ fn test_prepare_statement_insert_infer() {
         ScalarValue::UInt32(Some(1)),
         ScalarValue::from("Alan"),
         ScalarValue::from("Turing"),
-    ]
-    .into();
-    let expected_plan = "Dml: op=[Insert Into] table=[person]\
-                        \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
-                                    CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
-                                    CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
-                        \n    Values: (UInt32(1) AS $1, Utf8(\"Alan\") AS $2, Utf8(\"Turing\") AS $3)";
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    ];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r#"
+    Dml: op=[Insert Into] table=[person]
+      Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
+        Values: (UInt32(1) AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
+    "#
+    );
 }
 
 #[test]
@@ -4704,11 +4715,16 @@ fn test_prepare_statement_to_plan_one_param() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan = "Projection: person.id, person.age\
-        \n  Filter: person.age = Int32(10)\
-        \n    TableScan: person";
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = Int32(10)
+        TableScan: person
+    "
+    );
 }
 
 #[test]
@@ -4729,11 +4745,16 @@ fn test_prepare_statement_to_plan_data_type() {
     ///////////////////
     // replace params with values still succeed and use Float64
     let param_values = vec![ScalarValue::Float64(Some(10.0))];
-    let expected_plan = "Projection: person.id, person.age\
-        \n  Filter: person.age = Float64(10)\
-        \n    TableScan: person";
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = Float64(10)
+        TableScan: person
+    "
+    );
 }
 
 #[test]
@@ -4762,12 +4783,16 @@ fn test_prepare_statement_to_plan_multi_params() {
         ScalarValue::Float64(Some(200.0)),
         ScalarValue::from("xyz"),
     ];
-    let expected_plan =
-            "Projection: person.id, person.age, Utf8(\"xyz\") AS $6\
-        \n  Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8(\"abc\")\
-        \n    TableScan: person";
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r#"
+    Projection: person.id, person.age, Utf8("xyz") AS $6
+      Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8("abc")
+        TableScan: person
+    "#
+    );
 }
 
 #[test]
@@ -4799,14 +4824,18 @@ fn test_prepare_statement_to_plan_having() {
         ScalarValue::Float64(Some(200.0)),
         ScalarValue::Float64(Some(300.0)),
     ];
-    let expected_plan =
-            "Projection: person.id, sum(person.age)\
-        \n  Filter: sum(person.age) < Int32(10) AND sum(person.age) > Int64(10) OR sum(person.age) IN ([Float64(200), Float64(300)])\
-        \n    Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]\
-        \n      Filter: person.salary > Float64(100)\
-        \n        TableScan: person";
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r#"
+    Projection: person.id, sum(person.age)
+      Filter: sum(person.age) < Int32(10) AND sum(person.age) > Int64(10) OR sum(person.age) IN ([Float64(200), Float64(300)])
+        Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
+          Filter: person.salary > Float64(100)
+            TableScan: person
+    "#
+    );
 }
 
 #[test]
@@ -4826,10 +4855,15 @@ fn test_prepare_statement_to_plan_limit() {
 
     // replace params with values
     let param_values = vec![ScalarValue::Int64(Some(10)), ScalarValue::Int64(Some(200))];
-    let expected_plan = "Limit: skip=10, fetch=200\
-        \n  Projection: person.id\
-        \n    TableScan: person";
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r#"
+    Limit: skip=10, fetch=200
+      Projection: person.id
+        TableScan: person
+    "#
+    );
 }
 
 #[test]
