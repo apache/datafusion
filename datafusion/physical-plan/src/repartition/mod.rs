@@ -387,8 +387,7 @@ impl BatchPartitioner {
                                 .map(|&hash| Some(hash == partition as u64))
                                 .collect::<BooleanArray>(),
                         );
-                        let mut columns =
-                            batch.columns().iter().map(Arc::clone).collect::<Vec<_>>();
+                        let mut columns = batch.columns().to_vec();
                         columns.push(selection_vector);
                         let mut options = RecordBatchOptions::new();
                         options = options.with_row_count(Some(batch.num_rows()));
