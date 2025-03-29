@@ -397,6 +397,11 @@ SELECT to_timestamp(1.1) as c1, cast(1.1 as timestamp) as c2, 1.1::timestamp as 
 1970-01-01T00:00:01.100 1970-01-01T00:00:01.100 1970-01-01T00:00:01.100
 
 query PPP
+SELECT to_timestamp(arrow_cast(1.1, 'Decimal128(2,1)')) as c1, cast(arrow_cast(1.1, 'Decimal128(2,1)') as timestamp) as c2, arrow_cast(1.1, 'Decimal128(2,1)')::timestamp as c3;
+----
+1970-01-01T00:00:01.100 1970-01-01T00:00:01.100 1970-01-01T00:00:01.100
+
+query PPP
 SELECT to_timestamp(-1.1) as c1, cast(-1.1 as timestamp) as c2, (-1.1)::timestamp as c3;
 ----
 1969-12-31T23:59:58.900 1969-12-31T23:59:58.900 1969-12-31T23:59:58.900

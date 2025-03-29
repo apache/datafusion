@@ -18,14 +18,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::datetime::common::*;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-
-use crate::datetime::common::*;
 use datafusion_common::{exec_err, Result, ScalarType, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -331,8 +330,11 @@ impl ScalarUDFImpl for ToTimestampFunc {
             }
             Decimal128(_, _) => {
                 match &args[0] {
-                    ColumnarValue::Scalar(ScalarValue::Decimal128(Some(value), _, scale)) => {
-                        info!("hello world");
+                    ColumnarValue::Scalar(ScalarValue::Decimal128(
+                        Some(value),
+                        _,
+                        scale,
+                    )) => {
                         // Convert decimal to seconds and nanoseconds
                         let scale_factor = 10_i128.pow(*scale as u32);
                         let seconds = value / scale_factor;
@@ -632,7 +634,10 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::types::Int64Type;
-    use arrow::array::{Array, Float64Array, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray};
+    use arrow::array::{
+        Array, Float64Array, PrimitiveArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    };
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
     use arrow::datatypes::TimeUnit;
     use chrono::Utc;
