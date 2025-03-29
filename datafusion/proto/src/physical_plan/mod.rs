@@ -18,9 +18,25 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-use prost::bytes::BufMut;
-use prost::Message;
+use self::from_proto::parse_protobuf_partitioning;
+use self::to_proto::{serialize_partitioning, serialize_physical_expr};
+use crate::common::{byte_to_string, str_to_byte};
+use crate::physical_plan::from_proto::{
+    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
+    parse_physical_window_expr, parse_protobuf_file_scan_config,
+    parse_protobuf_file_scan_schema,
+};
+use crate::physical_plan::to_proto::{
+    serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
+    serialize_physical_window_expr,
+};
+use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
+use crate::protobuf::physical_expr_node::ExprType;
+use crate::protobuf::physical_plan_node::PhysicalPlanType;
+use crate::protobuf::{
+    self, proto_error, window_agg_exec_node, ListUnnest as ProtoListUnnest,
+};
+use crate::{convert_required, into_required};
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -33,10 +49,14 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::physical_plan::AvroSource;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, JsonSource};
+use datafusion::datasource::physical_plan::{
+    CsvSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
+};
+use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
+use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion::physical_plan::aggregates::AggregateMode;
@@ -48,7 +68,6 @@ use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::insert::DataSinkExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
     CrossJoinExec, NestedLoopJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
@@ -70,26 +89,8 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
-use crate::common::{byte_to_string, str_to_byte};
-use crate::physical_plan::from_proto::{
-    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
-    parse_physical_window_expr, parse_protobuf_file_scan_config,
-    parse_protobuf_file_scan_schema,
-};
-use crate::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
-    serialize_physical_window_expr,
-};
-use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
-use crate::protobuf::physical_expr_node::ExprType;
-use crate::protobuf::physical_plan_node::PhysicalPlanType;
-use crate::protobuf::{
-    self, proto_error, window_agg_exec_node, ListUnnest as ProtoListUnnest,
-};
-use crate::{convert_required, into_required};
-
-use self::from_proto::parse_protobuf_partitioning;
-use self::to_proto::{serialize_partitioning, serialize_physical_expr};
+use prost::bytes::BufMut;
+use prost::Message;
 
 pub mod from_proto;
 pub mod to_proto;
@@ -237,15 +238,16 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     .with_comment(comment),
                 );
 
-                let conf = parse_protobuf_file_scan_config(
+                let conf = FileScanConfigBuilder::from(parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
                     extension_codec,
                     source,
-                )?
+                )?)
                 .with_newlines_in_values(scan.newlines_in_values)
-                .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
-                Ok(conf.build())
+                .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+                .build();
+                Ok(DataSourceExec::from_data_source(conf))
             }
             PhysicalPlanType::JsonScan(scan) => {
                 let scan_conf = parse_protobuf_file_scan_config(
@@ -254,7 +256,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     extension_codec,
                     Arc::new(JsonSource::new()),
                 )?;
-                Ok(scan_conf.build())
+                Ok(DataSourceExec::from_data_source(scan_conf))
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
@@ -291,7 +293,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         extension_codec,
                         Arc::new(source),
                     )?;
-                    Ok(base_config.build())
+                    Ok(DataSourceExec::from_data_source(base_config))
                 }
                 #[cfg(not(feature = "parquet"))]
                 panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
@@ -306,7 +308,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         extension_codec,
                         Arc::new(AvroSource::new()),
                     )?;
-                    Ok(conf.build())
+                    Ok(DataSourceExec::from_data_source(conf))
                 }
                 #[cfg(not(feature = "avro"))]
                 panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
@@ -1715,31 +1717,27 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
         #[cfg(feature = "parquet")]
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let data_source_exec = exec.data_source();
-            if let Some(maybe_parquet) =
-                data_source_exec.as_any().downcast_ref::<FileScanConfig>()
+            if let Some((maybe_parquet, conf)) =
+                exec.downcast_to_file_source::<ParquetSource>()
             {
-                let source = maybe_parquet.file_source();
-                if let Some(conf) = source.as_any().downcast_ref::<ParquetSource>() {
-                    let predicate = conf
-                        .predicate()
-                        .map(|pred| serialize_physical_expr(pred, extension_codec))
-                        .transpose()?;
-                    return Ok(protobuf::PhysicalPlanNode {
-                        physical_plan_type: Some(PhysicalPlanType::ParquetScan(
-                            protobuf::ParquetScanExecNode {
-                                base_conf: Some(serialize_file_scan_config(
-                                    maybe_parquet,
-                                    extension_codec,
-                                )?),
-                                predicate,
-                                parquet_options: Some(
-                                    conf.table_parquet_options().try_into()?,
-                                ),
-                            },
-                        )),
-                    });
-                }
+                let predicate = conf
+                    .predicate()
+                    .map(|pred| serialize_physical_expr(pred, extension_codec))
+                    .transpose()?;
+                return Ok(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::ParquetScan(
+                        protobuf::ParquetScanExecNode {
+                            base_conf: Some(serialize_file_scan_config(
+                                maybe_parquet,
+                                extension_codec,
+                            )?),
+                            predicate,
+                            parquet_options: Some(
+                                conf.table_parquet_options().try_into()?,
+                            ),
+                        },
+                    )),
+                });
             }
         }
 

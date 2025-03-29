@@ -125,8 +125,9 @@ mod tests {
     };
     use datafusion_common::config::{ParquetOptions, TableParquetOptions};
     use datafusion_common::stats::Precision;
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common::ScalarValue::Utf8;
-    use datafusion_common::{assert_batches_eq, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
     use datafusion_datasource::{ListingTableUrl, PartitionedFile};
@@ -147,8 +148,10 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field};
     use async_trait::async_trait;
+    use datafusion_datasource::file_groups::FileGroup;
     use futures::stream::BoxStream;
     use futures::{Stream, StreamExt};
+    use insta::assert_snapshot;
     use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectMeta;
@@ -1090,10 +1093,11 @@ mod tests {
             .expect("read_parquet should succeed");
 
         let result = df.collect().await?;
-        #[rustfmt::skip]
-        let expected = ["++",
-            "++"];
-        assert_batches_eq!(expected, &result);
+
+        assert_snapshot!(batches_to_string(&result), @r###"
+            ++
+            ++
+       "###);
 
         Ok(())
     }
@@ -1120,10 +1124,11 @@ mod tests {
             .expect("read_parquet should succeed");
 
         let result = df.collect().await?;
-        #[rustfmt::skip]
-        let expected = ["++",
-            "++"];
-        assert_batches_eq!(expected, &result);
+
+        assert_snapshot!(batches_to_string(&result), @r###"
+            ++
+            ++
+       "###);
 
         Ok(())
     }
@@ -1375,7 +1380,7 @@ mod tests {
         let file_sink_config = FileSinkConfig {
             original_url: String::default(),
             object_store_url: object_store_url.clone(),
-            file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
             table_paths: vec![ListingTableUrl::parse(table_path)?],
             output_schema: schema.clone(),
             table_partition_cols: vec![],
@@ -1461,7 +1466,7 @@ mod tests {
         let file_sink_config = FileSinkConfig {
             original_url: String::default(),
             object_store_url: object_store_url.clone(),
-            file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
             table_paths: vec![ListingTableUrl::parse("file:///")?],
             output_schema: schema.clone(),
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
@@ -1545,7 +1550,10 @@ mod tests {
             let file_sink_config = FileSinkConfig {
                 original_url: String::default(),
                 object_store_url: object_store_url.clone(),
-                file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+                file_group: FileGroup::new(vec![PartitionedFile::new(
+                    "/tmp".to_string(),
+                    1,
+                )]),
                 table_paths: vec![ListingTableUrl::parse("file:///")?],
                 output_schema: schema.clone(),
                 table_partition_cols: vec![],

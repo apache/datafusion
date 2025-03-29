@@ -30,7 +30,7 @@ use arrow::{
     compute::SortColumn,
     row::{Row, Rows},
 };
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -202,10 +202,10 @@ impl MinMaxStatistics {
                         .zip(max_values.column_by_name(column.name()))
                 }
                 .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
+                    plan_datafusion_err!(
                         "missing column in MinMaxStatistics::new: '{}'",
                         column.name()
-                    ))
+                    )
                 })
             })
             .collect::<Result<Vec<_>>>()?

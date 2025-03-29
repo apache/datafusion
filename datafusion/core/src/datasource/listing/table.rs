@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::{any::Any, str::FromStr, sync::Arc};
 
-use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
+use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
 use super::{ListingTableUrl, PartitionedFile};
 
 use crate::datasource::{
@@ -34,7 +34,7 @@ use crate::datasource::{
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
@@ -55,6 +55,7 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -941,7 +942,7 @@ impl TableProvider for ListingTable {
             .format
             .create_physical_plan(
                 session_state,
-                FileScanConfig::new(
+                FileScanConfigBuilder::new(
                     object_store_url,
                     Arc::clone(&self.file_schema),
                     self.options.format.file_source(),
@@ -952,7 +953,8 @@ impl TableProvider for ListingTable {
                 .with_projection(projection.cloned())
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
-                .with_table_partition_cols(table_partition_cols),
+                .with_table_partition_cols(table_partition_cols)
+                .build(),
                 filters.as_ref(),
             )
             .await
@@ -1031,7 +1033,7 @@ impl TableProvider for ListingTable {
         )
         .await?;
 
-        let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
+        let file_group = file_list_stream.try_collect::<Vec<_>>().await?.into();
         let keep_partition_by_columns =
             state.config_options().execution.keep_partition_by_columns;
 
@@ -1040,7 +1042,7 @@ impl TableProvider for ListingTable {
             original_url: String::default(),
             object_store_url: self.table_paths()[0].object_store(),
             table_paths: self.table_paths().clone(),
-            file_groups,
+            file_group,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             insert_op,
@@ -1088,7 +1090,7 @@ impl ListingTable {
         ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
+    ) -> Result<(Vec<FileGroup>, Statistics)> {
         let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
@@ -1136,7 +1138,7 @@ impl ListingTable {
         .await?;
 
         Ok((
-            split_files(files, self.options.target_partitions),
+            files.split_files(self.options.target_partitions),
             statistics,
         ))
     }
@@ -1190,14 +1192,12 @@ mod tests {
     use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
-    use crate::{
-        assert_batches_eq,
-        test::{columns, object_store::register_test_store},
-    };
+    use crate::test::{columns, object_store::register_test_store};
 
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::stats::Precision;
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
@@ -2208,16 +2208,14 @@ mod tests {
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &res);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Read the records in the table
         let batches = session_ctx
@@ -2225,16 +2223,14 @@ mod tests {
             .await?
             .collect()
             .await?;
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Assert that `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -2248,17 +2244,14 @@ mod tests {
 
         // Again, execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
-        // Insert returns the number of rows written, in our case this would be 6.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 20    |",
-            "+-------+",
-        ];
 
-        // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &res);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 20    |
+            +-------+
+        "###);}
 
         // Read the contents of the table
         let batches = session_ctx
@@ -2267,17 +2260,13 @@ mod tests {
             .collect()
             .await?;
 
-        // Define the expected result after the second append.
-        let expected = [
-            "+-------+",
-            "| count |",
-            "+-------+",
-            "| 40    |",
-            "+-------+",
-        ];
-
-        // Assert that the batches read from the file after the second append match the expected result.
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-------+
+            | count |
+            +-------+
+            | 40    |
+            +-------+
+        "###);}
 
         // Assert that another `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -2333,16 +2322,15 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+-----+-----+---+",
-            "| a   | b   | c |",
-            "+-----+-----+---+",
-            "| foo | bar | 1 |",
-            "| foo | bar | 2 |",
-            "| foo | bar | 3 |",
-            "+-----+-----+---+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
+            +-----+-----+---+
+            | a   | b   | c |
+            +-----+-----+---+
+            | foo | bar | 1 |
+            | foo | bar | 2 |
+            | foo | bar | 3 |
+            +-----+-----+---+
+        "###);}
 
         Ok(())
     }
