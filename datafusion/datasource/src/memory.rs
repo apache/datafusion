@@ -729,6 +729,7 @@ impl MemorySourceConfig {
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
 
 /// Implements for writing to a [`MemTable`]
+/// 
 /// [`MemTable`]: <https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemTable.html>
 pub struct MemSink {
     /// Target locations for writing data
