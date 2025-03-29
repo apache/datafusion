@@ -1435,6 +1435,8 @@ physical_plan
 statement ok
 set datafusion.optimizer.prefer_hash_selection_vector_partitioning = true;
 
+# TODO: The selection vector partitioning should be used for the hash join.
+# After fix https://github.com/apache/datafusion/issues/15382
 query TT
 explain
 SELECT * FROM
@@ -1474,10 +1476,6 @@ physical_plan
 19)--------ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
 20)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
-# TODO: It should be:
-# 2 2 2 2
-# 3 3 3 3
-# After fix https://github.com/apache/datafusion/issues/15382
 query IIII
 SELECT * FROM
 (SELECT x+1 AS col0, y+1 AS col1 FROM PAIRS WHERE x == y)
