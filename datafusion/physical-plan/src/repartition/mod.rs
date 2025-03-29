@@ -40,9 +40,10 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
+use arrow::array::{BooleanArray, PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
+use arrow_schema::{DataType, Field};
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -193,7 +194,15 @@ enum BatchPartitionerState {
         num_partitions: usize,
         next_idx: usize,
     },
+    HashSelectionVector {
+        random_state: ahash::RandomState,
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        num_partitions: usize,
+        hash_buffer: Vec<u64>,
+    },
 }
+
+pub static SELECTION_FIELD_NAME: &str = "__selection";
 
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
@@ -214,6 +223,15 @@ impl BatchPartitioner {
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
             },
+            Partitioning::HashSelectionVector(exprs, num_partitions) => {
+                BatchPartitionerState::HashSelectionVector {
+                    exprs,
+                    num_partitions,
+                    // Use fixed random hash
+                    random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
+                    hash_buffer: vec![],
+                }
+            }
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
         };
 
@@ -318,6 +336,69 @@ impl BatchPartitioner {
 
                     Box::new(it)
                 }
+                BatchPartitionerState::HashSelectionVector {
+                    random_state,
+                    exprs,
+                    num_partitions,
+                    hash_buffer,
+                } => {
+                    let timer = self.timer.timer();
+                    let arrays = exprs
+                        .iter()
+                        .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
+                        .collect::<Result<Vec<_>>>()?;
+
+                    hash_buffer.clear();
+                    hash_buffer.resize(batch.num_rows(), 0);
+                    create_hashes(&arrays, random_state, hash_buffer)?;
+
+                    let hash_vector = hash_buffer
+                        .iter()
+                        .map(|hash| *hash % *num_partitions as u64)
+                        .collect::<Vec<_>>();
+                    let mut fields = batch
+                        .schema()
+                        .fields()
+                        .iter()
+                        .map(Arc::clone)
+                        .collect::<Vec<_>>();
+                    fields.push(Arc::new(Field::new(
+                        SELECTION_FIELD_NAME,
+                        DataType::Boolean,
+                        false,
+                    )));
+                    let schema = Arc::new(arrow::datatypes::Schema::new(fields));
+                    // Finished building index-arrays for output partitions
+                    timer.done();
+
+                    // Borrowing partitioner timer to prevent moving `self` to closure
+                    let partitioner_timer = &self.timer;
+
+                    let it = (0..*num_partitions).map(move |partition| {
+                        // Tracking time required for repartitioned batches construction
+                        let _timer = partitioner_timer.timer();
+                        let selection_vector = Arc::new(
+                            hash_vector
+                                .iter()
+                                .map(|&hash| Some(hash == partition as u64))
+                                .collect::<BooleanArray>(),
+                        );
+                        let mut columns = batch.columns().to_vec();
+                        columns.push(selection_vector);
+                        let mut options = RecordBatchOptions::new();
+                        options = options.with_row_count(Some(batch.num_rows()));
+                        let batch = RecordBatch::try_new_with_options(
+                            Arc::clone(&schema),
+                            columns,
+                            &options,
+                        )
+                        .unwrap();
+
+                        Ok((partition, batch))
+                    });
+
+                    Box::new(it)
+                }
             };
 
         Ok(it)
@@ -328,6 +409,9 @@ impl BatchPartitioner {
         match self.state {
             BatchPartitionerState::RoundRobin { num_partitions, .. } => num_partitions,
             BatchPartitionerState::Hash { num_partitions, .. } => num_partitions,
+            BatchPartitionerState::HashSelectionVector { num_partitions, .. } => {
+                num_partitions
+            }
         }
     }
 }
@@ -1075,7 +1159,7 @@ mod tests {
         {collect, expressions::col},
     };
 
-    use arrow::array::{ArrayRef, StringArray, UInt32Array};
+    use arrow::array::{ArrayRef, AsArray, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::test_util::batches_to_sort_string;
@@ -1164,6 +1248,46 @@ mod tests {
         assert_eq!(8, output_partitions.len());
         assert_eq!(total_rows, 8 * 50 * 3);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn many_to_many_hash_select_vector() -> Result<()> {
+        let schema = test_schema();
+        let partition = create_vec_batches(50);
+        let partitions = vec![partition.clone(), partition.clone(), partition.clone()];
+
+        let output_partitions = repartition(
+            &schema,
+            partitions,
+            Partitioning::HashSelectionVector(vec![col("c0", &schema)?], 8),
+        )
+        .await?;
+
+        let total_rows: usize = output_partitions
+            .iter()
+            .map(|x| {
+                x.iter()
+                    .map(|x| {
+                        x.column_by_name(SELECTION_FIELD_NAME)
+                            .unwrap()
+                            .as_boolean()
+                            .iter()
+                            .filter(|x| x.unwrap_or(false))
+                            .count()
+                    })
+                    .sum::<usize>()
+            })
+            .sum();
+
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::UInt32, false),
+            Field::new(SELECTION_FIELD_NAME, DataType::Boolean, false),
+        ]));
+
+        assert_eq!(expected_schema, output_partitions[0][0].schema());
+        assert_eq!(8, output_partitions.len());
+        assert_eq!(total_rows, 8 * 50 * 3);
         Ok(())
     }
 

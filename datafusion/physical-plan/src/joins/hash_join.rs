@@ -78,7 +78,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::{HashPartitionMode, PhysicalExprRef};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
@@ -714,8 +714,14 @@ impl ExecutionPlan for HashJoinExec {
                     .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
                     .unzip();
                 vec![
-                    Distribution::HashPartitioned(left_expr),
-                    Distribution::HashPartitioned(right_expr),
+                    Distribution::HashPartitioned(
+                        left_expr,
+                        HashPartitionMode::HashPartitioned,
+                    ),
+                    Distribution::HashPartitioned(
+                        right_expr,
+                        HashPartitionMode::HashPartitioned,
+                    ),
                 ]
             }
             PartitionMode::Auto => vec![

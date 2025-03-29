@@ -60,7 +60,7 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{HashPartitionMode, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use futures::stream::Stream;
@@ -301,7 +301,10 @@ impl ExecutionPlan for BoundedWindowAggExec {
             debug!("No partition defined for BoundedWindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            vec![Distribution::HashPartitioned(self.partition_keys().clone())]
+            vec![Distribution::HashPartitioned(
+                self.partition_keys().clone(),
+                HashPartitionMode::HashPartitioned,
+            )]
         }
     }
 

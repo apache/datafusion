@@ -472,7 +472,7 @@ impl GroupedHashAggregateStream {
             AggregateMode::Partial
             | AggregateMode::Single
             | AggregateMode::SinglePartitioned => agg_filter_expr,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
+            AggregateMode::Final | AggregateMode::FinalPartitioned(_) => {
                 vec![None; agg.aggr_expr.len()]
             }
         };
@@ -946,7 +946,7 @@ impl GroupedHashAggregateStream {
                     output.extend(acc.state(emit_to)?)
                 }
                 AggregateMode::Final
-                | AggregateMode::FinalPartitioned
+                | AggregateMode::FinalPartitioned(_)
                 | AggregateMode::Single
                 | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
             }

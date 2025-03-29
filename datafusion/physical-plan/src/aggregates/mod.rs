@@ -42,6 +42,7 @@ use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Res
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr::HashPartitionMode;
 use datafusion_physical_expr::{
     equivalence::ProjectionMapping, expressions::Column, physical_exprs_contains,
     ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
@@ -95,7 +96,9 @@ pub enum AggregateMode {
     /// the same partitions, such as is the case with Hash repartitioning on the
     /// group keys. If a group key is duplicated, duplicate groups would be
     /// produced
-    FinalPartitioned,
+    ///
+    ///
+    FinalPartitioned(HashPartitionMode),
     /// *Single* layer of Aggregation, input is exactly one partition
     ///
     /// Applies the entire logical aggregation operation in a single operator,
@@ -124,7 +127,7 @@ impl AggregateMode {
             AggregateMode::Partial
             | AggregateMode::Single
             | AggregateMode::SinglePartitioned => true,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => false,
+            AggregateMode::Final | AggregateMode::FinalPartitioned(_) => false,
         }
     }
 }
@@ -879,8 +882,17 @@ impl ExecutionPlan for AggregateExec {
             AggregateMode::Partial => {
                 vec![Distribution::UnspecifiedDistribution]
             }
-            AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
-                vec![Distribution::HashPartitioned(self.group_by.input_exprs())]
+            AggregateMode::SinglePartitioned => {
+                vec![Distribution::HashPartitioned(
+                    self.group_by.input_exprs(),
+                    HashPartitionMode::HashPartitioned,
+                )]
+            }
+            AggregateMode::FinalPartitioned(mode) => {
+                vec![Distribution::HashPartitioned(
+                    self.group_by.input_exprs(),
+                    *mode,
+                )]
             }
             AggregateMode::Final | AggregateMode::Single => {
                 vec![Distribution::SinglePartition]
@@ -948,7 +960,7 @@ impl ExecutionPlan for AggregateExec {
         // - aggregations sometimes also preserve invariants such as min, max...
         let column_statistics = Statistics::unknown_column(&self.schema());
         match self.mode {
-            AggregateMode::Final | AggregateMode::FinalPartitioned
+            AggregateMode::Final | AggregateMode::FinalPartitioned(_)
                 if self.group_by.expr.is_empty() =>
             {
                 Ok(Statistics {
@@ -1009,7 +1021,7 @@ fn create_schema(
             }
         }
         AggregateMode::Final
-        | AggregateMode::FinalPartitioned
+        | AggregateMode::FinalPartitioned(_)
         | AggregateMode::Single
         | AggregateMode::SinglePartitioned => {
             // in final mode, the field with the final result of the accumulator
@@ -1216,7 +1228,7 @@ pub fn aggregate_expressions(
             })
             .collect()),
         // In this mode, we build the merge expressions of the aggregation.
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+        AggregateMode::Final | AggregateMode::FinalPartitioned(_) => {
             let mut col_idx_base = col_idx_base;
             aggr_expr
                 .iter()
@@ -1280,7 +1292,7 @@ pub fn finalize_aggregation(
                 .collect()
         }
         AggregateMode::Final
-        | AggregateMode::FinalPartitioned
+        | AggregateMode::FinalPartitioned(_)
         | AggregateMode::Single
         | AggregateMode::SinglePartitioned => {
             // Merge the state to the final value
@@ -2647,7 +2659,7 @@ mod tests {
             None,
         )?;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::FinalPartitioned,
+            AggregateMode::FinalPartitioned(HashPartitionMode::HashPartitioned),
             group_by,
             aggr_expr,
             vec![None],

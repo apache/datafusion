@@ -44,6 +44,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::HashPartitionMode;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use futures::{ready, Stream, StreamExt};
@@ -234,7 +235,10 @@ impl ExecutionPlan for WindowAggExec {
         if self.partition_keys().is_empty() {
             vec![Distribution::SinglePartition]
         } else {
-            vec![Distribution::HashPartitioned(self.partition_keys())]
+            vec![Distribution::HashPartitioned(
+                self.partition_keys(),
+                HashPartitionMode::HashPartitioned,
+            )]
         }
     }
 
