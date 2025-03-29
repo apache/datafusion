@@ -779,14 +779,14 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let d2 = df.clone().select_columns(&["b", "c", "a"])?.with_column("d", lit("77"))?;
+    /// let d2 = df.clone().select_columns(&["b", "c", "a"])?;
     /// let df = df.union_by_name_distinct(d2)?;
     /// let expected = vec![
-    ///     "+---+---+---+----+",
-    ///     "| a | b | c | d  |",
-    ///     "+---+---+---+----+",
-    ///     "| 1 | 2 | 3 | 77 |",
-    ///     "+---+---+---+----+"
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+"
     /// ];
     /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
