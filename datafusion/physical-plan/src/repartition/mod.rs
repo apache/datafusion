@@ -206,7 +206,7 @@ enum BatchPartitionerState {
     },
 }
 
-pub static SELECTION_FILED_NAME: &str = "__selection";
+pub static SELECTION_FIELD_NAME: &str = "__selection";
 
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
@@ -367,7 +367,7 @@ impl BatchPartitioner {
                         .map(Arc::clone)
                         .collect::<Vec<_>>();
                     fields.push(Arc::new(Field::new(
-                        SELECTION_FILED_NAME,
+                        SELECTION_FIELD_NAME,
                         DataType::Boolean,
                         false,
                     )));
@@ -1308,7 +1308,7 @@ mod tests {
             .map(|x| {
                 x.iter()
                     .map(|x| {
-                        x.column_by_name(SELECTION_FILED_NAME)
+                        x.column_by_name(SELECTION_FIELD_NAME)
                             .unwrap()
                             .as_boolean()
                             .iter()
@@ -1321,7 +1321,7 @@ mod tests {
 
         let expected_schema = Arc::new(Schema::new(vec![
             Field::new("c0", DataType::UInt32, false),
-            Field::new(SELECTION_FILED_NAME, DataType::Boolean, false),
+            Field::new(SELECTION_FIELD_NAME, DataType::Boolean, false),
         ]));
 
         assert_eq!(expected_schema, output_partitions[0][0].schema());
