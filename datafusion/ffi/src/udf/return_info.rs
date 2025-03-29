@@ -21,7 +21,7 @@ use datafusion::{error::DataFusionError, logical_expr::ReturnInfo};
 
 use crate::arrow_wrappers::WrappedSchema;
 
-/// A stable struct for sharing a [`ReturnTypeArgs`] across FFI boundaries.
+/// A stable struct for sharing a [`ReturnInfo`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
