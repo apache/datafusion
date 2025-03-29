@@ -1476,7 +1476,7 @@ physical_plan
 19)--------ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
 20)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
-query IIII
+query IIII rowsort
 SELECT * FROM
 (SELECT x+1 AS col0, y+1 AS col1 FROM PAIRS WHERE x == y)
 JOIN f
@@ -1484,8 +1484,8 @@ ON col0 = f.a
 JOIN s
 ON col1 = s.b
 ----
-3 3 3 3
 2 2 2 2
+3 3 3 3
 
 # reset the config
 statement ok
