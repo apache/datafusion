@@ -1252,13 +1252,10 @@ async fn get_files_with_limit(
             }
         }
     }
-    let mut inexact_stats = false;
-    if all_files.next().await.is_some() {
-        // If we still have files in the stream, it means that the limit kicked
-        // in, and the statistic could have been different had we processed the
-        // files in a different order.
-        inexact_stats = true;
-    }
+    // If we still have files in the stream, it means that the limit kicked
+    // in, and the statistic could have been different had we processed the
+    // files in a different order.
+    let inexact_stats = all_files.next().await.is_some();
     Ok((file_group, inexact_stats))
 }
 

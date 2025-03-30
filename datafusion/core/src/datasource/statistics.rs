@@ -354,3 +354,183 @@ fn set_min_if_lesser(
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_compute_summary_statistics_basic() {
+        // Create a schema with two columns
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col1", DataType::Int32, false),
+            Field::new("col2", DataType::Int32, false),
+        ]));
+
+        // Create items with statistics
+        let stats1 = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Exact(100),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(1),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
+                    distinct_count: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(2),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(200))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(10))),
+                    sum_value: Precision::Exact(ScalarValue::Int32(Some(1000))),
+                    distinct_count: Precision::Absent,
+                },
+            ],
+        };
+
+        let stats2 = Statistics {
+            num_rows: Precision::Exact(15),
+            total_byte_size: Precision::Exact(150),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(2),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(120))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(-10))),
+                    sum_value: Precision::Exact(ScalarValue::Int32(Some(600))),
+                    distinct_count: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(3),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(180))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(5))),
+                    sum_value: Precision::Exact(ScalarValue::Int32(Some(1200))),
+                    distinct_count: Precision::Absent,
+                },
+            ],
+        };
+
+        let items = vec![Arc::new(stats1), Arc::new(stats2)];
+
+        // Call compute_summary_statistics
+        let summary_stats =
+            compute_summary_statistics(items, &schema, |item| Some(item.as_ref()));
+
+        // Verify the results
+        assert_eq!(summary_stats.num_rows, Precision::Exact(25)); // 10 + 15
+        assert_eq!(summary_stats.total_byte_size, Precision::Exact(250)); // 100 + 150
+
+        // Verify column statistics
+        let col1_stats = &summary_stats.column_statistics[0];
+        assert_eq!(col1_stats.null_count, Precision::Exact(3)); // 1 + 2
+        assert_eq!(
+            col1_stats.max_value,
+            Precision::Exact(ScalarValue::Int32(Some(120)))
+        );
+        assert_eq!(
+            col1_stats.min_value,
+            Precision::Exact(ScalarValue::Int32(Some(-10)))
+        );
+        assert_eq!(
+            col1_stats.sum_value,
+            Precision::Exact(ScalarValue::Int32(Some(1100)))
+        ); // 500 + 600
+
+        let col2_stats = &summary_stats.column_statistics[1];
+        assert_eq!(col2_stats.null_count, Precision::Exact(5)); // 2 + 3
+        assert_eq!(
+            col2_stats.max_value,
+            Precision::Exact(ScalarValue::Int32(Some(200)))
+        );
+        assert_eq!(
+            col2_stats.min_value,
+            Precision::Exact(ScalarValue::Int32(Some(5)))
+        );
+        assert_eq!(
+            col2_stats.sum_value,
+            Precision::Exact(ScalarValue::Int32(Some(2200)))
+        ); // 1000 + 1200
+    }
+
+    #[test]
+    fn test_compute_summary_statistics_mixed_precision() {
+        // Create a schema with one column
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        // Create items with different precision levels
+        let stats1 = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Inexact(100),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(1),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+                min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
+                distinct_count: Precision::Absent,
+            }],
+        };
+
+        let stats2 = Statistics {
+            num_rows: Precision::Inexact(15),
+            total_byte_size: Precision::Exact(150),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Inexact(2),
+                max_value: Precision::Inexact(ScalarValue::Int32(Some(120))),
+                min_value: Precision::Exact(ScalarValue::Int32(Some(-10))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+            }],
+        };
+
+        let items = vec![Arc::new(stats1), Arc::new(stats2)];
+
+        let summary_stats =
+            compute_summary_statistics(items, &schema, |item| Some(item.as_ref()));
+
+        assert_eq!(summary_stats.num_rows, Precision::Inexact(25));
+        assert_eq!(summary_stats.total_byte_size, Precision::Inexact(250));
+
+        let col_stats = &summary_stats.column_statistics[0];
+        assert_eq!(col_stats.null_count, Precision::Inexact(3));
+        assert_eq!(
+            col_stats.max_value,
+            Precision::Inexact(ScalarValue::Int32(Some(120)))
+        );
+        assert_eq!(
+            col_stats.min_value,
+            Precision::Inexact(ScalarValue::Int32(Some(-10)))
+        );
+        assert!(matches!(col_stats.sum_value, Precision::Absent));
+    }
+
+    #[test]
+    fn test_compute_summary_statistics_empty() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        // Empty collection
+        let items: Vec<Arc<Statistics>> = vec![];
+
+        let summary_stats =
+            compute_summary_statistics(items, &schema, |item| Some(item.as_ref()));
+
+        // Verify default values for empty collection
+        assert_eq!(summary_stats.num_rows, Precision::Absent);
+        assert_eq!(summary_stats.total_byte_size, Precision::Absent);
+        assert_eq!(summary_stats.column_statistics.len(), 1);
+        assert_eq!(
+            summary_stats.column_statistics[0].null_count,
+            Precision::Absent
+        );
+    }
+}
