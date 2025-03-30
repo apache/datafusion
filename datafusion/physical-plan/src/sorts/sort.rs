@@ -424,7 +424,9 @@ impl ExternalSorter {
             in_progress_file.append_batch(&batch)?;
         }
 
-        assert!(globally_sorted_batches.is_empty());
+        if !globally_sorted_batches.is_empty() {
+            return internal_err!("This function consumes globally_sorted_batches, so it should be empty after taking.");
+        }
 
         Ok(())
     }
@@ -535,7 +537,11 @@ impl ExternalSorter {
             self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
-        assert!(self.in_mem_batches.is_empty());
+        if !self.in_mem_batches.is_empty() {
+            return internal_err!(
+                "in_mem_batches should be empty after constructing sorted stream"
+            );
+        }
         // 'global' here refers to all buffered batches when the memory limit is
         // reached. This variable will buffer the sorted batches after
         // sort-preserving merge and incrementally append to spill files.
@@ -584,7 +590,10 @@ impl ExternalSorter {
             // element: after sorting only the top K elements will be kept in memory.
             // For simplicity, those sorted top K entries are put back to unsorted
             // `in_mem_batches` to be consumed by the next sort/merge.
-            assert!(self.in_mem_batches.is_empty());
+            if !self.in_mem_batches.is_empty() {
+                return internal_err!("in_mem_batches should be cleared before");
+            }
+
             self.in_mem_batches = std::mem::take(&mut globally_sorted_batches);
         }
 
