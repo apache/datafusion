@@ -764,7 +764,7 @@ impl DataFrame {
         })
     }
 
-    /// Calculate the union of two [`DataFrame`]s using column names, preserving duplicate rows.
+    /// Calculate the union of two [`DataFrame`]s using column names with all duplicated rows removed.
     ///
     /// The two [`DataFrame`]s are combined using column names rather than position,
     /// filling missing columns with null.
