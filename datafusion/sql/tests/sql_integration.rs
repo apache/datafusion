@@ -157,7 +157,7 @@ fn parse_ident_normalization() {
 
 #[test]
 fn select_no_relation() {
-    let plan = generate_plan("SELECT 1");
+    let plan = generate_logical_plan("SELECT 1");
     assert_snapshot!(
         plan,
         @r#"
@@ -169,7 +169,7 @@ fn select_no_relation() {
 
 #[test]
 fn test_real_f32() {
-    let plan = generate_plan("SELECT CAST(1.1 AS REAL)");
+    let plan = generate_logical_plan("SELECT CAST(1.1 AS REAL)");
     assert_snapshot!(
         plan,
         @r#"
@@ -181,7 +181,7 @@ fn test_real_f32() {
 
 #[test]
 fn test_int_decimal_default() {
-    let plan = generate_plan("SELECT CAST(10 AS DECIMAL)");
+    let plan = generate_logical_plan("SELECT CAST(10 AS DECIMAL)");
     assert_snapshot!(
         plan,
         @r#"
@@ -193,7 +193,7 @@ fn test_int_decimal_default() {
 
 #[test]
 fn test_int_decimal_no_scale() {
-    let plan = generate_plan("SELECT CAST(10 AS DECIMAL(5))");
+    let plan = generate_logical_plan("SELECT CAST(10 AS DECIMAL(5))");
     assert_snapshot!(
         plan,
         @r#"
@@ -205,7 +205,7 @@ fn test_int_decimal_no_scale() {
 
 #[test]
 fn test_tinyint() {
-    let plan = generate_plan("SELECT CAST(6 AS TINYINT)");
+    let plan = generate_logical_plan("SELECT CAST(6 AS TINYINT)");
     assert_snapshot!(
         plan,
         @r#"
@@ -217,7 +217,7 @@ fn test_tinyint() {
 
 #[test]
 fn cast_from_subquery() {
-    let plan = generate_plan("SELECT CAST (a AS FLOAT) FROM (SELECT 1 AS a)");
+    let plan = generate_logical_plan("SELECT CAST (a AS FLOAT) FROM (SELECT 1 AS a)");
     assert_snapshot!(
         plan,
         @r#"
@@ -230,7 +230,7 @@ fn cast_from_subquery() {
 
 #[test]
 fn try_cast_from_aggregation() {
-    let plan = generate_plan("SELECT TRY_CAST(sum(age) AS FLOAT) FROM person");
+    let plan = generate_logical_plan("SELECT TRY_CAST(sum(age) AS FLOAT) FROM person");
     assert_snapshot!(
         plan,
         @r#"
@@ -257,7 +257,7 @@ fn cast_to_invalid_decimal_type_precision_0() {
 fn cast_to_invalid_decimal_type_precision_gt_38() {
     // precision > 38
     let sql = "SELECT CAST(10 AS DECIMAL(39))";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -294,7 +294,7 @@ fn cast_to_invalid_decimal_type_precision_lt_scale() {
 #[test]
 fn plan_create_table_with_pk() {
     let sql = "create table person (id int, name string, primary key(id))";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -304,7 +304,7 @@ fn plan_create_table_with_pk() {
     );
 
     let sql = "create table person (id int primary key, name string)";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -315,7 +315,7 @@ fn plan_create_table_with_pk() {
 
     let sql =
         "create table person (id int, name string unique not null, primary key(id))";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -325,7 +325,7 @@ fn plan_create_table_with_pk() {
     );
 
     let sql = "create table person (id int, name varchar,  primary key(name,  id));";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -338,7 +338,7 @@ fn plan_create_table_with_pk() {
 #[test]
 fn plan_create_table_with_multi_pk() {
     let sql = "create table person (id int, name string primary key, primary key(id))";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -351,7 +351,7 @@ fn plan_create_table_with_multi_pk() {
 #[test]
 fn plan_create_table_with_unique() {
     let sql = "create table person (id int unique, name string)";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -364,7 +364,7 @@ fn plan_create_table_with_unique() {
 #[test]
 fn plan_create_table_no_pk() {
     let sql = "create table person (id int, name string)";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -377,7 +377,7 @@ fn plan_create_table_no_pk() {
 #[test]
 fn plan_create_table_check_constraint() {
     let sql = "create table person (id int, name string, unique(id))";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -390,7 +390,7 @@ fn plan_create_table_check_constraint() {
 #[test]
 fn plan_start_transaction() {
     let sql = "start transaction";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -402,7 +402,7 @@ fn plan_start_transaction() {
 #[test]
 fn plan_start_transaction_isolation() {
     let sql = "start transaction isolation level read committed";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -414,7 +414,7 @@ fn plan_start_transaction_isolation() {
 #[test]
 fn plan_start_transaction_read_only() {
     let sql = "start transaction read only";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -426,7 +426,7 @@ fn plan_start_transaction_read_only() {
 #[test]
 fn plan_start_transaction_fully_qualified() {
     let sql = "start transaction isolation level read committed read only";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -442,7 +442,7 @@ isolation level read committed
 read only
 isolation level repeatable read
 "#;
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -454,7 +454,7 @@ isolation level repeatable read
 #[test]
 fn plan_commit_transaction() {
     let sql = "commit transaction";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -466,7 +466,7 @@ fn plan_commit_transaction() {
 #[test]
 fn plan_commit_transaction_chained() {
     let sql = "commit transaction and chain";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -478,7 +478,7 @@ fn plan_commit_transaction_chained() {
 #[test]
 fn plan_rollback_transaction() {
     let sql = "rollback transaction";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -490,7 +490,7 @@ fn plan_rollback_transaction() {
 #[test]
 fn plan_rollback_transaction_chained() {
     let sql = "rollback transaction and chain";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -502,7 +502,7 @@ fn plan_rollback_transaction_chained() {
 #[test]
 fn plan_copy_to() {
     let sql = "COPY test_decimal to 'output.csv' STORED AS CSV";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -515,7 +515,7 @@ fn plan_copy_to() {
 #[test]
 fn plan_explain_copy_to() {
     let sql = "EXPLAIN COPY test_decimal to 'output.csv'";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -529,7 +529,7 @@ fn plan_explain_copy_to() {
 #[test]
 fn plan_explain_copy_to_format() {
     let sql = "EXPLAIN COPY test_decimal to 'output.tbl' STORED AS CSV";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -544,7 +544,7 @@ fn plan_explain_copy_to_format() {
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -558,7 +558,7 @@ fn plan_insert() {
 #[test]
 fn plan_insert_no_target_columns() {
     let sql = "INSERT INTO test_decimal VALUES (1, 2), (3, 4)";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -604,7 +604,7 @@ fn test_insert_schema_errors(#[case] sql: &str, #[case] error: &str) {
 #[test]
 fn plan_update() {
     let sql = "update person set last_name='Kay' where id=1";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -631,7 +631,7 @@ fn update_column_does_not_exist(#[case] sql: &str) {
 #[test]
 fn plan_delete() {
     let sql = "delete from person where id=1";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -646,7 +646,7 @@ fn plan_delete() {
 fn plan_delete_quoted_identifier_case_sensitive() {
     let sql =
         "DELETE FROM \"SomeCatalog\".\"SomeSchema\".\"UPPERCASE_test\" WHERE \"Id\" = 1";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -679,7 +679,7 @@ fn select_repeated_column() {
 
 #[test]
 fn select_scalar_func_with_literal_no_relation() {
-    let plan = generate_plan("SELECT sqrt(9)");
+    let plan = generate_logical_plan("SELECT sqrt(9)");
     assert_snapshot!(
         plan,
         @r#"
@@ -693,7 +693,7 @@ fn select_scalar_func_with_literal_no_relation() {
 fn select_simple_filter() {
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE state = 'CO'";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -722,7 +722,7 @@ fn select_filter_cannot_use_alias() {
 fn select_neg_filter() {
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE NOT state";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -737,7 +737,7 @@ fn select_neg_filter() {
 fn select_compound_filter() {
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE state = 'CO' AND age >= 21 AND age <= 65";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -751,7 +751,7 @@ fn select_compound_filter() {
 #[test]
 fn test_timestamp_filter() {
     let sql = "SELECT state FROM person WHERE birth_date < CAST (158412331400600000 as timestamp)";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -765,7 +765,7 @@ fn test_timestamp_filter() {
 #[test]
 fn test_date_filter() {
     let sql = "SELECT state FROM person WHERE birth_date < CAST ('2020-01-01' as date)";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -786,7 +786,7 @@ fn select_all_boolean_operators() {
                    AND age >= 21 \
                    AND age < 65 \
                    AND age <= 65";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -800,7 +800,7 @@ fn select_all_boolean_operators() {
 #[test]
 fn select_between() {
     let sql = "SELECT state FROM person WHERE age BETWEEN 21 AND 65";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -814,7 +814,7 @@ fn select_between() {
 #[test]
 fn select_between_negated() {
     let sql = "SELECT state FROM person WHERE age NOT BETWEEN 21 AND 65";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -835,7 +835,7 @@ fn select_nested() {
                        FROM person
                      ) AS a
                    ) AS b";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -858,7 +858,7 @@ fn select_nested_with_filters() {
                      WHERE age > 20
                    ) AS a
                    WHERE fn1 = 'X' AND age < 30";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -876,7 +876,7 @@ fn select_nested_with_filters() {
 fn table_with_column_alias() {
     let sql = "SELECT a, b, c
                    FROM lineitem l (a, b, c)";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -915,7 +915,7 @@ fn select_with_ambiguous_column() {
 fn join_with_ambiguous_column() {
     // This is legal.
     let sql = "SELECT id FROM person a join person b using(id)";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -932,7 +932,7 @@ fn join_with_ambiguous_column() {
 #[test]
 fn natural_left_join() {
     let sql = "SELECT l_item_id FROM lineitem a NATURAL LEFT JOIN lineitem b";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -949,7 +949,7 @@ fn natural_left_join() {
 #[test]
 fn natural_right_join() {
     let sql = "SELECT l_item_id FROM lineitem a NATURAL RIGHT JOIN lineitem b";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1040,7 +1040,7 @@ fn select_aggregate_with_having_that_reuses_aggregate() {
     let sql = "SELECT MAX(age)
                    FROM person
                    HAVING MAX(age) < 30";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1057,7 +1057,7 @@ fn select_aggregate_with_having_with_aggregate_not_in_select() {
     let sql = "SELECT max(age)
                    FROM person
                    HAVING max(first_name) > 'M'";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1090,7 +1090,7 @@ fn select_aggregate_aliased_with_having_referencing_aggregate_by_its_alias() {
                    FROM person
                    HAVING max_age < 30";
     // FIXME: add test for having in execution
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1107,7 +1107,7 @@ fn select_aggregate_aliased_with_having_that_reuses_aggregate_but_not_by_its_ali
     let sql = "SELECT max(age) as max_age
                    FROM person
                    HAVING max(age) < 30";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1125,7 +1125,7 @@ fn select_aggregate_with_group_by_with_having() {
                    FROM person
                    GROUP BY first_name
                    HAVING first_name = 'M'";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1144,7 +1144,7 @@ fn select_aggregate_with_group_by_with_having_and_where() {
                    WHERE id > 5
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1164,7 +1164,7 @@ fn select_aggregate_with_group_by_with_having_and_where_filtering_on_aggregate_c
                    WHERE id > 5 AND age > 18
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1183,7 +1183,7 @@ fn select_aggregate_with_group_by_with_having_using_column_by_alias() {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 2 AND fn = 'M'";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1202,7 +1202,7 @@ fn select_aggregate_with_group_by_with_having_using_columns_with_and_without_the
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 2 AND max_age < 5 AND first_name = 'M' AND fn = 'N'";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1220,7 +1220,7 @@ fn select_aggregate_with_group_by_with_having_that_reuses_aggregate() {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1254,7 +1254,7 @@ fn select_aggregate_with_group_by_with_having_that_reuses_aggregate_multiple_tim
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND MAX(age) < 200";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1272,7 +1272,7 @@ fn select_aggregate_with_group_by_with_having_using_aggregate_not_in_select() {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND MIN(id) < 50";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1291,7 +1291,7 @@ fn select_aggregate_aliased_with_group_by_with_having_referencing_aggregate_by_i
                    FROM person
                    GROUP BY first_name
                    HAVING max_age > 100";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1310,7 +1310,7 @@ fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compo
                    FROM person
                    GROUP BY first_name
                    HAVING max_age_plus_one > 100";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1329,7 +1329,7 @@ fn select_aggregate_with_group_by_with_having_using_derived_column_aggregate_not
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND MIN(id - 2) < 50";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1347,7 +1347,7 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND count(*) < 50";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1362,7 +1362,7 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
 #[test]
 fn select_binary_expr() {
     let sql = "SELECT age + salary from person";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1375,7 +1375,7 @@ fn select_binary_expr() {
 #[test]
 fn select_binary_expr_nested() {
     let sql = "SELECT (age + salary)/2 from person";
-    let plan = generate_plan(sql);
+    let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
@@ -1387,7 +1387,7 @@ fn select_binary_expr_nested() {
 
 #[test]
 fn select_simple_aggregate() {
-    let plan = generate_plan("SELECT MIN(age) FROM person");
+    let plan = generate_logical_plan("SELECT MIN(age) FROM person");
     assert_snapshot!(
         plan,
         @r#"
@@ -1400,7 +1400,7 @@ fn select_simple_aggregate() {
 
 #[test]
 fn test_sum_aggregate() {
-    let plan = generate_plan("SELECT sum(age) from person");
+    let plan = generate_logical_plan("SELECT sum(age) from person");
     assert_snapshot!(
         plan,
         @r#"
@@ -1433,7 +1433,7 @@ fn select_simple_aggregate_repeated_aggregate() {
 
 #[test]
 fn select_simple_aggregate_repeated_aggregate_with_single_alias() {
-    let plan = generate_plan("SELECT MIN(age), MIN(age) AS a FROM person");
+    let plan = generate_logical_plan("SELECT MIN(age), MIN(age) AS a FROM person");
     assert_snapshot!(
         plan,
         @r#"
@@ -1446,7 +1446,7 @@ fn select_simple_aggregate_repeated_aggregate_with_single_alias() {
 
 #[test]
 fn select_simple_aggregate_repeated_aggregate_with_unique_aliases() {
-    let plan = generate_plan("SELECT MIN(age) AS a, MIN(age) AS b FROM person");
+    let plan = generate_logical_plan("SELECT MIN(age) AS a, MIN(age) AS b FROM person");
     assert_snapshot!(
         plan,
         @r#"
@@ -1459,7 +1459,7 @@ fn select_simple_aggregate_repeated_aggregate_with_unique_aliases() {
 
 #[test]
 fn select_from_typed_string_values() {
-    let plan = generate_plan(
+    let plan = generate_logical_plan(
         "SELECT col1, col2 FROM (VALUES (TIMESTAMP '2021-06-10 17:01:00Z', DATE '2004-04-09')) as t (col1, col2)",
     );
     assert_snapshot!(
@@ -1488,8 +1488,9 @@ fn select_simple_aggregate_repeated_aggregate_with_repeated_aliases() {
 
 #[test]
 fn select_simple_aggregate_with_groupby() {
-    let plan =
-        generate_plan("SELECT state, MIN(age), MAX(age) FROM person GROUP BY state");
+    let plan = generate_logical_plan(
+        "SELECT state, MIN(age), MAX(age) FROM person GROUP BY state",
+    );
     assert_snapshot!(
         plan,
         @r#"
@@ -1502,8 +1503,9 @@ fn select_simple_aggregate_with_groupby() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_with_aliases() {
-    let plan =
-        generate_plan("SELECT state AS a, MIN(age) AS b FROM person GROUP BY state");
+    let plan = generate_logical_plan(
+        "SELECT state AS a, MIN(age) AS b FROM person GROUP BY state",
+    );
     assert_snapshot!(
         plan,
         @r#"
@@ -1529,7 +1531,8 @@ fn select_simple_aggregate_with_groupby_with_aliases_repeated() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_column_unselected() {
-    let plan = generate_plan("SELECT MIN(age), MAX(age) FROM person GROUP BY state");
+    let plan =
+        generate_logical_plan("SELECT MIN(age), MAX(age) FROM person GROUP BY state");
     assert_snapshot!(
         plan,
         @r#"
@@ -1575,7 +1578,8 @@ fn select_interval_out_of_range() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby() {
-    let plan = generate_plan("SELECT MAX(first_name) FROM person GROUP BY first_name");
+    let plan =
+        generate_logical_plan("SELECT MAX(first_name) FROM person GROUP BY first_name");
     assert_snapshot!(
         plan,
         @r#"
@@ -1588,8 +1592,9 @@ fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby()
 
 #[test]
 fn select_simple_aggregate_with_groupby_can_use_positions() {
-    let plan =
-        generate_plan("SELECT state, age AS b, count(1) FROM person GROUP BY 1, 2");
+    let plan = generate_logical_plan(
+        "SELECT state, age AS b, count(1) FROM person GROUP BY 1, 2",
+    );
     assert_snapshot!(
         plan,
         @r#"
@@ -1598,8 +1603,9 @@ fn select_simple_aggregate_with_groupby_can_use_positions() {
             TableScan: person
         "#
     );
-    let plan =
-        generate_plan("SELECT state, age AS b, count(1) FROM person GROUP BY 2, 1");
+    let plan = generate_logical_plan(
+        "SELECT state, age AS b, count(1) FROM person GROUP BY 2, 1",
+    );
     assert_snapshot!(
         plan,
         @r#"
@@ -1635,7 +1641,8 @@ fn select_simple_aggregate_with_groupby_position_out_of_range() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_can_use_alias() {
-    let plan = generate_plan("SELECT state AS a, MIN(age) AS b FROM person GROUP BY a");
+    let plan =
+        generate_logical_plan("SELECT state AS a, MIN(age) AS b FROM person GROUP BY a");
     assert_snapshot!(
         plan,
         @r#"
@@ -1661,7 +1668,7 @@ fn select_simple_aggregate_with_groupby_aggregate_repeated() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_aggregate_repeated_and_one_has_alias() {
-    let plan = generate_plan(
+    let plan = generate_logical_plan(
         "SELECT state, MIN(age), MIN(age) AS ma FROM person GROUP BY state",
     );
     assert_snapshot!(
@@ -1676,7 +1683,8 @@ fn select_simple_aggregate_with_groupby_aggregate_repeated_and_one_has_alias() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_non_column_expression_unselected() {
-    let plan = generate_plan("SELECT MIN(first_name) FROM person GROUP BY age + 1");
+    let plan =
+        generate_logical_plan("SELECT MIN(first_name) FROM person GROUP BY age + 1");
     assert_snapshot!(
         plan,
         @r#"
@@ -1689,8 +1697,9 @@ fn select_simple_aggregate_with_groupby_non_column_expression_unselected() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resolvable() {
-    let plan =
-        generate_plan("SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1");
+    let plan = generate_logical_plan(
+        "SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1",
+    );
     assert_snapshot!(
         plan,
         @r#"
@@ -1699,8 +1708,9 @@ fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resol
             TableScan: person
         "#
     );
-    let plan =
-        generate_plan("SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1");
+    let plan = generate_logical_plan(
+        "SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1",
+    );
     assert_snapshot!(
         plan,
         @r#"
@@ -1713,7 +1723,7 @@ fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resol
 
 #[test]
 fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_resolvable() {
-    let plan = generate_plan(
+    let plan = generate_logical_plan(
         "SELECT ((age + 1) / 2) * (age + 1), MIN(first_name) FROM person GROUP BY age + 1"
     );
     assert_snapshot!(
@@ -2883,7 +2893,7 @@ fn quick_test(sql: &str, expected: &str) {
     quick_test_with_options(sql, expected, ParserOptions::default())
 }
 
-fn generate_plan(sql: &str) -> LogicalPlan {
+fn generate_logical_plan(sql: &str) -> LogicalPlan {
     logical_plan_with_options(sql, ParserOptions::default()).unwrap()
 }
 
