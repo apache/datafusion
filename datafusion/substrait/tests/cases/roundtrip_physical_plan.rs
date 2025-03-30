@@ -22,19 +22,22 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{
+    FileGroup, FileScanConfigBuilder, ParquetSource,
+};
 use datafusion::error::Result;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_substrait::physical_plan::{consumer, producer};
 
+use datafusion::datasource::memory::DataSourceExec;
 use substrait::proto::extensions;
 
 #[tokio::test]
 async fn parquet_exec() -> Result<()> {
     let source = Arc::new(ParquetSource::default());
 
-    let scan_config = FileScanConfig::new(
+    let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         Arc::new(Schema::empty()),
         source,
@@ -48,8 +51,10 @@ async fn parquet_exec() -> Result<()> {
             "file://foo/part-1.parquet".to_string(),
             123,
         )]),
-    ]);
-    let parquet_exec: Arc<dyn ExecutionPlan> = scan_config.build();
+    ])
+    .build();
+    let parquet_exec: Arc<dyn ExecutionPlan> =
+        DataSourceExec::from_data_source(scan_config);
 
     let mut extension_info: (
         Vec<extensions::SimpleExtensionDeclaration>,
