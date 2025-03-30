@@ -93,13 +93,11 @@ fn cli_explain_environment_overrides() {
     let mut cmd = cli();
 
     // should use the environment variable to override the default explain plan
-    cmd
-        .env("DATAFUSION_EXPLAIN_FORMAT", "pgjson")
+    cmd.env("DATAFUSION_EXPLAIN_FORMAT", "pgjson")
         .args(["--command", "EXPLAIN SELECT 123"]);
 
     assert_cmd_snapshot!(cmd);
 }
-
 
 #[rstest]
 #[case("csv")]
