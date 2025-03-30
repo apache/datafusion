@@ -37,6 +37,8 @@ use datafusion_cli::{
 };
 
 use clap::Parser;
+use datafusion::common::config_err;
+use datafusion::config::ConfigOptions;
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -150,13 +152,7 @@ async fn main_inner() -> Result<()> {
         env::set_current_dir(p).unwrap();
     };
 
-    let mut session_config = SessionConfig::from_env()?.with_information_schema(true);
-
-    if let Some(batch_size) = args.batch_size {
-        session_config = session_config.with_batch_size(batch_size);
-    };
-    // use easier to understand "tree" mode by default
-    session_config.options_mut().explain.format = String::from("tree");
+    let session_config = get_session_config(&args)?;
 
     let mut rt_builder = RuntimeEnvBuilder::new();
     // set memory pool size
@@ -226,6 +222,30 @@ async fn main_inner() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Get the session configuration based on the provided arguments
+/// and environment settings.
+fn get_session_config(args: &Args) -> Result<SessionConfig> {
+    // Read options from environment variables and merge with command line options
+    let mut config_options = ConfigOptions::from_env()?;
+
+    if let Some(batch_size) = args.batch_size {
+        if batch_size == 0 {
+            return config_err!("batch_size must be greater than 0");
+        }
+        config_options.execution.batch_size = batch_size;
+    };
+
+    // use easier to understand "tree" mode by default
+    // if the user hasn't specified an explain format in the environment
+    if env::var_os("DATAFUSION_EXPLAIN_FORMAT").is_none() {
+        config_options.explain.format = String::from("tree");
+    }
+
+    let session_config =
+        SessionConfig::from(config_options).with_information_schema(true);
+    Ok(session_config)
 }
 
 fn parse_valid_file(dir: &str) -> Result<String, String> {
