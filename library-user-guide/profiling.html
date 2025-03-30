@@ -523,8 +523,8 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#building-a-flamegraph">
-   Building a flamegraph
+  <a class="reference internal nav-link" href="#building-a-flame-graph">
+   Building a flame graph
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -572,14 +572,16 @@
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#linux">
-   Linux
+  <a class="reference internal nav-link" href="#profiling-using-samply-cross-platform-profiler">
+   Profiling using Samply cross platform profiler
   </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#windows">
-   Windows
-  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#profile-the-benchmark">
+     Profile the benchmark
+    </a>
+   </li>
+  </ul>
  </li>
 </ul>
 
@@ -630,8 +632,8 @@
 <section id="profiling-cookbook">
 <h1>Profiling Cookbook<a class="headerlink" href="#profiling-cookbook" title="Link to this heading">¶</a></h1>
 <p>The section contains examples how to perform CPU profiling for Apache DataFusion on different operating systems.</p>
-<section id="building-a-flamegraph">
-<h2>Building a flamegraph<a class="headerlink" href="#building-a-flamegraph" title="Link to this heading">¶</a></h2>
+<section id="building-a-flame-graph">
+<h2>Building a flame graph<a class="headerlink" href="#building-a-flame-graph" title="Link to this heading">¶</a></h2>
 <p><a class="reference external" href="https://youtu.be/2z11xtYw_xs">Video: how to CPU profile DataFusion with a Flamegraph</a></p>
 <p>A flamegraph is a visual representation of which functions are being run
 You can create flamegraphs in many ways; The instructions below are for
@@ -685,11 +687,35 @@ in images such as this:</p>
 <p><a class="reference external" href="https://youtu.be/P3dXH61Kr5U">Video: how to CPU profile DataFusion with XCode Instruments</a></p>
 </section>
 </section>
-<section id="linux">
-<h2>Linux<a class="headerlink" href="#linux" title="Link to this heading">¶</a></h2>
+<section id="profiling-using-samply-cross-platform-profiler">
+<h2>Profiling using Samply cross platform profiler<a class="headerlink" href="#profiling-using-samply-cross-platform-profiler" title="Link to this heading">¶</a></h2>
+<p>There is an opportunity to build flamegraphs, call trees and stack charts on any platform using
+<a class="reference external" href="https://github.com/mstange/samply">Samply</a></p>
+<p>Install Samply profiler</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>install<span class="w"> </span>--locked<span class="w"> </span>samply
+</pre></div>
+</div>
+<p>More Samply <a class="reference external" href="https://github.com/mstange/samply?tab=readme-ov-file#installation">installation options</a></p>
+<p>Run the profiler</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>samply<span class="w"> </span>record<span class="w"> </span>--profile<span class="w"> </span>profiling<span class="w"> </span>./my-application<span class="w"> </span>my-arguments
+</pre></div>
+</div>
+<section id="profile-the-benchmark">
+<h3>Profile the benchmark<a class="headerlink" href="#profile-the-benchmark" title="Link to this heading">¶</a></h3>
+<p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/benchmarks/README.md#running-the-benchmarks">Set up benchmarks</a> if not yet done</p>
+<p>Example: Profile Q22 query from TPC-H benchmark.
+Note: <code class="docutils literal notranslate"><span class="pre">--profile</span> <span class="pre">profiling</span></code> to profile release optimized artifact with debug symbols</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>build<span class="w"> </span>--profile<span class="w"> </span>profiling<span class="w"> </span>--bin<span class="w"> </span>tpch
+samply<span class="w"> </span>record<span class="w"> </span>./target/profiling/tpch<span class="w"> </span>benchmark<span class="w"> </span>datafusion<span class="w"> </span>--iterations<span class="w"> </span><span class="m">5</span><span class="w"> </span>--path<span class="w"> </span>datafusion/benchmarks/data/tpch_sf10<span class="w"> </span>--prefer_hash_join<span class="w"> </span><span class="nb">true</span><span class="w"> </span>--format<span class="w"> </span>parquet<span class="w"> </span>-o<span class="w"> </span>datafusion/benchmarks/results/dev2/tpch_sf10.json<span class="w"> </span>--query<span class="w"> </span><span class="m">22</span>
+</pre></div>
+</div>
+<p>After sampling has completed the Samply starts a local server and navigates to the profiler</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>Local<span class="w"> </span>server<span class="w"> </span>listening<span class="w"> </span>at<span class="w"> </span>http://127.0.0.1:3000
+</pre></div>
+</div>
+<p><img alt="img.png" src="../_images/samply_profiler.png" /></p>
+<p>Note: The Firefox profiler cannot be opened in Safari, please use Chrome or Firefox instead</p>
 </section>
-<section id="windows">
-<h2>Windows<a class="headerlink" href="#windows" title="Link to this heading">¶</a></h2>
 </section>
 </section>
 
