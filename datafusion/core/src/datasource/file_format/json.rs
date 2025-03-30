@@ -31,6 +31,7 @@ mod tests {
     use arrow_schema::Schema;
     use bytes::Bytes;
     use datafusion_catalog::Session;
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_datasource::decoder::{
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
     };
@@ -42,11 +43,12 @@ mod tests {
     use arrow::json::ReaderBuilder;
     use arrow::util::pretty;
     use datafusion_common::cast::as_int64_array;
+    use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{assert_batches_eq, internal_err};
 
     use datafusion_common::Result;
     use futures::StreamExt;
+    use insta::assert_snapshot;
     use object_store::local::LocalFileSystem;
     use regex::Regex;
     use rstest::rstest;
@@ -213,16 +215,14 @@ mod tests {
         let result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_num_partitions(&ctx, query).await?;
 
-        #[rustfmt::skip]
-        let expected = [
-            "+----------------------+",
-            "| sum(json_parallel.a) |",
-            "+----------------------+",
-            "| -7                   |",
-            "+----------------------+"
-        ];
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&result),@r###"
+            +----------------------+
+            | sum(json_parallel.a) |
+            +----------------------+
+            | -7                   |
+            +----------------------+
+        "###);}
 
-        assert_batches_eq!(expected, &result);
         assert_eq!(n_partitions, actual_partitions);
 
         Ok(())
@@ -246,13 +246,10 @@ mod tests {
 
         let result = ctx.sql(query).await?.collect().await?;
 
-        #[rustfmt::skip]
-        let expected = [
-            "++",
-            "++",
-        ];
-
-        assert_batches_eq!(expected, &result);
+        assert_snapshot!(batches_to_string(&result),@r###"
+            ++
+            ++
+        "###);
 
         Ok(())
     }
@@ -284,17 +281,15 @@ mod tests {
         }
         assert_eq!(deserializer.next()?, DeserializerOutput::InputExhausted);
 
-        let expected = [
-            "+----+----+----+----+----+",
-            "| c1 | c2 | c3 | c4 | c5 |",
-            "+----+----+----+----+----+",
-            "| 1  | 2  | 3  | 4  | 5  |",
-            "| 6  | 7  | 8  | 9  | 10 |",
-            "| 11 | 12 | 13 | 14 | 15 |",
-            "+----+----+----+----+----+",
-        ];
-
-        assert_batches_eq!(expected, &[all_batches]);
+        assert_snapshot!(batches_to_string(&[all_batches]),@r###"
+            +----+----+----+----+----+
+            | c1 | c2 | c3 | c4 | c5 |
+            +----+----+----+----+----+
+            | 1  | 2  | 3  | 4  | 5  |
+            | 6  | 7  | 8  | 9  | 10 |
+            | 11 | 12 | 13 | 14 | 15 |
+            +----+----+----+----+----+
+        "###);
 
         Ok(())
     }
@@ -326,16 +321,14 @@ mod tests {
         }
         assert_eq!(deserializer.next()?, DeserializerOutput::RequiresMoreData);
 
-        let expected = [
-            "+----+----+----+----+----+",
-            "| c1 | c2 | c3 | c4 | c5 |",
-            "+----+----+----+----+----+",
-            "| 1  | 2  | 3  | 4  | 5  |",
-            "| 6  | 7  | 8  | 9  | 10 |",
-            "+----+----+----+----+----+",
-        ];
-
-        assert_batches_eq!(expected, &[all_batches]);
+        insta::assert_snapshot!(fmt_batches(&[all_batches]),@r###"
+            +----+----+----+----+----+
+            | c1 | c2 | c3 | c4 | c5 |
+            +----+----+----+----+----+
+            | 1  | 2  | 3  | 4  | 5  |
+            | 6  | 7  | 8  | 9  | 10 |
+            +----+----+----+----+----+
+        "###);
 
         Ok(())
     }
@@ -348,5 +341,9 @@ mod tests {
             .with_batch_size(batch_size)
             .build_decoder()?;
         Ok(DecoderDeserializer::new(JsonDecoder::new(decoder)))
+    }
+
+    fn fmt_batches(batches: &[RecordBatch]) -> String {
+        pretty::pretty_format_batches(batches).unwrap().to_string()
     }
 }

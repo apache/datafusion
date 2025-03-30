@@ -512,7 +512,7 @@ pub fn serialize_file_scan_config(
         projection: conf
             .projection
             .as_ref()
-            .unwrap_or(&vec![])
+            .unwrap_or(&(0..schema.fields().len()).collect::<Vec<_>>())
             .iter()
             .map(|n| *n as u32)
             .collect(),

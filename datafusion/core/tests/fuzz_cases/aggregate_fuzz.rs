@@ -353,12 +353,12 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     )
     .unwrap();
 
-    let running_source = Arc::new(DataSourceExec::new(Arc::new(
+    let running_source = DataSourceExec::from_data_source(
         MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
             .unwrap()
             .try_with_sort_information(vec![sort_keys])
             .unwrap(),
-    )));
+    );
 
     let aggregate_expr =
         vec![

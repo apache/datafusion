@@ -40,9 +40,8 @@ pub(crate) mod test_util {
 
     use datafusion_catalog::Session;
     use datafusion_common::Result;
-    use datafusion_datasource::{
-        file_format::FileFormat, file_scan_config::FileScanConfig, PartitionedFile,
-    };
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_datasource::{file_format::FileFormat, PartitionedFile};
     use datafusion_execution::object_store::ObjectStoreUrl;
 
     use crate::test::object_store::local_unpartitioned_file;
@@ -79,7 +78,7 @@ pub(crate) mod test_util {
         let exec = format
             .create_physical_plan(
                 state,
-                FileScanConfig::new(
+                FileScanConfigBuilder::new(
                     ObjectStoreUrl::local_filesystem(),
                     file_schema,
                     format.file_source(),
@@ -87,7 +86,8 @@ pub(crate) mod test_util {
                 .with_file_groups(file_groups)
                 .with_statistics(statistics)
                 .with_projection(projection)
-                .with_limit(limit),
+                .with_limit(limit)
+                .build(),
                 None,
             )
             .await?;

@@ -521,7 +521,7 @@ impl MemorySourceConfig {
         projection: Option<Vec<usize>>,
     ) -> Result<Arc<DataSourceExec>> {
         let source = Self::try_new(partitions, schema, projection)?;
-        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+        Ok(DataSourceExec::from_data_source(source))
     }
 
     /// Create a new execution plan from a list of constant values (`ValuesExec`)
@@ -611,7 +611,7 @@ impl MemorySourceConfig {
             show_sizes: true,
             fetch: None,
         };
-        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+        Ok(DataSourceExec::from_data_source(source))
     }
 
     /// Set the limit of the files
@@ -760,10 +760,10 @@ mod memory_source_tests {
         expected_output_order.extend(sort2.clone());
 
         let sort_information = vec![sort1.clone(), sort2.clone()];
-        let mem_exec = Arc::new(DataSourceExec::new(Arc::new(
+        let mem_exec = DataSourceExec::from_data_source(
             MemorySourceConfig::try_new(&[vec![]], schema, None)?
                 .try_with_sort_information(sort_information)?,
-        )));
+        );
 
         assert_eq!(
             mem_exec.properties().output_ordering().unwrap(),
