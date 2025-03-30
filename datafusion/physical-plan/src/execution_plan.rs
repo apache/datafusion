@@ -467,6 +467,13 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(None)
     }
+
+    fn push_down_filter(
+        &self,
+        _expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
 }
 
 /// [`ExecutionPlan`] Invariant Level

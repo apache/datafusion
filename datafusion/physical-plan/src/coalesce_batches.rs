@@ -32,6 +32,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExpr;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
 use crate::execution_plan::CardinalityEffect;
@@ -211,6 +212,20 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn push_down_filter(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // Try to push down to the input
+        if let Some(input) = self.input.push_down_filter(expr)? {
+            return Ok(Some(Arc::new(Self {
+                input,
+                ..self.clone()
+            })));
+        }
+        Ok(None)
     }
 }
 

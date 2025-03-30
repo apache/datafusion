@@ -29,3 +29,5 @@ mod pruning;
 mod limit_fuzz;
 mod sort_preserving_repartition_fuzz;
 mod window_fuzz;
+
+mod topk_filter_pushdown;

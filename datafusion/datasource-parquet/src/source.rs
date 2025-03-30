@@ -20,6 +20,8 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use crate::opener::build_page_pruning_predicate;
+use crate::opener::build_pruning_predicate;
 use crate::opener::ParquetOpener;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::DefaultParquetFileReaderFactory;
@@ -34,6 +36,7 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
@@ -41,7 +44,6 @@ use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion_physical_plan::DisplayFormatType;
 
 use itertools::Itertools;
-use log::debug;
 use object_store::ObjectStore;
 
 /// Execution plan for reading one or more Parquet files.
@@ -316,24 +318,10 @@ impl ParquetSource {
         conf = conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
 
-        match PruningPredicate::try_new(Arc::clone(&predicate), Arc::clone(&file_schema))
-        {
-            Ok(pruning_predicate) => {
-                if !pruning_predicate.always_true() {
-                    conf.pruning_predicate = Some(Arc::new(pruning_predicate));
-                }
-            }
-            Err(e) => {
-                debug!("Could not create pruning predicate for: {e}");
-                predicate_creation_errors.add(1);
-            }
-        };
-
-        let page_pruning_predicate = Arc::new(PagePruningAccessPlanFilter::new(
-            &predicate,
-            Arc::clone(&file_schema),
-        ));
-        conf.page_pruning_predicate = Some(page_pruning_predicate);
+        conf.page_pruning_predicate =
+            Some(build_page_pruning_predicate(&predicate, &file_schema));
+        conf.pruning_predicate =
+            build_pruning_predicate(predicate, &file_schema, &predicate_creation_errors);
 
         conf
     }
@@ -349,11 +337,13 @@ impl ParquetSource {
     }
 
     /// Optional reference to this parquet scan's pruning predicate
+    #[deprecated(note = "ParquetDataSource no longer constructs a PruningPredicate.")]
     pub fn pruning_predicate(&self) -> Option<&Arc<PruningPredicate>> {
         self.pruning_predicate.as_ref()
     }
 
     /// Optional reference to this parquet scan's page pruning predicate
+    #[deprecated(note = "ParquetDataSource no longer constructs a PruningPredicate.")]
     pub fn page_pruning_predicate(&self) -> Option<&Arc<PagePruningAccessPlanFilter>> {
         self.page_pruning_predicate.as_ref()
     }
@@ -488,8 +478,6 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
             predicate: self.predicate.clone(),
-            pruning_predicate: self.pruning_predicate.clone(),
-            page_pruning_predicate: self.page_pruning_predicate.clone(),
             table_schema: Arc::clone(&base_config.file_schema),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
@@ -537,11 +525,10 @@ impl FileSource for ParquetSource {
             .expect("projected_statistics must be set");
         // When filters are pushed down, we have no way of knowing the exact statistics.
         // Note that pruning predicate is also a kind of filter pushdown.
-        // (bloom filters use `pruning_predicate` too)
-        if self.pruning_predicate().is_some()
-            || self.page_pruning_predicate().is_some()
-            || (self.predicate().is_some() && self.pushdown_filters())
-        {
+        // (bloom filters use `pruning_predicate` too).
+        // Because filter pushdown may happen dynamically as long as there is a predicate
+        // if we have *any* predicate applied, we can't guarantee the statistics are exact.
+        if self.predicate().is_some() {
             Ok(statistics.to_inexact())
         } else {
             Ok(statistics)
@@ -559,6 +546,7 @@ impl FileSource for ParquetSource {
                     .predicate()
                     .map(|p| format!(", predicate={p}"))
                     .unwrap_or_default();
+                #[expect(deprecated)]
                 let pruning_predicate_string = self
                     .pruning_predicate()
                     .map(|pre| {
@@ -585,5 +573,19 @@ impl FileSource for ParquetSource {
                 Ok(())
             }
         }
+    }
+
+    fn push_down_filter(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
+        let mut conf = self.clone();
+        conf.predicate = match self.predicate.as_ref() {
+            Some(existing_predicate) => {
+                Some(conjunction([Arc::clone(existing_predicate), expr]))
+            }
+            None => Some(expr),
+        };
+        Ok(Some(Arc::new(conf)))
     }
 }

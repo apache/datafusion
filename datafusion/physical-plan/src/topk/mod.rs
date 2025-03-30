@@ -17,26 +17,33 @@
 
 //! TopK: Combination of Sort / LIMIT
 
+use std::mem::size_of;
+use std::sync::{Arc, RwLock};
+use std::{cmp::Ordering, collections::BinaryHeap};
+
+use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::datatypes::SchemaRef;
 use arrow::{
     compute::interleave,
     row::{RowConverter, Rows, SortField},
 };
-use std::mem::size_of;
-use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
-
-use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::spill::get_record_batch_memory_size;
-use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
-use arrow::array::{Array, ArrayRef, RecordBatch};
-use arrow::datatypes::SchemaRef;
-use datafusion_common::HashMap;
+use arrow_schema::SortOptions;
 use datafusion_common::Result;
+use datafusion_common::{internal_err, DataFusionError, HashMap};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
 };
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_expr::ColumnarValue;
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::{is_not_null, is_null, lit, BinaryExpr};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+
+use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::dynamic_filters::{DynamicFilterPhysicalExpr, DynamicFilterSource};
+use crate::spill::get_record_batch_memory_size;
+use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 
 /// Global TopK
 ///
@@ -90,6 +97,18 @@ pub struct TopK {
     scratch_rows: Rows,
     /// stores the top k values and their sort key values, in order
     heap: TopKHeap,
+    /// stores the current filters derived from this TopK that can be pushed down
+    filters: Option<Arc<TopKDynamicFilterSource>>,
+}
+
+impl std::fmt::Debug for TopK {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TopK")
+            .field("schema", &self.schema)
+            .field("batch_size", &self.batch_size)
+            .field("expr", &self.expr)
+            .finish()
+    }
 }
 
 impl TopK {
@@ -137,7 +156,24 @@ impl TopK {
             row_converter,
             scratch_rows,
             heap: TopKHeap::new(k, batch_size, schema),
+            filters: None,
         })
+    }
+
+    pub(crate) fn dynamic_filter_source(&mut self) -> Arc<dyn PhysicalExpr> {
+        match self.filters {
+            Some(ref filters) => filters.as_dynamic_physical_expr(),
+            None => {
+                let children = self
+                    .expr
+                    .iter()
+                    .map(|e| Arc::clone(&e.expr))
+                    .collect::<Vec<_>>();
+                let filters = Arc::new(TopKDynamicFilterSource::new(children));
+                self.filters = Some(Arc::clone(&filters));
+                filters.as_dynamic_physical_expr()
+            }
+        }
     }
 
     /// Insert `batch`, remembering if any of its values are among
@@ -164,6 +200,7 @@ impl TopK {
         // Idea: filter out rows >= self.heap.max() early (before passing to `RowConverter`)
         //       this avoids some work and also might be better vectorizable.
         let mut batch_entry = self.heap.register_batch(batch);
+        let mut need_to_update_dynamic_filters = false;
         for (index, row) in rows.iter().enumerate() {
             match self.heap.max() {
                 // heap has k items, and the new row is greater than the
@@ -173,10 +210,22 @@ impl TopK {
                 None | Some(_) => {
                     self.heap.add(&mut batch_entry, row, index);
                     self.metrics.row_replacements.add(1);
+                    need_to_update_dynamic_filters = true;
                 }
             }
         }
         self.heap.insert_batch_entry(batch_entry);
+
+        if need_to_update_dynamic_filters {
+            if let Some(filters) = self.filters.as_ref() {
+                if let Some(threasholds) = self.heap.get_threshold_values(&self.expr)? {
+                    if let Some(predicate) = Self::calculate_dynamic_filters(threasholds)?
+                    {
+                        filters.update_filters(predicate)?;
+                    }
+                }
+            }
+        }
 
         // conserve memory
         self.heap.maybe_compact()?;
@@ -184,6 +233,90 @@ impl TopK {
         // update memory reservation
         self.reservation.try_resize(self.size())?;
         Ok(())
+    }
+
+    fn calculate_dynamic_filters(
+        thresholds: Vec<ColumnThreshold>,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        // Create filter expressions for each threshold
+        let mut filters: Vec<Arc<dyn PhysicalExpr>> =
+            Vec::with_capacity(thresholds.len());
+
+        let mut prev_sort_expr: Option<Arc<dyn PhysicalExpr>> = None;
+        for threshold in thresholds {
+            // Create the appropriate operator based on sort order
+            let op = if threshold.sort_options.descending {
+                // For descending sort, we want col > threshold (exclude smaller values)
+                Operator::Gt
+            } else {
+                // For ascending sort, we want col < threshold (exclude larger values)
+                Operator::Lt
+            };
+
+            let value_null = threshold.value.is_null();
+
+            let comparison = Arc::new(BinaryExpr::new(
+                Arc::clone(&threshold.expr),
+                op,
+                lit(threshold.value.clone()),
+            ));
+
+            let comparison_with_null =
+                match (threshold.sort_options.nulls_first, value_null) {
+                    // For nulls first, transform to (threshold.value is not null) and (threshold.expr is null or comparison)
+                    (true, true) => lit(false),
+                    (true, false) => Arc::new(BinaryExpr::new(
+                        is_null(Arc::clone(&threshold.expr))?,
+                        Operator::Or,
+                        comparison,
+                    )),
+                    // For nulls last, transform to (threshold.value is null and threshold.expr is not null)
+                    // or (threshold.value is not null and comparison)
+                    (false, true) => is_not_null(Arc::clone(&threshold.expr))?,
+                    (false, false) => comparison,
+                };
+
+            let mut eq_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(&threshold.expr),
+                Operator::Eq,
+                lit(threshold.value.clone()),
+            ));
+
+            if value_null {
+                eq_expr = Arc::new(BinaryExpr::new(
+                    is_null(Arc::clone(&threshold.expr))?,
+                    Operator::Or,
+                    eq_expr,
+                ));
+            }
+
+            // For a query like order by a, b, the filter for column `b` is only applied if
+            // the condition a = threshold.value (considering null equality) is met.
+            // Therefore, we add equality predicates for all preceding fields to the filter logic of the current field,
+            // and include the current field's equality predicate in `prev_sort_expr` for use with subsequent fields.
+            match prev_sort_expr.take() {
+                None => {
+                    prev_sort_expr = Some(eq_expr);
+                    filters.push(comparison_with_null);
+                }
+                Some(p) => {
+                    filters.push(Arc::new(BinaryExpr::new(
+                        Arc::clone(&p),
+                        Operator::And,
+                        comparison_with_null,
+                    )));
+
+                    prev_sort_expr =
+                        Some(Arc::new(BinaryExpr::new(p, Operator::And, eq_expr)));
+                }
+            }
+        }
+
+        let dynamic_predicate = filters
+            .into_iter()
+            .reduce(|a, b| Arc::new(BinaryExpr::new(a, Operator::Or, b)));
+
+        Ok(dynamic_predicate)
     }
 
     /// Returns the top k results broken into `batch_size` [`RecordBatch`]es, consuming the heap
@@ -197,6 +330,7 @@ impl TopK {
             row_converter: _,
             scratch_rows: _,
             mut heap,
+            filters: _,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
@@ -270,8 +404,18 @@ struct TopKHeap {
     owned_bytes: usize,
 }
 
+/// Holds threshold value and sort order information for a column
+struct ColumnThreshold {
+    /// The column expression
+    pub expr: Arc<dyn PhysicalExpr>,
+    /// The threshold value
+    pub value: datafusion_common::ScalarValue,
+    /// Sort options
+    pub sort_options: SortOptions,
+}
+
 impl TopKHeap {
-    fn new(k: usize, batch_size: usize, schema: SchemaRef) -> Self {
+    pub fn new(k: usize, batch_size: usize, schema: SchemaRef) -> Self {
         assert!(k > 0);
         Self {
             k,
@@ -280,6 +424,54 @@ impl TopKHeap {
             store: RecordBatchStore::new(schema),
             owned_bytes: 0,
         }
+    }
+
+    /// Get threshold values for all columns in the given sort expressions.
+    /// If the heap does not yet have k items, returns None.
+    /// Otherwise, returns the threshold values from the max row in the heap.
+    pub fn get_threshold_values(
+        &self,
+        sort_exprs: &[PhysicalSortExpr],
+    ) -> Result<Option<Vec<ColumnThreshold>>> {
+        // If the heap doesn't have k elements yet, we can't create thresholds
+        let max_row = match self.max() {
+            Some(row) => row,
+            None => return Ok(None),
+        };
+
+        // Get the batch that contains the max row
+        let batch_entry = match self.store.get(max_row.batch_id) {
+            Some(entry) => entry,
+            None => return internal_err!("Invalid batch ID in TopKRow"),
+        };
+
+        // Extract threshold values for each sort expression
+        let mut thresholds = Vec::with_capacity(sort_exprs.len());
+        for sort_expr in sort_exprs {
+            // Extract the value for this column from the max row
+            let expr = Arc::clone(&sort_expr.expr);
+            let value = expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
+
+            // Convert to scalar value - should be a single value since we're evaluating on a single row batch
+            let scalar = match value {
+                ColumnarValue::Scalar(scalar) => scalar,
+                ColumnarValue::Array(array) if array.len() == 1 => {
+                    // Extract the first (and only) value from the array
+                    datafusion_common::ScalarValue::try_from_array(&array, 0)?
+                }
+                array => {
+                    return internal_err!("Expected a scalar value, got {:?}", array)
+                }
+            };
+
+            thresholds.push(ColumnThreshold {
+                expr,
+                value: scalar,
+                sort_options: sort_expr.options,
+            });
+        }
+
+        Ok(Some(thresholds))
     }
 
     /// Register a [`RecordBatch`] with the heap, returning the
@@ -297,7 +489,7 @@ impl TopKHeap {
     /// Returns the largest value stored by the heap if there are k
     /// items, otherwise returns None. Remember this structure is
     /// keeping the "smallest" k values
-    fn max(&self) -> Option<&TopKRow> {
+    pub fn max(&self) -> Option<&TopKRow> {
         if self.inner.len() < self.k {
             None
         } else {
@@ -509,7 +701,7 @@ impl TopKRow {
     }
 
     /// Returns a slice to the owned row value
-    fn row(&self) -> &[u8] {
+    pub fn row(&self) -> &[u8] {
         self.row.as_slice()
     }
 }
@@ -529,7 +721,7 @@ impl Ord for TopKRow {
 }
 
 #[derive(Debug)]
-struct RecordBatchEntry {
+pub struct RecordBatchEntry {
     id: u32,
     batch: RecordBatch,
     // for this batch, how many times has it been used
@@ -644,10 +836,101 @@ impl RecordBatchStore {
     }
 }
 
+/// Pushdown of dynamic fitlers from TopK operators is used to speed up queries
+/// such as `SELECT * FROM table ORDER BY col DESC LIMIT 10` by pushing down the
+/// threshold values for the sort columns to the data source.
+/// That is, the TopK operator will keep track of the top 10 values for the sort
+/// and before a new file is opened it's statitics will be checked against the
+/// threshold values to determine if the file can be skipped and predicate pushdown
+/// will use these to skip rows during the scan.
+///
+/// For example, imagine this data gets created if multiple sources with clock skews,
+/// network delays, etc. are writing data and you don't do anything fancy to guarantee
+/// perfect sorting by `timestamp` (i.e. you naively write out the data to Parquet, maybe do some compaction, etc.).
+/// The point is that 99% of yesterday's files have a `timestamp` smaller than 99% of today's files
+/// but there may be a couple seconds of overlap between files.
+/// To be concrete, let's say this is our data:
+//
+// | file | min | max |
+// |------|-----|-----|
+// | 1    | 1   | 10  |
+// | 2    | 9   | 19  |
+// | 3    | 20  | 31  |
+// | 4    | 30  | 35  |
+//
+// Ideally a [`TableProvider`] is able to use file level stats or other methods to roughly order the files
+// within each partition / file group such that we start with the newest / largest `timestamp`s.
+// If this is not possible the optimization still works but is less efficient and harder to visualize,
+// so for this example let's assume that we process 1 file at a time and we started with file 4.
+// After processing file 4 let's say we have 10 values in our TopK heap, the smallest of which is 30.
+// The TopK operator will then push down the filter `timestamp < 30` down the tree of [`ExecutionPlan`]s
+// and if the data source supports dynamic filter pushdown it will accept a reference to this [`DynamicPhysicalExprSource`]
+// and when it goes to open file 3 it will ask the [`DynamicPhysicalExprSource`] for the current filters.
+// Since file 3 may contain values larger than 30 we cannot skip it entirely,
+// but scanning it may still be more efficient due to page pruning and other optimizations.
+// Once we get to file 2 however we can skip it entirely because we know that all values in file 2 are smaller than 30.
+// The same goes for file 1.
+// So this optimization just saved us 50% of the work of scanning the data.
+#[derive(Debug, Clone)]
+struct TopKDynamicFilterSource {
+    /// The children of the dynamic filters produced by this TopK.
+    /// In particular, this is the columns that are being sorted, derived from the sorting expressions.
+    children: Vec<Arc<dyn PhysicalExpr>>,
+    /// The current filters derived from this TopK
+    predicate: Arc<RwLock<Arc<dyn PhysicalExpr>>>,
+}
+
+impl TopKDynamicFilterSource {
+    fn new(children: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        Self {
+            children,
+            predicate: Arc::new(RwLock::new(lit(true))),
+        }
+    }
+
+    fn update_filters(&self, predicate: Arc<dyn PhysicalExpr>) -> Result<()> {
+        let mut current_predicate = self.predicate.write().map_err(|_| {
+            DataFusionError::Internal(
+                "Failed to acquire write lock on TopKDynamicPhysicalExprSource"
+                    .to_string(),
+            )
+        })?;
+        *current_predicate = predicate;
+        Ok(())
+    }
+}
+
+impl TopKDynamicFilterSource {
+    fn as_dynamic_physical_expr(&self) -> Arc<dyn PhysicalExpr> {
+        let new = self.clone();
+        // Transform the sort expresions into referenced columns
+        let children = self.children.clone();
+        Arc::new(DynamicFilterPhysicalExpr::new(children, Arc::new(new)))
+    }
+}
+
+impl DynamicFilterSource for TopKDynamicFilterSource {
+    fn snapshot_current_filters(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+        let predicate = self
+            .predicate
+            .read()
+            .map_err(|_| {
+                DataFusionError::Internal(
+                    "Failed to acquire read lock on TopKDynamicPhysicalExprSource"
+                        .to_string(),
+                )
+            })?
+            .clone();
+        Ok(vec![predicate])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expressions::col;
     use arrow::array::{Float64Array, Int32Array, RecordBatch};
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
 
     /// This test ensures the size calculation is correct for RecordBatches with multiple columns.
@@ -680,5 +963,66 @@ mod tests {
         // when unuse record batch entry
         record_batch_store.unuse(0);
         assert_eq!(record_batch_store.batches_size, 0);
+    }
+
+    #[test]
+    fn test_topk_as_dynamic_filter_source() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col1", DataType::Int32, true),
+            Field::new("col2", DataType::Float64, false),
+        ]));
+
+        let runtime = Arc::new(RuntimeEnv::default());
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        // Create a TopK with descending sort on col2
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: Arc::new(datafusion_physical_expr::expressions::Column::new(
+                "col2", 1,
+            )),
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        }];
+
+        let mut topk = TopK::try_new(
+            0,
+            Arc::clone(&schema),
+            sort_expr.into(),
+            5,   // k=5
+            100, // batch_size
+            runtime,
+            &metrics,
+        )
+        .unwrap();
+
+        // Initially there should be no filters (empty heap)
+        let filter = topk.dynamic_filter_source().snapshot().unwrap().unwrap();
+        assert!(filter.eq(&lit(true)), "{filter:?}");
+
+        // Insert some data to fill the heap
+        let col1 = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let col2 =
+            Float64Array::from(vec![10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(col1), Arc::new(col2)],
+        )
+        .unwrap();
+
+        // Insert the data into TopK
+        topk.insert_batch(batch).unwrap();
+
+        // Now there should be a filter
+        let filter = topk.dynamic_filter_source().snapshot().unwrap().unwrap();
+
+        // We expect a filter for col2 > 6.0 (since we're doing descending sort and have 5 values)
+        let expected = Arc::new(BinaryExpr::new(
+            col("col2", &schema).unwrap(),
+            Operator::Gt,
+            lit(6.0),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(filter.eq(&expected), "{filter:?}");
     }
 }

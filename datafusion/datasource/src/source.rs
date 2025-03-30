@@ -33,7 +33,7 @@ use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Common behaviors in Data Sources for both from Files and Memory.
@@ -79,6 +79,13 @@ pub trait DataSource: Send + Sync + Debug {
         &self,
         _projection: &ProjectionExec,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>>;
+
+    fn push_down_filter(
+        &self,
+        _expr: Arc<dyn PhysicalExpr>,
+    ) -> datafusion_common::Result<Option<Arc<dyn DataSource>>> {
+        Ok(None)
+    }
 }
 
 /// [`ExecutionPlan`] handles different file formats like JSON, CSV, AVRO, ARROW, PARQUET
@@ -191,6 +198,20 @@ impl ExecutionPlan for DataSourceExec {
         projection: &ProjectionExec,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         self.data_source.try_swapping_with_projection(projection)
+    }
+
+    fn push_down_filter(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
+        // Try to push down to the data source
+        if let Some(data_source) = self.data_source.push_down_filter(expr)? {
+            return Ok(Some(Arc::new(Self {
+                data_source,
+                ..self.clone()
+            })));
+        }
+        Ok(None)
     }
 }
 

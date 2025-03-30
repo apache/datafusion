@@ -40,7 +40,9 @@ use datafusion_common::{
 use datafusion_common::{Column, DFSchema};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
-use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
+use datafusion_physical_expr::{
+    expressions as phys_expr, snasphot_physical_expr, PhysicalExprRef,
+};
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
 /// A source of runtime statistical information to [`PruningPredicate`]s.
@@ -527,6 +529,7 @@ impl PruningPredicate {
     /// See the struct level documentation on [`PruningPredicate`] for more
     /// details.
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+        let expr = snasphot_physical_expr(expr)?;
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
 
         // build predicate expression once

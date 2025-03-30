@@ -57,7 +57,7 @@ use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::{StreamExt, TryStreamExt};
@@ -1197,35 +1197,55 @@ impl ExecutionPlan for SortExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        let mut input = self.input.execute(partition, Arc::clone(&context))?;
-
-        let execution_options = &context.session_config().options().execution;
-
-        trace!("End SortExec's input.execute for partition: {}", partition);
-
         let sort_satisfied = self
             .input
             .equivalence_properties()
             .ordering_satisfy_requirement(&LexRequirement::from(self.expr.clone()));
 
+        let input_exec = Arc::clone(&self.input);
+
+        let execution_options = &context.session_config().options().execution;
+
+        trace!("End SortExec's input.execute for partition: {}", partition);
+
         match (sort_satisfied, self.fetch.as_ref()) {
-            (true, Some(fetch)) => Ok(Box::pin(LimitStream::new(
-                input,
-                0,
-                Some(*fetch),
-                BaselineMetrics::new(&self.metrics_set, partition),
-            ))),
-            (true, None) => Ok(input),
+            (true, Some(fetch)) => {
+                let input = input_exec.execute(partition, Arc::clone(&context))?;
+                Ok(Box::pin(LimitStream::new(
+                    input,
+                    0,
+                    Some(*fetch),
+                    BaselineMetrics::new(&self.metrics_set, partition),
+                )))
+            }
+            (true, None) => self.input.execute(partition, Arc::clone(&context)),
             (false, Some(fetch)) => {
+                let schema = input_exec.schema();
                 let mut topk = TopK::try_new(
                     partition,
-                    input.schema(),
+                    schema,
                     self.expr.clone(),
                     *fetch,
                     context.session_config().batch_size(),
                     context.runtime_env(),
                     &self.metrics_set,
                 )?;
+                let input_exec = if context
+                    .session_config()
+                    .options()
+                    .optimizer
+                    .enable_dynamic_filter_pushdown
+                {
+                    // Try to push down the dynamic filter. If the execution plan doesn't
+                    // support it, push_down_filter will return None and we'll
+                    // keep the original input_exec.
+                    input_exec
+                        .push_down_filter(topk.dynamic_filter_source())?
+                        .unwrap_or(input_exec)
+                } else {
+                    input_exec
+                };
+                let mut input = input_exec.execute(partition, Arc::clone(&context))?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
@@ -1239,6 +1259,7 @@ impl ExecutionPlan for SortExec {
                 )))
             }
             (false, None) => {
+                let mut input = input_exec.execute(partition, Arc::clone(&context))?;
                 let mut sorter = ExternalSorter::new(
                     partition,
                     input.schema(),
@@ -1318,6 +1339,28 @@ impl ExecutionPlan for SortExec {
                 .with_fetch(self.fetch())
                 .with_preserve_partitioning(self.preserve_partitioning()),
         )))
+    }
+
+    // Pass though filter pushdown.
+    // This often happens in partitioned plans with a TopK because we end up with 1 TopK per partition + a final TopK at the end.
+    // Implementing this pass-through allows global/top/final TopK to push down filters to the partitions.
+    fn push_down_filter(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let new_input = self.input.push_down_filter(expr)?;
+        if let Some(new_input) = new_input {
+            Ok(Some(Arc::new(SortExec {
+                input: new_input,
+                expr: self.expr.clone(),
+                metrics_set: self.metrics_set.clone(),
+                preserve_partitioning: self.preserve_partitioning,
+                fetch: self.fetch,
+                cache: self.cache.clone(),
+            })))
+        } else {
+            Ok(None)
+        }
     }
 }
 

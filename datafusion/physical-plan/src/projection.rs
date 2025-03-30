@@ -271,6 +271,20 @@ impl ExecutionPlan for ProjectionExec {
             Ok(Some(Arc::new(projection.clone())))
         }
     }
+
+    fn push_down_filter(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // Try to push down to the input
+        if let Some(input) = self.input.push_down_filter(expr)? {
+            return Ok(Some(Arc::new(Self {
+                input,
+                ..self.clone()
+            })));
+        }
+        Ok(None)
+    }
 }
 
 /// If 'e' is a direct column reference, returns the field level

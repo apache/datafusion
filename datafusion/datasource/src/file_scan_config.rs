@@ -37,7 +37,7 @@ use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
 use datafusion_physical_expr::{
-    expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
+    expressions::Column, EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr,
     PhysicalSortExpr,
 };
 use datafusion_physical_plan::{
@@ -583,6 +583,20 @@ impl DataSource for FileScanConfig {
                     .build(),
             ) as _
         }))
+    }
+
+    fn push_down_filter(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        // Try to push down to the file source
+        if let Some(file_source) = self.file_source.push_down_filter(expr)? {
+            return Ok(Some(Arc::new(Self {
+                file_source,
+                ..self.clone()
+            })));
+        }
+        Ok(None)
     }
 }
 

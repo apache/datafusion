@@ -59,7 +59,9 @@ pub use physical_expr::{
     PhysicalExprRef,
 };
 
-pub use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+pub use datafusion_physical_expr_common::physical_expr::{
+    snasphot_physical_expr, PhysicalExpr,
+};
 pub use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
 };
@@ -68,7 +70,7 @@ pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
 
 pub use datafusion_physical_expr_common::utils::reverse_order_bys;
-pub use utils::split_conjunction;
+pub use utils::{conjunction, split_conjunction};
 
 // For backwards compatibility
 pub mod tree_node {

@@ -50,8 +50,8 @@ use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AcrossPartitions, AnalysisContext, ConstExpr,
-    ExprBoundaries, PhysicalExpr,
+    analyze, conjunction, split_conjunction, AcrossPartitions, AnalysisContext,
+    ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -432,6 +432,22 @@ impl ExecutionPlan for FilterExec {
             }
         }
         try_embed_projection(projection, self)
+    }
+
+    fn push_down_filter(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut input = Arc::clone(&self.input);
+        if let Some(new_input) = input.push_down_filter(Arc::clone(&expr))? {
+            input = new_input;
+        }
+        let new_predicate = conjunction([Arc::clone(&self.predicate), expr]);
+        Ok(Some(Arc::new(Self {
+            input,
+            predicate: Arc::clone(&new_predicate),
+            ..self.clone()
+        })))
     }
 }
 
