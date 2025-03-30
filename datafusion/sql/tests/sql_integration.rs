@@ -1661,12 +1661,6 @@ fn select_simple_aggregate_with_groupby_aggregate_repeated() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_aggregate_repeated_and_one_has_alias() {
-    // quick_test(
-    //     "SELECT state, MIN(age), MIN(age) AS ma FROM person GROUP BY state",
-    //     "Projection: person.state, min(person.age), min(person.age) AS ma\
-    //          \n  Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]\
-    //          \n    TableScan: person",
-    // )
     let plan = generate_plan(
         "SELECT state, MIN(age), MIN(age) AS ma FROM person GROUP BY state",
     );
@@ -1682,12 +1676,6 @@ fn select_simple_aggregate_with_groupby_aggregate_repeated_and_one_has_alias() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_non_column_expression_unselected() {
-    // quick_test(
-    //     "SELECT MIN(first_name) FROM person GROUP BY age + 1",
-    //     "Projection: min(person.first_name)\
-    //          \n  Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]\
-    //          \n    TableScan: person",
-    // );
     let plan = generate_plan("SELECT MIN(first_name) FROM person GROUP BY age + 1");
     assert_snapshot!(
         plan,
@@ -1701,12 +1689,6 @@ fn select_simple_aggregate_with_groupby_non_column_expression_unselected() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resolvable() {
-    // quick_test(
-    //     "SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1",
-    //     "Projection: person.age + Int64(1), min(person.first_name)\
-    //          \n  Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]\
-    //          \n    TableScan: person",
-    // );
     let plan =
         generate_plan("SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1");
     assert_snapshot!(
@@ -1717,12 +1699,6 @@ fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resol
             TableScan: person
         "#
     );
-    // quick_test(
-    //     "SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1",
-    //     "Projection: min(person.first_name), person.age + Int64(1)\
-    //          \n  Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]\
-    //          \n    TableScan: person",
-    // );
     let plan =
         generate_plan("SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1");
     assert_snapshot!(
@@ -1737,12 +1713,6 @@ fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resol
 
 #[test]
 fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_resolvable() {
-    // quick_test(
-    //         "SELECT ((age + 1) / 2) * (age + 1), MIN(first_name) FROM person GROUP BY age + 1",
-    //         "Projection: person.age + Int64(1) / Int64(2) * person.age + Int64(1), min(person.first_name)\
-    //          \n  Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]\
-    //          \n    TableScan: person",
-    //     );
     let plan = generate_plan(
         "SELECT ((age + 1) / 2) * (age + 1), MIN(first_name) FROM person GROUP BY age + 1"
     );
@@ -2921,10 +2891,6 @@ fn quick_test_with_options(sql: &str, expected: &str, options: ParserOptions) {
     let plan: LogicalPlan = logical_plan_with_options(sql, options).unwrap();
     assert_eq!(format!("{plan}"), expected);
 }
-
-// fn generate_plan_with_options(sql: &str, options: ParserOptions) -> LogicalPlan {
-//     logical_plan_with_options(sql, options).unwrap()
-// }
 
 fn prepare_stmt_quick_test(
     sql: &str,
