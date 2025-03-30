@@ -82,18 +82,18 @@ CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph --root --bench sql_planner -- 
 
 [Video: how to CPU profile DataFusion with XCode Instruments](https://youtu.be/P3dXH61Kr5U)
 
-## Cross Platform
+## Profiling using Samply cross platform profiler
 
 There is an opportunity to build flamegraphs, call trees and stack charts on any platform using
 [Samply](https://github.com/mstange/samply)
 
-Install Samply
+Install Samply profiler
 
 ```shell
 cargo install --locked samply
 ```
 
-More [installation options](https://github.com/mstange/samply?tab=readme-ov-file#installation)
+More Samply [installation options](https://github.com/mstange/samply?tab=readme-ov-file#installation)
 
 Run the profiler
 
@@ -110,7 +110,7 @@ Note: `--profile profiling` to profile release optimized artifact with debug sym
 
 ```shell
 cargo build --profile profiling --bin tpch
-samply record ./target/debug/tpch benchmark datafusion --iterations 5 --path datafusion/benchmarks/data/tpch_sf10 --prefer_hash_join true --format parquet -o datafusion/benchmarks/results/dev2/tpch_sf10.json --query 22
+samply record ./target/profiling/tpch benchmark datafusion --iterations 5 --path datafusion/benchmarks/data/tpch_sf10 --prefer_hash_join true --format parquet -o datafusion/benchmarks/results/dev2/tpch_sf10.json --query 22
 ```
 
 After sampling has completed the Samply starts a local server and navigates to the profiler
