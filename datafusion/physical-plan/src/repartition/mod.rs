@@ -680,6 +680,10 @@ impl ExecutionPlan for RepartitionExec {
         self.input.statistics()
     }
 
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        todo!()
+    }
+
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
     }

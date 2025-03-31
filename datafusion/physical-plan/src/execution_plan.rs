@@ -427,6 +427,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(Statistics::new_unknown(&self.schema()))
     }
 
+    /// Returns statistics for each partition of this `ExecutionPlan` node.
+    /// If statistics are not available, returns an array of
+    /// [`Statistics::new_unknown`] for each partition.
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        Ok(vec![
+            Statistics::new_unknown(&self.schema());
+            self.properties().partitioning.partition_count()
+        ])
+    }
+
     /// Returns `true` if a limit can be safely pushed down through this
     /// `ExecutionPlan` node.
     ///
