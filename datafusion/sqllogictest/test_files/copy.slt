@@ -210,7 +210,7 @@ OPTIONS (execution.keep_partition_by_columns true);
 # validate generated file contains tables
 statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet4 STORED AS PARQUET
-LOCATION 'test_files/scratch/copy/partitioned_table4/column1=1/';
+LOCATION 'test_files/scratch/copy/partitioned_table4/column1=1/*.parquet';
 
 query TT
 select column1, column2 from validate_partitioned_parquet4 order by column1,column2;
