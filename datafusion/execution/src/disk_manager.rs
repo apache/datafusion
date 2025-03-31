@@ -17,13 +17,16 @@
 
 //! [`DiskManager`]: Manages files generated during query execution
 
-use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
+use datafusion_common::{config_err, resources_datafusion_err, DataFusionError, Result};
 use log::debug;
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use tempfile::{Builder, NamedTempFile, TempDir};
+
+const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 
 /// Configuration for temporary disk access
 #[derive(Debug, Clone)]
@@ -75,6 +78,12 @@ pub struct DiskManager {
     /// If `Some(vec![])` a new OS specified temporary directory will be created
     /// If `None` an error will be returned (configured not to spill)
     local_dirs: Mutex<Option<Vec<Arc<TempDir>>>>,
+    /// The maximum amount of data (in bytes) stored inside the temporary directories.
+    /// Default to 100GB
+    max_temp_directory_size: u64,
+    /// Used disk space in the temporary directories. Now only spilled data for
+    /// external executors are counted.
+    used_disk_space: Arc<AtomicU64>,
 }
 
 impl DiskManager {
@@ -84,6 +93,8 @@ impl DiskManager {
             DiskManagerConfig::Existing(manager) => Ok(manager),
             DiskManagerConfig::NewOs => Ok(Arc::new(Self {
                 local_dirs: Mutex::new(Some(vec![])),
+                max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+                used_disk_space: Arc::new(AtomicU64::new(0)),
             })),
             DiskManagerConfig::NewSpecified(conf_dirs) => {
                 let local_dirs = create_local_dirs(conf_dirs)?;
@@ -93,12 +104,32 @@ impl DiskManager {
                 );
                 Ok(Arc::new(Self {
                     local_dirs: Mutex::new(Some(local_dirs)),
+                    max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+                    used_disk_space: Arc::new(AtomicU64::new(0)),
                 }))
             }
             DiskManagerConfig::Disabled => Ok(Arc::new(Self {
                 local_dirs: Mutex::new(None),
+                max_temp_directory_size: DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+                used_disk_space: Arc::new(AtomicU64::new(0)),
             })),
         }
+    }
+
+    pub fn with_max_temp_directory_size(
+        mut self,
+        max_temp_directory_size: u64,
+    ) -> Result<Self> {
+        // If the disk manager is disabled and `max_temp_directory_size` is not 0,
+        // this operation is not meaningful, fail early.
+        if self.local_dirs.lock().is_none() && max_temp_directory_size != 0 {
+            return config_err!(
+                "Cannot set max temp directory size for a disk manager that spilling is disabled"
+            );
+        }
+
+        self.max_temp_directory_size = max_temp_directory_size;
+        Ok(self)
     }
 
     /// Return true if this disk manager supports creating temporary

@@ -44,11 +44,13 @@ use datafusion_common::{assert_contains, Result};
 use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
-use datafusion_execution::TaskContext;
+use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_execution::{DiskManager, TaskContext};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::collect as collect_batches;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use rand::Rng;
@@ -522,6 +524,86 @@ async fn test_external_sort_zero_merge_reservation() {
     let metrics = physical_plan.metrics().unwrap();
     let spill_count = metrics.spill_count().unwrap();
     assert!(spill_count > 0);
+}
+
+// Tests for disk limit (`max_temp_directory_size` in `DiskManager`)
+// ------------------------------------------------------------------
+
+// Create a new `SessionContext` with speicified disk limit and memory pool limit
+async fn setup_context(
+    disk_limit: u64,
+    memory_pool_limit: usize,
+) -> Result<SessionContext> {
+    let disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
+
+    let disk_manager = Arc::try_unwrap(disk_manager)
+        .expect("DiskManager should be a single instance")
+        .with_max_temp_directory_size(disk_limit)?;
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(memory_pool_limit)))
+        .build_arc()
+        .unwrap();
+
+    let runtime = Arc::new(RuntimeEnv {
+        memory_pool: runtime.memory_pool.clone(),
+        disk_manager: Arc::new(disk_manager),
+        cache_manager: runtime.cache_manager.clone(),
+        object_store_registry: runtime.object_store_registry.clone(),
+    });
+
+    let config = SessionConfig::new()
+        .with_sort_spill_reservation_bytes(10 * 1024 * 1024) // 10MB
+        .with_target_partitions(1);
+
+    Ok(SessionContext::new_with_config_rt(config, runtime))
+}
+
+/// If the spilled bytes exceed the disk limit, the query should fail
+/// (specified by `max_temp_directory_size` in `DiskManager`)
+#[tokio::test]
+async fn test_disk_spill_limit_reached() -> Result<()> {
+    let ctx = setup_context(100 * 1024 * 1024, 60 * 1024 * 1024).await?;
+
+    let df = ctx
+        .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1")
+        .await
+        .unwrap();
+
+    let err = df.collect().await.unwrap_err();
+    assert_contains!(
+    err.to_string(),
+    "The used disk space during the spilling process has exceeded the allowable limit"
+);
+
+    Ok(())
+}
+
+/// External query should succeed, if the spilled bytes is less than the disk limit
+#[tokio::test]
+async fn test_disk_spill_limit_not_reached() -> Result<()> {
+    let disk_spill_limit = 100 * 1024 * 1024; // 100MB
+    let ctx = setup_context(disk_spill_limit, 60 * 1024 * 1024).await?;
+
+    let df = ctx
+        .sql("select * from generate_series(1, 10000000) as t1(v1) order by v1")
+        .await
+        .unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+
+    let task_ctx = ctx.task_ctx();
+    let _ = collect_batches(Arc::clone(&plan), task_ctx)
+        .await
+        .expect("Query execution failed");
+
+    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
+    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+
+    println!("spill count {}, spill bytes {}", spill_count, spilled_bytes);
+    assert!(spill_count > 0);
+    assert!((spilled_bytes as u64) < disk_spill_limit);
+
+    Ok(())
 }
 
 /// Run the query with the specified memory limit,
