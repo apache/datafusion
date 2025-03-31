@@ -125,6 +125,32 @@ select count(*) from hits;
 1 row in set. Query took 0.344 seconds.
 ```
 
+**Why Wildcards Are Not Supported**
+
+Although wildcards (e.g., _.parquet or \*\*/_.parquet) may work for local filesystems in some cases, they are not officially supported by DataFusion. This is because wildcards are not universally applicable across all storage backends (e.g., S3, GCS). Instead, DataFusion expects the user to specify the directory path, and it will automatically read all compatible files within that directory.
+
+For example, the following usage is not supported:
+
+```sql
+CREATE EXTERNAL TABLE test (
+    message TEXT,
+    day DATE
+)
+STORED AS PARQUET
+LOCATION 'gs://bucket/*.parquet';
+```
+
+Instead, you should use:
+
+```sql
+CREATE EXTERNAL TABLE test (
+    message TEXT,
+    day DATE
+)
+STORED AS PARQUET
+LOCATION 'gs://bucket/';
+```
+
 # Formats
 
 ## Parquet
