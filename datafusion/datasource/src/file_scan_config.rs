@@ -864,10 +864,11 @@ impl FileScanConfig {
     /// files within each partition maintain sort order based on their min/max statistics.
     ///
     /// The algorithm works by:
-    /// 1. Sorting all files by their minimum values
-    /// 2. Trying to place each file into an existing group where it can maintain sort order
-    /// 3. Creating new groups when necessary if a file cannot fit into existing groups
-    /// 4. Prioritizing smaller groups when multiple suitable groups exist (for load balancing)
+    /// 1. Takes files sorted by minimum values
+    /// 2. For each file:
+    ///   - Finds eligible groups (empty or where file's min > group's last max)
+    ///   - Selects the smallest eligible group
+    ///   - Creates a new group if needed
     ///
     /// # Parameters
     /// * `table_schema`: Schema containing information about the columns
