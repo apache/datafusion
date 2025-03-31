@@ -95,8 +95,7 @@ additional configuration options.
 # `CREATE EXTERNAL TABLE`
 
 It is also possible to create a table backed by files or remote locations via
-`CREATE EXTERNAL TABLE` as shown below. Note that wildcards (e.g. `*`) are also
-supported
+`CREATE EXTERNAL TABLE` as shown below. Note that DataFusion does not support wildcards (e.g. `*`) in file paths; instead, specify the directory path directly to read all compatible files in that directory.
 
 For example, to create a table `hits` backed by a local parquet file, use:
 
@@ -147,14 +146,6 @@ parquet files and have compatible schemas
 CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/';
-```
-
-Register a single folder parquet datasource by specifying a wildcard for files to read
-
-```sql
-CREATE EXTERNAL TABLE taxi
-STORED AS PARQUET
-LOCATION '/mnt/nyctaxi/*.parquet';
 ```
 
 ## CSV

@@ -284,6 +284,11 @@ STORED AS PARQUET;
 statement ok
 CREATE EXTERNAL TABLE listing_table
 STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_table/';
+
+statement error DataFusion error: Object Store error: Object at location *.parquet not found
+CREATE EXTERNAL TABLE invalid_listing_table
+STORED AS PARQUET
 LOCATION 'test_files/scratch/parquet/test_table/*.parquet';
 
 statement ok
