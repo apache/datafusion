@@ -254,7 +254,6 @@ impl AggregateExprBuilder {
     /// .alias("first_a_by_x")
     /// .ignore_nulls()
     /// .build()
-    /// .expect("Built aggregate expression successfully");
     /// ```
     ///
     /// This creates a physical expression equivalent to SQL:
