@@ -25,10 +25,9 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::{
-    assert_batches_sorted_eq,
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig},
@@ -40,6 +39,7 @@ use datafusion::{
 };
 use datafusion_catalog::TableProvider;
 use datafusion_common::stats::Precision;
+use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::{col, lit, Expr, Operator};
@@ -49,6 +49,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::stream::{self, BoxStream};
+use insta::assert_snapshot;
 use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
     ObjectStore, PutOptions, PutResult,
@@ -85,27 +86,23 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
         Expr::gt(col("id"), lit(1)),
     ];
     let exec = table.scan(&ctx.state(), None, &filters, None).await?;
-    let data_source = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let source = data_source.source();
-    let file_source = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
-    let parquet_config = file_source
-        .file_source()
-        .as_any()
-        .downcast_ref::<ParquetSource>()
-        .unwrap();
-    let pred = parquet_config.predicate().unwrap();
-    // Only the last filter should be pushdown to TableScan
-    let expected = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
-        Operator::Gt,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-    ));
+    let data_source_exec = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    if let Some((_, parquet_config)) =
+        data_source_exec.downcast_to_file_source::<ParquetSource>()
+    {
+        let pred = parquet_config.predicate().unwrap();
+        // Only the last filter should be pushdown to TableScan
+        let expected = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        ));
 
-    assert!(pred.as_any().is::<BinaryExpr>());
-    let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
+        assert!(pred.as_any().is::<BinaryExpr>());
+        let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
 
-    assert_eq!(pred, expected.as_ref());
-
+        assert_eq!(pred, expected.as_ref());
+    }
     Ok(())
 }
 
@@ -142,16 +139,15 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+------+-------+-----+",
-        "| year | month | day |",
-        "+------+-------+-----+",
-        "| 2021 | 09    | 09  |",
-        "| 2021 | 10    | 09  |",
-        "| 2021 | 10    | 28  |",
-        "+------+-------+-----+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +------+-------+-----+
+    | year | month | day |
+    +------+-------+-----+
+    | 2021 | 09    | 09  |
+    | 2021 | 10    | 09  |
+    | 2021 | 10    | 28  |
+    +------+-------+-----+
+    ");
     //Test that the number of rows returned by partition column scan and actually reading the parquet file are the same
     let actual_row_count: usize = ctx
         .sql("SELECT id from t")
@@ -272,18 +268,17 @@ async fn csv_filter_with_file_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+----+----+",
-        "| c1 | c2 |",
-        "+----+----+",
-        "| a  | 1  |",
-        "| b  | 1  |",
-        "| b  | 5  |",
-        "| c  | 2  |",
-        "| d  | 5  |",
-        "+----+----+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +----+----+
+    | c1 | c2 |
+    +----+----+
+    | a  | 1  |
+    | b  | 1  |
+    | b  | 5  |
+    | c  | 2  |
+    | d  | 5  |
+    +----+----+
+    ");
 
     Ok(())
 }
@@ -310,18 +305,17 @@ async fn csv_filter_with_file_nonstring_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+----+----+------------+",
-        "| c1 | c2 | date       |",
-        "+----+----+------------+",
-        "| a  | 1  | 2021-10-28 |",
-        "| b  | 1  | 2021-10-28 |",
-        "| b  | 5  | 2021-10-28 |",
-        "| c  | 2  | 2021-10-28 |",
-        "| d  | 5  | 2021-10-28 |",
-        "+----+----+------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +----+----+------------+
+    | c1 | c2 | date       |
+    +----+----+------------+
+    | a  | 1  | 2021-10-28 |
+    | b  | 1  | 2021-10-28 |
+    | b  | 5  | 2021-10-28 |
+    | c  | 2  | 2021-10-28 |
+    | d  | 5  | 2021-10-28 |
+    +----+----+------------+
+    ");
 
     Ok(())
 }
@@ -348,18 +342,17 @@ async fn csv_projection_on_partition() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+----+------------+",
-        "| c1 | date       |",
-        "+----+------------+",
-        "| a  | 2021-10-27 |",
-        "| b  | 2021-10-27 |",
-        "| b  | 2021-10-27 |",
-        "| c  | 2021-10-27 |",
-        "| d  | 2021-10-27 |",
-        "+----+------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +----+------------+
+    | c1 | date       |
+    +----+------------+
+    | a  | 2021-10-27 |
+    | b  | 2021-10-27 |
+    | b  | 2021-10-27 |
+    | c  | 2021-10-27 |
+    | d  | 2021-10-27 |
+    +----+------------+
+    ");
 
     Ok(())
 }
@@ -387,15 +380,14 @@ async fn csv_grouping_by_partition() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+------------+----------+----------------------+",
-        "| date       | count(*) | count(DISTINCT t.c1) |",
-        "+------------+----------+----------------------+",
-        "| 2021-10-26 | 100      | 5                    |",
-        "| 2021-10-27 | 100      | 5                    |",
-        "+------------+----------+----------------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +------------+----------+----------------------+
+    | date       | count(*) | count(DISTINCT t.c1) |
+    +------------+----------+----------------------+
+    | 2021-10-26 | 100      | 5                    |
+    | 2021-10-27 | 100      | 5                    |
+    +------------+----------+----------------------+
+    ");
 
     Ok(())
 }
@@ -427,21 +419,20 @@ async fn parquet_multiple_partitions() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+----+-----+",
-        "| id | day |",
-        "+----+-----+",
-        "| 0  | 09  |",
-        "| 1  | 09  |",
-        "| 2  | 09  |",
-        "| 3  | 09  |",
-        "| 4  | 09  |",
-        "| 5  | 09  |",
-        "| 6  | 09  |",
-        "| 7  | 09  |",
-        "+----+-----+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +----+-----+
+    | id | day |
+    +----+-----+
+    | 0  | 09  |
+    | 1  | 09  |
+    | 2  | 09  |
+    | 3  | 09  |
+    | 4  | 09  |
+    | 5  | 09  |
+    | 6  | 09  |
+    | 7  | 09  |
+    +----+-----+
+    ");
 
     Ok(())
 }
@@ -473,21 +464,20 @@ async fn parquet_multiple_nonstring_partitions() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = [
-        "+----+-----+",
-        "| id | day |",
-        "+----+-----+",
-        "| 0  | 9   |",
-        "| 1  | 9   |",
-        "| 2  | 9   |",
-        "| 3  | 9   |",
-        "| 4  | 9   |",
-        "| 5  | 9   |",
-        "| 6  | 9   |",
-        "| 7  | 9   |",
-        "+----+-----+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +----+-----+
+    | id | day |
+    +----+-----+
+    | 0  | 9   |
+    | 1  | 9   |
+    | 2  | 9   |
+    | 3  | 9   |
+    | 4  | 9   |
+    | 5  | 9   |
+    | 6  | 9   |
+    | 7  | 9   |
+    +----+-----+
+    ");
 
     Ok(())
 }

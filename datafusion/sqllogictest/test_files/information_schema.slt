@@ -218,6 +218,7 @@ datafusion.execution.parquet.schema_force_view_types true
 datafusion.execution.parquet.skip_arrow_metadata false
 datafusion.execution.parquet.skip_metadata true
 datafusion.execution.parquet.statistics_enabled page
+datafusion.execution.parquet.statistics_truncate_length NULL
 datafusion.execution.parquet.write_batch_size 1024
 datafusion.execution.parquet.writer_version 1.0
 datafusion.execution.planning_concurrency 13
@@ -231,6 +232,7 @@ datafusion.execution.split_file_groups_by_statistics false
 datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false
+datafusion.explain.format indent
 datafusion.explain.logical_plan_only false
 datafusion.explain.physical_plan_only false
 datafusion.explain.show_schema false
@@ -261,7 +263,9 @@ datafusion.sql_parser.collect_spans false
 datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
 datafusion.sql_parser.enable_options_value_normalization false
+datafusion.sql_parser.map_varchar_to_utf8view false
 datafusion.sql_parser.parse_float_as_decimal false
+datafusion.sql_parser.recursion_limit 50
 datafusion.sql_parser.support_varchar_with_length true
 
 # show all variables with verbose
@@ -313,6 +317,7 @@ datafusion.execution.parquet.schema_force_view_types true (reading) If true, par
 datafusion.execution.parquet.skip_arrow_metadata false (writing) Skip encoding the embedded arrow metadata in the KV_meta This is analogous to the `ArrowWriterOptions::with_skip_arrow_metadata`. Refer to <https://docs.rs/parquet/53.3.0/parquet/arrow/arrow_writer/struct.ArrowWriterOptions.html#method.with_skip_arrow_metadata>
 datafusion.execution.parquet.skip_metadata true (reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata
 datafusion.execution.parquet.statistics_enabled page (writing) Sets if statistics are enabled for any column Valid values are: "none", "chunk", and "page" These values are not case sensitive. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.statistics_truncate_length NULL (writing) Sets statictics truncate length. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.write_batch_size 1024 (writing) Sets write_batch_size in bytes
 datafusion.execution.parquet.writer_version 1.0 (writing) Sets parquet writer version valid values are "1.0" and "2.0"
 datafusion.execution.planning_concurrency 13 Fan-out during initial physical planning. This is mostly use to plan `UNION` children in parallel. Defaults to the number of CPU cores on the system
@@ -326,6 +331,7 @@ datafusion.execution.split_file_groups_by_statistics false Attempt to eliminate 
 datafusion.execution.target_partitions 7 Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system
 datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false Should DataFusion use row number estimates at the input to decide whether increasing parallelism is beneficial or not. By default, only exact row numbers (not estimates) are used for this decision. Setting this flag to `true` will likely produce better plans. if the source of statistics is accurate. We plan to make this the default in the future.
+datafusion.explain.format indent Display format of explain. Default is "indent". When set to "tree", it will print the plan in a tree-rendered format.
 datafusion.explain.logical_plan_only false When set to true, the explain statement will only print logical plans
 datafusion.explain.physical_plan_only false When set to true, the explain statement will only print physical plans
 datafusion.explain.show_schema false When set to true, the explain statement will print schema information
@@ -352,11 +358,13 @@ datafusion.optimizer.repartition_sorts true Should DataFusion execute sorts in a
 datafusion.optimizer.repartition_windows true Should DataFusion repartition data using the partitions keys to execute window functions in parallel using the provided `target_partitions` level
 datafusion.optimizer.skip_failed_rules false When set to true, the logical plan optimizer will produce warning messages if any optimization rules produce errors and then proceed to the next rule. When set to false, any rules that produce errors will cause the query to fail
 datafusion.optimizer.top_down_join_key_reordering true When set to true, the physical plan optimizer will run a top down process to reorder the join keys
-datafusion.sql_parser.collect_spans false When set to true, the source locations relative to the original SQL query (i.e. [`Span`](sqlparser::tokenizer::Span)) will be collected and recorded in the logical plan nodes.
-datafusion.sql_parser.dialect generic Configure the SQL dialect used by DataFusion's parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
+datafusion.sql_parser.collect_spans false When set to true, the source locations relative to the original SQL query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected and recorded in the logical plan nodes.
+datafusion.sql_parser.dialect generic Configure the SQL dialect used by DataFusion's parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
 datafusion.sql_parser.enable_ident_normalization true When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
 datafusion.sql_parser.enable_options_value_normalization false When set to true, SQL parser will normalize options value (convert value to lowercase). Note that this option is ignored and will be removed in the future. All case-insensitive values are normalized automatically.
+datafusion.sql_parser.map_varchar_to_utf8view false If true, `VARCHAR` is mapped to `Utf8View` during SQL planning. If false, `VARCHAR` is mapped to `Utf8`  during SQL planning. Default is false.
 datafusion.sql_parser.parse_float_as_decimal false When set to true, SQL parser will parse float as decimal type
+datafusion.sql_parser.recursion_limit 50 Specifies the recursion depth limit when parsing complex SQL Queries
 datafusion.sql_parser.support_varchar_with_length true If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but ignore the length. If false, error if a `VARCHAR` with a length is specified. The Arrow type system does not have a notion of maximum string length and thus DataFusion can not enforce such limits.
 
 # show_variable_in_config_options

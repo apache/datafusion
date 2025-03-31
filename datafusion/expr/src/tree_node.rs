@@ -67,6 +67,8 @@ impl TreeNode for Expr {
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 lists_of_exprs.apply_elements(f)
             }
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
@@ -113,6 +115,8 @@ impl TreeNode for Expr {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
             Expr::Column(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(Placeholder { .. })
@@ -128,7 +132,10 @@ impl TreeNode for Expr {
                 expr,
                 relation,
                 name,
-            }) => f(*expr)?.update_data(|e| e.alias_qualified(relation, name)),
+                metadata,
+            }) => f(*expr)?.update_data(|e| {
+                e.alias_qualified_with_metadata(relation, name, metadata)
+            }),
             Expr::InSubquery(InSubquery {
                 expr,
                 subquery,

@@ -18,6 +18,37 @@
 # under the License.
 #
 
+# Check that required dependencies are installed
+check_dependencies() {
+  local missing_deps=0
+  local required_deps=("curl" "git" "gpg" "cc" "protoc")
+  
+  # Either shasum or sha256sum/sha512sum are required
+  local has_sha_tools=0
+
+  for dep in "${required_deps[@]}"; do
+    if ! command -v $dep &> /dev/null; then
+      echo "Error: $dep is not installed or not in PATH"
+      missing_deps=1
+    fi
+  done
+  
+  # Check for either shasum or sha256sum/sha512sum
+  if command -v shasum &> /dev/null; then
+    has_sha_tools=1
+  elif command -v sha256sum &> /dev/null && command -v sha512sum &> /dev/null; then
+    has_sha_tools=1
+  else
+    echo "Error: Neither shasum nor sha256sum/sha512sum are installed or in PATH"
+    missing_deps=1
+  fi
+  
+  if [ $missing_deps -ne 0 ]; then
+    echo "Please install missing dependencies and try again"
+    exit 1
+  fi
+}
+
 case $# in
   2) VERSION="$1"
      RC_NUMBER="$2"
@@ -30,6 +61,9 @@ esac
 set -e
 set -x
 set -o pipefail
+
+# Add the dependency check early in the script execution
+check_dependencies
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ARROW_DIR="$(dirname $(dirname ${SOURCE_DIR}))"
@@ -117,8 +151,11 @@ test_source_distribution() {
 
   # build and test rust
 
+  # install the needed version of rust defined in rust-toolchain.toml
+  rustup toolchain install
+
   # raises on any formatting errors
-  rustup component add rustfmt --toolchain stable
+  rustup component add rustfmt
   cargo fmt --all -- --check
 
   # Clone testing repositories into the expected location

@@ -24,18 +24,18 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use crate::common::{spawn_buffered, IPCWriter};
+use crate::common::spawn_buffered;
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
 };
 use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
-use crate::spill::{
-    get_record_batch_memory_size, read_spill_as_stream, spill_record_batches,
-};
+use crate::spill::get_record_batch_memory_size;
+use crate::spill::in_progress_spill_file::InProgressSpillFile;
+use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
@@ -44,11 +44,15 @@ use crate::{
     Statistics,
 };
 
-use arrow::array::{Array, RecordBatch, RecordBatchOptions, UInt32Array};
+use arrow::array::{
+    Array, RecordBatch, RecordBatchOptions, StringViewArray, UInt32Array,
+};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
 use arrow::datatypes::{DataType, SchemaRef};
-use arrow::row::{RowConverter, SortField};
-use datafusion_common::{internal_err, Result};
+use arrow::row::{RowConverter, Rows, SortField};
+use datafusion_common::{
+    exec_datafusion_err, internal_datafusion_err, internal_err, Result,
+};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -63,23 +67,14 @@ struct ExternalSorterMetrics {
     /// metrics
     baseline: BaselineMetrics,
 
-    /// count of spills during the execution of the operator
-    spill_count: Count,
-
-    /// total spilled bytes during the execution of the operator
-    spilled_bytes: Count,
-
-    /// total spilled rows during the execution of the operator
-    spilled_rows: Count,
+    spill_metrics: SpillMetrics,
 }
 
 impl ExternalSorterMetrics {
     fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
         Self {
             baseline: BaselineMetrics::new(metrics, partition),
-            spill_count: MetricBuilder::new(metrics).spill_count(partition),
-            spilled_bytes: MetricBuilder::new(metrics).spilled_bytes(partition),
-            spilled_rows: MetricBuilder::new(metrics).spilled_rows(partition),
+            spill_metrics: SpillMetrics::new(metrics, partition),
         }
     }
 }
@@ -210,6 +205,8 @@ struct ExternalSorter {
     schema: SchemaRef,
     /// Sort expressions
     expr: Arc<[PhysicalSortExpr]>,
+    /// RowConverter corresponding to the sort expressions
+    sort_keys_row_converter: Arc<RowConverter>,
     /// If Some, the maximum number of output rows that will be produced
     fetch: Option<usize>,
     /// The target number of rows for output batches
@@ -223,14 +220,17 @@ struct ExternalSorter {
     // STATE BUFFERS:
     // Fields that hold intermediate data during sorting
     // ========================================================================
-    /// Potentially unsorted in memory buffer
+    /// Unsorted input batches stored in the memory buffer
     in_mem_batches: Vec<RecordBatch>,
-    /// if `Self::in_mem_batches` are sorted
-    in_mem_batches_sorted: bool,
 
-    /// If data has previously been spilled, the locations of the
-    /// spill files (in Arrow IPC format)
-    spills: Vec<RefCountedTempFile>,
+    /// During external sorting, in-memory intermediate data will be appended to
+    /// this file incrementally. Once finished, this file will be moved to [`Self::finished_spill_files`].
+    in_progress_spill_file: Option<InProgressSpillFile>,
+    /// If data has previously been spilled, the locations of the spill files (in
+    /// Arrow IPC format)
+    /// Within the same spill file, the data might be chunked into multiple batches,
+    /// and ordered by sort keys.
+    finished_spill_files: Vec<RefCountedTempFile>,
 
     // ========================================================================
     // EXECUTION RESOURCES:
@@ -242,6 +242,7 @@ struct ExternalSorter {
     runtime: Arc<RuntimeEnv>,
     /// Reservation for in_mem_batches
     reservation: MemoryReservation,
+    spill_manager: SpillManager,
 
     /// Reservation for the merging of in-memory batches. If the sort
     /// might spill, `sort_spill_reservation_bytes` will be
@@ -266,7 +267,7 @@ impl ExternalSorter {
         sort_in_place_threshold_bytes: usize,
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,
-    ) -> Self {
+    ) -> Result<Self> {
         let metrics = ExternalSorterMetrics::new(metrics, partition_id);
         let reservation = MemoryConsumer::new(format!("ExternalSorter[{partition_id}]"))
             .with_can_spill(true)
@@ -276,21 +277,45 @@ impl ExternalSorter {
             MemoryConsumer::new(format!("ExternalSorterMerge[{partition_id}]"))
                 .register(&runtime.memory_pool);
 
-        Self {
+        // Construct RowConverter for sort keys
+        let sort_fields = expr
+            .iter()
+            .map(|e| {
+                let data_type = e
+                    .expr
+                    .data_type(&schema)
+                    .map_err(|e| e.context("Resolving sort expression data type"))?;
+                Ok(SortField::new_with_options(data_type, e.options))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let converter = RowConverter::new(sort_fields).map_err(|e| {
+            exec_datafusion_err!("Failed to create RowConverter: {:?}", e)
+        })?;
+
+        let spill_manager = SpillManager::new(
+            Arc::clone(&runtime),
+            metrics.spill_metrics.clone(),
+            Arc::clone(&schema),
+        );
+
+        Ok(Self {
             schema,
             in_mem_batches: vec![],
-            in_mem_batches_sorted: false,
-            spills: vec![],
+            in_progress_spill_file: None,
+            finished_spill_files: vec![],
             expr: expr.into(),
+            sort_keys_row_converter: Arc::new(converter),
             metrics,
             fetch,
             reservation,
+            spill_manager,
             merge_reservation,
             runtime,
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
-        }
+        })
     }
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
@@ -300,11 +325,12 @@ impl ExternalSorter {
         if input.num_rows() == 0 {
             return Ok(());
         }
+
         self.reserve_memory_for_merge()?;
 
         let size = get_reserved_byte_for_record_batch(&input);
         if self.reservation.try_grow(size).is_err() {
-            self.sort_or_spill_in_mem_batches().await?;
+            self.sort_or_spill_in_mem_batches(false).await?;
             // We've already freed more than half of reserved memory,
             // so we can grow the reservation again. There's nothing we can do
             // if this try_grow fails.
@@ -312,12 +338,11 @@ impl ExternalSorter {
         }
 
         self.in_mem_batches.push(input);
-        self.in_mem_batches_sorted = false;
         Ok(())
     }
 
     fn spilled_before(&self) -> bool {
-        !self.spills.is_empty()
+        !self.finished_spill_files.is_empty()
     }
 
     /// Returns the final sorted output of all batches inserted via
@@ -329,7 +354,7 @@ impl ExternalSorter {
     ///
     /// 2. A combined streaming merge incorporating both in-memory
     ///    batches and data from spill files on disk.
-    fn sort(&mut self) -> Result<SendableRecordBatchStream> {
+    async fn sort(&mut self) -> Result<SendableRecordBatchStream> {
         // Release the memory reserved for merge back to the pool so
         // there is some left when `in_mem_sort_stream` requests an
         // allocation.
@@ -337,17 +362,19 @@ impl ExternalSorter {
 
         if self.spilled_before() {
             let mut streams = vec![];
+
+            // Sort `in_mem_batches` and spill it first. If there are many
+            // `in_mem_batches` and the memory limit is almost reached, merging
+            // them with the spilled files at the same time might cause OOM.
             if !self.in_mem_batches.is_empty() {
-                let in_mem_stream =
-                    self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
-                streams.push(in_mem_stream);
+                self.sort_or_spill_in_mem_batches(true).await?;
             }
 
-            for spill in self.spills.drain(..) {
+            for spill in self.finished_spill_files.drain(..) {
                 if !spill.path().exists() {
                     return internal_err!("Spill file {:?} does not exist", spill.path());
                 }
-                let stream = read_spill_as_stream(spill, Arc::clone(&self.schema), 2)?;
+                let stream = self.spill_manager.read_spill_as_stream(spill)?;
                 streams.push(stream);
             }
 
@@ -374,57 +401,151 @@ impl ExternalSorter {
 
     /// How many bytes have been spilled to disk?
     fn spilled_bytes(&self) -> usize {
-        self.metrics.spilled_bytes.value()
+        self.metrics.spill_metrics.spilled_bytes.value()
     }
 
     /// How many rows have been spilled to disk?
     fn spilled_rows(&self) -> usize {
-        self.metrics.spilled_rows.value()
+        self.metrics.spill_metrics.spilled_rows.value()
     }
 
     /// How many spill files have been created?
     fn spill_count(&self) -> usize {
-        self.metrics.spill_count.value()
+        self.metrics.spill_metrics.spill_file_count.value()
     }
 
-    /// Writes any `in_memory_batches` to a spill file and clears
-    /// the batches. The contents of the spill file are sorted.
-    ///
-    /// Returns the amount of memory freed.
-    async fn spill(&mut self) -> Result<usize> {
-        // we could always get a chance to free some memory as long as we are holding some
-        if self.in_mem_batches.is_empty() {
-            return Ok(0);
+    /// Appending globally sorted batches to the in-progress spill file, and clears
+    /// the `globally_sorted_batches` (also its memory reservation) afterwards.
+    async fn consume_and_spill_append(
+        &mut self,
+        globally_sorted_batches: &mut Vec<RecordBatch>,
+    ) -> Result<()> {
+        if globally_sorted_batches.is_empty() {
+            return Ok(());
         }
+
+        // Lazily initialize the in-progress spill file
+        if self.in_progress_spill_file.is_none() {
+            self.in_progress_spill_file =
+                Some(self.spill_manager.create_in_progress_file("Sorting")?);
+        }
+
+        Self::organize_stringview_arrays(globally_sorted_batches)?;
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
-        let spill_file = self.runtime.disk_manager.create_tmp_file("Sorting")?;
-        let batches = std::mem::take(&mut self.in_mem_batches);
-        let (spilled_rows, spilled_bytes) = spill_record_batches(
-            batches,
-            spill_file.path().into(),
-            Arc::clone(&self.schema),
-        )?;
-        let used = self.reservation.free();
-        self.metrics.spill_count.add(1);
-        self.metrics.spilled_bytes.add(spilled_bytes);
-        self.metrics.spilled_rows.add(spilled_rows);
-        self.spills.push(spill_file);
-        Ok(used)
+        let batches_to_spill = std::mem::take(globally_sorted_batches);
+        self.reservation.free();
+
+        let in_progress_file = self.in_progress_spill_file.as_mut().ok_or_else(|| {
+            internal_datafusion_err!("In-progress spill file should be initialized")
+        })?;
+
+        for batch in batches_to_spill {
+            in_progress_file.append_batch(&batch)?;
+        }
+
+        if !globally_sorted_batches.is_empty() {
+            return internal_err!("This function consumes globally_sorted_batches, so it should be empty after taking.");
+        }
+
+        Ok(())
     }
 
-    /// Sorts the in_mem_batches in place
+    /// Finishes the in-progress spill file and moves it to the finished spill files.
+    async fn spill_finish(&mut self) -> Result<()> {
+        let mut in_progress_file =
+            self.in_progress_spill_file.take().ok_or_else(|| {
+                internal_datafusion_err!("Should be called after `spill_append`")
+            })?;
+        let spill_file = in_progress_file.finish()?;
+
+        if let Some(spill_file) = spill_file {
+            self.finished_spill_files.push(spill_file);
+        }
+
+        Ok(())
+    }
+
+    /// Reconstruct `globally_sorted_batches` to organize the payload buffers of each
+    /// `StringViewArray` in sequential order by calling `gc()` on them.
     ///
-    /// Sorting may have freed memory, especially if fetch is `Some`. If
-    /// the memory usage has dropped by a factor of 2, then we don't have
-    /// to spill. Otherwise, we spill to free up memory for inserting
-    /// more batches.
+    /// Note this is a workaround until <https://github.com/apache/arrow-rs/issues/7185> is
+    /// available
     ///
-    /// The factor of 2 aims to avoid a degenerate case where the
-    /// memory required for `fetch` is just under the memory available,
-    // causing repeated re-sorting of data
-    async fn sort_or_spill_in_mem_batches(&mut self) -> Result<()> {
+    /// # Rationale
+    /// After (merge-based) sorting, all batches will be sorted into a single run,
+    /// but physically this sorted run is chunked into many small batches. For
+    /// `StringViewArray`s inside each sorted run, their inner buffers are not
+    /// re-constructed by default, leading to non-sequential payload locations
+    /// (permutated by `interleave()` Arrow kernel). A single payload buffer might
+    /// be shared by multiple `RecordBatch`es.
+    /// When writing each batch to disk, the writer has to write all referenced buffers,
+    /// because they have to be read back one by one to reduce memory usage. This
+    /// causes extra disk reads and writes, and potentially execution failure.
+    ///
+    /// # Example
+    /// Before sorting:
+    /// batch1 -> buffer1
+    /// batch2 -> buffer2
+    ///
+    /// sorted_batch1 -> buffer1
+    ///               -> buffer2
+    /// sorted_batch2 -> buffer1
+    ///               -> buffer2
+    ///
+    /// Then when spilling each batch, the writer has to write all referenced buffers
+    /// repeatedly.
+    fn organize_stringview_arrays(
+        globally_sorted_batches: &mut Vec<RecordBatch>,
+    ) -> Result<()> {
+        let mut organized_batches = Vec::with_capacity(globally_sorted_batches.len());
+
+        for batch in globally_sorted_batches.drain(..) {
+            let mut new_columns: Vec<Arc<dyn Array>> =
+                Vec::with_capacity(batch.num_columns());
+
+            let mut arr_mutated = false;
+            for array in batch.columns() {
+                if let Some(string_view_array) =
+                    array.as_any().downcast_ref::<StringViewArray>()
+                {
+                    let new_array = string_view_array.gc();
+                    new_columns.push(Arc::new(new_array));
+                    arr_mutated = true;
+                } else {
+                    new_columns.push(Arc::clone(array));
+                }
+            }
+
+            let organized_batch = if arr_mutated {
+                RecordBatch::try_new(batch.schema(), new_columns)?
+            } else {
+                batch
+            };
+
+            organized_batches.push(organized_batch);
+        }
+
+        *globally_sorted_batches = organized_batches;
+
+        Ok(())
+    }
+
+    /// Sorts the in_mem_batches and potentially spill the sorted batches.
+    ///
+    /// If the memory usage has dropped by a factor of 2, it might be a sort with
+    /// fetch (e.g. sorting 1M rows but only keep the top 100), so we keep the
+    /// sorted entries inside `in_mem_batches` to be sorted in the next iteration.
+    /// Otherwise, we spill the sorted run to free up memory for inserting more batches.
+    ///
+    /// # Arguments
+    ///
+    /// * `force_spill` - If true, the method will spill the in-memory batches
+    ///   even if the memory usage has not dropped by a factor of 2. Otherwise it will
+    ///   only spill when the memory usage has dropped by the pre-defined factor.
+    ///
+    async fn sort_or_spill_in_mem_batches(&mut self, force_spill: bool) -> Result<()> {
         // Release the memory reserved for merge back to the pool so
         // there is some left when `in_mem_sort_stream` requests an
         // allocation. At the end of this function, memory will be
@@ -435,40 +556,32 @@ impl ExternalSorter {
 
         let mut sorted_stream =
             self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
+        // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
+        // to construct a globally sorted stream.
+        if !self.in_mem_batches.is_empty() {
+            return internal_err!(
+                "in_mem_batches should be empty after constructing sorted stream"
+            );
+        }
+        // 'global' here refers to all buffered batches when the memory limit is
+        // reached. This variable will buffer the sorted batches after
+        // sort-preserving merge and incrementally append to spill files.
+        let mut globally_sorted_batches: Vec<RecordBatch> = vec![];
 
-        // `self.in_mem_batches` is already taken away by the sort_stream, now it is empty.
-        // We'll gradually collect the sorted stream into self.in_mem_batches, or directly
-        // write sorted batches to disk when the memory is insufficient.
-        let mut spill_writer: Option<IPCWriter> = None;
+        let mut spilled = false;
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
-            match &mut spill_writer {
-                None => {
-                    let sorted_size = get_reserved_byte_for_record_batch(&batch);
-                    if self.reservation.try_grow(sorted_size).is_err() {
-                        // Directly write in_mem_batches as well as all the remaining batches in
-                        // sorted_stream to disk. Further batches fetched from `sorted_stream` will
-                        // be handled by the `Some(writer)` matching arm.
-                        let spill_file =
-                            self.runtime.disk_manager.create_tmp_file("Sorting")?;
-                        let mut writer = IPCWriter::new(spill_file.path(), &self.schema)?;
-                        // Flush everything in memory to the spill file
-                        for batch in self.in_mem_batches.drain(..) {
-                            writer.write(&batch)?;
-                        }
-                        // as well as the newly sorted batch
-                        writer.write(&batch)?;
-                        spill_writer = Some(writer);
-                        self.reservation.free();
-                        self.spills.push(spill_file);
-                    } else {
-                        self.in_mem_batches.push(batch);
-                        self.in_mem_batches_sorted = true;
-                    }
-                }
-                Some(writer) => {
-                    writer.write(&batch)?;
-                }
+            let sorted_size = get_reserved_byte_for_record_batch(&batch);
+            if self.reservation.try_grow(sorted_size).is_err() {
+                // Although the reservation is not enough, the batch is
+                // already in memory, so it's okay to combine it with previously
+                // sorted batches, and spill together.
+                globally_sorted_batches.push(batch);
+                self.consume_and_spill_append(&mut globally_sorted_batches)
+                    .await?; // reservation is freed in spill()
+                spilled = true;
+            } else {
+                globally_sorted_batches.push(batch);
             }
         }
 
@@ -476,20 +589,33 @@ impl ExternalSorter {
         // upcoming `self.reserve_memory_for_merge()` may fail due to insufficient memory.
         drop(sorted_stream);
 
-        if let Some(writer) = &mut spill_writer {
-            writer.finish()?;
-            self.metrics.spill_count.add(1);
-            self.metrics.spilled_rows.add(writer.num_rows);
-            self.metrics.spilled_bytes.add(writer.num_bytes);
-        }
-
         // Sorting may free up some memory especially when fetch is `Some`. If we have
         // not freed more than 50% of the memory, then we have to spill to free up more
         // memory for inserting more batches.
-        if spill_writer.is_none() && self.reservation.size() > before / 2 {
+        if (self.reservation.size() > before / 2) || force_spill {
             // We have not freed more than 50% of the memory, so we have to spill to
             // free up more memory
-            self.spill().await?;
+            self.consume_and_spill_append(&mut globally_sorted_batches)
+                .await?;
+            spilled = true;
+        }
+
+        if spilled {
+            // There might be some buffered batches that haven't trigger a spill yet.
+            self.consume_and_spill_append(&mut globally_sorted_batches)
+                .await?;
+            self.spill_finish().await?;
+        } else {
+            // If the memory limit has reached before calling this function, and it
+            // didn't spill anything, it means this is a sorting with fetch top K
+            // element: after sorting only the top K elements will be kept in memory.
+            // For simplicity, those sorted top K entries are put back to unsorted
+            // `in_mem_batches` to be consumed by the next sort/merge.
+            if !self.in_mem_batches.is_empty() {
+                return internal_err!("in_mem_batches should be cleared before");
+            }
+
+            self.in_mem_batches = std::mem::take(&mut globally_sorted_batches);
         }
 
         // Reserve headroom for next sort/merge
@@ -637,15 +763,29 @@ impl ExternalSorter {
 
         let fetch = self.fetch;
         let expressions: LexOrdering = self.expr.iter().cloned().collect();
-        let stream = futures::stream::once(futures::future::lazy(move |_| {
-            let timer = metrics.elapsed_compute().timer();
-            let sorted = sort_batch(&batch, &expressions, fetch)?;
-            timer.done();
+        let row_converter = Arc::clone(&self.sort_keys_row_converter);
+        let stream = futures::stream::once(async move {
+            let _timer = metrics.elapsed_compute().timer();
+
+            let sort_columns = expressions
+                .iter()
+                .map(|expr| expr.evaluate_to_sort_column(&batch))
+                .collect::<Result<Vec<_>>>()?;
+
+            let sorted = if is_multi_column_with_lists(&sort_columns) {
+                // lex_sort_to_indices doesn't support List with more than one column
+                // https://github.com/apache/arrow-rs/issues/5454
+                sort_batch_row_based(&batch, &expressions, row_converter, fetch)?
+            } else {
+                sort_batch(&batch, &expressions, fetch)?
+            };
+
             metrics.record_output(sorted.num_rows());
             drop(batch);
             drop(reservation);
             Ok(sorted)
-        }));
+        });
+
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
@@ -688,6 +828,45 @@ impl Debug for ExternalSorter {
             .field("spill_count", &self.spill_count())
             .finish()
     }
+}
+
+/// Converts rows into a sorted array of indices based on their order.
+/// This function returns the indices that represent the sorted order of the rows.
+fn rows_to_indices(rows: Rows, limit: Option<usize>) -> Result<UInt32Array> {
+    let mut sort: Vec<_> = rows.iter().enumerate().collect();
+    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+
+    let mut len = rows.num_rows();
+    if let Some(limit) = limit {
+        len = limit.min(len);
+    }
+    let indices =
+        UInt32Array::from_iter_values(sort.iter().take(len).map(|(i, _)| *i as u32));
+    Ok(indices)
+}
+
+/// Sorts a `RecordBatch` by converting its sort columns into Arrow Row Format for faster comparison.
+fn sort_batch_row_based(
+    batch: &RecordBatch,
+    expressions: &LexOrdering,
+    row_converter: Arc<RowConverter>,
+    fetch: Option<usize>,
+) -> Result<RecordBatch> {
+    let sort_columns = expressions
+        .iter()
+        .map(|expr| expr.evaluate_to_sort_column(batch).map(|col| col.values))
+        .collect::<Result<Vec<_>>>()?;
+    let rows = row_converter.convert_columns(&sort_columns)?;
+    let indices = rows_to_indices(rows, fetch)?;
+    let columns = take_arrays(batch.columns(), &indices, None)?;
+
+    let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
+
+    Ok(RecordBatch::try_new_with_options(
+        batch.schema(),
+        columns,
+        &options,
+    )?)
 }
 
 pub fn sort_batch(
@@ -752,7 +931,9 @@ pub(crate) fn lexsort_to_indices_multi_columns(
         },
     );
 
-    // TODO reuse converter and rows, refer to TopK.
+    // Note: row converter is reused through `sort_batch_row_based()`, this function
+    // is not used during normal sort execution, but it's kept temporarily because
+    // it's inside a public interface `sort_batch()`.
     let converter = RowConverter::new(fields)?;
     let rows = converter.convert_columns(&columns)?;
     let mut sort: Vec<_> = rows.iter().enumerate().collect();
@@ -954,6 +1135,15 @@ impl DisplayAs for SortExec {
                     None => write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr),
                 }
             }
+            DisplayFormatType::TreeRender => match self.fetch {
+                Some(fetch) => {
+                    writeln!(f, "{}", self.expr)?;
+                    writeln!(f, "limit={fetch}")
+                }
+                None => {
+                    writeln!(f, "{}", self.expr)
+                }
+            },
         }
     }
 }
@@ -1059,7 +1249,7 @@ impl ExecutionPlan for SortExec {
                     execution_options.sort_in_place_threshold_bytes,
                     &self.metrics_set,
                     context.runtime_env(),
-                );
+                )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
@@ -1067,7 +1257,7 @@ impl ExecutionPlan for SortExec {
                             let batch = batch?;
                             sorter.insert_batch(batch).await?;
                         }
-                        sorter.sort()
+                        sorter.sort().await
                     })
                     .try_flatten(),
                 )))
@@ -1151,7 +1341,8 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
-    use datafusion_common::{assert_batches_eq, Result, ScalarValue};
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::RecordBatchStream;
@@ -1159,6 +1350,7 @@ mod tests {
     use datafusion_physical_expr::EquivalenceProperties;
 
     use futures::{FutureExt, Stream};
+    use insta::assert_snapshot;
 
     #[derive(Debug, Clone)]
     pub struct SortedUnboundedExec {
@@ -1170,9 +1362,9 @@ mod tests {
     impl DisplayAs for SortedUnboundedExec {
         fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
             match t {
-                DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                    write!(f, "UnboundableExec",).unwrap()
-                }
+                DisplayFormatType::Default
+                | DisplayFormatType::Verbose
+                | DisplayFormatType::TreeRender => write!(f, "UnboundableExec",).unwrap(),
             }
             Ok(())
         }
@@ -1358,7 +1550,7 @@ mod tests {
         // bytes. We leave a little wiggle room for the actual numbers.
         assert!((3..=10).contains(&spill_count));
         assert!((9000..=10000).contains(&spilled_rows));
-        assert!((36000..=40000).contains(&spilled_bytes));
+        assert!((38000..=42000).contains(&spilled_bytes));
 
         let columns = result[0].columns();
 
@@ -1422,12 +1614,23 @@ mod tests {
         let spill_count = metrics.spill_count().unwrap();
         let spilled_rows = metrics.spilled_rows().unwrap();
         let spilled_bytes = metrics.spilled_bytes().unwrap();
-        // Processing 840 KB of data using 400 KB of memory requires at least 2 spills
-        // It will spill roughly 18000 rows and 800 KBytes.
-        // We leave a little wiggle room for the actual numbers.
-        assert!((2..=10).contains(&spill_count));
+
+        // This test case is processing 840KB of data using 400KB of memory. Note
+        // that buffered batches can't be dropped until all sorted batches are
+        // generated, so we can only buffer `sort_spill_reservation_bytes` of sorted
+        // batches.
+        // The number of spills is roughly calculated as:
+        //  `number_of_batches / (sort_spill_reservation_bytes / batch_size)`
+
+        // If this assertion fail with large spill count, make sure the following
+        // case does not happen:
+        // During external sorting, one sorted run should be spilled to disk in a
+        // single file, due to memory limit we might need to append to the file
+        // multiple times to spill all the data. Make sure we're not writing each
+        // appending as a separate file.
+        assert!((4..=8).contains(&spill_count));
         assert!((15000..=20000).contains(&spilled_rows));
-        assert!((700000..=900000).contains(&spilled_bytes));
+        assert!((900000..=1000000).contains(&spilled_bytes));
 
         // Verify that the result is sorted
         let concated_result = concat_batches(&schema, &result)?;
@@ -1809,22 +2012,21 @@ mod tests {
         plan = plan.with_fetch(Some(9));
 
         let batches = collect(Arc::new(plan), task_ctx).await?;
-        #[rustfmt::skip]
-        let expected = [
-            "+----+",
-            "| c1 |",
-            "+----+",
-            "| 0  |",
-            "| 1  |",
-            "| 2  |",
-            "| 3  |",
-            "| 4  |",
-            "| 5  |",
-            "| 6  |",
-            "| 7  |",
-            "| 8  |",
-            "+----+",];
-        assert_batches_eq!(expected, &batches);
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+
+            | c1 |
+            +----+
+            | 0  |
+            | 1  |
+            | 2  |
+            | 3  |
+            | 4  |
+            | 5  |
+            | 6  |
+            | 7  |
+            | 8  |
+            +----+
+            "#);
         Ok(())
     }
 }

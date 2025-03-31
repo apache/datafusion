@@ -30,8 +30,8 @@ use datafusion_expr::{
     col,
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
-    CreateIndex, DdlStatement, ScalarUDF, ScalarUDFImpl, Signature, Statement,
-    Volatility,
+    ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Statement, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -48,20 +48,12 @@ use datafusion_functions_aggregate::{
 use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::rank::rank_udwf;
+use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 mod cases;
 mod common;
-
-#[test]
-fn test_schema_support() {
-    quick_test(
-        "SELECT * FROM s1.test",
-        "Projection: *\
-             \n  TableScan: s1.test",
-    );
-}
 
 #[test]
 fn parse_decimals() {
@@ -92,6 +84,7 @@ fn parse_decimals() {
                 parse_float_as_decimal: true,
                 enable_ident_normalization: false,
                 support_varchar_with_length: false,
+                map_varchar_to_utf8view: false,
                 enable_options_value_normalization: false,
                 collect_spans: false,
             },
@@ -148,6 +141,7 @@ fn parse_ident_normalization() {
                 parse_float_as_decimal: false,
                 enable_ident_normalization,
                 support_varchar_with_length: false,
+                map_varchar_to_utf8view: false,
                 enable_options_value_normalization: false,
                 collect_spans: false,
             },
@@ -232,9 +226,10 @@ fn cast_to_invalid_decimal_type_precision_0() {
     {
         let sql = "SELECT CAST(10 AS DECIMAL(0))";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Error during planning: Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
-            err.strip_backtrace()
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @r"Error during planning: Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`."
         );
     }
 }
@@ -255,9 +250,10 @@ fn cast_to_invalid_decimal_type_precision_gt_76() {
     {
         let sql = "SELECT CAST(10 AS DECIMAL(79))";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Error during planning: Decimal(precision = 79, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
-            err.strip_backtrace()
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @r"Error during planning: Decimal(precision = 79, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`."
         );
     }
 }
@@ -268,9 +264,10 @@ fn cast_to_invalid_decimal_type_precision_lt_scale() {
     {
         let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Error during planning: Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
-            err.strip_backtrace()
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @r"Error during planning: Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 76`, and `scale <= precision`."
         );
     }
 }
@@ -450,19 +447,6 @@ Explain
 }
 
 #[test]
-fn plan_copy_to_query() {
-    let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
-    let plan = r#"
-CopyTo: format=csv output_url=output.csv options: ()
-  Limit: skip=0, fetch=10
-    Projection: *
-      TableScan: test_decimal
-    "#
-    .trim();
-    quick_test(sql, plan);
-}
-
-#[test]
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
@@ -579,18 +563,12 @@ fn select_column_does_not_exist() {
 fn select_repeated_column() {
     let sql = "SELECT age, age FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"person.age\" at position 0 and \"person.age\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.",
-        err.strip_backtrace()
-    );
-}
 
-#[test]
-fn select_wildcard_with_repeated_column_but_is_aliased() {
-    quick_test(
-        "SELECT *, first_name AS fn from person",
-        "Projection: *, person.first_name AS fn\
-            \n  TableScan: person",
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Projections require unique expression names but the expression "person.age" at position 0 and "person.age" at position 1 have the same name. Consider aliasing ("AS") one of them.
+        "#
     );
 }
 
@@ -764,9 +742,10 @@ fn table_with_column_alias_number_cols() {
     let sql = "SELECT a, b, c
                    FROM lineitem l (a, b)";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Source table contains 3 columns but only 2 names given as column alias",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r"Error during planning: Source table contains 3 columns but only 2 names given as column alias"
     );
 }
 
@@ -774,9 +753,10 @@ fn table_with_column_alias_number_cols() {
 fn select_with_ambiguous_column() {
     let sql = "SELECT id FROM person a, person b";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Schema error: Ambiguous reference to unqualified field id",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r"Schema error: Ambiguous reference to unqualified field id"
     );
 }
 
@@ -790,30 +770,6 @@ fn join_with_ambiguous_column() {
                         \n      TableScan: person\
                         \n    SubqueryAlias: b\
                         \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn where_selection_with_ambiguous_column() {
-    let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
-    let err = logical_plan(sql)
-        .expect_err("query should have failed")
-        .strip_backtrace();
-    assert_eq!(
-        "\"Schema error: Ambiguous reference to unqualified field id\"",
-        format!("{err:?}")
-    );
-}
-
-#[test]
-fn natural_join() {
-    let sql = "SELECT * FROM lineitem a NATURAL JOIN lineitem b";
-    let expected = "Projection: *\
-                        \n  Inner Join: Using a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.price = b.price\
-                        \n    SubqueryAlias: a\
-                        \n      TableScan: lineitem\
-                        \n    SubqueryAlias: b\
-                        \n      TableScan: lineitem";
     quick_test(sql, expected);
 }
 
@@ -842,92 +798,16 @@ fn natural_right_join() {
 }
 
 #[test]
-fn natural_join_no_common_becomes_cross_join() {
-    let sql = "SELECT * FROM person a NATURAL JOIN lineitem b";
-    let expected = "Projection: *\
-                        \n  Cross Join: \
-                        \n    SubqueryAlias: a\
-                        \n      TableScan: person\
-                        \n    SubqueryAlias: b\
-                        \n      TableScan: lineitem";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn using_join_multiple_keys() {
-    let sql = "SELECT * FROM person a join person b using (id, age)";
-    let expected = "Projection: *\
-                        \n  Inner Join: Using a.id = b.id, a.age = b.age\
-                        \n    SubqueryAlias: a\
-                        \n      TableScan: person\
-                        \n    SubqueryAlias: b\
-                        \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn using_join_multiple_keys_subquery() {
-    let sql =
-        "SELECT age FROM (SELECT * FROM person a join person b using (id, age, state))";
-    let expected = "Projection: a.age\
-                        \n  Projection: *\
-                        \n    Inner Join: Using a.id = b.id, a.age = b.age, a.state = b.state\
-                        \n      SubqueryAlias: a\
-                        \n        TableScan: person\
-                        \n      SubqueryAlias: b\
-                        \n        TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn using_join_multiple_keys_qualified_wildcard_select() {
-    let sql = "SELECT a.* FROM person a join person b using (id, age)";
-    let expected = "Projection: a.*\
-                        \n  Inner Join: Using a.id = b.id, a.age = b.age\
-                        \n    SubqueryAlias: a\
-                        \n      TableScan: person\
-                        \n    SubqueryAlias: b\
-                        \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn using_join_multiple_keys_select_all_columns() {
-    let sql = "SELECT a.*, b.* FROM person a join person b using (id, age)";
-    let expected = "Projection: a.*, b.*\
-                        \n  Inner Join: Using a.id = b.id, a.age = b.age\
-                        \n    SubqueryAlias: a\
-                        \n      TableScan: person\
-                        \n    SubqueryAlias: b\
-                        \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn using_join_multiple_keys_multiple_joins() {
-    let sql = "SELECT * FROM person a join person b using (id, age, state) join person c using (id, age, state)";
-    let expected = "Projection: *\
-                        \n  Inner Join: Using a.id = c.id, a.age = c.age, a.state = c.state\
-                        \n    Inner Join: Using a.id = b.id, a.age = b.age, a.state = b.state\
-                        \n      SubqueryAlias: a\
-                        \n        TableScan: person\
-                        \n      SubqueryAlias: b\
-                        \n        TableScan: person\
-                        \n    SubqueryAlias: c\
-                        \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
 fn select_with_having() {
     let sql = "SELECT id, age
                    FROM person
                    HAVING age > 100 AND age < 200";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Error during planning: HAVING clause references: person.age > Int64(100) AND person.age < Int64(200) must appear in the GROUP BY clause or be used in an aggregate function",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r"Error during planning: HAVING clause references: person.age > Int64(100) AND person.age < Int64(200) must appear in the GROUP BY clause or be used in an aggregate function"
+    );
 }
 
 #[test]
@@ -936,10 +816,13 @@ fn select_with_having_referencing_column_not_in_select() {
                    FROM person
                    HAVING first_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Error during planning: HAVING clause references: person.first_name = Utf8(\"M\") must appear in the GROUP BY clause or be used in an aggregate function",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: HAVING clause references: person.first_name = Utf8("M") must appear in the GROUP BY clause or be used in an aggregate function
+        "#
+    );
 }
 
 #[test]
@@ -949,10 +832,13 @@ fn select_with_having_refers_to_invalid_column() {
                    GROUP BY id
                    HAVING first_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Error during planning: HAVING clause references non-aggregate values: Expression person.first_name could not be resolved from available columns: person.id, max(person.age)",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.first_name" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.id, max(person.age)" appears in the SELECT clause satisfies this requirement
+        "#
+    );
 }
 
 #[test]
@@ -961,10 +847,13 @@ fn select_with_having_referencing_column_nested_in_select_expression() {
                    FROM person
                    HAVING age > 100";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Error during planning: HAVING clause references: person.age > Int64(100) must appear in the GROUP BY clause or be used in an aggregate function",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: HAVING clause references: person.age > Int64(100) must appear in the GROUP BY clause or be used in an aggregate function
+        "#
+    );
 }
 
 #[test]
@@ -973,10 +862,11 @@ fn select_with_having_with_aggregate_not_in_select() {
                    FROM person
                    HAVING MAX(age) > 100";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Error during planning: Projection references non-aggregate values: Expression person.first_name could not be resolved from available columns: max(person.age)",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.first_name" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "max(person.age)" appears in the SELECT clause satisfies this requirement"#
+    );
 }
 
 #[test]
@@ -1009,9 +899,12 @@ fn select_aggregate_with_having_referencing_column_not_in_select() {
                    FROM person
                    HAVING first_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: HAVING clause references non-aggregate values: Expression person.first_name could not be resolved from available columns: count(*)",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.first_name" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "count(*)" appears in the SELECT clause satisfies this requirement
+        "#
     );
 }
 
@@ -1130,9 +1023,12 @@ fn select_aggregate_with_group_by_with_having_referencing_column_not_in_group_by
                    GROUP BY first_name
                    HAVING MAX(age) > 10 AND last_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: HAVING clause references non-aggregate values: Expression person.last_name could not be resolved from available columns: person.first_name, max(person.age)",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.last_name" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.first_name, max(person.age)" appears in the SELECT clause satisfies this requirement
+        "#
     );
 }
 
@@ -1234,24 +1130,6 @@ fn select_binary_expr_nested() {
 }
 
 #[test]
-fn select_wildcard_with_groupby() {
-    quick_test(
-            r#"SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date, "😀""#,
-            "Projection: *\
-             \n  Aggregate: groupBy=[[person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀]], aggr=[[]]\
-             \n    TableScan: person",
-        );
-    quick_test(
-            "SELECT * FROM (SELECT first_name, last_name FROM person) AS a GROUP BY first_name, last_name",
-            "Projection: *\
-            \n  Aggregate: groupBy=[[a.first_name, a.last_name]], aggr=[[]]\
-            \n    SubqueryAlias: a\
-            \n      Projection: person.first_name, person.last_name\
-            \n        TableScan: person",
-        );
-}
-
-#[test]
 fn select_simple_aggregate() {
     quick_test(
         "SELECT MIN(age) FROM person",
@@ -1282,9 +1160,12 @@ fn select_simple_aggregate_column_does_not_exist() {
 fn select_simple_aggregate_repeated_aggregate() {
     let sql = "SELECT MIN(age), MIN(age) FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"min(person.age)\" at position 0 and \"min(person.age)\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Projections require unique expression names but the expression "min(person.age)" at position 0 and "min(person.age)" at position 1 have the same name. Consider aliasing ("AS") one of them.
+        "#
     );
 }
 
@@ -1323,9 +1204,12 @@ fn select_from_typed_string_values() {
 fn select_simple_aggregate_repeated_aggregate_with_repeated_aliases() {
     let sql = "SELECT MIN(age) AS a, MIN(age) AS a FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"min(person.age) AS a\" at position 0 and \"min(person.age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Projections require unique expression names but the expression "min(person.age) AS a" at position 0 and "min(person.age) AS a" at position 1 have the same name. Consider aliasing ("AS") one of them.
+        "#
     );
 }
 
@@ -1353,9 +1237,12 @@ fn select_simple_aggregate_with_groupby_with_aliases() {
 fn select_simple_aggregate_with_groupby_with_aliases_repeated() {
     let sql = "SELECT state AS a, MIN(age) AS a FROM person GROUP BY state";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"person.state AS a\" at position 0 and \"min(person.age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Projections require unique expression names but the expression "person.state AS a" at position 0 and "min(person.age) AS a" at position 1 have the same name. Consider aliasing ("AS") one of them.
+        "#
     );
 }
 
@@ -1373,11 +1260,13 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
 fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
     let sql = "SELECT sum(age) FROM person GROUP BY doesnotexist";
     let err = logical_plan(sql).expect_err("query should have failed");
-    let expected = "Schema error: No field named doesnotexist. \
-        Valid fields are \"sum(person.age)\", \
-        person.id, person.first_name, person.last_name, person.age, person.state, \
-        person.salary, person.birth_date, person.\"😀\".";
-    assert_eq!(err.strip_backtrace(), expected);
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Schema error: No field named doesnotexist. Valid fields are "sum(person.age)", person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person."😀".
+        "#
+    );
 }
 
 #[test]
@@ -1391,59 +1280,12 @@ fn select_simple_aggregate_with_groupby_and_column_in_aggregate_does_not_exist()
 fn select_interval_out_of_range() {
     let sql = "SELECT INTERVAL '100000000000000000 day'";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Arrow error: Invalid argument error: Unable to represent 100000000000000000 days in a signed 32-bit integer",
+
+    assert_snapshot!(
         err.strip_backtrace(),
-    );
-}
-
-#[test]
-fn recursive_ctes() {
-    let sql = "
-        WITH RECURSIVE numbers AS (
-              select 1 as n
-            UNION ALL
-              select n + 1 FROM numbers WHERE N < 10
-        )
-        select * from numbers;";
-    quick_test(
-        sql,
-        "Projection: *\
-    \n  SubqueryAlias: numbers\
-    \n    RecursiveQuery: is_distinct=false\
-    \n      Projection: Int64(1) AS n\
-    \n        EmptyRelation\
-    \n      Projection: numbers.n + Int64(1)\
-    \n        Filter: numbers.n < Int64(10)\
-    \n          TableScan: numbers",
-    )
-}
-
-#[test]
-fn recursive_ctes_disabled() {
-    let sql = "
-        WITH RECURSIVE numbers AS (
-              select 1 as n
-            UNION ALL
-              select n + 1 FROM numbers WHERE N < 10
-        )
-        select * from numbers;";
-
-    // manually setting up test here so that we can disable recursive ctes
-    let mut state = MockSessionState::default();
-    state.config_options.execution.enable_recursive_ctes = false;
-    let context = MockContextProvider { state };
-
-    let planner = SqlToRel::new_with_options(&context, ParserOptions::default());
-    let result = DFParser::parse_sql_with_dialect(sql, &GenericDialect {});
-    let mut ast = result.unwrap();
-
-    let err = planner
-        .statement_to_plan(ast.pop_front().unwrap())
-        .expect_err("query should have failed");
-    assert_eq!(
-        "This feature is not implemented: Recursive CTEs are not enabled",
-        err.strip_backtrace()
+        @r#"
+        Arrow error: Invalid argument error: Unable to represent 100000000000000000 days in a signed 32-bit integer
+        "#
     );
 }
 
@@ -1461,14 +1303,14 @@ fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby()
 fn select_simple_aggregate_with_groupby_can_use_positions() {
     quick_test(
         "SELECT state, age AS b, count(1) FROM person GROUP BY 1, 2",
-        "Projection: person.state, person.age AS b, count(*)\
-             \n  Aggregate: groupBy=[[person.state, person.age]], aggr=[[count(*)]]\
+        "Projection: person.state, person.age AS b, count(Int64(1))\
+             \n  Aggregate: groupBy=[[person.state, person.age]], aggr=[[count(Int64(1))]]\
              \n    TableScan: person",
     );
     quick_test(
         "SELECT state, age AS b, count(1) FROM person GROUP BY 2, 1",
-        "Projection: person.state, person.age AS b, count(*)\
-             \n  Aggregate: groupBy=[[person.age, person.state]], aggr=[[count(*)]]\
+        "Projection: person.state, person.age AS b, count(Int64(1))\
+             \n  Aggregate: groupBy=[[person.age, person.state]], aggr=[[count(Int64(1))]]\
              \n    TableScan: person",
     );
 }
@@ -1477,16 +1319,22 @@ fn select_simple_aggregate_with_groupby_can_use_positions() {
 fn select_simple_aggregate_with_groupby_position_out_of_range() {
     let sql = "SELECT state, MIN(age) FROM person GROUP BY 0";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Cannot find column with position 0 in SELECT clause. Valid columns: 1 to 2",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Cannot find column with position 0 in SELECT clause. Valid columns: 1 to 2
+        "#
     );
 
     let sql2 = "SELECT state, MIN(age) FROM person GROUP BY 5";
     let err2 = logical_plan(sql2).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 2",
-        err2.strip_backtrace()
+
+    assert_snapshot!(
+        err2.strip_backtrace(),
+        @r#"
+        Error during planning: Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 2
+        "#
     );
 }
 
@@ -1504,9 +1352,12 @@ fn select_simple_aggregate_with_groupby_can_use_alias() {
 fn select_simple_aggregate_with_groupby_aggregate_repeated() {
     let sql = "SELECT state, MIN(age), MIN(age) FROM person GROUP BY state";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"min(person.age)\" at position 1 and \"min(person.age)\" at position 2 have the same name. Consider aliasing (\"AS\") one of them.",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Projections require unique expression names but the expression "min(person.age)" at position 1 and "min(person.age)" at position 2 have the same name. Consider aliasing ("AS") one of them.
+        "#
     );
 }
 
@@ -1562,20 +1413,26 @@ fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_not_res
     // The query should fail, because age + 9 is not in the group by.
     let sql = "SELECT ((age + 1) / 2) * (age + 9), MIN(first_name) FROM person GROUP BY age + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.age could not be resolved from available columns: person.age + Int64(1), min(person.first_name)",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.age" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.age + Int64(1), min(person.first_name)" appears in the SELECT clause satisfies this requirement
+        "#
+    );
 }
 
 #[test]
 fn select_simple_aggregate_with_groupby_non_column_expression_and_its_column_selected() {
     let sql = "SELECT age, MIN(first_name) FROM person GROUP BY age + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.age could not be resolved from available columns: person.age + Int64(1), min(person.first_name)",
-            err.strip_backtrace()
-        );
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.age" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.age + Int64(1), min(person.first_name)" appears in the SELECT clause satisfies this requirement
+        "#
+    );
 }
 
 #[test]
@@ -1619,19 +1476,10 @@ fn select_aggregate_with_non_column_inner_expression_with_groupby() {
 }
 
 #[test]
-fn test_wildcard() {
-    quick_test(
-        "SELECT * from person",
-        "Projection: *\
-            \n  TableScan: person",
-    );
-}
-
-#[test]
 fn select_count_one() {
     let sql = "SELECT count(1) FROM person";
-    let expected = "Projection: count(*)\
-                        \n  Aggregate: groupBy=[[]], aggr=[[count(*)]]\
+    let expected = "Projection: count(Int64(1))\
+                        \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
                         \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -1735,9 +1583,12 @@ fn select_order_by_index_of_0() {
     let err = logical_plan(sql)
         .expect_err("query should have failed")
         .strip_backtrace();
-    assert_eq!(
-        "Error during planning: Order by index starts at 1 for column indexes",
-        err
+
+    assert_snapshot!(
+        err,
+        @r#"
+        Error during planning: Order by index starts at 1 for column indexes
+        "#
     );
 }
 
@@ -1747,9 +1598,12 @@ fn select_order_by_index_oob() {
     let err = logical_plan(sql)
         .expect_err("query should have failed")
         .strip_backtrace();
-    assert_eq!(
-        "Error during planning: Order by column out of bounds, specified: 2, max: 1",
-        err
+
+    assert_snapshot!(
+        err,
+        @r#"
+        Error during planning: Order by column out of bounds, specified: 2, max: 1
+        "#
     );
 }
 
@@ -1842,9 +1696,12 @@ fn select_7480_1() {
 fn select_7480_2() {
     let sql = "SELECT c1, c13, MIN(c12) FROM aggregate_test_100 GROUP BY c1";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression aggregate_test_100.c13 could not be resolved from available columns: aggregate_test_100.c1, min(aggregate_test_100.c12)",
-        err.strip_backtrace()
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"
+        Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "aggregate_test_100.c13" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "aggregate_test_100.c1, min(aggregate_test_100.c12)" appears in the SELECT clause satisfies this requirement
+        "#
     );
 }
 
@@ -1929,12 +1786,19 @@ fn create_external_table_with_compression_type() {
         "CREATE EXTERNAL TABLE t STORED AS ARROW LOCATION 'foo.arrow' OPTIONS ('format.compression' 'gzip')",
         "CREATE EXTERNAL TABLE t STORED AS ARROW LOCATION 'foo.arrow' OPTIONS ('format.compression' 'bzip2')",
     ];
-    for sql in sqls {
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Error during planning: File compression type cannot be set for PARQUET, AVRO, or ARROW files.",
-            err.strip_backtrace()
-        );
+
+    allow_duplicates! {
+        for sql in sqls {
+            let err = logical_plan(sql).expect_err("query should have failed");
+
+            assert_snapshot!(
+                err.strip_backtrace(),
+                @r#"
+                Error during planning: File compression type cannot be set for PARQUET, AVRO, or ARROW files.
+                "#
+            );
+
+        }
     }
 }
 
@@ -2061,20 +1925,6 @@ fn join_with_using() {
 }
 
 #[test]
-fn project_wildcard_on_join_with_using() {
-    let sql = "SELECT * \
-            FROM lineitem \
-            JOIN lineitem as lineitem2 \
-            USING (l_item_id)";
-    let expected = "Projection: *\
-        \n  Inner Join: Using lineitem.l_item_id = lineitem2.l_item_id\
-        \n    TableScan: lineitem\
-        \n    SubqueryAlias: lineitem2\
-        \n      TableScan: lineitem";
-    quick_test(sql, expected);
-}
-
-#[test]
 fn equijoin_explicit_syntax_3_tables() {
     let sql = "SELECT id, order_id, l_description \
             FROM person \
@@ -2119,11 +1969,12 @@ fn union_by_name_different_columns() {
     let expected = "\
         Distinct:\
         \n  Union\
-        \n    Projection: NULL AS Int64(1), order_id\
+        \n    Projection: order_id, NULL AS Int64(1)\
         \n      Projection: orders.order_id\
         \n        TableScan: orders\
-        \n    Projection: orders.order_id, Int64(1)\
-        \n      TableScan: orders";
+        \n    Projection: order_id, Int64(1)\
+        \n      Projection: orders.order_id, Int64(1)\
+        \n        TableScan: orders";
     quick_test(sql, expected);
 }
 
@@ -2157,22 +2008,26 @@ fn union_all_by_name_different_columns() {
         "SELECT order_id from orders UNION ALL BY NAME SELECT order_id, 1 FROM orders";
     let expected = "\
         Union\
-        \n  Projection: NULL AS Int64(1), order_id\
+        \n  Projection: order_id, NULL AS Int64(1)\
         \n    Projection: orders.order_id\
         \n      TableScan: orders\
-        \n  Projection: orders.order_id, Int64(1)\
-        \n    TableScan: orders";
+        \n  Projection: order_id, Int64(1)\
+        \n    Projection: orders.order_id, Int64(1)\
+        \n      TableScan: orders";
     quick_test(sql, expected);
 }
 
 #[test]
 fn union_all_by_name_same_column_names() {
     let sql = "SELECT order_id from orders UNION ALL BY NAME SELECT order_id FROM orders";
-    let expected = "Union\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders";
+    let expected = "\
+        Union\
+        \n  Projection: order_id\
+        \n    Projection: orders.order_id\
+        \n      TableScan: orders\
+        \n  Projection: order_id\
+        \n    Projection: orders.order_id\
+        \n      TableScan: orders";
     quick_test(sql, expected);
 }
 
@@ -2698,6 +2553,10 @@ impl ScalarUDFImpl for DummyUDF {
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
     }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("dummy - not implemented")
+    }
 }
 
 /// Create logical plan, write with formatter, compare to expected output
@@ -2728,18 +2587,6 @@ fn prepare_stmt_quick_test(
         let dt = format!("{data_types:?}");
         assert_eq!(dt, expected_data_types);
     }
-
-    plan
-}
-
-fn prepare_stmt_replace_params_quick_test(
-    plan: LogicalPlan,
-    param_values: impl Into<ParamValues>,
-    expected_plan: &str,
-) -> LogicalPlan {
-    // replace params
-    let plan = plan.with_param_values(param_values).unwrap();
-    assert_eq!(format!("{plan}"), expected_plan);
 
     plan
 }
@@ -2868,24 +2715,6 @@ fn exists_subquery_schema_outer_schema_overlap() {
 }
 
 #[test]
-fn exists_subquery_wildcard() {
-    let sql = "SELECT id FROM person p WHERE EXISTS \
-            (SELECT * FROM person \
-            WHERE last_name = p.last_name \
-            AND state = p.state)";
-
-    let expected = "Projection: p.id\
-        \n  Filter: EXISTS (<subquery>)\
-        \n    Subquery:\
-        \n      Projection: *\
-        \n        Filter: person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)\
-        \n          TableScan: person\
-        \n    SubqueryAlias: p\
-        \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
 fn in_subquery_uncorrelated() {
     let sql = "SELECT id FROM person p WHERE id IN \
             (SELECT id FROM person)";
@@ -2956,88 +2785,6 @@ fn scalar_subquery_reference_outer_field() {
         \n      TableScan: j2";
 
     quick_test(sql, expected);
-}
-
-#[test]
-fn subquery_references_cte() {
-    let sql = "WITH \
-        cte AS (SELECT * FROM person) \
-        SELECT * FROM person WHERE EXISTS (SELECT * FROM cte WHERE id = person.id)";
-
-    let expected = "Projection: *\
-        \n  Filter: EXISTS (<subquery>)\
-        \n    Subquery:\
-        \n      Projection: *\
-        \n        Filter: cte.id = outer_ref(person.id)\
-        \n          SubqueryAlias: cte\
-        \n            Projection: *\
-        \n              TableScan: person\
-        \n    TableScan: person";
-
-    quick_test(sql, expected)
-}
-
-#[test]
-fn cte_with_no_column_names() {
-    let sql = "WITH \
-        numbers AS ( \
-            SELECT 1 as a, 2 as b, 3 as c \
-        ) \
-        SELECT * FROM numbers;";
-
-    let expected = "Projection: *\
-        \n  SubqueryAlias: numbers\
-        \n    Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c\
-        \n      EmptyRelation";
-
-    quick_test(sql, expected)
-}
-
-#[test]
-fn cte_with_column_names() {
-    let sql = "WITH \
-        numbers(a, b, c) AS ( \
-            SELECT 1, 2, 3 \
-        ) \
-        SELECT * FROM numbers;";
-
-    let expected = "Projection: *\
-        \n  SubqueryAlias: numbers\
-        \n    Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c\
-        \n      Projection: Int64(1), Int64(2), Int64(3)\
-        \n        EmptyRelation";
-
-    quick_test(sql, expected)
-}
-
-#[test]
-fn cte_with_column_aliases_precedence() {
-    // The end result should always be what CTE specification says
-    let sql = "WITH \
-        numbers(a, b, c) AS ( \
-            SELECT 1 as x, 2 as y, 3 as z \
-        ) \
-        SELECT * FROM numbers;";
-
-    let expected = "Projection: *\
-        \n  SubqueryAlias: numbers\
-        \n    Projection: x AS a, y AS b, z AS c\
-        \n      Projection: Int64(1) AS x, Int64(2) AS y, Int64(3) AS z\
-        \n        EmptyRelation";
-    quick_test(sql, expected)
-}
-
-#[test]
-fn cte_unbalanced_number_of_columns() {
-    let sql = "WITH \
-        numbers(a) AS ( \
-            SELECT 1, 2, 3 \
-        ) \
-        SELECT * FROM numbers;";
-
-    let expected = "Error during planning: Source table contains 3 columns but only 1 names given as column alias";
-    let result = logical_plan(sql).err().unwrap();
-    assert_eq!(result.strip_backtrace(), expected);
 }
 
 #[test]
@@ -3134,137 +2881,20 @@ fn join_on_complex_condition() {
 }
 
 #[test]
-fn lateral_constant() {
-    let sql = "SELECT * FROM j1, LATERAL (SELECT 1) AS j2";
-    let expected = "Projection: *\
-            \n  Cross Join: \
-            \n    TableScan: j1\
-            \n    SubqueryAlias: j2\
-            \n      Projection: Int64(1)\
-            \n        EmptyRelation";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_comma_join() {
-    let sql = "SELECT j1_string, j2_string FROM
-            j1, \
-            LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2";
-    let expected = "Projection: j1.j1_string, j2.j2_string\
-            \n  Cross Join: \
-            \n    TableScan: j1\
-            \n    SubqueryAlias: j2\
-            \n      Subquery:\
-            \n        Projection: *\
-            \n          Filter: outer_ref(j1.j1_id) < j2.j2_id\
-            \n            TableScan: j2";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_comma_join_referencing_join_rhs() {
-    let sql = "SELECT * FROM\
-            \n  j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id),\
-            \n  LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4;";
-    let expected = "Projection: *\
-            \n  Cross Join: \
-            \n    Inner Join:  Filter: j1.j1_id = j2.j2_id\
-            \n      TableScan: j1\
-            \n      Inner Join:  Filter: j2.j2_id = j3.j3_id - Int64(2)\
-            \n        TableScan: j2\
-            \n        TableScan: j3\
-            \n    SubqueryAlias: j4\
-            \n      Subquery:\
-            \n        Projection: *\
-            \n          Filter: j3.j3_string = outer_ref(j2.j2_string)\
-            \n            TableScan: j3";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_comma_join_with_shadowing() {
-    // The j1_id on line 3 references the (closest) j1 definition from line 2.
-    let sql = "\
-            SELECT * FROM j1, LATERAL (\
-              SELECT * FROM j1, LATERAL (\
-                SELECT * FROM j2 WHERE j1_id = j2_id\
-              ) as j2\
-            ) as j2;";
-    let expected = "Projection: *\
-            \n  Cross Join: \
-            \n    TableScan: j1\
-            \n    SubqueryAlias: j2\
-            \n      Subquery:\
-            \n        Projection: *\
-            \n          Cross Join: \
-            \n            TableScan: j1\
-            \n            SubqueryAlias: j2\
-            \n              Subquery:\
-            \n                Projection: *\
-            \n                  Filter: outer_ref(j1.j1_id) = j2.j2_id\
-            \n                    TableScan: j2";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_left_join() {
-    let sql = "SELECT j1_string, j2_string FROM \
-            j1 \
-            LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);";
-    let expected = "Projection: j1.j1_string, j2.j2_string\
-            \n  Left Join:  Filter: Boolean(true)\
-            \n    TableScan: j1\
-            \n    SubqueryAlias: j2\
-            \n      Subquery:\
-            \n        Projection: *\
-            \n          Filter: outer_ref(j1.j1_id) < j2.j2_id\
-            \n            TableScan: j2";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_nested_left_join() {
-    let sql = "SELECT * FROM 
-            j1, \
-            (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true))";
-    let expected = "Projection: *\
-            \n  Cross Join: \
-            \n    TableScan: j1\
-            \n    Left Join:  Filter: Boolean(true)\
-            \n      TableScan: j2\
-            \n      SubqueryAlias: j3\
-            \n        Subquery:\
-            \n          Projection: *\
-            \n            Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id\
-            \n              TableScan: j3";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_unnest() {
-    let sql = "SELECT * from unnest_table u, unnest(u.array_col)";
-    let expected = "Projection: *\
-            \n  Cross Join: \
-            \n    SubqueryAlias: u\
-            \n      TableScan: unnest_table\
-            \n    Subquery:\
-            \n      Projection: __unnest_placeholder(outer_ref(u.array_col),depth=1) AS UNNEST(outer_ref(u.array_col))\
-            \n        Unnest: lists[__unnest_placeholder(outer_ref(u.array_col))|depth=1] structs[]\
-            \n          Projection: outer_ref(u.array_col) AS __unnest_placeholder(outer_ref(u.array_col))\
-            \n            EmptyRelation";
-    quick_test(sql, expected);
-}
-
-#[test]
 fn hive_aggregate_with_filter() -> Result<()> {
     let dialect = &HiveDialect {};
     let sql = "SELECT sum(age) FILTER (WHERE age > 4) FROM person";
     let plan = logical_plan_with_dialect(sql, dialect)?;
-    let expected = "Projection: sum(person.age) FILTER (WHERE person.age > Int64(4))\
-        \n  Aggregate: groupBy=[[]], aggr=[[sum(person.age) FILTER (WHERE person.age > Int64(4))]]\
-        \n    TableScan: person"
-        .to_string();
-    assert_eq!(plan.display_indent().to_string(), expected);
+
+    assert_snapshot!(
+        plan,
+        @r###"
+        Projection: sum(person.age) FILTER (WHERE person.age > Int64(4))
+          Aggregate: groupBy=[[]], aggr=[[sum(person.age) FILTER (WHERE person.age > Int64(4))]]
+            TableScan: person
+        "###
+    );
+
     Ok(())
 }
 
@@ -3287,19 +2917,27 @@ fn order_by_unaliased_name() {
 #[test]
 fn order_by_ambiguous_name() {
     let sql = "select * from person a join person b using (id) order by age";
-    let expected = "Schema error: Ambiguous reference to unqualified field age";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
 
-    let err = logical_plan(sql).unwrap_err();
-    assert_eq!(err.strip_backtrace(), expected);
+    assert_snapshot!(
+        err,
+        @r###"
+        Schema error: Ambiguous reference to unqualified field age
+        "###
+    );
 }
 
 #[test]
 fn group_by_ambiguous_name() {
     let sql = "select max(id) from person a join person b using (id) group by age";
-    let expected = "Schema error: Ambiguous reference to unqualified field age";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
 
-    let err = logical_plan(sql).unwrap_err();
-    assert_eq!(err.strip_backtrace(), expected);
+    assert_snapshot!(
+        err,
+        @r###"
+        Schema error: Ambiguous reference to unqualified field age
+        "###
+    );
 }
 
 #[test]
@@ -3516,20 +3154,6 @@ fn test_one_side_constant_full_join() {
 }
 
 #[test]
-fn test_select_all_inner_join() {
-    let sql = "SELECT *
-            FROM person \
-            INNER JOIN orders \
-            ON orders.customer_id * 2 = person.id + 10";
-
-    let expected = "Projection: *\
-            \n  Inner Join:  Filter: orders.customer_id * Int64(2) = person.id + Int64(10)\
-            \n    TableScan: person\
-            \n    TableScan: orders";
-    quick_test(sql, expected);
-}
-
-#[test]
 fn test_select_join_key_inner_join() {
     let sql = "SELECT  orders.customer_id * 2,  person.id + 10
             FROM person
@@ -3555,14 +3179,17 @@ fn test_select_order_by() {
 fn test_select_distinct_order_by() {
     let sql = "SELECT distinct '1' from person order by id";
 
-    let expected =
-        "Error during planning: For SELECT DISTINCT, ORDER BY expressions person.id must appear in select list";
-
     // It should return error.
     let result = logical_plan(sql);
     assert!(result.is_err());
-    let err = result.err().unwrap();
-    assert_eq!(err.strip_backtrace(), expected);
+    let err = result.err().unwrap().strip_backtrace();
+
+    assert_snapshot!(
+        err,
+        @r###"
+        Error during planning: For SELECT DISTINCT, ORDER BY expressions person.id must appear in select list
+        "###
+    );
 }
 
 #[rstest]
@@ -3651,13 +3278,17 @@ fn test_ambiguous_column_references_in_on_join() {
             INNER JOIN person as p2
             ON id = 1";
 
-    let expected = "Schema error: Ambiguous reference to unqualified field id";
-
     // It should return error.
     let result = logical_plan(sql);
     assert!(result.is_err());
-    let err = result.err().unwrap();
-    assert_eq!(err.strip_backtrace(), expected);
+    let err = result.err().unwrap().strip_backtrace();
+
+    assert_snapshot!(
+        err,
+        @r###"
+        Schema error: Ambiguous reference to unqualified field id
+        "###
+    );
 }
 
 #[test]
@@ -3681,9 +3312,12 @@ fn test_prepare_statement_to_plan_panic_param_format() {
     // param is not number following the $ sign
     // panic due to error returned from the parser
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo";
-    assert_eq!(
+
+    assert_snapshot!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        "Error during planning: Invalid placeholder, not a number: $foo"
+        @r###"
+        Error during planning: Invalid placeholder, not a number: $foo
+        "###
     );
 }
 
@@ -3692,9 +3326,12 @@ fn test_prepare_statement_to_plan_panic_param_zero() {
     // param is zero following the $ sign
     // panic due to error returned from the parser
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $0";
-    assert_eq!(
+
+    assert_snapshot!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        "Error during planning: Invalid placeholder, zero is not a valid index: $0"
+        @r###"
+        Error during planning: Invalid placeholder, zero is not a valid index: $0
+        "###
     );
 }
 
@@ -3768,11 +3405,15 @@ fn test_prepare_statement_to_plan_no_param() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan = "Projection: person.id, person.age\
-        \n  Filter: person.age = Int64(10)\
-        \n    TableScan: person";
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = Int64(10)
+        TableScan: person
+    "
+    );
 
     //////////////////////////////////////////
     // no embedded parameter and no declare it
@@ -3790,11 +3431,15 @@ fn test_prepare_statement_to_plan_no_param() {
     ///////////////////
     // replace params with values
     let param_values: Vec<ScalarValue> = vec![];
-    let expected_plan = "Projection: person.id, person.age\
-        \n  Filter: person.age = Int64(10)\
-        \n    TableScan: person";
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = Int64(10)
+        TableScan: person
+    "
+    );
 }
 
 #[test]
@@ -3804,12 +3449,14 @@ fn test_prepare_statement_to_plan_one_param_no_value_panic() {
     let plan = logical_plan(sql).unwrap();
     // declare 1 param but provide 0
     let param_values: Vec<ScalarValue> = vec![];
-    assert_eq!(
+
+    assert_snapshot!(
         plan.with_param_values(param_values)
-            .unwrap_err()
-            .strip_backtrace(),
-        "Error during planning: Expected 1 parameters, got 0"
-    );
+        .unwrap_err()
+        .strip_backtrace(),
+        @r###"
+        Error during planning: Expected 1 parameters, got 0
+        "###);
 }
 
 #[test]
@@ -3819,11 +3466,14 @@ fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
     let plan = logical_plan(sql).unwrap();
     // declare 1 param but provide 0
     let param_values = vec![ScalarValue::Float64(Some(20.0))];
-    assert_eq!(
+
+    assert_snapshot!(
         plan.with_param_values(param_values)
             .unwrap_err()
             .strip_backtrace(),
-        "Error during planning: Expected parameter of type Int32, got Float64 at index 0"
+        @r###"
+        Error during planning: Expected parameter of type Int32, got Float64 at index 0
+        "###
     );
 }
 
@@ -3834,11 +3484,14 @@ fn test_prepare_statement_to_plan_no_param_on_value_panic() {
     let plan = logical_plan(sql).unwrap();
     // declare 1 param but provide 0
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    assert_eq!(
+
+    assert_snapshot!(
         plan.with_param_values(param_values)
             .unwrap_err()
             .strip_backtrace(),
-        "Error during planning: Expected 0 parameters, got 1"
+        @r###"
+        Error during planning: Expected 0 parameters, got 1
+        "###
     );
 }
 
@@ -3855,9 +3508,14 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan = "Projection: Int32(10) AS $1\n  EmptyRelation";
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: Int32(10) AS $1
+      EmptyRelation
+    "
+    );
 
     ///////////////////////////////////////
     let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1";
@@ -3871,10 +3529,14 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan =
-        "Projection: Int64(1) + Int32(10) AS Int64(1) + $1\n  EmptyRelation";
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: Int64(1) + Int32(10) AS Int64(1) + $1
+      EmptyRelation
+    "
+    );
 
     ///////////////////////////////////////
     let sql = "PREPARE my_plan(INT, DOUBLE) AS SELECT 1 + $1 + $2";
@@ -3891,11 +3553,14 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         ScalarValue::Int32(Some(10)),
         ScalarValue::Float64(Some(10.0)),
     ];
-    let expected_plan =
-        "Projection: Int64(1) + Int32(10) + Float64(10) AS Int64(1) + $1 + $2\
-        \n  EmptyRelation";
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: Int64(1) + Int32(10) + Float64(10) AS Int64(1) + $1 + $2
+      EmptyRelation
+    "
+    );
 }
 
 #[test]
@@ -3919,17 +3584,18 @@ Projection: person.id, orders.order_id
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))].into();
-    let expected_plan = r#"
-Projection: person.id, orders.order_id
-  Inner Join:  Filter: person.id = orders.customer_id AND person.age = Int32(10)
-    TableScan: person
-    TableScan: orders
-    "#
-    .trim();
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
+    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, orders.order_id
+      Inner Join:  Filter: person.id = orders.customer_id AND person.age = Int32(10)
+        TableScan: person
+        TableScan: orders
+    "
+    );
 }
 
 #[test]
@@ -3951,16 +3617,17 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::Int32(Some(10))].into();
-    let expected_plan = r#"
-Projection: person.id, person.age
-  Filter: person.age = Int32(10)
-    TableScan: person
-        "#
-    .trim();
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
+    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = Int32(10)
+        TableScan: person
+    "
+    );
 }
 
 #[test]
@@ -3985,17 +3652,17 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values =
-        vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(30))].into();
-    let expected_plan = r#"
-Projection: person.id, person.age
-  Filter: person.age BETWEEN Int32(10) AND Int32(30)
-    TableScan: person
-        "#
-    .trim();
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
+    let param_values = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(30))];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age BETWEEN Int32(10) AND Int32(30)
+        TableScan: person
+    "
+    );
 }
 
 #[test]
@@ -4022,21 +3689,22 @@ Projection: person.id, person.age
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values = vec![ScalarValue::UInt32(Some(10))].into();
-    let expected_plan = r#"
-Projection: person.id, person.age
-  Filter: person.age = (<subquery>)
-    Subquery:
-      Projection: max(person.age)
-        Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
-          Filter: person.id = UInt32(10)
-            TableScan: person
-    TableScan: person
-        "#
-    .trim();
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
+    let param_values = vec![ScalarValue::UInt32(Some(10))];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = (<subquery>)
+        Subquery:
+          Projection: max(person.age)
+            Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
+              Filter: person.id = UInt32(10)
+                TableScan: person
+        TableScan: person
+        "
+    );
 }
 
 #[test]
@@ -4062,18 +3730,18 @@ Dml: op=[Update] table=[person]
     assert_eq!(actual_types, expected_types);
 
     // replace params with values
-    let param_values =
-        vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))].into();
-    let expected_plan = r#"
-Dml: op=[Update] table=[person]
-  Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: person.id = UInt32(1)
-      TableScan: person
-        "#
-        .trim();
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
+    let param_values = vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Dml: op=[Update] table=[person]
+      Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+        Filter: person.id = UInt32(1)
+          TableScan: person
+        "
+    );
 }
 
 #[test]
@@ -4102,16 +3770,16 @@ fn test_prepare_statement_insert_infer() {
         ScalarValue::UInt32(Some(1)),
         ScalarValue::from("Alan"),
         ScalarValue::from("Turing"),
-    ]
-    .into();
-    let expected_plan = "Dml: op=[Insert Into] table=[person]\
-                        \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
-                                    CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
-                                    CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
-                        \n    Values: (UInt32(1) AS $1, Utf8(\"Alan\") AS $2, Utf8(\"Turing\") AS $3)";
-    let plan = plan.replace_params_with_values(&param_values).unwrap();
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    ];
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r#"
+    Dml: op=[Insert Into] table=[person]
+      Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
+        Values: (UInt32(1) AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
+    "#
+    );
 }
 
 #[test]
@@ -4130,11 +3798,16 @@ fn test_prepare_statement_to_plan_one_param() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan = "Projection: person.id, person.age\
-        \n  Filter: person.age = Int32(10)\
-        \n    TableScan: person";
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = Int32(10)
+        TableScan: person
+    "
+    );
 }
 
 #[test]
@@ -4155,11 +3828,16 @@ fn test_prepare_statement_to_plan_data_type() {
     ///////////////////
     // replace params with values still succeed and use Float64
     let param_values = vec![ScalarValue::Float64(Some(10.0))];
-    let expected_plan = "Projection: person.id, person.age\
-        \n  Filter: person.age = Float64(10)\
-        \n    TableScan: person";
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r"
+    Projection: person.id, person.age
+      Filter: person.age = Float64(10)
+        TableScan: person
+    "
+    );
 }
 
 #[test]
@@ -4188,12 +3866,16 @@ fn test_prepare_statement_to_plan_multi_params() {
         ScalarValue::Float64(Some(200.0)),
         ScalarValue::from("xyz"),
     ];
-    let expected_plan =
-            "Projection: person.id, person.age, Utf8(\"xyz\") AS $6\
-        \n  Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8(\"abc\")\
-        \n    TableScan: person";
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r#"
+    Projection: person.id, person.age, Utf8("xyz") AS $6
+      Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8("abc")
+        TableScan: person
+    "#
+    );
 }
 
 #[test]
@@ -4225,14 +3907,18 @@ fn test_prepare_statement_to_plan_having() {
         ScalarValue::Float64(Some(200.0)),
         ScalarValue::Float64(Some(300.0)),
     ];
-    let expected_plan =
-            "Projection: person.id, sum(person.age)\
-        \n  Filter: sum(person.age) < Int32(10) AND sum(person.age) > Int64(10) OR sum(person.age) IN ([Float64(200), Float64(300)])\
-        \n    Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]\
-        \n      Filter: person.salary > Float64(100)\
-        \n        TableScan: person";
 
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r#"
+    Projection: person.id, sum(person.age)
+      Filter: sum(person.age) < Int32(10) AND sum(person.age) > Int64(10) OR sum(person.age) IN ([Float64(200), Float64(300)])
+        Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
+          Filter: person.salary > Float64(100)
+            TableScan: person
+    "#
+    );
 }
 
 #[test]
@@ -4252,38 +3938,15 @@ fn test_prepare_statement_to_plan_limit() {
 
     // replace params with values
     let param_values = vec![ScalarValue::Int64(Some(10)), ScalarValue::Int64(Some(200))];
-    let expected_plan = "Limit: skip=10, fetch=200\
-        \n  Projection: person.id\
-        \n    TableScan: person";
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
-}
-
-#[test]
-fn test_prepare_statement_to_plan_value_list() {
-    let sql = "PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);";
-
-    let expected_plan = "Prepare: \"my_plan\" [Utf8, Utf8] \
-        \n  Projection: *\
-        \n    SubqueryAlias: t\
-        \n      Projection: column1 AS num, column2 AS letter\
-        \n        Values: (Int64(1), $1), (Int64(2), $2)";
-
-    let expected_dt = "[Utf8, Utf8]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
-
-    ///////////////////
-    // replace params with values
-    let param_values = vec![
-        ScalarValue::from("a".to_string()),
-        ScalarValue::from("b".to_string()),
-    ];
-    let expected_plan = "Projection: *\
-        \n  SubqueryAlias: t\
-        \n    Projection: column1 AS num, column2 AS letter\
-        \n      Values: (Int64(1), Utf8(\"a\") AS $1), (Int64(2), Utf8(\"b\") AS $2)";
-
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    let plan_with_params = plan.with_param_values(param_values).unwrap();
+    assert_snapshot!(
+        plan_with_params,
+        @r#"
+    Limit: skip=10, fetch=200
+      Projection: person.id
+        TableScan: person
+    "#
+    );
 }
 
 #[test]
@@ -4318,44 +3981,6 @@ fn test_prepare_statement_bad_list_idx() {
 
     let err = plan.replace_params_with_values(&param_values).unwrap_err();
     assert_contains!(err.to_string(), "Error during planning: Failed to parse placeholder id: invalid digit found in string");
-}
-
-#[test]
-fn test_table_alias() {
-    let sql = "select * from (\
-          (select id from person) t1 \
-            CROSS JOIN \
-          (select age from person) t2 \
-        ) as f";
-
-    let expected = "Projection: *\
-        \n  SubqueryAlias: f\
-        \n    Cross Join: \
-        \n      SubqueryAlias: t1\
-        \n        Projection: person.id\
-        \n          TableScan: person\
-        \n      SubqueryAlias: t2\
-        \n        Projection: person.age\
-        \n          TableScan: person";
-    quick_test(sql, expected);
-
-    let sql = "select * from (\
-          (select id from person) t1 \
-            CROSS JOIN \
-          (select age from person) t2 \
-        ) as f (c1, c2)";
-
-    let expected = "Projection: *\
-        \n  SubqueryAlias: f\
-        \n    Projection: t1.id AS c1, t2.age AS c2\
-        \n      Cross Join: \
-        \n        SubqueryAlias: t1\
-        \n          Projection: person.id\
-        \n            TableScan: person\
-        \n        SubqueryAlias: t2\
-        \n          Projection: person.age\
-        \n            TableScan: person";
-    quick_test(sql, expected);
 }
 
 #[test]
@@ -4407,15 +4032,28 @@ fn test_multi_grouping_sets() {
 #[test]
 fn test_field_not_found_window_function() {
     let order_by_sql = "SELECT count() OVER (order by a);";
-    let order_by_err = logical_plan(order_by_sql).expect_err("query should have failed");
-    let expected = "Schema error: No field named a.";
-    assert_eq!(order_by_err.strip_backtrace(), expected);
+    let order_by_err = logical_plan(order_by_sql)
+        .expect_err("query should have failed")
+        .strip_backtrace();
+
+    assert_snapshot!(
+        order_by_err,
+        @r###"
+        Schema error: No field named a.
+        "###
+    );
 
     let partition_by_sql = "SELECT count() OVER (PARTITION BY a);";
-    let partition_by_err =
-        logical_plan(partition_by_sql).expect_err("query should have failed");
-    let expected = "Schema error: No field named a.";
-    assert_eq!(partition_by_err.strip_backtrace(), expected);
+    let partition_by_err = logical_plan(partition_by_sql)
+        .expect_err("query should have failed")
+        .strip_backtrace();
+
+    assert_snapshot!(
+        partition_by_err,
+        @r###"
+        Schema error: No field named a.
+        "###
+    );
 
     let qualified_sql =
         "SELECT order_id, MAX(qty) OVER (PARTITION BY orders.order_id) from orders";
@@ -4443,10 +4081,13 @@ fn test_parse_escaped_string_literal_value() {
     quick_test(sql, expected);
 
     let sql = r"SELECT character_length(E'\000') AS len";
-    assert_eq!(
-        logical_plan(sql).unwrap_err().strip_backtrace(),
-        "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column: 25\")"
-    )
+
+    assert_snapshot!(
+        logical_plan(sql).unwrap_err(),
+        @r###"
+        SQL error: TokenizerError("Unterminated encoded string literal at Line: 1, Column: 25")
+        "###
+    );
 }
 
 #[test]
@@ -4562,22 +4203,36 @@ fn test_custom_type_plan() -> Result<()> {
     }
 
     let plan = plan_sql(sql);
-    let expected =
-        "Projection: CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None))\
-    \n  EmptyRelation";
-    assert_eq!(plan.to_string(), expected);
+
+    assert_snapshot!(
+        plan,
+        @r###"
+        Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None))
+          EmptyRelation
+        "###
+    );
 
     let plan = plan_sql("SELECT CAST(TIMESTAMP '2001-01-01 18:00:00' AS DATETIME)");
-    let expected = "Projection: CAST(CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None)) AS Timestamp(Nanosecond, None))\
-    \n  EmptyRelation";
-    assert_eq!(plan.to_string(), expected);
+
+    assert_snapshot!(
+        plan,
+        @r###"
+        Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)) AS Timestamp(Nanosecond, None))
+          EmptyRelation
+        "###
+    );
 
     let plan = plan_sql(
         "SELECT ARRAY[DATETIME '2001-01-01 18:00:00', DATETIME '2001-01-02 18:00:00']",
     );
-    let expected = "Projection: make_array(CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2001-01-02 18:00:00\") AS Timestamp(Nanosecond, None)))\
-    \n  EmptyRelation";
-    assert_eq!(plan.to_string(), expected);
+
+    assert_snapshot!(
+        plan,
+        @r###"
+        Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(Nanosecond, None)))
+          EmptyRelation
+        "###
+    );
 
     Ok(())
 }

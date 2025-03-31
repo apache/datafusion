@@ -103,6 +103,8 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
         // - Can `Wildcard` be considered as a `Literal`?
         // - ScalarVariable could be `applicable`, but that would require access to the context
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
         Expr::AggregateFunction { .. }
         | Expr::WindowFunction { .. }
         | Expr::Wildcard { .. }
@@ -120,6 +122,7 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
 const CONCURRENCY_LIMIT: usize = 100;
 
 /// Partition the list of files into `n` groups
+#[deprecated(since = "47.0.0", note = "use `FileGroup::split_files` instead")]
 pub fn split_files(
     mut partitioned_files: Vec<PartitionedFile>,
     n: usize,
@@ -532,13 +535,14 @@ pub fn describe_partition(partition: &Partition) -> (&str, usize, Vec<&str>) {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
+    use datafusion_common::config::TableOptions;
+    use datafusion_datasource::file_groups::FileGroup;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::FutureExt;
     use object_store::memory::InMemory;
     use std::any::Any;
     use std::ops::Not;
-    // use futures::StreamExt;
 
     use super::*;
     use datafusion_expr::{
@@ -550,24 +554,24 @@ mod tests {
     #[test]
     fn test_split_files() {
         let new_partitioned_file = |path: &str| PartitionedFile::new(path.to_owned(), 10);
-        let files = vec![
+        let files = FileGroup::new(vec![
             new_partitioned_file("a"),
             new_partitioned_file("b"),
             new_partitioned_file("c"),
             new_partitioned_file("d"),
             new_partitioned_file("e"),
-        ];
+        ]);
 
-        let chunks = split_files(files.clone(), 1);
+        let chunks = files.clone().split_files(1);
         assert_eq!(1, chunks.len());
         assert_eq!(5, chunks[0].len());
 
-        let chunks = split_files(files.clone(), 2);
+        let chunks = files.clone().split_files(2);
         assert_eq!(2, chunks.len());
         assert_eq!(3, chunks[0].len());
         assert_eq!(2, chunks[1].len());
 
-        let chunks = split_files(files.clone(), 5);
+        let chunks = files.clone().split_files(5);
         assert_eq!(5, chunks.len());
         assert_eq!(1, chunks[0].len());
         assert_eq!(1, chunks[1].len());
@@ -575,7 +579,7 @@ mod tests {
         assert_eq!(1, chunks[3].len());
         assert_eq!(1, chunks[4].len());
 
-        let chunks = split_files(files, 123);
+        let chunks = files.clone().split_files(123);
         assert_eq!(5, chunks.len());
         assert_eq!(1, chunks[0].len());
         assert_eq!(1, chunks[1].len());
@@ -583,7 +587,8 @@ mod tests {
         assert_eq!(1, chunks[3].len());
         assert_eq!(1, chunks[4].len());
 
-        let chunks = split_files(vec![], 2);
+        let empty_group = FileGroup::default();
+        let chunks = empty_group.split_files(2);
         assert_eq!(0, chunks.len());
     }
 
@@ -1066,6 +1071,18 @@ mod tests {
         }
 
         fn as_any(&self) -> &dyn Any {
+            unimplemented!()
+        }
+
+        fn table_options(&self) -> &TableOptions {
+            unimplemented!()
+        }
+
+        fn table_options_mut(&mut self) -> &mut TableOptions {
+            unimplemented!()
+        }
+
+        fn task_ctx(&self) -> Arc<datafusion_execution::TaskContext> {
             unimplemented!()
         }
     }

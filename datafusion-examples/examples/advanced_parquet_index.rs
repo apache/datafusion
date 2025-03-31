@@ -23,8 +23,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
@@ -32,7 +30,7 @@ use datafusion::common::{
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
-    parquet::ParquetFileReaderFactory, FileMeta, FileScanConfig, ParquetSource,
+    FileMeta, FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
 };
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -53,8 +51,11 @@ use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 
+use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::datasource::memory::DataSourceExec;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use object_store::ObjectStore;
@@ -498,13 +499,15 @@ impl TableProvider for IndexTableProvider {
                 // provide the factory to create parquet reader without re-reading metadata
                 .with_parquet_file_reader_factory(Arc::new(reader_factory)),
         );
-        let file_scan_config = FileScanConfig::new(object_store_url, schema, file_source)
-            .with_limit(limit)
-            .with_projection(projection.cloned())
-            .with_file(partitioned_file);
+        let file_scan_config =
+            FileScanConfigBuilder::new(object_store_url, schema, file_source)
+                .with_limit(limit)
+                .with_projection(projection.cloned())
+                .with_file(partitioned_file)
+                .build();
 
         // Finally, put it all together into a DataSourceExec
-        Ok(file_scan_config.build())
+        Ok(DataSourceExec::from_data_source(file_scan_config))
     }
 
     /// Tell DataFusion to push filters down to the scan method

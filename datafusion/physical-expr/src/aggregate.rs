@@ -65,6 +65,8 @@ pub struct AggregateExprBuilder {
     /// Physical expressions of the aggregate function
     args: Vec<Arc<dyn PhysicalExpr>>,
     alias: Option<String>,
+    /// A human readable name
+    human_display: String,
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
     /// The physical order by expressions
@@ -83,6 +85,7 @@ impl AggregateExprBuilder {
             fun,
             args,
             alias: None,
+            human_display: String::default(),
             schema: Arc::new(Schema::empty()),
             ordering_req: LexOrdering::default(),
             ignore_nulls: false,
@@ -91,11 +94,15 @@ impl AggregateExprBuilder {
         }
     }
 
+    /// Constructs an `AggregateFunctionExpr` from the builder
+    ///
+    /// Note that an [`Self::alias`] must be provided before calling this method.
     pub fn build(self) -> Result<AggregateFunctionExpr> {
         let Self {
             fun,
             args,
             alias,
+            human_display,
             schema,
             ordering_req,
             ignore_nulls,
@@ -132,7 +139,11 @@ impl AggregateExprBuilder {
         let data_type = fun.return_type(&input_exprs_types)?;
         let is_nullable = fun.is_nullable();
         let name = match alias {
-            None => return internal_err!("alias should be provided"),
+            None => {
+                return internal_err!(
+                    "AggregateExprBuilder::alias must be provided prior to calling build"
+                )
+            }
             Some(alias) => alias,
         };
 
@@ -141,6 +152,7 @@ impl AggregateExprBuilder {
             args,
             data_type,
             name,
+            human_display,
             schema: Arc::unwrap_or_clone(schema),
             ordering_req,
             ignore_nulls,
@@ -154,6 +166,11 @@ impl AggregateExprBuilder {
 
     pub fn alias(mut self, alias: impl Into<String>) -> Self {
         self.alias = Some(alias.into());
+        self
+    }
+
+    pub fn human_display(mut self, name: String) -> Self {
+        self.human_display = name;
         self
     }
 
@@ -199,13 +216,18 @@ impl AggregateExprBuilder {
 }
 
 /// Physical aggregate expression of a UDAF.
+///
+/// Instances are constructed via [`AggregateExprBuilder`].
 #[derive(Debug, Clone)]
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Output / return type of this aggregate
     data_type: DataType,
+    /// Output column name that this expression creates
     name: String,
+    /// Simplified name for `tree` explain.
+    human_display: String,
     schema: Schema,
     // The physical order by expressions
     ordering_req: LexOrdering,
@@ -234,6 +256,11 @@ impl AggregateFunctionExpr {
     /// Human readable name such as `"MIN(c2)"`.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Simplified name for `tree` explain.
+    pub fn human_display(&self) -> &str {
+        &self.human_display
     }
 
     /// Return if the aggregation is distinct
