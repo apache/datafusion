@@ -97,9 +97,9 @@ impl AggregateExprBuilder {
     /// Constructs an `AggregateFunctionExpr` from the builder
     ///
     /// Note that an [`Self::alias`] must be provided before calling this method.
-    /// 
+    ///
     /// # Example: Create an `AggregateUDF`
-    /// 
+    ///
     /// In the following example, `AggregateFunctionExpr` will be built using `AggregateExprBuilder`
     /// which provides a build function.
     ///
