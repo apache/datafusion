@@ -73,7 +73,7 @@ select arrow_cast(now(), 'Timestamp(Second, None)');
 | `FLOAT`                              | `Float32`                      |                                                                                                       |
 | `REAL`                               | `Float32`                      |                                                                                                       |
 | `DOUBLE`                             | `Float64`                      |                                                                                                       |
-| `DECIMAL(precision, scale)`          | `Decimal128(precision, scale)` | Decimal support is currently experimental ([#3523](https://github.com/apache/datafusion/issues/3523)) |
+| `DECIMAL(precision, scale)`          | `Decimal128(precision, scale)` |  |
 
 ## Date/Time Types
 
