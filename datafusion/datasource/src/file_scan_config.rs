@@ -884,6 +884,12 @@ impl FileScanConfig {
         sort_order: &LexOrdering,
         target_partitions: usize,
     ) -> Result<Vec<FileGroup>> {
+        if target_partitions == 0 {
+            return Err(DataFusionError::Internal(
+                "target_partitions must be greater than 0".to_string(),
+            ));
+        }
+
         let flattened_files = file_groups
             .iter()
             .flat_map(FileGroup::iter)
@@ -903,12 +909,10 @@ impl FileScanConfig {
         let indices_sorted_by_min = statistics.min_values_sorted();
 
         // Initialize with target_partitions empty groups
-        let mut file_groups_indices: Vec<Vec<usize>> =
-            vec![vec![]; target_partitions.max(1)];
+        let mut file_groups_indices: Vec<Vec<usize>> = vec![vec![]; target_partitions];
 
         for (idx, min) in indices_sorted_by_min {
-            // Find all groups where the file can fit
-            let mut suitable_groups: Vec<(usize, &mut Vec<usize>)> = file_groups_indices
+            if let Some((_, group)) = file_groups_indices
                 .iter_mut()
                 .enumerate()
                 .filter(|(_, group)| {
@@ -917,12 +921,8 @@ impl FileScanConfig {
                             > statistics
                                 .max(*group.last().expect("groups should not be empty"))
                 })
-                .collect();
-
-            // Sort by group size to prioritize smaller groups
-            suitable_groups.sort_by_key(|(_, group)| group.len());
-
-            if let Some((_, group)) = suitable_groups.first_mut() {
+                .min_by_key(|(_, group)| group.len())
+            {
                 group.push(idx);
             } else {
                 // Create a new group if no existing group fits
