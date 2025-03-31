@@ -416,6 +416,33 @@ SELECT to_timestamp(123456789.123456789) as c1, cast(123456789.123456789 as time
 ----
 1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784
 
+# to_timestamp Decimal128 inputs
+
+query PPP
+SELECT to_timestamp(arrow_cast(1.1, 'Decimal128(2,1)')) as c1, cast(arrow_cast(1.1, 'Decimal128(2,1)') as timestamp) as c2, arrow_cast(1.1, 'Decimal128(2,1)')::timestamp as c3;
+----
+1970-01-01T00:00:01.100 1970-01-01T00:00:01.100 1970-01-01T00:00:01.100
+
+query PPP
+SELECT to_timestamp(arrow_cast(-1.1, 'Decimal128(2,1)')) as c1, cast(arrow_cast(-1.1, 'Decimal128(2,1)') as timestamp) as c2, arrow_cast(-1.1, 'Decimal128(2,1)')::timestamp as c3;
+----
+1969-12-31T23:59:58.900 1969-12-31T23:59:58.900 1969-12-31T23:59:58.900
+
+query PPP
+SELECT to_timestamp(arrow_cast(0.0, 'Decimal128(2,1)')) as c1, cast(arrow_cast(0.0, 'Decimal128(2,1)') as timestamp) as c2, arrow_cast(0.0, 'Decimal128(2,1)')::timestamp as c3;
+----
+1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00
+
+query PPP
+SELECT to_timestamp(arrow_cast(1.23456789, 'Decimal128(9,8)')) as c1, cast(arrow_cast(1.23456789, 'Decimal128(9,8)') as timestamp) as c2, arrow_cast(1.23456789, 'Decimal128(9,8)')::timestamp as c3;
+----
+1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890
+
+query PPP
+SELECT to_timestamp(arrow_cast(123456789.123456789, 'Decimal128(18,9)')) as c1, cast(arrow_cast(123456789.123456789, 'Decimal128(18,9)') as timestamp) as c2, arrow_cast(123456789.123456789, 'Decimal128(18,9)')::timestamp as c3;
+----
+1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784
+
 
 # from_unixtime
 
