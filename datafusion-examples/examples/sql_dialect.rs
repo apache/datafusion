@@ -19,7 +19,7 @@ use std::fmt::Display;
 
 use datafusion::error::Result;
 use datafusion::sql::{
-    parser::{CopyToSource, CopyToStatement, DFParser, Statement},
+    parser::{CopyToSource, CopyToStatement, DFParser, DFParserBuilder, Statement},
     sqlparser::{keywords::Keyword, parser::ParserError, tokenizer::Token},
 };
 
@@ -46,9 +46,9 @@ struct MyParser<'a> {
     df_parser: DFParser<'a>,
 }
 
-impl MyParser<'_> {
-    fn new(sql: &str) -> Result<Self> {
-        let df_parser = DFParser::new(sql)?;
+impl<'a> MyParser<'a> {
+    fn new(sql: &'a str) -> Result<Self> {
+        let df_parser = DFParserBuilder::new(sql).build()?;
         Ok(Self { df_parser })
     }
 

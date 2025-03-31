@@ -26,14 +26,15 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion::datasource::data_source::FileSource;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
+use datafusion::datasource::physical_plan::{
+    FileGroup, FileScanConfig, FileScanConfigBuilder, FileSinkConfig, FileSource,
+};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
@@ -480,7 +481,7 @@ pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     registry: &dyn FunctionRegistry,
     codec: &dyn PhysicalExtensionCodec,
-    source: Arc<dyn FileSource>,
+    file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
     let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
     let projection = proto
@@ -488,16 +489,11 @@ pub fn parse_protobuf_file_scan_config(
         .iter()
         .map(|i| *i as usize)
         .collect::<Vec<_>>();
-    let projection = if projection.is_empty() {
-        None
-    } else {
-        Some(projection)
-    };
 
     let constraints = convert_required!(proto.constraints)?;
     let statistics = convert_required!(proto.statistics)?;
 
-    let file_groups: Vec<Vec<PartitionedFile>> = proto
+    let file_groups = proto
         .file_groups
         .iter()
         .map(|f| f.try_into())
@@ -538,14 +534,17 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.push(sort_expr);
     }
 
-    Ok(FileScanConfig::new(object_store_url, file_schema, source)
+    let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
-        .with_projection(projection)
+        .with_projection(Some(projection))
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_table_partition_cols(table_partition_cols)
-        .with_output_ordering(output_ordering))
+        .with_output_ordering(output_ordering)
+        .with_batch_size(proto.batch_size.map(|s| s as usize))
+        .build();
+    Ok(config)
 }
 
 impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
@@ -584,14 +583,16 @@ impl TryFrom<&protobuf::FileRange> for FileRange {
     }
 }
 
-impl TryFrom<&protobuf::FileGroup> for Vec<PartitionedFile> {
+impl TryFrom<&protobuf::FileGroup> for FileGroup {
     type Error = DataFusionError;
 
     fn try_from(val: &protobuf::FileGroup) -> Result<Self, Self::Error> {
-        val.files
+        let files = val
+            .files
             .iter()
             .map(|f| f.try_into())
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(FileGroup::new(files))
     }
 }
 
@@ -633,11 +634,12 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
     type Error = DataFusionError;
 
     fn try_from(conf: &protobuf::FileSinkConfig) -> Result<Self, Self::Error> {
-        let file_groups = conf
-            .file_groups
-            .iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>>>()?;
+        let file_group = FileGroup::new(
+            conf.file_groups
+                .iter()
+                .map(|f| f.try_into())
+                .collect::<Result<Vec<_>>>()?,
+        );
         let table_paths = conf
             .table_paths
             .iter()
@@ -657,8 +659,9 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             protobuf::InsertOp::Replace => InsertOp::Replace,
         };
         Ok(Self {
+            original_url: String::default(),
             object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
-            file_groups,
+            file_group,
             table_paths,
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,

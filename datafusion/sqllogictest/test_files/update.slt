@@ -78,8 +78,8 @@ physical_plan_error This feature is not implemented: Unsupported logical plan: D
 statement ok
 create table t3(a int, b varchar, c double, d int);
 
-# set from multiple tables, sqlparser only supports from one table
-query error DataFusion error: SQL error: ParserError\("Expected end of statement, found: ,"\)
+# set from multiple tables, DataFusion only supports from one table
+query error DataFusion error: Error during planning: Multiple tables in UPDATE SET FROM not yet supported
 explain update t1 set b = t2.b, c = t3.a, d = 1 from t2, t3 where t1.a = t2.a and t1.a = t3.a;
 
 # test table alias

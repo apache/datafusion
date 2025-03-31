@@ -25,7 +25,7 @@ use datafusion_common::ScalarValue;
 use rand::rngs::ThreadRng;
 use rand::Rng;
 
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_bin;
 
 fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
@@ -45,12 +45,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         let interval = ColumnarValue::Scalar(ScalarValue::new_interval_dt(0, 1_000_000));
         let timestamps = ColumnarValue::Array(timestamps_array);
         let udf = date_bin();
+        let return_type = udf
+            .return_type(&[interval.data_type(), timestamps.data_type()])
+            .unwrap();
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
-                udf.invoke_batch(&[interval.clone(), timestamps.clone()], batch_len)
-                    .expect("date_bin should work on valid values"),
+                udf.invoke_with_args(ScalarFunctionArgs {
+                    args: vec![interval.clone(), timestamps.clone()],
+                    number_rows: batch_len,
+                    return_type: &return_type,
+                })
+                .expect("date_bin should work on valid values"),
             )
         })
     });

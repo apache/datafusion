@@ -17,7 +17,9 @@
 
 use std::sync::Arc;
 
-use datafusion_common::HashMap;
+use crate::create_physical_expr;
+use datafusion_common::{DFSchema, HashMap};
+use datafusion_expr::execution_props::ExecutionProps;
 pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 pub use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use itertools::izip;
@@ -56,6 +58,126 @@ pub fn physical_exprs_bag_equal(
         *multi_set_rhs.entry(expr).or_insert(0) += 1;
     }
     multi_set_lhs == multi_set_rhs
+}
+
+use crate::{expressions, LexOrdering, PhysicalSortExpr};
+use arrow::compute::SortOptions;
+use arrow::datatypes::Schema;
+use datafusion_common::plan_err;
+use datafusion_common::Result;
+use datafusion_expr::{Expr, SortExpr};
+
+/// Converts logical sort expressions to physical sort expressions
+///
+/// This function transforms a collection of logical sort expressions into their physical
+/// representation that can be used during query execution.
+///
+/// # Arguments
+///
+/// * `schema` - The schema containing column definitions
+/// * `sort_order` - A collection of logical sort expressions grouped into lexicographic orderings
+///
+/// # Returns
+///
+/// A vector of lexicographic orderings for physical execution, or an error if the transformation fails
+///
+/// # Examples
+///
+/// ```
+/// // Create orderings from columns "id" and "name"
+/// # use arrow::datatypes::{Schema, Field, DataType};
+/// # use datafusion_physical_expr::create_ordering;
+/// # use datafusion_common::Column;
+/// # use datafusion_expr::{Expr, SortExpr};
+/// #
+/// // Create a schema with two fields
+/// let schema = Schema::new(vec![
+///     Field::new("id", DataType::Int32, false),
+///     Field::new("name", DataType::Utf8, false),
+/// ]);
+///
+/// let sort_exprs = vec![
+///     vec![
+///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "id")), asc: true, nulls_first: false }
+///     ],
+///     vec![
+///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "name")), asc: false, nulls_first: true }
+///     ]
+/// ];
+/// let result = create_ordering(&schema, &sort_exprs).unwrap();
+/// ```
+pub fn create_ordering(
+    schema: &Schema,
+    sort_order: &[Vec<SortExpr>],
+) -> Result<Vec<LexOrdering>> {
+    let mut all_sort_orders = vec![];
+
+    for (group_idx, exprs) in sort_order.iter().enumerate() {
+        // Construct PhysicalSortExpr objects from Expr objects:
+        let mut sort_exprs = LexOrdering::default();
+        for (expr_idx, sort) in exprs.iter().enumerate() {
+            match &sort.expr {
+                Expr::Column(col) => match expressions::col(&col.name, schema) {
+                    Ok(expr) => {
+                        sort_exprs.push(PhysicalSortExpr {
+                            expr,
+                            options: SortOptions {
+                                descending: !sort.asc,
+                                nulls_first: sort.nulls_first,
+                            },
+                        });
+                    }
+                    // Cannot find expression in the projected_schema, stop iterating
+                    // since rest of the orderings are violated
+                    Err(_) => break,
+                },
+                expr => {
+                    return plan_err!(
+                        "Expected single column reference in sort_order[{}][{}], got {}",
+                        group_idx,
+                        expr_idx,
+                        expr
+                    );
+                }
+            }
+        }
+        if !sort_exprs.is_empty() {
+            all_sort_orders.push(sort_exprs);
+        }
+    }
+    Ok(all_sort_orders)
+}
+
+/// Create a physical sort expression from a logical expression
+pub fn create_physical_sort_expr(
+    e: &SortExpr,
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<PhysicalSortExpr> {
+    let SortExpr {
+        expr,
+        asc,
+        nulls_first,
+    } = e;
+    Ok(PhysicalSortExpr {
+        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+        options: SortOptions {
+            descending: !asc,
+            nulls_first: *nulls_first,
+        },
+    })
+}
+
+/// Create vector of physical sort expression from a vector of logical expression
+pub fn create_physical_sort_exprs(
+    exprs: &[SortExpr],
+    input_dfschema: &DFSchema,
+    execution_props: &ExecutionProps,
+) -> Result<LexOrdering> {
+    exprs
+        .iter()
+        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
+        .collect::<Result<LexOrdering>>()
 }
 
 #[cfg(test)]

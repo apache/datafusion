@@ -40,9 +40,15 @@ nested_expressions = ["datafusion-functions-nested"]
 # This feature is deprecated. Use the `nested_expressions` feature instead.
 array_expressions = ["nested_expressions"]
 # Used to enable the avro format
-avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
+avro = ["datafusion-common/avro", "datafusion-datasource-avro"]
 backtrace = ["datafusion-common/backtrace"]
-compression = ["xz2", "bzip2", "flate2", "zstd", "datafusion-datasource/compression"]
+compression = [
+    "xz2",
+    "bzip2",
+    "flate2",
+    "zstd",
+    "datafusion-datasource/compression",
+]
 crypto_expressions = ["datafusion-functions/crypto_expressions"]
 datetime_expressions = ["datafusion-functions/datetime_expressions"]
 default = [
@@ -61,7 +67,7 @@ encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = ["datafusion-physical-plan/force_hash_collisions", "datafusion-common/force_hash_collisions"]
 math_expressions = ["datafusion-functions/math_expressions"]
-parquet = ["datafusion-common/parquet", "dep:parquet"]
+parquet = ["datafusion-common/parquet", "dep:parquet", "datafusion-datasource-parquet"]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = [
     "datafusion-functions/regex_expressions",
@@ -73,7 +79,12 @@ recursive_protection = [
     "datafusion-physical-optimizer/recursive_protection",
     "datafusion-sql/recursive_protection",
 ]
-serde = ["dep:serde"]
+serde = [
+    "dep:serde",
+    # Enable `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+    # statements in `arrow-schema` crate
+    "arrow-schema/serde",
+]
 string_expressions = ["datafusion-functions/string_expressions"]
 unicode_expressions = [
     "datafusion-sql/unicode_expressions",
@@ -82,19 +93,22 @@ unicode_expressions = [
 extended_tests = []
 
 [dependencies]
-apache-avro = { version = "0.17", optional = true }
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-bzip2 = { version = "0.5.1", optional = true }
+bzip2 = { version = "0.5.2", optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-datasource = { workspace = true }
+datafusion-datasource-avro = { workspace = true, optional = true }
+datafusion-datasource-csv = { workspace = true }
+datafusion-datasource-json = { workspace = true }
+datafusion-datasource-parquet = { workspace = true, optional = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
@@ -109,12 +123,12 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-session = { workspace = true }
 datafusion-sql = { workspace = true }
-flate2 = { version = "1.0.24", optional = true }
+flate2 = { version = "1.1.0", optional = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
-num-traits = { version = "0.2", optional = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
@@ -125,13 +139,13 @@ sqlparser = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.13", features = ["v4", "js"] }
+uuid = { version = "1.16", features = ["v4", "js"] }
 xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-criterion = { workspace = true, features = ["async_tokio"] }
+criterion = { workspace = true, features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
 dashmap = "6.1.0"
 datafusion-doc = { workspace = true }
@@ -139,6 +153,7 @@ datafusion-functions-window-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
+insta = { workspace = true }
 paste = "^1.0"
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.4.3"

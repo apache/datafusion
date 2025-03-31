@@ -104,6 +104,11 @@ impl PhysicalExpr for IsNotNullExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(IsNotNullExpr::new(Arc::clone(&children[0]))))
     }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.arg.fmt_sql(f)?;
+        write!(f, " IS NOT NULL")
+    }
 }
 
 /// Create an IS NOT NULL expression
@@ -121,6 +126,7 @@ mod tests {
     use arrow::buffer::ScalarBuffer;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_boolean_array;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
     fn is_not_null_op() -> Result<()> {
@@ -186,5 +192,30 @@ mod tests {
         let expected = &BooleanArray::from(vec![true, false, true, true, false]);
 
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let union_fields: UnionFields = [
+            (0, Arc::new(Field::new("A", DataType::Int32, true))),
+            (1, Arc::new(Field::new("B", DataType::Float64, true))),
+        ]
+        .into_iter()
+        .collect();
+
+        let field = Field::new(
+            "my_union",
+            DataType::Union(union_fields, UnionMode::Sparse),
+            true,
+        );
+
+        let schema = Schema::new(vec![field]);
+        let expr = is_not_null(col("my_union", &schema).unwrap()).unwrap();
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "my_union@0 IS NOT NULL");
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "my_union IS NOT NULL");
+
+        Ok(())
     }
 }

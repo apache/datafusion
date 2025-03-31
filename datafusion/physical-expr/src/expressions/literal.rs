@@ -93,6 +93,10 @@ impl PhysicalExpr for Literal {
             preserves_lex_ordering: true,
         })
     }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
 }
 
 /// Create a literal expression
@@ -110,6 +114,7 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_int32_array;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
     fn literal_i32() -> Result<()> {
@@ -133,6 +138,18 @@ mod tests {
         for i in 0..literal_array.len() {
             assert_eq!(literal_array.value(i), 42);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        // create and evaluate a literal expression
+        let expr = lit(42i32);
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "42");
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "42");
 
         Ok(())
     }

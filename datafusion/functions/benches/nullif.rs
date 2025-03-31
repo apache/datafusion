@@ -17,10 +17,11 @@
 
 extern crate criterion;
 
+use arrow::datatypes::DataType;
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::core::nullif;
 use std::sync::Arc;
 
@@ -34,8 +35,15 @@ fn criterion_benchmark(c: &mut Criterion) {
         ];
         c.bench_function(&format!("nullif scalar array: {}", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                black_box(nullif.invoke_batch(&args, size).unwrap())
+                black_box(
+                    nullif
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            number_rows: size,
+                            return_type: &DataType::Utf8,
+                        })
+                        .unwrap(),
+                )
             })
         });
     }

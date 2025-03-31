@@ -35,7 +35,7 @@ use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::ops::{Neg, Range};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 get_or_init_udwf!(
     Lag,
@@ -148,38 +148,38 @@ impl WindowShift {
     }
 }
 
-static LAG_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static LAG_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(DOC_SECTION_ANALYTICAL, "Returns value evaluated at the row that is offset rows before the \
+            current row within the partition; if there is no such row, instead return default \
+            (which must be of the same type as value).", "lag(expression, offset, default)")
+        .with_argument("expression", "Expression to operate on")
+        .with_argument("offset", "Integer. Specifies how many rows back \
+        the value of expression should be retrieved. Defaults to 1.")
+        .with_argument("default", "The default value if the offset is \
+        not within the partition. Must be of the same type as expression.")
+        .build()
+});
 
 fn get_lag_doc() -> &'static Documentation {
-    LAG_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(DOC_SECTION_ANALYTICAL, "Returns value evaluated at the row that is offset rows before the \
-                current row within the partition; if there is no such row, instead return default \
-                (which must be of the same type as value).", "lag(expression, offset, default)")
-            .with_argument("expression", "Expression to operate on")
-            .with_argument("offset", "Integer. Specifies how many rows back \
-            the value of expression should be retrieved. Defaults to 1.")
-            .with_argument("default", "The default value if the offset is \
-            not within the partition. Must be of the same type as expression.")
-            .build()
-    })
+    &LAG_DOCUMENTATION
 }
 
-static LEAD_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static LEAD_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(DOC_SECTION_ANALYTICAL,
+            "Returns value evaluated at the row that is offset rows after the \
+            current row within the partition; if there is no such row, instead return default \
+            (which must be of the same type as value).",
+        "lead(expression, offset, default)")
+        .with_argument("expression", "Expression to operate on")
+        .with_argument("offset", "Integer. Specifies how many rows \
+        forward the value of expression should be retrieved. Defaults to 1.")
+        .with_argument("default", "The default value if the offset is \
+        not within the partition. Must be of the same type as expression.")
+        .build()
+});
 
 fn get_lead_doc() -> &'static Documentation {
-    LEAD_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(DOC_SECTION_ANALYTICAL,
-                "Returns value evaluated at the row that is offset rows after the \
-                current row within the partition; if there is no such row, instead return default \
-                (which must be of the same type as value).",
-            "lead(expression, offset, default)")
-            .with_argument("expression", "Expression to operate on")
-            .with_argument("offset", "Integer. Specifies how many rows \
-            forward the value of expression should be retrieved. Defaults to 1.")
-            .with_argument("default", "The default value if the offset is \
-            not within the partition. Must be of the same type as expression.")
-            .build()
-    })
+    &LEAD_DOCUMENTATION
 }
 
 impl WindowUDFImpl for WindowShift {

@@ -30,7 +30,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
-    Result, TableReference,
+    Result, Spans, TableReference,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -215,6 +215,7 @@ impl ExprSchemable for Expr {
                     Ok(DataType::Null)
                 }
             }
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => Ok(DataType::Null),
             Expr::GroupingSet(_) => {
                 // Grouping sets do not really have a type and do not appear in projections
@@ -329,6 +330,7 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => Ok(false),
             Expr::GroupingSet(_) => {
                 // Grouping sets do not really have the concept of nullable and do not appear
@@ -341,7 +343,16 @@ impl ExprSchemable for Expr {
     fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>> {
         match self {
             Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
-            Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
+            Expr::Alias(Alias { expr, metadata, .. }) => {
+                let mut ret = expr.metadata(schema)?;
+                if let Some(metadata) = metadata {
+                    if !metadata.is_empty() {
+                        ret.extend(metadata.clone());
+                        return Ok(ret);
+                    }
+                }
+                Ok(ret)
+            }
             Expr::Cast(Cast { expr, .. }) => expr.metadata(schema),
             _ => Ok(HashMap::new()),
         }
@@ -606,6 +617,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
     Ok(Subquery {
         subquery: Arc::new(new_plan),
         outer_ref_columns: subquery.outer_ref_columns,
+        spans: Spans::new(),
     })
 }
 

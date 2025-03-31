@@ -1,0 +1,89 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: PR commands
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+  checks: write
+
+jobs:
+  # Starts the extended_tests on a PR branch when someone leaves a `Run extended tests` comment
+  run_extended_tests:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, 'Run extended tests') }}
+    steps:
+      - name: Dispatch extended tests for a PR branch with comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Get PR details to fetch the branch name
+            const { data: pullRequest } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.issue.number
+            });
+            
+            // Extract the branch name
+            const branchName = pullRequest.head.ref;
+            const headSha = pullRequest.head.sha;
+            const workflowRunsUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions?query=workflow%3A%22Datafusion+extended+tests%22+branch%3A${branchName}`;
+            
+            // Create a check run that links to the Actions tab so the run will be visible in GitHub UI
+            const check = await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Extended Tests',
+              head_sha: headSha,
+              status: 'in_progress',
+              output: {
+                title: 'Extended Tests Running',
+                summary: `Extended tests have been triggered for this PR.\n\n[View workflow runs](${workflowRunsUrl})`
+              },
+              details_url: workflowRunsUrl
+            });
+
+            // Dispatch the workflow with the PR branch name
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'extended.yml',
+              ref: branchName,
+              inputs: {
+                pr_number: context.payload.issue.number.toString(),
+                check_run_id: check.data.id.toString(),
+                pr_head_sha: headSha
+              }
+            });
+
+      - name: Add reaction to comment 
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            });

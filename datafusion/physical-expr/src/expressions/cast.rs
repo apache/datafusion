@@ -194,6 +194,14 @@ impl PhysicalExpr for CastExpr {
             Ok(ExprProperties::new_unknown().with_range(unbounded))
         }
     }
+
+    fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CAST(")?;
+        self.expr.fmt_sql(f)?;
+        write!(f, " AS {:?}", self.cast_type)?;
+
+        write!(f, ")")
+    }
 }
 
 /// Return a PhysicalExpression representing `expr` casted to
@@ -243,6 +251,7 @@ mod tests {
         datatypes::*,
     };
     use datafusion_common::assert_contains;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -764,6 +773,28 @@ mod tests {
         let expression =
             cast_with_options(col("a", &schema)?, &schema, Decimal128(38, 38), None)?;
         expression.evaluate(&batch)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", Int32, true)]);
+
+        // Test numeric casting
+        let expr = cast(col("a", &schema)?, &schema, Int64)?;
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "CAST(a@0 AS Int64)");
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "CAST(a AS Int64)");
+
+        // Test string casting
+        let schema = Schema::new(vec![Field::new("b", Utf8, true)]);
+        let expr = cast(col("b", &schema)?, &schema, Int32)?;
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "CAST(b@0 AS Int32)");
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "CAST(b AS Int32)");
+
         Ok(())
     }
 }

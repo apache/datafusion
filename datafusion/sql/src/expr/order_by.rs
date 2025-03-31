@@ -21,7 +21,9 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, SortExpr};
-use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};
+use sqlparser::ast::{
+    Expr as SQLExpr, OrderByExpr, OrderByOptions, Value, ValueWithSpan,
+};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Convert sql [OrderByExpr] to `Vec<Expr>`.
@@ -62,9 +64,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut expr_vec = vec![];
         for e in exprs {
             let OrderByExpr {
-                asc,
                 expr,
-                nulls_first,
+                options: OrderByOptions { asc, nulls_first },
                 with_fill,
             } = e;
 
@@ -73,7 +74,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             let expr = match expr {
-                SQLExpr::Value(Value::Number(v, _)) if literal_to_column => {
+                SQLExpr::Value(ValueWithSpan {
+                    value: Value::Number(v, _),
+                    span: _,
+                }) if literal_to_column => {
                     let field_index = v
                         .parse::<usize>()
                         .map_err(|err| plan_datafusion_err!("{}", err))?;

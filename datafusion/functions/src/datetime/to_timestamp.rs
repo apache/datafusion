@@ -299,11 +299,11 @@ impl ScalarUDFImpl for ToTimestampFunc {
         Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = args.args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp function requires 1 or more arguments, got {}",
@@ -313,7 +313,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            validate_data_types(args, "to_timestamp")?;
+            validate_data_types(&args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -327,7 +327,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
             Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp")
+                to_timestamp_impl::<TimestampNanosecondType>(&args, "to_timestamp")
             }
             other => {
                 exec_err!(
@@ -359,11 +359,11 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         Ok(return_type_for(&arg_types[0], Second))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = args.args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_seconds function requires 1 or more arguments, got {}",
@@ -373,7 +373,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            validate_data_types(args, "to_timestamp")?;
+            validate_data_types(&args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -382,7 +382,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
             }
             Timestamp(_, Some(tz)) => args[0].cast_to(&Timestamp(Second, Some(tz)), None),
             Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds")
+                to_timestamp_impl::<TimestampSecondType>(&args, "to_timestamp_seconds")
             }
             other => {
                 exec_err!(
@@ -414,11 +414,11 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         Ok(return_type_for(&arg_types[0], Millisecond))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = args.args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_millis function requires 1 or more arguments, got {}",
@@ -428,7 +428,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            validate_data_types(args, "to_timestamp")?;
+            validate_data_types(&args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -438,9 +438,10 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Millisecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampMillisecondType>(args, "to_timestamp_millis")
-            }
+            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMillisecondType>(
+                &args,
+                "to_timestamp_millis",
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp_millis",
@@ -471,11 +472,11 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         Ok(return_type_for(&arg_types[0], Microsecond))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = args.args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_micros function requires 1 or more arguments, got {}",
@@ -485,7 +486,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            validate_data_types(args, "to_timestamp")?;
+            validate_data_types(&args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -495,9 +496,10 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Microsecond, Some(tz)), None)
             }
-            Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampMicrosecondType>(args, "to_timestamp_micros")
-            }
+            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMicrosecondType>(
+                &args,
+                "to_timestamp_micros",
+            ),
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp_micros",
@@ -528,11 +530,11 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = args.args;
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_nanos function requires 1 or more arguments, got {}",
@@ -542,7 +544,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
 
         // validate that any args after the first one are Utf8
         if args.len() > 1 {
-            validate_data_types(args, "to_timestamp")?;
+            validate_data_types(&args, "to_timestamp")?;
         }
 
         match args[0].data_type() {
@@ -553,7 +555,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
             Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp_nanos")
+                to_timestamp_impl::<TimestampNanosecondType>(&args, "to_timestamp_nanos")
             }
             other => {
                 exec_err!(
@@ -988,9 +990,13 @@ mod tests {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
                 assert!(matches!(rt, Timestamp(_, Some(_))));
-                #[allow(deprecated)] // TODO: migrate to invoke_with_args
+                let args = datafusion_expr::ScalarFunctionArgs {
+                    args: vec![array.clone()],
+                    number_rows: 4,
+                    return_type: &rt,
+                };
                 let res = udf
-                    .invoke_batch(&[array.clone()], 1)
+                    .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
                 let array = match res {
                     ColumnarValue::Array(res) => res,
@@ -1031,9 +1037,13 @@ mod tests {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
                 assert!(matches!(rt, Timestamp(_, None)));
-                #[allow(deprecated)] // TODO: migrate to invoke_with_args
+                let args = datafusion_expr::ScalarFunctionArgs {
+                    args: vec![array.clone()],
+                    number_rows: 5,
+                    return_type: &rt,
+                };
                 let res = udf
-                    .invoke_batch(&[array.clone()], 1)
+                    .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
                 let array = match res {
                     ColumnarValue::Array(res) => res,

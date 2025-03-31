@@ -18,8 +18,9 @@
 extern crate criterion;
 
 use arrow::array::{StringArray, StringViewArray};
+use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use rand::distributions::Alphanumeric;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
@@ -114,8 +115,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("strpos_StringArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(strpos.invoke_batch(&args_string_ascii, n_rows))
+                    black_box(strpos.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_ascii.clone(),
+                        number_rows: n_rows,
+                        return_type: &DataType::Int32,
+                    }))
                 })
             },
         );
@@ -126,8 +130,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("strpos_StringArray_utf8_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(strpos.invoke_batch(&args_string_utf8, n_rows))
+                    black_box(strpos.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_utf8.clone(),
+                        number_rows: n_rows,
+                        return_type: &DataType::Int32,
+                    }))
                 })
             },
         );
@@ -138,8 +145,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("strpos_StringViewArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(strpos.invoke_batch(&args_string_view_ascii, n_rows))
+                    black_box(strpos.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_view_ascii.clone(),
+                        number_rows: n_rows,
+                        return_type: &DataType::Int32,
+                    }))
                 })
             },
         );
@@ -150,8 +160,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("strpos_StringViewArray_utf8_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(strpos.invoke_batch(&args_string_view_utf8, n_rows))
+                    black_box(strpos.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_view_utf8.clone(),
+                        number_rows: n_rows,
+                        return_type: &DataType::Int32,
+                    }))
                 })
             },
         );

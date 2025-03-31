@@ -20,8 +20,9 @@
 
 use arrow::array::{ArrayRef, AsArray, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::{assert_batches_eq, prelude::SessionContext};
-use datafusion_common::{Result, ScalarValue};
+use datafusion::common::test_util::batches_to_string;
+use datafusion::common::{Result, ScalarValue};
+use datafusion::prelude::SessionContext;
 use datafusion_expr::{
     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF, WindowUDFImpl,
 };
@@ -57,30 +58,30 @@ const BOUNDED_WINDOW_QUERY:  &str  =
      odd_counter(val) OVER (PARTITION BY x ORDER BY y ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) \
      from t ORDER BY x, y";
 
-/// Test to show the contents of the setup
 #[tokio::test]
 async fn test_setup() {
     let test_state = TestState::new();
     let TestContext { ctx, test_state: _ } = TestContext::new(test_state);
 
     let sql = "SELECT * from t order by x, y";
-    let expected = vec![
-        "+---+---+-----+",
-        "| x | y | val |",
-        "+---+---+-----+",
-        "| 1 | a | 0   |",
-        "| 1 | b | 1   |",
-        "| 1 | c | 2   |",
-        "| 2 | d | 3   |",
-        "| 2 | e | 4   |",
-        "| 2 | f | 5   |",
-        "| 2 | g | 6   |",
-        "| 2 | h | 6   |",
-        "| 2 | i | 6   |",
-        "| 2 | j | 6   |",
-        "+---+---+-----+",
-    ];
-    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
+    let actual = execute(&ctx, sql).await.unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+         +---+---+-----+
+         | x | y | val |
+         +---+---+-----+
+         | 1 | a | 0   |
+         | 1 | b | 1   |
+         | 1 | c | 2   |
+         | 2 | d | 3   |
+         | 2 | e | 4   |
+         | 2 | f | 5   |
+         | 2 | g | 6   |
+         | 2 | h | 6   |
+         | 2 | i | 6   |
+         | 2 | j | 6   |
+         +---+---+-----+
+         "###);
 }
 
 /// Basic user defined window function
@@ -89,26 +90,25 @@ async fn test_udwf() {
     let test_state = TestState::new();
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
-    let expected = vec![
-    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |",
-    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-    "| 1 | a | 0   | 1                                                                                                                     |",
-    "| 1 | b | 1   | 1                                                                                                                     |",
-    "| 1 | c | 2   | 1                                                                                                                     |",
-    "| 2 | d | 3   | 2                                                                                                                     |",
-    "| 2 | e | 4   | 2                                                                                                                     |",
-    "| 2 | f | 5   | 2                                                                                                                     |",
-    "| 2 | g | 6   | 2                                                                                                                     |",
-    "| 2 | h | 6   | 2                                                                                                                     |",
-    "| 2 | i | 6   | 2                                                                                                                     |",
-    "| 2 | j | 6   | 2                                                                                                                     |",
-    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(
-        expected,
-        &execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap()
-    );
+    let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         | 1 | a | 0   | 1                                                                                                                     |
+         | 1 | b | 1   | 1                                                                                                                     |
+         | 1 | c | 2   | 1                                                                                                                     |
+         | 2 | d | 3   | 2                                                                                                                     |
+         | 2 | e | 4   | 2                                                                                                                     |
+         | 2 | f | 5   | 2                                                                                                                     |
+         | 2 | g | 6   | 2                                                                                                                     |
+         | 2 | h | 6   | 2                                                                                                                     |
+         | 2 | i | 6   | 2                                                                                                                     |
+         | 2 | j | 6   | 2                                                                                                                     |
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         "###);
+
     // evaluated on two distinct batches
     assert_eq!(test_state.evaluate_all_called(), 2);
 }
@@ -133,28 +133,26 @@ async fn test_udwf_with_alias() {
     let test_state = TestState::new();
     let TestContext { ctx, .. } = TestContext::new(test_state);
 
-    let expected = vec![
-        "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-        "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |",
-        "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-        "| 1 | a | 0   | 1                                                                                                                     |",
-        "| 1 | b | 1   | 1                                                                                                                     |",
-        "| 1 | c | 2   | 1                                                                                                                     |",
-        "| 2 | d | 3   | 2                                                                                                                     |",
-        "| 2 | e | 4   | 2                                                                                                                     |",
-        "| 2 | f | 5   | 2                                                                                                                     |",
-        "| 2 | g | 6   | 2                                                                                                                     |",
-        "| 2 | h | 6   | 2                                                                                                                     |",
-        "| 2 | i | 6   | 2                                                                                                                     |",
-        "| 2 | j | 6   | 2                                                                                                                     |",
-        "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(
-        expected,
-        &execute(&ctx, UNBOUNDED_WINDOW_QUERY_WITH_ALIAS)
-            .await
-            .unwrap()
-    );
+    let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY_WITH_ALIAS)
+        .await
+        .unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         | 1 | a | 0   | 1                                                                                                                     |
+         | 1 | b | 1   | 1                                                                                                                     |
+         | 1 | c | 2   | 1                                                                                                                     |
+         | 2 | d | 3   | 2                                                                                                                     |
+         | 2 | e | 4   | 2                                                                                                                     |
+         | 2 | f | 5   | 2                                                                                                                     |
+         | 2 | g | 6   | 2                                                                                                                     |
+         | 2 | h | 6   | 2                                                                                                                     |
+         | 2 | i | 6   | 2                                                                                                                     |
+         | 2 | j | 6   | 2                                                                                                                     |
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         "###);
 }
 
 /// Basic user defined window function with bounded window
@@ -164,26 +162,25 @@ async fn test_udwf_bounded_window_ignores_frame() {
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
     // Since the UDWF doesn't say it needs the window frame, the frame is ignored
-    let expected = vec![
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |",
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    "| 1 | a | 0   | 1                                                                                                            |",
-    "| 1 | b | 1   | 1                                                                                                            |",
-    "| 1 | c | 2   | 1                                                                                                            |",
-    "| 2 | d | 3   | 2                                                                                                            |",
-    "| 2 | e | 4   | 2                                                                                                            |",
-    "| 2 | f | 5   | 2                                                                                                            |",
-    "| 2 | g | 6   | 2                                                                                                            |",
-    "| 2 | h | 6   | 2                                                                                                            |",
-    "| 2 | i | 6   | 2                                                                                                            |",
-    "| 2 | j | 6   | 2                                                                                                            |",
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(
-        expected,
-        &execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap()
-    );
+    let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         | 1 | a | 0   | 1                                                                                                            |
+         | 1 | b | 1   | 1                                                                                                            |
+         | 1 | c | 2   | 1                                                                                                            |
+         | 2 | d | 3   | 2                                                                                                            |
+         | 2 | e | 4   | 2                                                                                                            |
+         | 2 | f | 5   | 2                                                                                                            |
+         | 2 | g | 6   | 2                                                                                                            |
+         | 2 | h | 6   | 2                                                                                                            |
+         | 2 | i | 6   | 2                                                                                                            |
+         | 2 | j | 6   | 2                                                                                                            |
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         "###);
+
     // evaluated on 2 distinct batches (when x=1 and x=2)
     assert_eq!(test_state.evaluate_called(), 0);
     assert_eq!(test_state.evaluate_all_called(), 2);
@@ -195,26 +192,25 @@ async fn test_udwf_bounded_window() {
     let test_state = TestState::new().with_uses_window_frame();
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
-    let expected = vec![
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |",
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    "| 1 | a | 0   | 1                                                                                                            |",
-    "| 1 | b | 1   | 1                                                                                                            |",
-    "| 1 | c | 2   | 1                                                                                                            |",
-    "| 2 | d | 3   | 1                                                                                                            |",
-    "| 2 | e | 4   | 2                                                                                                            |",
-    "| 2 | f | 5   | 1                                                                                                            |",
-    "| 2 | g | 6   | 1                                                                                                            |",
-    "| 2 | h | 6   | 0                                                                                                            |",
-    "| 2 | i | 6   | 0                                                                                                            |",
-    "| 2 | j | 6   | 0                                                                                                            |",
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(
-        expected,
-        &execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap()
-    );
+    let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         | 1 | a | 0   | 1                                                                                                            |
+         | 1 | b | 1   | 1                                                                                                            |
+         | 1 | c | 2   | 1                                                                                                            |
+         | 2 | d | 3   | 1                                                                                                            |
+         | 2 | e | 4   | 2                                                                                                            |
+         | 2 | f | 5   | 1                                                                                                            |
+         | 2 | g | 6   | 1                                                                                                            |
+         | 2 | h | 6   | 0                                                                                                            |
+         | 2 | i | 6   | 0                                                                                                            |
+         | 2 | j | 6   | 0                                                                                                            |
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         "###);
+
     // Evaluate is called for each input rows
     assert_eq!(test_state.evaluate_called(), 10);
     assert_eq!(test_state.evaluate_all_called(), 0);
@@ -228,26 +224,25 @@ async fn test_stateful_udwf() {
         .with_uses_window_frame();
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
-    let expected = vec![
-    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |",
-    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-    "| 1 | a | 0   | 0                                                                                                                     |",
-    "| 1 | b | 1   | 1                                                                                                                     |",
-    "| 1 | c | 2   | 1                                                                                                                     |",
-    "| 2 | d | 3   | 1                                                                                                                     |",
-    "| 2 | e | 4   | 1                                                                                                                     |",
-    "| 2 | f | 5   | 2                                                                                                                     |",
-    "| 2 | g | 6   | 2                                                                                                                     |",
-    "| 2 | h | 6   | 2                                                                                                                     |",
-    "| 2 | i | 6   | 2                                                                                                                     |",
-    "| 2 | j | 6   | 2                                                                                                                     |",
-    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(
-        expected,
-        &execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap()
-    );
+    let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         | 1 | a | 0   | 0                                                                                                                     |
+         | 1 | b | 1   | 1                                                                                                                     |
+         | 1 | c | 2   | 1                                                                                                                     |
+         | 2 | d | 3   | 1                                                                                                                     |
+         | 2 | e | 4   | 1                                                                                                                     |
+         | 2 | f | 5   | 2                                                                                                                     |
+         | 2 | g | 6   | 2                                                                                                                     |
+         | 2 | h | 6   | 2                                                                                                                     |
+         | 2 | i | 6   | 2                                                                                                                     |
+         | 2 | j | 6   | 2                                                                                                                     |
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         "###);
+
     assert_eq!(test_state.evaluate_called(), 10);
     assert_eq!(test_state.evaluate_all_called(), 0);
 }
@@ -260,26 +255,25 @@ async fn test_stateful_udwf_bounded_window() {
         .with_uses_window_frame();
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
-    let expected = vec![
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |",
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    "| 1 | a | 0   | 1                                                                                                            |",
-    "| 1 | b | 1   | 1                                                                                                            |",
-    "| 1 | c | 2   | 1                                                                                                            |",
-    "| 2 | d | 3   | 1                                                                                                            |",
-    "| 2 | e | 4   | 2                                                                                                            |",
-    "| 2 | f | 5   | 1                                                                                                            |",
-    "| 2 | g | 6   | 1                                                                                                            |",
-    "| 2 | h | 6   | 0                                                                                                            |",
-    "| 2 | i | 6   | 0                                                                                                            |",
-    "| 2 | j | 6   | 0                                                                                                            |",
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(
-        expected,
-        &execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap()
-    );
+    let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         | 1 | a | 0   | 1                                                                                                            |
+         | 1 | b | 1   | 1                                                                                                            |
+         | 1 | c | 2   | 1                                                                                                            |
+         | 2 | d | 3   | 1                                                                                                            |
+         | 2 | e | 4   | 2                                                                                                            |
+         | 2 | f | 5   | 1                                                                                                            |
+         | 2 | g | 6   | 1                                                                                                            |
+         | 2 | h | 6   | 0                                                                                                            |
+         | 2 | i | 6   | 0                                                                                                            |
+         | 2 | j | 6   | 0                                                                                                            |
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         "###);
+
     // Evaluate and update_state is called for each input row
     assert_eq!(test_state.evaluate_called(), 10);
     assert_eq!(test_state.evaluate_all_called(), 0);
@@ -291,26 +285,25 @@ async fn test_udwf_query_include_rank() {
     let test_state = TestState::new().with_include_rank();
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
-    let expected = vec![
-    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |",
-    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-    "| 1 | a | 0   | 3                                                                                                                     |",
-    "| 1 | b | 1   | 2                                                                                                                     |",
-    "| 1 | c | 2   | 1                                                                                                                     |",
-    "| 2 | d | 3   | 7                                                                                                                     |",
-    "| 2 | e | 4   | 6                                                                                                                     |",
-    "| 2 | f | 5   | 5                                                                                                                     |",
-    "| 2 | g | 6   | 4                                                                                                                     |",
-    "| 2 | h | 6   | 3                                                                                                                     |",
-    "| 2 | i | 6   | 2                                                                                                                     |",
-    "| 2 | j | 6   | 1                                                                                                                     |",
-    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(
-        expected,
-        &execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap()
-    );
+    let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         | 1 | a | 0   | 3                                                                                                                     |
+         | 1 | b | 1   | 2                                                                                                                     |
+         | 1 | c | 2   | 1                                                                                                                     |
+         | 2 | d | 3   | 7                                                                                                                     |
+         | 2 | e | 4   | 6                                                                                                                     |
+         | 2 | f | 5   | 5                                                                                                                     |
+         | 2 | g | 6   | 4                                                                                                                     |
+         | 2 | h | 6   | 3                                                                                                                     |
+         | 2 | i | 6   | 2                                                                                                                     |
+         | 2 | j | 6   | 1                                                                                                                     |
+         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+         "###);
+
     assert_eq!(test_state.evaluate_called(), 0);
     assert_eq!(test_state.evaluate_all_called(), 0);
     // evaluated on 2 distinct batches (when x=1 and x=2)
@@ -323,26 +316,25 @@ async fn test_udwf_bounded_query_include_rank() {
     let test_state = TestState::new().with_include_rank();
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
-    let expected = vec![
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |",
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    "| 1 | a | 0   | 3                                                                                                            |",
-    "| 1 | b | 1   | 2                                                                                                            |",
-    "| 1 | c | 2   | 1                                                                                                            |",
-    "| 2 | d | 3   | 7                                                                                                            |",
-    "| 2 | e | 4   | 6                                                                                                            |",
-    "| 2 | f | 5   | 5                                                                                                            |",
-    "| 2 | g | 6   | 4                                                                                                            |",
-    "| 2 | h | 6   | 3                                                                                                            |",
-    "| 2 | i | 6   | 2                                                                                                            |",
-    "| 2 | j | 6   | 1                                                                                                            |",
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(
-        expected,
-        &execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap()
-    );
+    let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         | 1 | a | 0   | 3                                                                                                            |
+         | 1 | b | 1   | 2                                                                                                            |
+         | 1 | c | 2   | 1                                                                                                            |
+         | 2 | d | 3   | 7                                                                                                            |
+         | 2 | e | 4   | 6                                                                                                            |
+         | 2 | f | 5   | 5                                                                                                            |
+         | 2 | g | 6   | 4                                                                                                            |
+         | 2 | h | 6   | 3                                                                                                            |
+         | 2 | i | 6   | 2                                                                                                            |
+         | 2 | j | 6   | 1                                                                                                            |
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         "###);
+
     assert_eq!(test_state.evaluate_called(), 0);
     assert_eq!(test_state.evaluate_all_called(), 0);
     // evaluated on 2 distinct batches (when x=1 and x=2)
@@ -357,26 +349,25 @@ async fn test_udwf_bounded_window_returns_null() {
         .with_null_for_zero();
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
-    let expected = vec![
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |",
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    "| 1 | a | 0   | 1                                                                                                            |",
-    "| 1 | b | 1   | 1                                                                                                            |",
-    "| 1 | c | 2   | 1                                                                                                            |",
-    "| 2 | d | 3   | 1                                                                                                            |",
-    "| 2 | e | 4   | 2                                                                                                            |",
-    "| 2 | f | 5   | 1                                                                                                            |",
-    "| 2 | g | 6   | 1                                                                                                            |",
-    "| 2 | h | 6   |                                                                                                              |",
-    "| 2 | i | 6   |                                                                                                              |",
-    "| 2 | j | 6   |                                                                                                              |",
-    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(
-        expected,
-        &execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap()
-    );
+    let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         | 1 | a | 0   | 1                                                                                                            |
+         | 1 | b | 1   | 1                                                                                                            |
+         | 1 | c | 2   | 1                                                                                                            |
+         | 2 | d | 3   | 1                                                                                                            |
+         | 2 | e | 4   | 2                                                                                                            |
+         | 2 | f | 5   | 1                                                                                                            |
+         | 2 | g | 6   | 1                                                                                                            |
+         | 2 | h | 6   |                                                                                                              |
+         | 2 | i | 6   |                                                                                                              |
+         | 2 | j | 6   |                                                                                                              |
+         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+         "###);
+
     // Evaluate is called for each input rows
     assert_eq!(test_state.evaluate_called(), 10);
     assert_eq!(test_state.evaluate_all_called(), 0);

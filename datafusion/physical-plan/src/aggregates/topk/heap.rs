@@ -485,6 +485,8 @@ pub fn new_heap(
 
 #[cfg(test)]
 mod tests {
+    use insta::assert_snapshot;
+
     use super::*;
 
     #[test]
@@ -494,10 +496,9 @@ mod tests {
         heap.append_or_replace(1, 1, &mut map);
 
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=1 idx=0, bucket=1
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         Ok(())
     }
@@ -514,11 +515,10 @@ val=1 idx=0, bucket=1
         assert_eq!(map, vec![(2, 0), (1, 1)]);
 
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         Ok(())
     }
@@ -532,22 +532,20 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(2, 2, &mut map);
         heap.append_or_replace(3, 3, &mut map);
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=3 idx=0, bucket=3
 ├── val=1 idx=1, bucket=1
 └── val=2 idx=2, bucket=2
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         let mut map = vec![];
         heap.append_or_replace(0, 0, &mut map);
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=2
 ├── val=1 idx=1, bucket=1
 └── val=0 idx=2, bucket=0
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
         assert_eq!(map, vec![(2, 0), (0, 2)]);
 
         Ok(())
@@ -563,24 +561,22 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(3, 3, &mut map);
         heap.append_or_replace(4, 4, &mut map);
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=4 idx=0, bucket=4
 ├── val=3 idx=1, bucket=3
 │   └── val=1 idx=3, bucket=1
 └── val=2 idx=2, bucket=2
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         let mut map = vec![];
         heap.replace_if_better(1, 0, &mut map);
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=4 idx=0, bucket=4
 ├── val=1 idx=1, bucket=1
 │   └── val=0 idx=3, bucket=3
 └── val=2 idx=2, bucket=2
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
         assert_eq!(map, vec![(1, 1), (3, 3)]);
 
         Ok(())
@@ -595,11 +591,10 @@ val=4 idx=0, bucket=4
         heap.append_or_replace(2, 2, &mut map);
 
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         assert_eq!(heap.worst_val(), Some(&2));
         assert_eq!(heap.worst_map_idx(), 2);
@@ -616,11 +611,10 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(2, 2, &mut map);
 
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         let (vals, map_idxs) = heap.drain();
         assert_eq!(vals, vec![1, 2]);
@@ -639,20 +633,18 @@ val=2 idx=0, bucket=2
         heap.append_or_replace(2, 2, &mut map);
 
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=2
 └── val=1 idx=1, bucket=1
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         let numbers = vec![(0, 1), (1, 2)];
         heap.renumber(numbers.as_slice());
         let actual = heap.to_string();
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 val=2 idx=0, bucket=1
 └── val=1 idx=1, bucket=2
-        "#;
-        assert_eq!(actual.trim(), expected.trim());
+            "#);
 
         Ok(())
     }

@@ -121,8 +121,8 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
-        col, lit, ColumnarValue, LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature,
-        TypeSignature,
+        col, lit, ColumnarValue, LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF,
+        ScalarUDFImpl, Signature, TypeSignature,
     };
 
     use datafusion_functions_aggregate::expr_fn::count;
@@ -155,11 +155,7 @@ mod tests {
         fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int32)
         }
-        fn invoke_batch(
-            &self,
-            _args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             unimplemented!()
         }
     }

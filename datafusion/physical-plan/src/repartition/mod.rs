@@ -506,6 +506,18 @@ impl DisplayAs for RepartitionExec {
                 }
                 Ok(())
             }
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
+                writeln!(
+                    f,
+                    "output_partition_count={}",
+                    self.input.output_partitioning().partition_count()
+                )?;
+                if self.preserve_order {
+                    writeln!(f, "preserve_order={}", self.preserve_order)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -1066,10 +1078,11 @@ mod tests {
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
-    use datafusion_common::{arrow_datafusion_err, assert_batches_sorted_eq, exec_err};
+    use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_common::{arrow_datafusion_err, exec_err};
+    use datafusion_common_runtime::JoinSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
-    use tokio::task::JoinSet;
+    use insta::assert_snapshot;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
@@ -1322,23 +1335,30 @@ mod tests {
 
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
 
-        let expected = vec![
-            "+------------------+",
-            "| my_awesome_field |",
-            "+------------------+",
-            "| foo              |",
-            "| bar              |",
-            "| frob             |",
-            "| baz              |",
-            "+------------------+",
-        ];
-
-        assert_batches_sorted_eq!(&expected, &expected_batches);
+        assert_snapshot!(batches_to_sort_string(&expected_batches), @r"
+        +------------------+
+        | my_awesome_field |
+        +------------------+
+        | bar              |
+        | baz              |
+        | foo              |
+        | frob             |
+        +------------------+
+        ");
 
         let output_stream = exec.execute(0, task_ctx).unwrap();
         let batches = crate::common::collect(output_stream).await.unwrap();
 
-        assert_batches_sorted_eq!(&expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +------------------+
+        | my_awesome_field |
+        +------------------+
+        | bar              |
+        | baz              |
+        | foo              |
+        | frob             |
+        +------------------+
+        ");
     }
 
     #[tokio::test]
@@ -1372,18 +1392,16 @@ mod tests {
         // output stream 1 should *not* error and have one of the input batches
         let batches = crate::common::collect(output_stream1).await.unwrap();
 
-        let expected = vec![
-            "+------------------+",
-            "| my_awesome_field |",
-            "+------------------+",
-            "| baz              |",
-            "| frob             |",
-            "| gaz              |",
-            "| grob             |",
-            "+------------------+",
-        ];
-
-        assert_batches_sorted_eq!(&expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +------------------+
+            | my_awesome_field |
+            +------------------+
+            | baz              |
+            | frob             |
+            | gaz              |
+            | grob             |
+            +------------------+
+            "#);
     }
 
     #[tokio::test]

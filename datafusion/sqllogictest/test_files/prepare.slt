@@ -312,3 +312,18 @@ SET datafusion.explain.logical_plan_only=false;
 
 statement ok
 DROP TABLE person;
+
+statement ok
+SET datafusion.explain.logical_plan_only=true;
+
+statement count 0
+PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+
+statement count 5
+explain PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+
+query IT
+EXECUTE my_plan('a', 'b');
+----
+1 a
+2 b

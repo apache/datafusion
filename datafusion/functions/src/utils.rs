@@ -141,12 +141,28 @@ pub mod test {
                     ColumnarValue::Array(a) => Some(a.len()),
                 })
                 .unwrap_or(1);
-            let return_type = func.return_type(&type_array);
+
+            let scalar_arguments = $ARGS.iter().map(|arg| match arg {
+                ColumnarValue::Scalar(scalar) => Some(scalar.clone()),
+                ColumnarValue::Array(_) => None,
+            }).collect::<Vec<_>>();
+            let scalar_arguments_refs = scalar_arguments.iter().map(|arg| arg.as_ref()).collect::<Vec<_>>();
+
+            let nullables = $ARGS.iter().map(|arg| match arg {
+                ColumnarValue::Scalar(scalar) => scalar.is_null(),
+                ColumnarValue::Array(a) => a.null_count() > 0,
+            }).collect::<Vec<_>>();
+
+            let return_info = func.return_type_from_args(datafusion_expr::ReturnTypeArgs {
+                arg_types: &type_array,
+                scalar_arguments: &scalar_arguments_refs,
+                nullables: &nullables
+            });
 
             match expected {
                 Ok(expected) => {
-                    assert_eq!(return_type.is_ok(), true);
-                    let return_type = return_type.unwrap();
+                    assert_eq!(return_info.is_ok(), true);
+                    let (return_type, _nullable) = return_info.unwrap().into_parts();
                     assert_eq!(return_type, $EXPECTED_DATA_TYPE);
 
                     let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type});
@@ -163,15 +179,17 @@ pub mod test {
                     };
                 }
                 Err(expected_error) => {
-                    if return_type.is_err() {
-                        match return_type {
+                    if return_info.is_err() {
+                        match return_info {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => { datafusion_common::assert_contains!(expected_error.strip_backtrace(), error.strip_backtrace()); }
                         }
                     }
                     else {
+                        let (return_type, _nullable) = return_info.unwrap().into_parts();
+
                         // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
-                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type.unwrap()}) {
+                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type}) {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => {
                                 assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));

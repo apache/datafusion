@@ -28,8 +28,8 @@ This crate is a submodule of DataFusion that contains an implementation of [sqll
 ## Overview
 
 This crate uses [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) to parse and run `.slt` files in the
-[`test_files`](test_files) directory of this crate or the [`data/sqlite`](sqlite)
-directory of the datafusion-testing crate.
+[`test_files`](test_files) directory of this crate or the [`data/sqlite`](https://github.com/apache/datafusion-testing/tree/main/data/sqlite)
+directory of the [datafusion-testing](https://github.com/apache/datafusion-testing) crate.
 
 ## Testing setup
 
@@ -241,6 +241,14 @@ The sqlite tests can also be run with the postgres runner to verify compatibilit
 ```shell
 export RUST_MIN_STACK=30485760;
 PG_COMPAT=true INCLUDE_SQLITE=true cargo test --features=postgres --test sqllogictests
+```
+
+To update the sqllite expected answers use the `datafusion/sqllogictest/regenerate_sqlite_files.sh` script.
+
+Note this must be run with an empty postgres instance. For example
+
+```shell
+PG_URI=postgresql://postgres@localhost:5432/postgres bash datafusion/sqllogictest/regenerate_sqlite_files.sh
 ```
 
 ## Updating tests: Completion Mode

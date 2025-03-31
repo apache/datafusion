@@ -34,6 +34,8 @@ mod symmetric_hash_join;
 pub mod utils;
 
 mod join_filter;
+mod join_hash_map;
+
 #[cfg(test)]
 pub mod test_utils;
 

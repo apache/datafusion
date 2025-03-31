@@ -162,6 +162,10 @@ impl DisplayAs for ValuesExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ValuesExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }

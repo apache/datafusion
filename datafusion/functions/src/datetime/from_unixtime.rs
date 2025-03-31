@@ -117,11 +117,11 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         internal_err!("call return_type_from_args instead")
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = args.args;
         let len = args.len();
         if len != 1 && len != 2 {
             return exec_err!(
@@ -161,16 +161,21 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
 #[cfg(test)]
 mod test {
     use crate::datetime::from_unixtime::FromUnixtimeFunc;
+    use arrow::datatypes::DataType;
+    use arrow::datatypes::TimeUnit::Second;
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Int64;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use std::sync::Arc;
 
     #[test]
     fn test_without_timezone() {
-        let args = [ColumnarValue::Scalar(Int64(Some(1729900800)))];
-
-        // TODO use invoke_with_args
-        let result = FromUnixtimeFunc::new().invoke_batch(&args, 1).unwrap();
+        let args = datafusion_expr::ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(Int64(Some(1729900800)))],
+            number_rows: 1,
+            return_type: &DataType::Timestamp(Second, None),
+        };
+        let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 
         match result {
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(sec), None)) => {
@@ -182,15 +187,20 @@ mod test {
 
     #[test]
     fn test_with_timezone() {
-        let args = [
-            ColumnarValue::Scalar(Int64(Some(1729900800))),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                "America/New_York".to_string(),
-            ))),
-        ];
-
-        // TODO use invoke_with_args
-        let result = FromUnixtimeFunc::new().invoke_batch(&args, 2).unwrap();
+        let args = datafusion_expr::ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(Int64(Some(1729900800))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                    "America/New_York".to_string(),
+                ))),
+            ],
+            number_rows: 2,
+            return_type: &DataType::Timestamp(
+                Second,
+                Some(Arc::from("America/New_York")),
+            ),
+        };
+        let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 
         match result {
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(sec), Some(tz))) => {

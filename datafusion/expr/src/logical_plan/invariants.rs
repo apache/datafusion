@@ -112,11 +112,11 @@ fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
 /// Returns an error if the plan does not have the expected schema.
 /// Ignores metadata and nullability.
 pub fn assert_expected_schema(schema: &DFSchemaRef, plan: &LogicalPlan) -> Result<()> {
-    let equivalent = plan.schema().equivalent_names_and_types(schema);
+    let compatible = plan.schema().has_equivalent_names_and_types(schema);
 
-    if !equivalent {
+    if let Err(e) = compatible {
         internal_err!(
-            "Failed due to a difference in schemas, original schema: {:?}, new schema: {:?}",
+            "Failed due to a difference in schemas: {e}, original schema: {:?}, new schema: {:?}",
             schema,
             plan.schema()
         )

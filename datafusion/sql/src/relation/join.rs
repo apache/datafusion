@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, Column, Result};
+use datafusion_common::{not_impl_err, plan_datafusion_err, Column, Result};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
@@ -55,13 +55,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             self.create_relation(join.relation, planner_context)?
         };
         match join.join_operator {
-            JoinOperator::LeftOuter(constraint) => {
+            JoinOperator::LeftOuter(constraint) | JoinOperator::Left(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Left, planner_context)
             }
-            JoinOperator::RightOuter(constraint) => {
+            JoinOperator::RightOuter(constraint) | JoinOperator::Right(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Right, planner_context)
             }
-            JoinOperator::Inner(constraint) => {
+            JoinOperator::Inner(constraint) | JoinOperator::Join(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Inner, planner_context)
             }
             JoinOperator::LeftSemi(constraint) => self.parse_join(
@@ -136,7 +136,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             )
                         } else {
                             let id = object_names.swap_remove(0);
-                            Ok(self.ident_normalizer.normalize(id))
+                            id.as_ident()
+                                .ok_or_else(|| {
+                                    plan_datafusion_err!(
+                                        "Expected identifier in USING clause"
+                                    )
+                                })
+                                .map(|ident| self.ident_normalizer.normalize(ident.clone()))
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -186,6 +192,7 @@ pub(crate) fn is_lateral_join(join: &Join) -> Result<bool> {
     let is_lateral_syntax = is_lateral(&join.relation);
     let is_apply_syntax = match join.join_operator {
         JoinOperator::FullOuter(..)
+        | JoinOperator::Right(..)
         | JoinOperator::RightOuter(..)
         | JoinOperator::RightAnti(..)
         | JoinOperator::RightSemi(..)

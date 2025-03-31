@@ -68,15 +68,15 @@ SELECT SUM(v1) FROM generate_series(1, 5) t1(v1)
 query I
 SELECT * FROM generate_series(6, -1, -2)
 ----
-6 
-4 
-2 
-0 
+6
+4
+2
+0
 
 query I
 SELECT * FROM generate_series(6, 66, 666)
 ----
-6 
+6
 
 
 
@@ -120,7 +120,7 @@ SELECT v1 + 10 FROM (SELECT * FROM generate_series(1, 3) t1(v1))
 
 # Test generate_series with JOIN
 query II rowsort
-SELECT a.v1, b.v1 
+SELECT a.v1, b.v1
 FROM generate_series(1, 3) a(v1)
 JOIN generate_series(2, 4) b(v1)
 ON a.v1 = b.v1 - 1
@@ -187,3 +187,119 @@ SELECT generate_series(1, t1.end) FROM generate_series(3, 5) as t1(end)
 [1, 2, 3, 4, 5]
 [1, 2, 3, 4]
 [1, 2, 3]
+
+# Test range table function
+query I
+SELECT * FROM range(6)
+----
+0
+1
+2
+3
+4
+5
+
+
+
+query I rowsort
+SELECT * FROM range(1, 5)
+----
+1
+2
+3
+4
+
+query I rowsort
+SELECT * FROM range(1, 1)
+----
+
+query I rowsort
+SELECT * FROM range(3, 6)
+----
+3
+4
+5
+
+# #generated_data > batch_size
+query I
+SELECT count(v1) FROM range(-66666,66666) t1(v1)
+----
+133332
+
+query I rowsort
+SELECT SUM(v1) FROM range(1, 5) t1(v1)
+----
+10
+
+query I
+SELECT * FROM range(6, -1, -2)
+----
+6
+4
+2
+0
+
+query I
+SELECT * FROM range(6, 66, 666)
+----
+6
+
+
+
+#
+# Test range with null arguments
+#
+
+query I
+SELECT * FROM range(NULL, 5)
+----
+
+query I
+SELECT * FROM range(1, NULL)
+----
+
+query I
+SELECT * FROM range(NULL, NULL)
+----
+
+query I
+SELECT * FROM range(1, 5, NULL)
+----
+
+
+query TT
+EXPLAIN SELECT * FROM range(1, 5)
+----
+logical_plan TableScan: tmp_table projection=[value]
+physical_plan LazyMemoryExec: partitions=1, batch_generators=[range: start=1, end=5, batch_size=8192]
+
+#
+# Test range with invalid arguments
+#
+
+query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
+SELECT * FROM range(5, 1)
+
+query error DataFusion error: Error during planning: start is smaller than end, but increment is negative: cannot generate infinite series
+SELECT * FROM range(-6, 6, -1)
+
+query error DataFusion error: Error during planning: step cannot be zero
+SELECT * FROM range(-6, 6, 0)
+
+query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
+SELECT * FROM range(6, -6, 1)
+
+
+statement error DataFusion error: Error during planning: range function requires 1 to 3 arguments
+SELECT * FROM range(1, 2, 3, 4)
+
+
+statement error DataFusion error: Error during planning: First argument must be an integer literal
+SELECT * FROM range('foo', 'bar')
+
+# UDF and UDTF `range` can be used simultaneously
+query ? rowsort
+SELECT range(1, t1.end) FROM range(3, 5) as t1(end)
+----
+[1, 2, 3]
+[1, 2]

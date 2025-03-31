@@ -29,7 +29,7 @@ use std::fmt::{self, Formatter};
 use std::hash::Hash;
 
 use datafusion_common::{plan_err, sql_err, DataFusionError, Result, ScalarValue};
-use sqlparser::ast;
+use sqlparser::ast::{self, ValueWithSpan};
 use sqlparser::parser::ParserError::ParserError;
 
 /// The frame specification determines which output rows are read by an aggregate
@@ -368,7 +368,7 @@ fn convert_frame_bound_to_scalar_value(
     match units {
         // For ROWS and GROUPS we are sure that the ScalarValue must be a non-negative integer ...
         ast::WindowFrameUnits::Rows | ast::WindowFrameUnits::Groups => match v {
-            ast::Expr::Value(ast::Value::Number(value, false)) => {
+            ast::Expr::Value(ValueWithSpan{value: ast::Value::Number(value, false), span: _}) => {
                 Ok(ScalarValue::try_from_string(value, &DataType::UInt64)?)
             },
             ast::Expr::Interval(ast::Interval {
@@ -379,7 +379,7 @@ fn convert_frame_bound_to_scalar_value(
                 fractional_seconds_precision: None,
             }) => {
                 let value = match *value {
-                    ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
+                    ast::Expr::Value(ValueWithSpan{value: ast::Value::SingleQuotedString(item), span: _}) => item,
                     e => {
                         return sql_err!(ParserError(format!(
                             "INTERVAL expression cannot be {e:?}"
@@ -395,14 +395,14 @@ fn convert_frame_bound_to_scalar_value(
         // ... instead for RANGE it could be anything depending on the type of the ORDER BY clause,
         // so we use a ScalarValue::Utf8.
         ast::WindowFrameUnits::Range => Ok(ScalarValue::Utf8(Some(match v {
-            ast::Expr::Value(ast::Value::Number(value, false)) => value,
+            ast::Expr::Value(ValueWithSpan{value: ast::Value::Number(value, false), span: _}) => value,
             ast::Expr::Interval(ast::Interval {
                 value,
                 leading_field,
                 ..
             }) => {
                 let result = match *value {
-                    ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
+                    ast::Expr::Value(ValueWithSpan{value: ast::Value::SingleQuotedString(item), span: _}) => item,
                     e => {
                         return sql_err!(ParserError(format!(
                             "INTERVAL expression cannot be {e:?}"
@@ -514,10 +514,10 @@ mod tests {
         let window_frame = ast::WindowFrame {
             units: ast::WindowFrameUnits::Rows,
             start_bound: ast::WindowFrameBound::Preceding(Some(Box::new(
-                ast::Expr::Value(ast::Value::Number("2".to_string(), false)),
+                ast::Expr::value(ast::Value::Number("2".to_string(), false)),
             ))),
             end_bound: Some(ast::WindowFrameBound::Preceding(Some(Box::new(
-                ast::Expr::Value(ast::Value::Number("1".to_string(), false)),
+                ast::Expr::value(ast::Value::Number("1".to_string(), false)),
             )))),
         };
 
@@ -575,10 +575,9 @@ mod tests {
         test_bound!(Range, None, ScalarValue::Null);
 
         // Number
-        let number = Some(Box::new(ast::Expr::Value(ast::Value::Number(
-            "42".to_string(),
-            false,
-        ))));
+        let number = Some(Box::new(ast::Expr::Value(
+            ast::Value::Number("42".to_string(), false).into(),
+        )));
         test_bound!(Rows, number.clone(), ScalarValue::UInt64(Some(42)));
         test_bound!(Groups, number.clone(), ScalarValue::UInt64(Some(42)));
         test_bound!(
@@ -589,9 +588,9 @@ mod tests {
 
         // Interval
         let number = Some(Box::new(ast::Expr::Interval(ast::Interval {
-            value: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
-                "1".to_string(),
-            ))),
+            value: Box::new(ast::Expr::Value(
+                ast::Value::SingleQuotedString("1".to_string()).into(),
+            )),
             leading_field: Some(ast::DateTimeField::Day),
             fractional_seconds_precision: None,
             last_field: None,

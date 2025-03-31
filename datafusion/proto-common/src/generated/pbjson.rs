@@ -3133,6 +3133,7 @@ impl serde::Serialize for Field {
     }
 }
 impl<'de> serde::Deserialize<'de> for Field {
+    #[allow(deprecated)]
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -4968,6 +4969,9 @@ impl serde::Serialize for ParquetOptions {
         if self.column_index_truncate_length_opt.is_some() {
             len += 1;
         }
+        if self.statistics_truncate_length_opt.is_some() {
+            len += 1;
+        }
         if self.encoding_opt.is_some() {
             len += 1;
         }
@@ -5100,6 +5104,15 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if let Some(v) = self.statistics_truncate_length_opt.as_ref() {
+            match v {
+                parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("statisticsTruncateLength", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
         if let Some(v) = self.encoding_opt.as_ref() {
             match v {
                 parquet_options::EncodingOpt::Encoding(v) => {
@@ -5183,6 +5196,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxStatisticsSize",
             "column_index_truncate_length",
             "columnIndexTruncateLength",
+            "statistics_truncate_length",
+            "statisticsTruncateLength",
             "encoding",
             "bloom_filter_fpp",
             "bloomFilterFpp",
@@ -5218,6 +5233,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             StatisticsEnabled,
             MaxStatisticsSize,
             ColumnIndexTruncateLength,
+            StatisticsTruncateLength,
             Encoding,
             BloomFilterFpp,
             BloomFilterNdv,
@@ -5268,6 +5284,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "statisticsEnabled" | "statistics_enabled" => Ok(GeneratedField::StatisticsEnabled),
                             "maxStatisticsSize" | "max_statistics_size" => Ok(GeneratedField::MaxStatisticsSize),
                             "columnIndexTruncateLength" | "column_index_truncate_length" => Ok(GeneratedField::ColumnIndexTruncateLength),
+                            "statisticsTruncateLength" | "statistics_truncate_length" => Ok(GeneratedField::StatisticsTruncateLength),
                             "encoding" => Ok(GeneratedField::Encoding),
                             "bloomFilterFpp" | "bloom_filter_fpp" => Ok(GeneratedField::BloomFilterFpp),
                             "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
@@ -5316,6 +5333,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut statistics_enabled_opt__ = None;
                 let mut max_statistics_size_opt__ = None;
                 let mut column_index_truncate_length_opt__ = None;
+                let mut statistics_truncate_length_opt__ = None;
                 let mut encoding_opt__ = None;
                 let mut bloom_filter_fpp_opt__ = None;
                 let mut bloom_filter_ndv_opt__ = None;
@@ -5491,6 +5509,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             column_index_truncate_length_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(x.0));
                         }
+                        GeneratedField::StatisticsTruncateLength => {
+                            if statistics_truncate_length_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("statisticsTruncateLength"));
+                            }
+                            statistics_truncate_length_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(x.0));
+                        }
                         GeneratedField::Encoding => {
                             if encoding_opt__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("encoding"));
@@ -5538,6 +5562,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     statistics_enabled_opt: statistics_enabled_opt__,
                     max_statistics_size_opt: max_statistics_size_opt__,
                     column_index_truncate_length_opt: column_index_truncate_length_opt__,
+                    statistics_truncate_length_opt: statistics_truncate_length_opt__,
                     encoding_opt: encoding_opt__,
                     bloom_filter_fpp_opt: bloom_filter_fpp_opt__,
                     bloom_filter_ndv_opt: bloom_filter_ndv_opt__,

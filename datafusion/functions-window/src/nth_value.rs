@@ -23,7 +23,7 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ops::Range;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
@@ -127,54 +127,54 @@ impl NthValue {
     }
 }
 
-static FIRST_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static FIRST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_ANALYTICAL,
+        "Returns value evaluated at the row that is the first row of the window \
+            frame.",
+        "first_value(expression)",
+    )
+    .with_argument("expression", "Expression to operate on")
+    .build()
+});
 
 fn get_first_value_doc() -> &'static Documentation {
-    FIRST_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ANALYTICAL,
-            "Returns value evaluated at the row that is the first row of the window \
-                frame.",
-            "first_value(expression)",
-        )
-        .with_argument("expression", "Expression to operate on")
-        .build()
-    })
+    &FIRST_VALUE_DOCUMENTATION
 }
 
-static LAST_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static LAST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_ANALYTICAL,
+        "Returns value evaluated at the row that is the last row of the window \
+            frame.",
+        "last_value(expression)",
+    )
+    .with_argument("expression", "Expression to operate on")
+    .build()
+});
 
 fn get_last_value_doc() -> &'static Documentation {
-    LAST_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ANALYTICAL,
-            "Returns value evaluated at the row that is the last row of the window \
-                frame.",
-            "last_value(expression)",
-        )
-        .with_argument("expression", "Expression to operate on")
-        .build()
-    })
+    &LAST_VALUE_DOCUMENTATION
 }
 
-static NTH_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static NTH_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_ANALYTICAL,
+        "Returns value evaluated at the row that is the nth row of the window \
+            frame (counting from 1); null if no such row.",
+        "nth_value(expression, n)",
+    )
+    .with_argument(
+        "expression",
+        "The name the column of which nth \
+        value to retrieve",
+    )
+    .with_argument("n", "Integer. Specifies the n in nth")
+    .build()
+});
 
 fn get_nth_value_doc() -> &'static Documentation {
-    NTH_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ANALYTICAL,
-            "Returns value evaluated at the row that is the nth row of the window \
-                frame (counting from 1); null if no such row.",
-            "nth_value(expression, n)",
-        )
-        .with_argument(
-            "expression",
-            "The name the column of which nth \
-            value to retrieve",
-        )
-        .with_argument("n", "Integer. Specifies the n in nth")
-        .build()
-    })
+    &NTH_VALUE_DOCUMENTATION
 }
 
 impl WindowUDFImpl for NthValue {

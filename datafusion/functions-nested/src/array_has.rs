@@ -27,13 +27,16 @@ use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_expr::expr::{InList, ScalarFunction};
+use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
+use crate::make_array::make_array_udf;
 use crate::utils::make_scalar_function;
 
 use std::any::Any;
@@ -119,6 +122,52 @@ impl ScalarUDFImpl for ArrayHas {
 
     fn return_type(&self, _: &[DataType]) -> Result<DataType> {
         Ok(DataType::Boolean)
+    }
+
+    fn simplify(
+        &self,
+        mut args: Vec<Expr>,
+        _info: &dyn datafusion_expr::simplify::SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        let [haystack, needle] = take_function_args(self.name(), &mut args)?;
+
+        // if the haystack is a constant list, we can use an inlist expression which is more
+        // efficient because the haystack is not varying per-row
+        if let Expr::Literal(ScalarValue::List(array)) = haystack {
+            // TODO: support LargeList
+            // (not supported by `convert_array_to_scalar_vec`)
+            // (FixedSizeList not supported either, but seems to have worked fine when attempting to
+            // build a reproducer)
+
+            assert_eq!(array.len(), 1); // guarantee of ScalarValue
+            if let Ok(scalar_values) =
+                ScalarValue::convert_array_to_scalar_vec(array.as_ref())
+            {
+                assert_eq!(scalar_values.len(), 1);
+                let list = scalar_values
+                    .into_iter()
+                    .flatten()
+                    .map(Expr::Literal)
+                    .collect();
+
+                return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
+                    expr: Box::new(std::mem::take(needle)),
+                    list,
+                    negated: false,
+                })));
+            }
+        } else if let Expr::ScalarFunction(ScalarFunction { func, args }) = haystack {
+            // make_array has a static set of arguments, so we can pull the arguments out from it
+            if func == &make_array_udf() {
+                return Ok(ExprSimplifyResult::Simplified(Expr::InList(InList {
+                    expr: Box::new(std::mem::take(needle)),
+                    list: std::mem::take(args),
+                    negated: false,
+                })));
+            }
+        }
+
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn invoke_with_args(
@@ -439,6 +488,13 @@ fn array_has_all_and_any_dispatch<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let haystack = as_generic_list_array::<O>(haystack)?;
     let needle = as_generic_list_array::<O>(needle)?;
+    if needle.values().len() == 0 {
+        let buffer = match comparison_type {
+            ComparisonType::All => BooleanBuffer::new_set(haystack.len()),
+            ComparisonType::Any => BooleanBuffer::new_unset(haystack.len()),
+        };
+        return Ok(Arc::new(BooleanArray::from(buffer)));
+    }
     match needle.data_type() {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
             array_has_all_and_any_string_internal::<O>(haystack, needle, comparison_type)
@@ -533,5 +589,88 @@ fn general_array_has_all_and_any_kernel(
                 .iter()
                 .any(|haystack_row| haystack_row == needle_row)
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::create_array;
+    use datafusion_common::utils::SingleRowListArrayBuilder;
+    use datafusion_expr::{
+        col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult, Expr,
+        ScalarUDFImpl,
+    };
+
+    use crate::expr_fn::make_array;
+
+    use super::ArrayHas;
+
+    #[test]
+    fn test_simplify_array_has_to_in_list() {
+        let haystack = lit(SingleRowListArrayBuilder::new(create_array!(
+            Int32,
+            [1, 2, 3]
+        ))
+        .build_list_scalar());
+        let needle = col("c");
+
+        let props = ExecutionProps::new();
+        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+
+        let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
+            ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
+        else {
+            panic!("Expected simplified expression");
+        };
+
+        assert_eq!(
+            in_list,
+            datafusion_expr::expr::InList {
+                expr: Box::new(needle),
+                list: vec![lit(1), lit(2), lit(3)],
+                negated: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_simplify_array_has_with_make_array_to_in_list() {
+        let haystack = make_array(vec![lit(1), lit(2), lit(3)]);
+        let needle = col("c");
+
+        let props = ExecutionProps::new();
+        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+
+        let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
+            ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
+        else {
+            panic!("Expected simplified expression");
+        };
+
+        assert_eq!(
+            in_list,
+            datafusion_expr::expr::InList {
+                expr: Box::new(needle),
+                list: vec![lit(1), lit(2), lit(3)],
+                negated: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_array_has_complex_list_not_simplified() {
+        let haystack = col("c1");
+        let needle = col("c2");
+
+        let props = ExecutionProps::new();
+        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+
+        let Ok(ExprSimplifyResult::Original(args)) =
+            ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
+        else {
+            panic!("Expected simplified expression");
+        };
+
+        assert_eq!(args, vec![col("c1"), col("c2")],);
     }
 }

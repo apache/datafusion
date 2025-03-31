@@ -18,6 +18,7 @@
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
 use arrow::array::{new_empty_array, Array, ArrayRef, AsArray, ListArray, StructArray};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Fields};
 
 use datafusion_common::cast::as_list_array;
@@ -32,6 +33,7 @@ use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -46,16 +48,25 @@ make_udaf_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "General Functions"),
-    description = "Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.",
+    description = r#"Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.
+This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the argument expression."#,
     syntax_example = "array_agg(expression [ORDER BY expression])",
-    sql_example = r#"```sql
+    sql_example = r#"
+```sql
 > SELECT array_agg(column_name ORDER BY other_column) FROM table_name;
 +-----------------------------------------------+
 | array_agg(column_name ORDER BY other_column)  |
 +-----------------------------------------------+
 | [element1, element2, element3]                |
 +-----------------------------------------------+
-```"#,
+> SELECT array_agg(DISTINCT column_name ORDER BY column_name) FROM table_name;
++--------------------------------------------------------+
+| array_agg(DISTINCT column_name ORDER BY column_name)  |
++--------------------------------------------------------+
+| [element1, element2, element3]                         |
++--------------------------------------------------------+
+```
+"#,
     standard_argument(name = "expression",)
 )]
 #[derive(Debug)]
@@ -131,7 +142,34 @@ impl AggregateUDFImpl for ArrayAgg {
         let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
 
         if acc_args.is_distinct {
-            return Ok(Box::new(DistinctArrayAggAccumulator::try_new(&data_type)?));
+            // Limitation similar to Postgres. The aggregation function can only mix
+            // DISTINCT and ORDER BY if all the expressions in the ORDER BY appear
+            // also in the arguments of the function. This implies that if the
+            // aggregation function only accepts one argument, only one argument
+            // can be used in the ORDER BY, For example:
+            //
+            // ARRAY_AGG(DISTINCT col)
+            //
+            // can only be mixed with an ORDER BY if the order expression is "col".
+            //
+            // ARRAY_AGG(DISTINCT col ORDER BY col)                         <- Valid
+            // ARRAY_AGG(DISTINCT concat(col, '') ORDER BY concat(col, '')) <- Valid
+            // ARRAY_AGG(DISTINCT col ORDER BY other_col)                   <- Invalid
+            // ARRAY_AGG(DISTINCT col ORDER BY concat(col, ''))             <- Invalid
+            if acc_args.ordering_req.len() > 1 {
+                return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
+            }
+            let mut sort_option: Option<SortOptions> = None;
+            if let Some(order) = acc_args.ordering_req.first() {
+                if !order.expr.eq(&acc_args.exprs[0]) {
+                    return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
+                }
+                sort_option = Some(order.options)
+            }
+            return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
+                &data_type,
+                sort_option,
+            )?));
         }
 
         if acc_args.ordering_req.is_empty() {
@@ -321,13 +359,18 @@ impl Accumulator for ArrayAggAccumulator {
 struct DistinctArrayAggAccumulator {
     values: HashSet<ScalarValue>,
     datatype: DataType,
+    sort_options: Option<SortOptions>,
 }
 
 impl DistinctArrayAggAccumulator {
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
+    pub fn try_new(
+        datatype: &DataType,
+        sort_options: Option<SortOptions>,
+    ) -> Result<Self> {
         Ok(Self {
             values: HashSet::new(),
             datatype: datatype.clone(),
+            sort_options,
         })
     }
 }
@@ -338,8 +381,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.len() != 1 {
-            return internal_err!("expects single batch");
+        if values.is_empty() {
+            return Ok(());
         }
 
         let array = &values[0];
@@ -369,10 +412,32 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let values: Vec<ScalarValue> = self.values.iter().cloned().collect();
+        let mut values: Vec<ScalarValue> = self.values.iter().cloned().collect();
         if values.is_empty() {
             return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
         }
+
+        if let Some(opts) = self.sort_options {
+            values.sort_by(|a, b| {
+                if a.is_null() {
+                    return match opts.nulls_first {
+                        true => Ordering::Less,
+                        false => Ordering::Greater,
+                    };
+                }
+                if b.is_null() {
+                    return match opts.nulls_first {
+                        true => Ordering::Greater,
+                        false => Ordering::Less,
+                    };
+                }
+                match opts.descending {
+                    true => b.partial_cmp(a).unwrap_or(Ordering::Equal),
+                    false => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+                }
+            });
+        };
+
         let arr = ScalarValue::new_list(&values, &self.datatype, true);
         Ok(ScalarValue::List(arr))
     }
@@ -382,6 +447,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
             - size_of_val(&self.values)
             + self.datatype.size()
             - size_of_val(&self.datatype)
+            - size_of_val(&self.sort_options)
+            + size_of::<Option<SortOptions>>()
     }
 }
 
@@ -598,146 +665,370 @@ impl OrderSensitiveArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::collections::VecDeque;
+    use arrow::datatypes::{FieldRef, Schema};
+    use datafusion_common::cast::as_generic_string_array;
+    use datafusion_common::internal_err;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use std::sync::Arc;
 
-    use arrow::array::Int64Array;
-    use arrow::compute::SortOptions;
-
-    use datafusion_common::utils::get_row_at_idx;
-    use datafusion_common::{Result, ScalarValue};
-
     #[test]
-    fn test_merge_asc() -> Result<()> {
-        let lhs_arrays: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2])),
-            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])),
-        ];
-        let n_row = lhs_arrays[0].len();
-        let lhs_orderings = (0..n_row)
-            .map(|idx| get_row_at_idx(&lhs_arrays, idx))
-            .collect::<Result<VecDeque<_>>>()?;
+    fn no_duplicates_no_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string().build_two()?;
 
-        let rhs_arrays: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2])),
-            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])),
-        ];
-        let n_row = rhs_arrays[0].len();
-        let rhs_orderings = (0..n_row)
-            .map(|idx| get_row_at_idx(&rhs_arrays, idx))
-            .collect::<Result<VecDeque<_>>>()?;
-        let sort_options = vec![
-            SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-            SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-        ];
+        acc1.update_batch(&[data(["a", "b", "c"])])?;
+        acc2.update_batch(&[data(["d", "e", "f"])])?;
+        acc1 = merge(acc1, acc2)?;
 
-        let lhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])) as ArrayRef;
-        let lhs_vals = (0..lhs_vals_arr.len())
-            .map(|idx| ScalarValue::try_from_array(&lhs_vals_arr, idx))
-            .collect::<Result<VecDeque<_>>>()?;
+        let result = print_nulls(str_arr(acc1.evaluate()?)?);
 
-        let rhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])) as ArrayRef;
-        let rhs_vals = (0..rhs_vals_arr.len())
-            .map(|idx| ScalarValue::try_from_array(&rhs_vals_arr, idx))
-            .collect::<Result<VecDeque<_>>>()?;
-        let expected =
-            Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef;
-        let expected_ts = vec![
-            Arc::new(Int64Array::from(vec![0, 0, 0, 0, 1, 1, 1, 1, 2, 2])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef,
-        ];
-
-        let (merged_vals, merged_ts) = merge_ordered_arrays(
-            &mut [lhs_vals, rhs_vals],
-            &mut [lhs_orderings, rhs_orderings],
-            &sort_options,
-        )?;
-        let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
-        let merged_ts = (0..merged_ts[0].len())
-            .map(|col_idx| {
-                ScalarValue::iter_to_array(
-                    (0..merged_ts.len())
-                        .map(|row_idx| merged_ts[row_idx][col_idx].clone()),
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        assert_eq!(&merged_vals, &expected);
-        assert_eq!(&merged_ts, &expected_ts);
+        assert_eq!(result, vec!["a", "b", "c", "d", "e", "f"]);
 
         Ok(())
     }
 
     #[test]
-    fn test_merge_desc() -> Result<()> {
-        let lhs_arrays: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![2, 1, 1, 0, 0])),
-            Arc::new(Int64Array::from(vec![4, 3, 2, 1, 0])),
-        ];
-        let n_row = lhs_arrays[0].len();
-        let lhs_orderings = (0..n_row)
-            .map(|idx| get_row_at_idx(&lhs_arrays, idx))
-            .collect::<Result<VecDeque<_>>>()?;
+    fn no_duplicates_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .build_two()?;
 
-        let rhs_arrays: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![2, 1, 1, 0, 0])),
-            Arc::new(Int64Array::from(vec![4, 3, 2, 1, 0])),
-        ];
-        let n_row = rhs_arrays[0].len();
-        let rhs_orderings = (0..n_row)
-            .map(|idx| get_row_at_idx(&rhs_arrays, idx))
-            .collect::<Result<VecDeque<_>>>()?;
-        let sort_options = vec![
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
-        ];
+        acc1.update_batch(&[data(["a", "b", "c"])])?;
+        acc2.update_batch(&[data(["d", "e", "f"])])?;
+        acc1 = merge(acc1, acc2)?;
 
-        // Values (which will be merged) doesn't have to be ordered.
-        let lhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 1, 2])) as ArrayRef;
-        let lhs_vals = (0..lhs_vals_arr.len())
-            .map(|idx| ScalarValue::try_from_array(&lhs_vals_arr, idx))
-            .collect::<Result<VecDeque<_>>>()?;
+        let mut result = print_nulls(str_arr(acc1.evaluate()?)?);
+        result.sort();
 
-        let rhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 1, 2])) as ArrayRef;
-        let rhs_vals = (0..rhs_vals_arr.len())
-            .map(|idx| ScalarValue::try_from_array(&rhs_vals_arr, idx))
-            .collect::<Result<VecDeque<_>>>()?;
-        let expected =
-            Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 1, 1, 2, 2])) as ArrayRef;
-        let expected_ts = vec![
-            Arc::new(Int64Array::from(vec![2, 2, 1, 1, 1, 1, 0, 0, 0, 0])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![4, 4, 3, 3, 2, 2, 1, 1, 0, 0])) as ArrayRef,
-        ];
-        let (merged_vals, merged_ts) = merge_ordered_arrays(
-            &mut [lhs_vals, rhs_vals],
-            &mut [lhs_orderings, rhs_orderings],
-            &sort_options,
-        )?;
-        let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
-        let merged_ts = (0..merged_ts[0].len())
-            .map(|col_idx| {
-                ScalarValue::iter_to_array(
-                    (0..merged_ts.len())
-                        .map(|row_idx| merged_ts[row_idx][col_idx].clone()),
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(result, vec!["a", "b", "c", "d", "e", "f"]);
 
-        assert_eq!(&merged_vals, &expected);
-        assert_eq!(&merged_ts, &expected_ts);
         Ok(())
+    }
+
+    #[test]
+    fn duplicates_no_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string().build_two()?;
+
+        acc1.update_batch(&[data(["a", "b", "c"])])?;
+        acc2.update_batch(&[data(["a", "b", "c"])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = print_nulls(str_arr(acc1.evaluate()?)?);
+
+        assert_eq!(result, vec!["a", "b", "c", "a", "b", "c"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn duplicates_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .build_two()?;
+
+        acc1.update_batch(&[data(["a", "b", "c"])])?;
+        acc2.update_batch(&[data(["a", "b", "c"])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let mut result = print_nulls(str_arr(acc1.evaluate()?)?);
+        result.sort();
+
+        assert_eq!(result, vec!["a", "b", "c"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn duplicates_on_second_batch_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .build_two()?;
+
+        acc1.update_batch(&[data(["a", "c"])])?;
+        acc2.update_batch(&[data(["d", "a", "b", "c"])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let mut result = print_nulls(str_arr(acc1.evaluate()?)?);
+        result.sort();
+
+        assert_eq!(result, vec!["a", "b", "c", "d"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_duplicates_distinct_sort_asc() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .order_by_col("col", SortOptions::new(false, false))
+            .build_two()?;
+
+        acc1.update_batch(&[data(["e", "b", "d"])])?;
+        acc2.update_batch(&[data(["f", "a", "c"])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = print_nulls(str_arr(acc1.evaluate()?)?);
+
+        assert_eq!(result, vec!["a", "b", "c", "d", "e", "f"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_duplicates_distinct_sort_desc() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .order_by_col("col", SortOptions::new(true, false))
+            .build_two()?;
+
+        acc1.update_batch(&[data(["e", "b", "d"])])?;
+        acc2.update_batch(&[data(["f", "a", "c"])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = print_nulls(str_arr(acc1.evaluate()?)?);
+
+        assert_eq!(result, vec!["f", "e", "d", "c", "b", "a"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn duplicates_distinct_sort_asc() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .order_by_col("col", SortOptions::new(false, false))
+            .build_two()?;
+
+        acc1.update_batch(&[data(["a", "c", "b"])])?;
+        acc2.update_batch(&[data(["b", "c", "a"])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = print_nulls(str_arr(acc1.evaluate()?)?);
+
+        assert_eq!(result, vec!["a", "b", "c"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn duplicates_distinct_sort_desc() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .order_by_col("col", SortOptions::new(true, false))
+            .build_two()?;
+
+        acc1.update_batch(&[data(["a", "c", "b"])])?;
+        acc2.update_batch(&[data(["b", "c", "a"])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = print_nulls(str_arr(acc1.evaluate()?)?);
+
+        assert_eq!(result, vec!["c", "b", "a"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_duplicates_distinct_sort_asc_nulls_first() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .order_by_col("col", SortOptions::new(false, true))
+            .build_two()?;
+
+        acc1.update_batch(&[data([Some("e"), Some("b"), None])])?;
+        acc2.update_batch(&[data([Some("f"), Some("a"), None])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = print_nulls(str_arr(acc1.evaluate()?)?);
+
+        assert_eq!(result, vec!["NULL", "a", "b", "e", "f"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_duplicates_distinct_sort_asc_nulls_last() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .order_by_col("col", SortOptions::new(false, false))
+            .build_two()?;
+
+        acc1.update_batch(&[data([Some("e"), Some("b"), None])])?;
+        acc2.update_batch(&[data([Some("f"), Some("a"), None])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = print_nulls(str_arr(acc1.evaluate()?)?);
+
+        assert_eq!(result, vec!["a", "b", "e", "f", "NULL"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_duplicates_distinct_sort_desc_nulls_first() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .order_by_col("col", SortOptions::new(true, true))
+            .build_two()?;
+
+        acc1.update_batch(&[data([Some("e"), Some("b"), None])])?;
+        acc2.update_batch(&[data([Some("f"), Some("a"), None])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = print_nulls(str_arr(acc1.evaluate()?)?);
+
+        assert_eq!(result, vec!["NULL", "f", "e", "b", "a"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_duplicates_distinct_sort_desc_nulls_last() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .order_by_col("col", SortOptions::new(true, false))
+            .build_two()?;
+
+        acc1.update_batch(&[data([Some("e"), Some("b"), None])])?;
+        acc2.update_batch(&[data([Some("f"), Some("a"), None])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = print_nulls(str_arr(acc1.evaluate()?)?);
+
+        assert_eq!(result, vec!["f", "e", "b", "a", "NULL"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn all_nulls_on_first_batch_with_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .build_two()?;
+
+        acc1.update_batch(&[data::<Option<&str>, 3>([None, None, None])])?;
+        acc2.update_batch(&[data([Some("a"), None, None, None])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let mut result = print_nulls(str_arr(acc1.evaluate()?)?);
+        result.sort();
+        assert_eq!(result, vec!["NULL", "a"]);
+        Ok(())
+    }
+
+    #[test]
+    fn all_nulls_on_both_batches_with_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .build_two()?;
+
+        acc1.update_batch(&[data::<Option<&str>, 3>([None, None, None])])?;
+        acc2.update_batch(&[data::<Option<&str>, 4>([None, None, None, None])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        let result = print_nulls(str_arr(acc1.evaluate()?)?);
+        assert_eq!(result, vec!["NULL"]);
+        Ok(())
+    }
+
+    struct ArrayAggAccumulatorBuilder {
+        data_type: DataType,
+        distinct: bool,
+        ordering: LexOrdering,
+        schema: Schema,
+    }
+
+    impl ArrayAggAccumulatorBuilder {
+        fn string() -> Self {
+            Self::new(DataType::Utf8)
+        }
+
+        fn new(data_type: DataType) -> Self {
+            Self {
+                data_type: data_type.clone(),
+                distinct: Default::default(),
+                ordering: Default::default(),
+                schema: Schema {
+                    fields: Fields::from(vec![Field::new(
+                        "col",
+                        DataType::List(FieldRef::new(Field::new(
+                            "item", data_type, true,
+                        ))),
+                        true,
+                    )]),
+                    metadata: Default::default(),
+                },
+            }
+        }
+
+        fn distinct(mut self) -> Self {
+            self.distinct = true;
+            self
+        }
+
+        fn order_by_col(mut self, col: &str, sort_options: SortOptions) -> Self {
+            self.ordering.extend([PhysicalSortExpr::new(
+                Arc::new(
+                    Column::new_with_schema(col, &self.schema)
+                        .expect("column not available in schema"),
+                ),
+                sort_options,
+            )]);
+            self
+        }
+
+        fn build(&self) -> Result<Box<dyn Accumulator>> {
+            ArrayAgg::default().accumulator(AccumulatorArgs {
+                return_type: &self.data_type,
+                schema: &self.schema,
+                ignore_nulls: false,
+                ordering_req: &self.ordering,
+                is_reversed: false,
+                name: "",
+                is_distinct: self.distinct,
+                exprs: &[Arc::new(Column::new("col", 0))],
+            })
+        }
+
+        fn build_two(&self) -> Result<(Box<dyn Accumulator>, Box<dyn Accumulator>)> {
+            Ok((self.build()?, self.build()?))
+        }
+    }
+
+    fn str_arr(value: ScalarValue) -> Result<Vec<Option<String>>> {
+        let ScalarValue::List(list) = value else {
+            return internal_err!("ScalarValue was not a List");
+        };
+        Ok(as_generic_string_array::<i32>(list.values())?
+            .iter()
+            .map(|v| v.map(|v| v.to_string()))
+            .collect())
+    }
+
+    fn print_nulls(sort: Vec<Option<String>>) -> Vec<String> {
+        sort.into_iter()
+            .map(|v| v.unwrap_or("NULL".to_string()))
+            .collect()
+    }
+
+    fn data<T, const N: usize>(list: [T; N]) -> ArrayRef
+    where
+        ScalarValue: From<T>,
+    {
+        let values: Vec<_> = list.into_iter().map(ScalarValue::from).collect();
+        ScalarValue::iter_to_array(values).expect("Cannot convert to array")
+    }
+
+    fn merge(
+        mut acc1: Box<dyn Accumulator>,
+        mut acc2: Box<dyn Accumulator>,
+    ) -> Result<Box<dyn Accumulator>> {
+        let intermediate_state = acc2.state().and_then(|e| {
+            e.iter()
+                .map(|v| v.to_array())
+                .collect::<Result<Vec<ArrayRef>>>()
+        })?;
+        acc1.merge_batch(&intermediate_state)?;
+        Ok(acc1)
     }
 }

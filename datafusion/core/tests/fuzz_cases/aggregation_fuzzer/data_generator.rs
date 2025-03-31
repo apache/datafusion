@@ -100,7 +100,28 @@ impl DatasetGeneratorConfig {
 
 /// Dataset generator
 ///
-/// It will generate one random [`Dataset`] when `generate` function is called.
+/// It will generate random [`Dataset`]s when the `generate` function is called. For each
+/// sort key in `sort_keys_set`, an additional sorted dataset will be generated, and the
+/// dataset will be chunked into staggered batches.
+///
+/// # Example
+/// For `DatasetGenerator` with `sort_keys_set = [["a"], ["b"]]`, it will generate 2
+/// datasets. The first one will be sorted by column `a` and get randomly chunked
+/// into staggered batches. It might look like the following:
+/// ```text
+/// a b
+/// ----
+/// 1 2 <-- batch 1
+/// 1 1
+///
+/// 2 1 <-- batch 2
+///
+/// 3 3 <-- batch 3
+/// 4 3
+/// 4 1
+/// ```
+///
+/// # Implementation details:
 ///
 /// The generation logic in `generate`:
 ///
@@ -205,6 +226,10 @@ impl ColumnDescr {
             column_type,
             max_num_distinct: None,
         }
+    }
+
+    pub fn get_max_num_distinct(&self) -> Option<usize> {
+        self.max_num_distinct
     }
 
     /// set the maximum number of distinct values in this column

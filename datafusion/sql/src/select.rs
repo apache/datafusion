@@ -19,6 +19,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
@@ -33,18 +34,19 @@ use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
-    qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
-    GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
+    LogicalPlanBuilderOptions, Partitioning,
 };
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
-    WildcardAdditionalOptions, WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderBy,
+    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -53,7 +55,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn select_to_plan(
         &self,
         mut select: Select,
-        order_by: Vec<OrderByExpr>,
+        query_order_by: Option<OrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // Check for unsupported syntax first
@@ -91,8 +93,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             planner_context,
         )?;
 
+        let order_by =
+            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
+
         // Having and group by clause may reference aliases defined in select projection
-        let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
+        let projected_plan = self.project(base_plan.clone(), select_exprs)?;
+        let select_exprs = projected_plan.expressions();
 
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
@@ -371,7 +377,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let agg_expr = agg.aggr_expr.clone();
                 let (new_input, new_group_by_exprs) =
                     self.try_process_group_by_unnest(agg)?;
+                let options = LogicalPlanBuilderOptions::new()
+                    .with_add_implicit_group_by_exprs(true);
                 LogicalPlanBuilder::from(new_input)
+                    .with_options(options)
                     .aggregate(new_group_by_exprs, agg_expr)?
                     .build()
             }
@@ -574,7 +583,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         projection: Vec<SelectItem>,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<Expr>> {
+    ) -> Result<Vec<SelectExpr>> {
         let mut prepared_select_exprs = vec![];
         let mut error_builder = DataFusionErrorBuilder::new();
         for expr in projection {
@@ -593,7 +602,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         plan: &LogicalPlan,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-    ) -> Result<Expr> {
+    ) -> Result<SelectExpr> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
@@ -602,7 +611,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                Ok(col)
+
+                Ok(SelectExpr::Expression(col))
             }
             SelectItem::ExprWithAlias { expr, alias } => {
                 let select_expr =
@@ -618,7 +628,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     Expr::Column(column) if column.name.eq(&name) => col,
                     _ => col.alias(name),
                 };
-                Ok(expr)
+
+                Ok(SelectExpr::Expression(expr))
             }
             SelectItem::Wildcard(options) => {
                 Self::check_wildcard_options(&options)?;
@@ -631,10 +642,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                     options,
                 )?;
-                Ok(wildcard_with_options(planned_options))
+
+                Ok(SelectExpr::Wildcard(planned_options))
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
+                let object_name = match object_name {
+                    SelectItemQualifiedWildcardKind::ObjectName(object_name) => {
+                        object_name
+                    }
+                    SelectItemQualifiedWildcardKind::Expr(_) => {
+                        return plan_err!(
+                            "Qualified wildcard with expression not supported"
+                        )
+                    }
+                };
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 let planned_options = self.plan_wildcard_options(
                     plan,
@@ -642,7 +664,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                     options,
                 )?;
-                Ok(qualified_wildcard_with_options(qualifier, planned_options))
+
+                Ok(SelectExpr::QualifiedWildcard(qualifier, planned_options))
             }
         }
     }
@@ -694,7 +717,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         planner_context,
                     )
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .filter_map(|expr| match expr {
+                    SelectExpr::Expression(expr) => Some(expr),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
             let planned_replace = PlannedReplaceSelectItem {
                 items: replace.items.into_iter().map(|i| *i).collect(),
                 planned_expressions: replace_expr,
@@ -706,8 +736,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Wrap a plan in a projection
-    fn project(&self, input: LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
-        self.validate_schema_satisfies_exprs(input.schema(), &expr)?;
+    fn project(&self, input: LogicalPlan, expr: Vec<SelectExpr>) -> Result<LogicalPlan> {
+        // convert to Expr for validate_schema_satisfies_exprs
+        let exprs = expr
+            .iter()
+            .filter_map(|e| match e {
+                SelectExpr::Expression(expr) => Some(expr.to_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        self.validate_schema_satisfies_exprs(input.schema(), &exprs)?;
+
         LogicalPlanBuilder::from(input).project(expr)?.build()
     }
 
@@ -744,7 +783,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         aggr_exprs: &[Expr],
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
         // create the aggregate plan
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
         let plan = LogicalPlanBuilder::from(input.clone())
+            .with_options(options)
             .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
             .build()?;
         let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {

@@ -49,7 +49,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
     UserDefinedLogicalNode,
 };
-use sqlparser::ast::{self, Ident, SetExpr, TableAliasColumnDef};
+use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
 use std::sync::Arc;
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
@@ -322,6 +322,7 @@ impl Unparser<'_> {
         }
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn select_to_sql_recursively(
         &self,
         plan: &LogicalPlan,
@@ -356,7 +357,7 @@ impl Unparser<'_> {
                 table_parts.push(
                     self.new_ident_quoted_if_needs(scan.table_name.table().to_string()),
                 );
-                builder.name(ast::ObjectName(table_parts));
+                builder.name(ast::ObjectName::from(table_parts));
                 relation.table(builder);
 
                 Ok(())
@@ -377,8 +378,17 @@ impl Unparser<'_> {
                 };
                 if self.dialect.unnest_as_table_factor() && unnest_input_type.is_some() {
                     if let LogicalPlan::Unnest(unnest) = &p.input.as_ref() {
-                        return self
-                            .unnest_to_table_factor_sql(unnest, query, select, relation);
+                        if let Some(unnest_relation) =
+                            self.try_unnest_to_table_factor_sql(unnest)?
+                        {
+                            relation.unnest(unnest_relation);
+                            return self.select_to_sql_recursively(
+                                p.input.as_ref(),
+                                query,
+                                select,
+                                relation,
+                            );
+                        }
                     }
                 }
 
@@ -471,7 +481,7 @@ impl Unparser<'_> {
                 };
 
                 if let Some(fetch) = sort.fetch {
-                    query_ref.limit(Some(ast::Expr::Value(ast::Value::Number(
+                    query_ref.limit(Some(ast::Expr::value(ast::Value::Number(
                         fetch.to_string(),
                         false,
                     ))));
@@ -566,14 +576,20 @@ impl Unparser<'_> {
             }
             LogicalPlan::Join(join) => {
                 let mut table_scan_filters = vec![];
+                let (left_plan, right_plan) = match join.join_type {
+                    JoinType::RightSemi | JoinType::RightAnti => {
+                        (&join.right, &join.left)
+                    }
+                    _ => (&join.left, &join.right),
+                };
 
                 let left_plan =
-                    match try_transform_to_simple_table_scan_with_filters(&join.left)? {
+                    match try_transform_to_simple_table_scan_with_filters(left_plan)? {
                         Some((plan, filters)) => {
                             table_scan_filters.extend(filters);
                             Arc::new(plan)
                         }
-                        None => Arc::clone(&join.left),
+                        None => Arc::clone(left_plan),
                     };
 
                 self.select_to_sql_recursively(
@@ -584,12 +600,12 @@ impl Unparser<'_> {
                 )?;
 
                 let right_plan =
-                    match try_transform_to_simple_table_scan_with_filters(&join.right)? {
+                    match try_transform_to_simple_table_scan_with_filters(right_plan)? {
                         Some((plan, filters)) => {
                             table_scan_filters.extend(filters);
                             Arc::new(plan)
                         }
-                        None => Arc::clone(&join.right),
+                        None => Arc::clone(right_plan),
                     };
 
                 let mut right_relation = RelationBuilder::default();
@@ -641,19 +657,70 @@ impl Unparser<'_> {
                     &mut right_relation,
                 )?;
 
-                let Ok(Some(relation)) = right_relation.build() else {
-                    return internal_err!("Failed to build right relation");
-                };
+                match join.join_type {
+                    JoinType::LeftSemi
+                    | JoinType::LeftAnti
+                    | JoinType::LeftMark
+                    | JoinType::RightSemi
+                    | JoinType::RightAnti => {
+                        let mut query_builder = QueryBuilder::default();
+                        let mut from = TableWithJoinsBuilder::default();
+                        let mut exists_select: SelectBuilder = SelectBuilder::default();
+                        from.relation(right_relation);
+                        exists_select.push_from(from);
+                        if let Some(filter) = &join.filter {
+                            exists_select.selection(Some(self.expr_to_sql(filter)?));
+                        }
+                        for (left, right) in &join.on {
+                            exists_select.selection(Some(
+                                self.expr_to_sql(&left.clone().eq(right.clone()))?,
+                            ));
+                        }
+                        exists_select.projection(vec![ast::SelectItem::UnnamedExpr(
+                            ast::Expr::value(ast::Value::Number("1".to_string(), false)),
+                        )]);
+                        query_builder.body(Box::new(SetExpr::Select(Box::new(
+                            exists_select.build()?,
+                        ))));
 
-                let ast_join = ast::Join {
-                    relation,
-                    global: false,
-                    join_operator: self
-                        .join_operator_to_sql(join.join_type, join_constraint)?,
+                        let negated = match join.join_type {
+                            JoinType::LeftSemi
+                            | JoinType::RightSemi
+                            | JoinType::LeftMark => false,
+                            JoinType::LeftAnti | JoinType::RightAnti => true,
+                            _ => unreachable!(),
+                        };
+                        let exists_expr = ast::Expr::Exists {
+                            subquery: Box::new(query_builder.build()?),
+                            negated,
+                        };
+                        if join.join_type == JoinType::LeftMark {
+                            let (table_ref, _) = right_plan.schema().qualified_field(0);
+                            let column = self
+                                .col_to_sql(&Column::new(table_ref.cloned(), "mark"))?;
+                            select.replace_mark(&column, &exists_expr);
+                        } else {
+                            select.selection(Some(exists_expr));
+                        }
+                    }
+                    JoinType::Inner
+                    | JoinType::Left
+                    | JoinType::Right
+                    | JoinType::Full => {
+                        let Ok(Some(relation)) = right_relation.build() else {
+                            return internal_err!("Failed to build right relation");
+                        };
+                        let ast_join = ast::Join {
+                            relation,
+                            global: false,
+                            join_operator: self
+                                .join_operator_to_sql(join.join_type, join_constraint)?,
+                        };
+                        let mut from = select.pop_from().unwrap();
+                        from.push_join(ast_join);
+                        select.push_from(from);
+                    }
                 };
-                let mut from = select.pop_from().unwrap();
-                from.push_join(ast_join);
-                select.push_from(from);
 
                 Ok(())
             }
@@ -854,25 +921,34 @@ impl Unparser<'_> {
         None
     }
 
-    fn unnest_to_table_factor_sql(
+    fn try_unnest_to_table_factor_sql(
         &self,
         unnest: &Unnest,
-        query: &mut Option<QueryBuilder>,
-        select: &mut SelectBuilder,
-        relation: &mut RelationBuilder,
-    ) -> Result<()> {
+    ) -> Result<Option<UnnestRelationBuilder>> {
         let mut unnest_relation = UnnestRelationBuilder::default();
-        let LogicalPlan::Projection(p) = unnest.input.as_ref() else {
-            return internal_err!("Unnest input is not a Projection: {unnest:?}");
+        let LogicalPlan::Projection(projection) = unnest.input.as_ref() else {
+            return Ok(None);
         };
-        let exprs = p
+
+        if !matches!(projection.input.as_ref(), LogicalPlan::EmptyRelation(_)) {
+            // It may be possible that UNNEST is used as a source for the query.
+            // However, at this point, we don't yet know if it is just a single expression
+            // from another source or if it's from UNNEST.
+            //
+            // Unnest(Projection(EmptyRelation)) denotes a case with `UNNEST([...])`,
+            // which is normally safe to unnest as a table factor.
+            // However, in the future, more comprehensive checks can be added here.
+            return Ok(None);
+        };
+
+        let exprs = projection
             .expr
             .iter()
             .map(|e| self.expr_to_sql(e))
             .collect::<Result<Vec<_>>>()?;
         unnest_relation.array_exprs(exprs);
-        relation.unnest(unnest_relation);
-        self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
+
+        Ok(Some(unnest_relation))
     }
 
     fn is_scan_with_pushdown(scan: &TableScan) -> bool {
@@ -984,11 +1060,18 @@ impl Unparser<'_> {
                 Ok(Some(builder.build()?))
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
-                Self::unparse_table_scan_pushdown(
+                let ret = Self::unparse_table_scan_pushdown(
                     &subquery_alias.input,
                     Some(subquery_alias.alias.clone()),
                     already_projected,
-                )
+                )?;
+                if let Some(alias) = alias {
+                    if let Some(plan) = ret {
+                        let plan = LogicalPlanBuilder::new(plan).alias(alias)?.build()?;
+                        return Ok(Some(plan));
+                    }
+                }
+                Ok(ret)
             }
             // SubqueryAlias could be rewritten to a plan with a projection as the top node by [rewrite::subquery_alias_inner_query_and_columns].
             // The inner table scan could be a scan with pushdown operations.
@@ -1048,11 +1131,13 @@ impl Unparser<'_> {
         }
     }
 
-    fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<Vec<ast::OrderByExpr>> {
-        sort_exprs
-            .iter()
-            .map(|sort_expr| self.sort_to_sql(sort_expr))
-            .collect::<Result<Vec<_>>>()
+    fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<OrderByKind> {
+        Ok(OrderByKind::Expressions(
+            sort_exprs
+                .iter()
+                .map(|sort_expr| self.sort_to_sql(sort_expr))
+                .collect::<Result<Vec<_>>>()?,
+        ))
     }
 
     fn join_operator_to_sql(
@@ -1108,7 +1193,7 @@ impl Unparser<'_> {
                     // this is represented as two columns like `[t1.id, t2.id]`
                     // This code forms `id` (without relation name)
                     let ident = self.new_ident_quoted_if_needs(left_name.to_string());
-                    object_names.push(ast::ObjectName(vec![ident]));
+                    object_names.push(ast::ObjectName::from(vec![ident]));
                 }
                 // USING is only valid with matching column names; arbitrary expressions
                 // are not allowed

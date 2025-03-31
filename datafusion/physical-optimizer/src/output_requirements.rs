@@ -132,10 +132,18 @@ impl OutputRequirementExec {
 impl DisplayAs for OutputRequirementExec {
     fn fmt_as(
         &self,
-        _t: DisplayFormatType,
+        t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        write!(f, "OutputRequirementExec")
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "OutputRequirementExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
+        }
     }
 }
 

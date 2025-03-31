@@ -478,8 +478,14 @@ a
 statement ok
 create table foo (a varchar, b varchar) as values ('a', 'b');
 
+
 query T
-SELECT concat_ws('',a,b,'c') from foo
+SELECT concat_ws('', a, b,'c') from foo
+----
+abc
+
+query T
+SELECT concat_ws('',arrow_cast(a, 'Utf8View'),arrow_cast(b, 'Utf8View'),'c') from foo
 ----
 abc
 
@@ -1642,6 +1648,56 @@ true
 true
 true
 
+#### Other binary operators
+
+# ArrowAt for strings
+query error
+select 'foo' <@ 'bar'
+
+# AtArrow for strings
+query error
+select 'foo' @> 'bar'
+
+# AtAt for strings
+query error
+select 'foo' @@ 'bar'
+
+# Arrow for arrays
+query error
+select make_array(1,2,3) -> 2
+
+# LongArrow for arrays
+query error
+select make_array(1,2,3) ->> 2
+
+# HashArrow for structs
+query error
+select struct(1,2,3) #> 0
+
+# HashLongArrow for structs
+query error
+select struct(1,2,3) #>> 0
+
+# HashMinus for structs
+query error
+select struct(1,2,3) #- 0
+
+# AtQuestion for JSON/structs
+query error
+select struct(1,2,3) @? 'a.b.c'
+
+# Question for JSON/structs
+query error
+select struct(1,2,3) ? 'a.b.c'
+
+# QuestionPipe for JSON/structs
+query error
+select struct(1,2,3) ?| array['a','b','c']
+
+# QuestionAnd for JSON/structs
+query error
+select struct(1,2,3) ?& array['a','b','c']
+
 #### binary_mathematical_operator_with_null_lt
 
 # 1. Integer and NULL
@@ -2057,3 +2113,16 @@ select 1 where null between null and 2;
 query T
 select 'A' where null between 2 and null;
 ----
+
+### Demonstrate use of E literals for escaping
+# should not have literal tab
+query T
+select 'foo\t\tbar';
+----
+foo\t\tbar
+
+# should have literal tab
+query T
+select E'foo\t\tbar';
+----
+foo		bar

@@ -27,6 +27,4 @@ pub use session_state_defaults::SessionStateDefaults;
 
 // backwards compatibility
 pub use crate::datasource::file_format::options;
-
-// backwards compatibility
 pub use datafusion_execution::*;

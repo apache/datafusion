@@ -1,0 +1,59 @@
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+# test table alias
+statement count 0
+create table t1(id int);
+
+statement count 0
+create table t2(age int);
+
+query TT
+explain select * from ((select id from t1) cross join (select age from t2)) as f;
+----
+logical_plan
+01)SubqueryAlias: f
+02)--Cross Join: 
+03)----TableScan: t1 projection=[id]
+04)----TableScan: t2 projection=[age]
+physical_plan
+01)CrossJoinExec
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain select * from ((select id from t1) cross join (select age from t2)) as f(c1, c2);
+----
+logical_plan
+01)SubqueryAlias: f
+02)--Projection: t1.id AS c1, t2.age AS c2
+03)----Cross Join: 
+04)------TableScan: t1 projection=[id]
+05)------TableScan: t2 projection=[age]
+physical_plan
+01)ProjectionExec: expr=[id@0 as c1, age@1 as c2]
+02)--CrossJoinExec
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+statement count 0
+drop table t1;
+
+statement count 0
+drop table t2;

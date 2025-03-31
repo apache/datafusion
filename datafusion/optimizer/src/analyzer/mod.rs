@@ -28,17 +28,13 @@ use datafusion_common::Result;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{InvariantLevel, LogicalPlan};
 
-use crate::analyzer::expand_wildcard_rule::ExpandWildcardRule;
-use crate::analyzer::inline_table_scan::InlineTableScan;
 use crate::analyzer::resolve_grouping_function::ResolveGroupingFunction;
 use crate::analyzer::type_coercion::TypeCoercion;
 use crate::utils::log_plan;
 
 use self::function_rewrite::ApplyFunctionRewrites;
 
-pub mod expand_wildcard_rule;
 pub mod function_rewrite;
-pub mod inline_table_scan;
 pub mod resolve_grouping_function;
 pub mod type_coercion;
 
@@ -98,10 +94,6 @@ impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
-            Arc::new(InlineTableScan::new()),
-            // Every rule that will generate [Expr::Wildcard] should be placed in front of [ExpandWildcardRule].
-            Arc::new(ExpandWildcardRule::new()),
-            // [Expr::Wildcard] should be expanded before [TypeCoercion]
             Arc::new(ResolveGroupingFunction::new()),
             Arc::new(TypeCoercion::new()),
         ];

@@ -30,6 +30,10 @@ In addition to submitting new PRs, we have a healthy tradition of community
 members reviewing each other's PRs. Doing so is a great way to help the
 community as well as get more familiar with Rust and the relevant codebases.
 
+## Development Environment
+
+You can find how to setup build and testing environment [here](https://datafusion.apache.org/contributor-guide/development_environment.html)
+
 ## Finding and Creating Issues to Work On
 
 You can find a curated [good-first-issue] list to help you get started.

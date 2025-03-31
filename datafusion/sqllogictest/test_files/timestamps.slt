@@ -2845,7 +2845,27 @@ NULL
 query T
 SELECT to_char(null, '%d-%m-%Y');
 ----
-(empty)
+NULL
+
+query T
+SELECT to_char(date_column, '%Y-%m-%d')
+FROM (VALUES 
+    (DATE '2020-09-01'),
+    (NULL)
+) AS t(date_column);
+----
+2020-09-01
+NULL
+
+query T
+SELECT to_char(date_column, '%Y-%m-%d')
+FROM (VALUES 
+    (NULL),
+    (DATE '2020-09-01')
+) AS t(date_column);
+----
+NULL
+2020-09-01
 
 query T
 SELECT to_char(column1, column2)

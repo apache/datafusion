@@ -21,7 +21,8 @@ use std::{collections::HashMap, fs, path::Path};
 use tempfile::TempDir;
 
 use super::*;
-use datafusion_common::assert_batches_sorted_eq;
+use datafusion_common::test_util::batches_to_sort_string;
+use insta::assert_snapshot;
 
 #[tokio::test]
 async fn schema_merge_ignores_metadata_by_default() {
@@ -57,20 +58,6 @@ async fn schema_merge_ignores_metadata_by_default() {
     ];
     write_files(table_dir.as_path(), schemas);
 
-    // can be any order
-    let expected = [
-        "+----+------+",
-        "| id | name |",
-        "+----+------+",
-        "| 1  | test |",
-        "| 2  | test |",
-        "| 3  | test |",
-        "| 0  | test |",
-        "| 5  | test |",
-        "| 4  | test |",
-        "+----+------+",
-    ];
-
     // Read the parquet files into a dataframe to confirm results
     // (no errors)
     let table_path = table_dir.to_str().unwrap().to_string();
@@ -82,7 +69,18 @@ async fn schema_merge_ignores_metadata_by_default() {
         .unwrap();
     let actual = df.collect().await.unwrap();
 
-    assert_batches_sorted_eq!(expected, &actual);
+    assert_snapshot!(batches_to_sort_string(&actual), @r"
+    +----+------+
+    | id | name |
+    +----+------+
+    | 0  | test |
+    | 1  | test |
+    | 2  | test |
+    | 3  | test |
+    | 4  | test |
+    | 5  | test |
+    +----+------+
+    ");
     assert_no_metadata(&actual);
 
     // also validate it works via SQL interface as well
@@ -97,7 +95,18 @@ async fn schema_merge_ignores_metadata_by_default() {
         .collect()
         .await
         .unwrap();
-    assert_batches_sorted_eq!(expected, &actual);
+    assert_snapshot!(batches_to_sort_string(&actual), @r"
+    +----+------+
+    | id | name |
+    +----+------+
+    | 0  | test |
+    | 1  | test |
+    | 2  | test |
+    | 3  | test |
+    | 4  | test |
+    | 5  | test |
+    +----+------+
+    ");
     assert_no_metadata(&actual);
 }
 
@@ -124,17 +133,6 @@ async fn schema_merge_can_preserve_metadata() {
     ];
     write_files(table_dir.as_path(), schemas);
 
-    // can be any order
-    let expected = [
-        "+----+------+",
-        "| id | name |",
-        "+----+------+",
-        "| 1  | test |",
-        "| 2  | test |",
-        "| 0  | test |",
-        "+----+------+",
-    ];
-
     let mut expected_metadata = make_meta("foo", "bar");
     expected_metadata.insert("foo2".into(), "baz".into());
 
@@ -153,7 +151,15 @@ async fn schema_merge_can_preserve_metadata() {
 
     let actual = df.collect().await.unwrap();
 
-    assert_batches_sorted_eq!(expected, &actual);
+    assert_snapshot!(batches_to_sort_string(&actual), @r"
+    +----+------+
+    | id | name |
+    +----+------+
+    | 0  | test |
+    | 1  | test |
+    | 2  | test |
+    +----+------+
+    ");
     assert_metadata(&actual, &expected_metadata);
 
     // also validate it works via SQL interface as well
@@ -167,7 +173,15 @@ async fn schema_merge_can_preserve_metadata() {
     assert_eq!(actual.clone(), expected_metadata);
 
     let actual = df.collect().await.unwrap();
-    assert_batches_sorted_eq!(expected, &actual);
+    assert_snapshot!(batches_to_sort_string(&actual), @r"
+    +----+------+
+    | id | name |
+    +----+------+
+    | 0  | test |
+    | 1  | test |
+    | 2  | test |
+    +----+------+
+    ");
     assert_metadata(&actual, &expected_metadata);
 }
 

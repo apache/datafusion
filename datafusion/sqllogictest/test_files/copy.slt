@@ -110,24 +110,36 @@ a
 
 # Copy to directory as partitioned files
 query I
-COPY (values (1::int, 2::bigint, 19968::date, arrow_cast(1725235200000, 'Date64'), false, 'x'),
-    (11::int, 22::bigint, 19969::date, arrow_cast(1725148800000, 'Date64'), true, 'y')
+COPY (values (arrow_cast(1, 'Int8'), arrow_cast(2, 'UInt8'), arrow_cast(3, 'Int16'), arrow_cast(4, 'UInt16'),
+        arrow_cast(5, 'Int32'), arrow_cast(6, 'UInt32'), arrow_cast(7, 'Int64'), arrow_cast(8, 'UInt64'),
+        arrow_cast(9.1015625, 'Float16'), arrow_cast(10.1, 'Float32'), arrow_cast(11.1, 'Float64'), 19968::date,
+        arrow_cast(1725235200000, 'Date64'), false, 'x'),
+    (arrow_cast(11, 'Int8'), arrow_cast(22, 'UInt8'), arrow_cast(33, 'Int16'), arrow_cast(44, 'UInt16'),
+         arrow_cast(55, 'Int32'), arrow_cast(66, 'UInt32'), arrow_cast(77, 'Int64'), arrow_cast(88, 'UInt64'),
+         arrow_cast(9.203125, 'Float16'), arrow_cast(10.2, 'Float32'), arrow_cast(11.2, 'Float64'), 19969::date,
+         arrow_cast(1725148800000, 'Date64'), true, 'y')
 )
-TO 'test_files/scratch/copy/partitioned_table5/' STORED AS parquet PARTITIONED BY (column1, column2, column3, column4, column5)
+TO 'test_files/scratch/copy/partitioned_table5/' STORED AS parquet PARTITIONED BY (column1, column2, column3, column4,
+    column5, column6, column7, column8, column9, column10, column11, column12, column13, column14)
 OPTIONS ('format.compression' 'zstd(10)');
 ----
 2
 
 # validate partitioning
 statement ok
-CREATE EXTERNAL TABLE validate_partitioned_parquet5 (column1 int, column2 bigint, column3 date, column4 date, column5 boolean, column6 varchar) STORED AS PARQUET
-LOCATION 'test_files/scratch/copy/partitioned_table5/' PARTITIONED BY (column1, column2, column3, column4, column5);
+CREATE EXTERNAL TABLE validate_partitioned_parquet5 (column1 int, column2 int, column3 int, column4 int, column5 int,
+    column6 int, column7 bigint, column8 bigint, column9 float, column10 float, column11 float, column12 date,
+    column13 date, column14 boolean, column15 varchar) STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_table5/' PARTITIONED BY (column1, column2, column3, column4, column5,
+    column6, column7, column8, column9, column10, column11, column12, column13, column14);
 
-query IIDDBT
-select column1, column2, column3, column4, column5, column6 from validate_partitioned_parquet5 order by column1,column2,column3,column4,column5;
+query IIIIIIIIRRRDDBT
+select column1, column2, column3, column4, column5, column6, column7, column8, column9, column10, column11, column12,
+    column13, column14, column15 from validate_partitioned_parquet5 order by column1, column2, column3, column4,
+    column5, column6, column7, column8, column9, column10, column11, column12, column13;
 ----
-1 2 2024-09-02 2024-09-02 false x
-11 22 2024-09-03 2024-09-01 true y
+1 2 3 4 5 6 7 8 9.1015625 10.1 11.1 2024-09-02 2024-09-02 false x
+11 22 33 44 55 66 77 88 9.203125 10.2 11.2 2024-09-03 2024-09-01 true y
 
 
 statement ok
@@ -631,3 +643,20 @@ COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);
 # Copy using execution.keep_partition_by_columns with an invalid value
 query error DataFusion error: Invalid or Unsupported Configuration: provided value for 'execution.keep_partition_by_columns' was not recognized: "invalid_value"
 COPY source_table  to '/tmp/table.parquet' OPTIONS (execution.keep_partition_by_columns invalid_value);
+
+statement count 0
+create table t;
+
+query TT
+explain COPY (select * from t limit 10) to 'output.csv';
+----
+logical_plan
+01)CopyTo: format=csv output_url=output.csv options: ()
+02)--Limit: skip=0, fetch=10
+03)----TableScan: t projection=[], fetch=10
+physical_plan
+01)DataSinkExec: sink=CsvSink(file_groups=[])
+02)--DataSourceExec: partitions=1, partition_sizes=[0], fetch=10
+
+statement count 0
+drop table t;

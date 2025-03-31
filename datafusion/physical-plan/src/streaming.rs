@@ -208,6 +208,18 @@ impl DisplayAs for StreamingTableExec {
 
                 Ok(())
             }
+            DisplayFormatType::TreeRender => {
+                if self.infinite {
+                    writeln!(f, "infinite={}", self.infinite)?;
+                }
+                if let Some(limit) = self.limit {
+                    write!(f, "limit={limit}")?;
+                } else {
+                    write!(f, "limit=None")?;
+                }
+
+                Ok(())
+            }
         }
     }
 }

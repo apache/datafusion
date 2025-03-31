@@ -108,12 +108,11 @@ impl ScalarUDFImpl for SubstrIndexFunc {
         utf8_to_str_type(&arg_types[0], "substr_index")
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(substr_index, vec![])(args)
+        make_scalar_function(substr_index, vec![])(&args.args)
     }
 
     fn aliases(&self) -> &[String] {

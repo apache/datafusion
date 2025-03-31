@@ -382,7 +382,7 @@ impl FFI_TableProvider {
 /// defined on this struct must only use the stable functions provided in
 /// FFI_TableProvider to interact with the foreign table provider.
 #[derive(Debug)]
-pub struct ForeignTableProvider(FFI_TableProvider);
+pub struct ForeignTableProvider(pub FFI_TableProvider);
 
 unsafe impl Send for ForeignTableProvider {}
 unsafe impl Sync for ForeignTableProvider {}

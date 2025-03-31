@@ -46,7 +46,7 @@ use datafusion_expr::type_coercion::functions::{
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
+use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_utf8view_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
@@ -214,7 +214,10 @@ impl<'a> TypeCoercionRewriter<'a> {
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
     /// This occurs after wildcard expansion and the coercion of the input expressions.
     pub fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
-        let union_schema = Arc::new(coerce_union_schema(&union_plan.inputs)?);
+        let union_schema = Arc::new(coerce_union_schema_with_schema(
+            &union_plan.inputs,
+            &union_plan.schema,
+        )?);
         let new_inputs = union_plan
             .inputs
             .into_iter()
@@ -293,6 +296,7 @@ impl<'a> TypeCoercionRewriter<'a> {
             &right.get_type(right_schema)?,
         )
         .get_input_types()?;
+
         Ok((
             left.cast_to(&left_type, left_schema)?,
             right.cast_to(&right_type, right_schema)?,
@@ -311,12 +315,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             Expr::ScalarSubquery(Subquery {
                 subquery,
                 outer_ref_columns,
+                spans,
             }) => {
                 let new_plan =
                     analyze_internal(self.schema, Arc::unwrap_or_clone(subquery))?.data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
+                    spans,
                 })))
             }
             Expr::Exists(Exists { subquery, negated }) => {
@@ -329,6 +335,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
                         outer_ref_columns: subquery.outer_ref_columns,
+                        spans: subquery.spans,
                     },
                     negated,
                 })))
@@ -352,6 +359,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
+                    spans: subquery.spans,
                 };
                 Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
                     Box::new(expr.cast_to(&common_type, self.schema)?),
@@ -565,6 +573,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         .build()?,
                 ))
             }
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
             Expr::Alias(_)
             | Expr::Column(_)
             | Expr::ScalarVariable(_, _)
@@ -707,7 +717,7 @@ fn coerce_frame_bound(
 
 fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
-        || is_utf8_or_large_utf8(col_type)
+        || is_utf8_or_utf8view_or_large_utf8(col_type)
         || matches!(col_type, DataType::Null)
         || matches!(col_type, DataType::Boolean)
     {
@@ -928,7 +938,12 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 /// This method presumes that the wildcard expansion is unneeded, or has already
 /// been applied.
 pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
-    let base_schema = inputs[0].schema();
+    coerce_union_schema_with_schema(&inputs[1..], inputs[0].schema())
+}
+fn coerce_union_schema_with_schema(
+    inputs: &[Arc<LogicalPlan>],
+    base_schema: &DFSchemaRef,
+) -> Result<DFSchema> {
     let mut union_datatypes = base_schema
         .fields()
         .iter()
@@ -947,7 +962,7 @@ pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
 
     let mut metadata = base_schema.metadata().clone();
 
-    for (i, plan) in inputs.iter().enumerate().skip(1) {
+    for (i, plan) in inputs.iter().enumerate() {
         let plan_schema = plan.schema();
         metadata.extend(plan_schema.metadata().clone());
 
@@ -987,15 +1002,15 @@ pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
         }
     }
     let union_qualified_fields = izip!(
-        base_schema.iter(),
+        base_schema.fields(),
         union_datatypes.into_iter(),
         union_nullabilities,
         union_field_meta.into_iter()
     )
-    .map(|((qualifier, field), datatype, nullable, metadata)| {
+    .map(|(field, datatype, nullable, metadata)| {
         let mut field = Field::new(field.name().clone(), datatype, nullable);
         field.set_metadata(metadata);
-        (qualifier.cloned(), field.into())
+        (None, field.into())
     })
     .collect::<Vec<_>>();
 
@@ -1021,6 +1036,7 @@ fn project_with_column_index(
                 spans: _,
             }) if name != schema.field(i).name() => Ok(e.alias(schema.field(i).name())),
             Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => {
                 plan_err!("Wildcard should be expanded before type coercion")
             }
@@ -1038,15 +1054,16 @@ mod test {
     use std::sync::Arc;
 
     use arrow::datatypes::DataType::Utf8;
-    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
 
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
     };
+    use crate::analyzer::Analyzer;
     use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
+    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, Spans};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
@@ -1054,9 +1071,10 @@ mod test {
         cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
         BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
         Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        SimpleAggregateUDF, Subquery, Volatility,
+        SimpleAggregateUDF, Subquery, Union, Volatility,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
+    use datafusion_sql::TableReference;
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -1085,6 +1103,42 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: a < CAST(UInt32(2) AS Float64)\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
+    }
+
+    #[test]
+    fn test_coerce_union() -> Result<()> {
+        let left_plan = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(
+                DFSchema::try_from_qualified_schema(
+                    TableReference::full("datafusion", "test", "foo"),
+                    &Schema::new(vec![Field::new("a", DataType::Int32, false)]),
+                )
+                .unwrap(),
+            ),
+        }));
+        let right_plan = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(
+                DFSchema::try_from_qualified_schema(
+                    TableReference::full("datafusion", "test", "foo"),
+                    &Schema::new(vec![Field::new("a", DataType::Int64, false)]),
+                )
+                .unwrap(),
+            ),
+        }));
+        let union = LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+            left_plan, right_plan,
+        ])?);
+        let analyzed_union = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
+            .execute_and_check(union, &ConfigOptions::default(), |_, _| {})?;
+        let top_level_plan = LogicalPlan::Projection(Projection::try_new(
+            vec![col("a")],
+            Arc::new(analyzed_union),
+        )?);
+
+        let expected = "Projection: a\n  Union\n    Projection: CAST(datafusion.test.foo.a AS Int64) AS a\n      EmptyRelation\n    EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), top_level_plan, expected)
     }
 
     fn coerce_on_output_if_viewtype(plan: LogicalPlan, expected: &str) -> Result<()> {
@@ -2038,6 +2092,31 @@ mod test {
     }
 
     #[test]
+    fn test_map_with_diff_name() -> Result<()> {
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("key", Utf8, false));
+        builder.push(Field::new("value", DataType::Float64, true));
+        let struct_fields = builder.finish().fields;
+
+        let fields =
+            Field::new("entries", DataType::Struct(struct_fields.clone()), false);
+        let map_type_entries = DataType::Map(Arc::new(fields), false);
+
+        let fields = Field::new("key_value", DataType::Struct(struct_fields), false);
+        let may_type_cutsom = DataType::Map(Arc::new(fields), false);
+
+        let expr = col("a").eq(cast(col("a"), may_type_cutsom));
+        let empty = empty_with_type(map_type_entries);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let expected = "Projection: a = CAST(CAST(a AS Map(Field { name: \"key_value\", data_type: Struct([Field { name: \"key\", data_type: Utf8, \
+        nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"value\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), \
+        nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false)) AS Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Utf8, nullable: false, \
+        dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"value\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false))\n  \
+        EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
+    }
+
+    #[test]
     fn interval_plus_timestamp() -> Result<()> {
         // SELECT INTERVAL '1' YEAR + '2000-01-01T00:00:00'::timestamp;
         let expr = Expr::BinaryExpr(BinaryExpr::new(
@@ -2086,6 +2165,7 @@ mod test {
             Subquery {
                 subquery: empty_int32,
                 outer_ref_columns: vec![],
+                spans: Spans::new(),
             },
             false,
         ));
@@ -2111,6 +2191,7 @@ mod test {
             Subquery {
                 subquery: empty_int64,
                 outer_ref_columns: vec![],
+                spans: Spans::new(),
             },
             false,
         ));
@@ -2135,6 +2216,7 @@ mod test {
             Subquery {
                 subquery: empty_inside,
                 outer_ref_columns: vec![],
+                spans: Spans::new(),
             },
             false,
         ));

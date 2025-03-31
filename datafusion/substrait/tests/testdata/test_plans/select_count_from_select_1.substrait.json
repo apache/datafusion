@@ -1,0 +1,92 @@
+{
+  "extensionUris": [
+    {
+      "uri": "https://github.com/substrait-io/substrait/blob/main/extensions/functions_aggregate_generic.yaml"
+    }
+  ],
+  "extensions": [
+    {
+      "extensionFunction": {
+        "functionAnchor": 185,
+        "name": "count:any"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "aggregate": {
+            "common": {
+              "direct": {
+              }
+            },
+            "input": {
+              "read": {
+                "common": {
+                  "direct": {
+                  }
+                },
+                "baseSchema": {
+                  "names": [
+                    "dummy"
+                  ],
+                  "struct": {
+                    "types": [
+                      {
+                        "i64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      }
+                    ],
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "virtualTable": {
+                  "values": [
+                    {
+                      "fields": [
+                        {
+                          "i64": "0",
+                          "nullable": false
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "groupings": [
+              {
+                "groupingExpressions": [],
+                "expressionReferences": []
+              }
+            ],
+            "measures": [
+              {
+                "measure": {
+                  "functionReference": 185,
+                  "args": [],
+                  "sorts": [],
+                  "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT",
+                  "outputType": {
+                    "i64": {
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "invocation": "AGGREGATION_INVOCATION_ALL",
+                  "arguments": [],
+                  "options": []
+                }
+              }
+            ],
+            "groupingExpressions": []
+          }
+        },
+        "names": [
+          "count(*)"
+        ]
+      }
+    }
+  ]
+}
