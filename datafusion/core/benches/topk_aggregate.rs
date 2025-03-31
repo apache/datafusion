@@ -55,8 +55,7 @@ async fn create_context(
     Ok((physical_plan, ctx.task_ctx()))
 }
 
-fn run(plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>, asc: bool) {
-    let rt = Runtime::new().unwrap();
+fn run(plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>, rt: &Runtime, asc: bool) {
     criterion::black_box(
         rt.block_on(async { aggregate(plan.clone(), ctx.clone(), asc).await }),
     )
@@ -127,12 +126,12 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function(
         format!("aggregate {} time-series rows", partitions * samples).as_str(),
-        |b| b.iter(|| run(real.0.clone(), real.1.clone(), false)),
+        |b| b.iter(|| run(real.0.clone(), real.1.clone(), &rt, false)),
     );
 
     c.bench_function(
         format!("aggregate {} worst-case rows", partitions * samples).as_str(),
-        |b| b.iter(|| run(asc.0.clone(), asc.1.clone(), true)),
+        |b| b.iter(|| run(asc.0.clone(), asc.1.clone(), &rt, true)),
     );
 
     c.bench_function(
@@ -141,7 +140,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             partitions * samples
         )
         .as_str(),
-        |b| b.iter(|| run(topk_real.0.clone(), topk_real.1.clone(), false)),
+        |b| b.iter(|| run(topk_real.0.clone(), topk_real.1.clone(), &rt, false)),
     );
 
     c.bench_function(
@@ -150,7 +149,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             partitions * samples
         )
         .as_str(),
-        |b| b.iter(|| run(topk_asc.0.clone(), topk_asc.1.clone(), true)),
+        |b| b.iter(|| run(topk_asc.0.clone(), topk_asc.1.clone(), &rt, true)),
     );
 }
 
