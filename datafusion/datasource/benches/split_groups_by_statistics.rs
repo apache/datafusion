@@ -87,8 +87,37 @@ pub fn compare_split_groups_by_statistics_algorithms(c: &mut Criterion) {
     };
     let sort_ordering = LexOrdering::from(vec![sort_expr]);
 
-    let file_counts = [10, 100, 1000]; // Small, medium, large number of files
-    let overlap_factors = [0.0, 0.2, 0.5, 0.8]; // Low, medium, high overlap
+    // Small, medium, large number of files
+    let file_counts = [10, 100, 1000];
+    // overlap_factors controls how much the value ranges in generated test files overlap:
+    // - 0.0: No overlap between files (completely disjoint ranges)
+    // - 0.2: Low overlap (20% of the range size overlaps with adjacent files)
+    // - 0.5: Medium overlap (50% of ranges overlap)
+    // - 0.8: High overlap (80% of ranges overlap between files)
+    //
+    // Example with 5 files and different overlap factors:
+    // [min, max]
+    // overlap_factor = 0.0 (no overlap):
+    //   File 0: [0, 20]
+    //   File 1: [20, 40]
+    //   File 2: [40, 60]
+    //   File 3: [60, 80]
+    //   File 4: [80, 100]
+    //
+    // overlap_factor = 0.5 (50% overlap):
+    //   File 0: [0, 40]
+    //   File 1: [20, 60]
+    //   File 2: [40, 80]
+    //   File 3: [60, 100]
+    //   File 4: [80, 120]
+    //
+    // overlap_factor = 0.8 (80% overlap):
+    //   File 0: [0, 100]
+    //   File 1: [20, 120]
+    //   File 2: [40, 140]
+    //   File 3: [60, 160]
+    //   File 4: [80, 180]
+    let overlap_factors = [0.0, 0.2, 0.5, 0.8]; // No, low, medium, high overlap
 
     let target_partitions: [usize; 4] = [4, 8, 16, 32];
 
