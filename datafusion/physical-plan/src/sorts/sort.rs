@@ -1300,6 +1300,10 @@ impl ExecutionPlan for SortExec {
         Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
     }
 
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        todo!()
+    }
+
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         Some(Arc::new(SortExec::with_fetch(self, limit)))
     }
