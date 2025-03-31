@@ -24,14 +24,14 @@ use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::Result;
+use datafusion_common::{instant::Instant, Result};
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryPool, UnboundedMemoryPool,
 };
 use datafusion_expr::display_schema;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use rand::seq::SliceRandom;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use datafusion_execution::{
     disk_manager::DiskManagerConfig, memory_pool::FairSpillPool,
@@ -53,7 +53,7 @@ async fn sort_query_fuzzer_runner() {
     let random_seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() as u64;
+        .as_secs();
     let test_generator = SortFuzzerTestGenerator::new(
         2000,
         3,
@@ -214,16 +214,14 @@ impl SortQueryFuzzer {
 
                     if expected_results.is_none() {
                         expected_results = Some(results);
+                    } else if let Some(ref expected) = expected_results {
+                        // `fuzzer_run` might append `LIMIT k` to either the
+                        // expected or actual query. The number of results is
+                        // checked inside `fuzzer_run()`. Here we only check
+                        // that the first k rows of each result are consistent.
+                        check_equality_of_batches(expected, &results).unwrap();
                     } else {
-                        if let Some(ref expected) = expected_results {
-                            // `fuzzer_run` might append `LIMIT k` to either the
-                            // expected or actual query. The number of results is
-                            // checked inside `fuzzer_run()`. Here we only check
-                            // that the first k rows of each result are consistent.
-                            check_equality_of_batches(expected, &results).unwrap();
-                        } else {
-                            unreachable!();
-                        }
+                        unreachable!();
                     }
                 }
             }
@@ -382,7 +380,7 @@ impl SortFuzzerTestGenerator {
             .map(|partition| {
                 partition
                     .iter()
-                    .map(|batch| get_record_batch_memory_size(batch))
+                    .map(get_record_batch_memory_size)
                     .sum::<usize>()
             })
             .sum();
@@ -494,7 +492,7 @@ impl SortFuzzerTestGenerator {
             0
         } else {
             let dataset_size = self.dataset_state.as_ref().unwrap().dataset_size;
-            rng.gen_range(0..=dataset_size * 2 as usize)
+            rng.gen_range(0..=dataset_size * 2_usize)
         };
 
         // Set up strings for printing
@@ -534,7 +532,7 @@ impl SortFuzzerTestGenerator {
             .with_sort_in_place_threshold_bytes(sort_in_place_threshold_bytes);
 
         let memory_pool: Arc<dyn MemoryPool> = if with_memory_limit {
-            Arc::new(FairSpillPool::new(memory_limit as usize))
+            Arc::new(FairSpillPool::new(memory_limit))
         } else {
             Arc::new(UnboundedMemoryPool::default())
         };
