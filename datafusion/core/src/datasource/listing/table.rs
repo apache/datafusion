@@ -899,10 +899,11 @@ impl TableProvider for ListingTable {
             .split_file_groups_by_statistics
             .then(|| {
                 output_ordering.first().map(|output_ordering| {
-                    FileScanConfig::split_groups_by_statistics(
+                    FileScanConfig::split_groups_by_statistics_v2(
                         &self.table_schema,
                         &partitioned_file_lists,
                         output_ordering,
+                        self.options.target_partitions,
                     )
                 })
             })
