@@ -60,7 +60,7 @@ pub use physical_expr::{
 };
 
 pub use datafusion_physical_expr_common::physical_expr::{
-    snasphot_physical_expr, PhysicalExpr,
+    snapshot_physical_expr, PhysicalExpr,
 };
 pub use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,

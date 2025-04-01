@@ -81,6 +81,10 @@ pub trait DataSource: Send + Sync + Debug {
         &self,
         _projection: &ProjectionExec,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>>;
+    /// Push down filters from parent execution plans to this data source.
+    /// This is expected to return Ok(None) if the filters cannot be pushed down.
+    /// If they can be pushed down it should return a [`FilterPushdownResult`] containing the new
+    /// data source and the support level for each filter (exact or inexact).
     fn push_down_filters(
         &self,
         _filters: &[&Arc<dyn PhysicalExpr>],

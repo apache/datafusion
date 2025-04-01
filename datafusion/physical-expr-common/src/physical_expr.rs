@@ -291,7 +291,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// or treat it via downcast matching.
     ///
     /// You should not call this method directly as it does not handle recursion.
-    /// Instead use `shapshot_physical_expr` to handle recursion and capture the
+    /// Instead use [`snapshot_physical_expr`] to handle recursion and capture the
     /// full state of the `PhysicalExpr`.
     ///
     /// This is expected to return "simple" expressions that do not have mutable state
@@ -318,7 +318,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// contain these dynamic references.
     ///
     /// Note for implementers: this method should *not* handle recursion.
-    /// Recursion is handled in `shapshot_physical_expr`.
+    /// Recursion is handled in [`snapshot_physical_expr`].
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // By default, we return None to indicate that this PhysicalExpr does not
         // have any dynamic references or state.
@@ -503,7 +503,7 @@ pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
 /// Returns an `Option<Arc<dyn PhysicalExpr>>` which is the snapshot of the
 /// `PhysicalExpr` if it is dynamic. If the `PhysicalExpr` does not have
 /// any dynamic references or state, it returns `None`.
-pub fn snasphot_physical_expr(
+pub fn snapshot_physical_expr(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     expr.transform_up(|e| {

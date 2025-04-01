@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::{Arc, RwLock};
+use std::{
+    hash::{Hash, Hasher},
+    sync::{Arc, RwLock},
+};
 
 use arrow_schema::SortOptions;
 use datafusion_common::{Result, ScalarValue};
@@ -77,6 +80,22 @@ struct ColumnThreshold {
 pub struct SortDynamicFilterSource {
     thresholds: Arc<RwLock<Vec<ColumnThreshold>>>,
 }
+
+impl Hash for SortDynamicFilterSource {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Hash the pointers to the thresholds
+        let thresholds = Arc::as_ptr(&self.thresholds) as usize;
+        thresholds.hash(state);
+    }
+}
+
+impl PartialEq for SortDynamicFilterSource {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.thresholds, &other.thresholds)
+    }
+}
+
+impl Eq for SortDynamicFilterSource {}
 
 impl SortDynamicFilterSource {
     pub fn new(ordering: &LexOrdering) -> Self {
@@ -150,6 +169,10 @@ impl SortDynamicFilterSource {
 }
 
 impl DynamicFilterSource for SortDynamicFilterSource {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn snapshot_current_filters(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
         let thresholds = self.thresholds.read().map_err(|_| {
             datafusion_common::DataFusionError::Execution(

@@ -37,7 +37,7 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_physical_expr::conjunction;
+use datafusion_physical_expr::{conjunction, expressions::lit};
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
@@ -339,13 +339,13 @@ impl ParquetSource {
     }
 
     /// Optional reference to this parquet scan's pruning predicate
-    #[deprecated(note = "ParquetDataSource no longer constructs a PruningPredicate.")]
+    #[deprecated(note = "ParquetSource no longer constructs a PruningPredicate.")]
     pub fn pruning_predicate(&self) -> Option<&Arc<PruningPredicate>> {
         self.pruning_predicate.as_ref()
     }
 
     /// Optional reference to this parquet scan's page pruning predicate
-    #[deprecated(note = "ParquetDataSource no longer constructs a PruningPredicate.")]
+    #[deprecated(note = "ParquetSource no longer constructs a PruningPredicate.")]
     pub fn page_pruning_predicate(&self) -> Option<&Arc<PagePruningAccessPlanFilter>> {
         self.page_pruning_predicate.as_ref()
     }
@@ -586,7 +586,7 @@ impl FileSource for ParquetSource {
             // If pushdown filters is not enabled, return early
             return Ok(None);
         }
-        conf.predicate = match self.predicate.as_ref() {
+        let predicate = match self.predicate.as_ref() {
             Some(existing_predicate) => {
                 // Combine existing predicate with new filters
                 Some(conjunction(
@@ -594,18 +594,17 @@ impl FileSource for ParquetSource {
                         .chain(filters.iter().cloned().cloned()),
                 ))
             }
-            None => {
-                if filters.is_empty() {
-                    None
-                } else {
-                    // If no existing predicate, just use the new filters
-                    Some(conjunction(filters.iter().cloned().cloned()))
-                }
-            }
+            None => Some(conjunction(filters.iter().cloned().cloned())),
         };
-        Ok(Some(FileSourceFilterPushdownResult::new(
-            Arc::new(conf),
-            vec![FilterPushdownSupport::Exact; filters.len()],
-        )))
+        match predicate {
+            Some(new_predicate) if !new_predicate.eq(&lit(true)) => {
+                conf.predicate = Some(new_predicate);
+                Ok(Some(FileSourceFilterPushdownResult::new(
+                    Arc::new(conf),
+                    vec![FilterPushdownSupport::Exact; filters.len()],
+                )))
+            }
+            _no_op_predicate => Ok(None),
+        }
     }
 }

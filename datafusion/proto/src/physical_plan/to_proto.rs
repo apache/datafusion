@@ -29,7 +29,7 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion::physical_plan::{
-    snasphot_physical_expr, Partitioning, PhysicalExpr, WindowExpr,
+    snapshot_physical_expr, Partitioning, PhysicalExpr, WindowExpr,
 };
 use datafusion::{
     datasource::{
@@ -212,7 +212,7 @@ pub fn serialize_physical_expr(
     value: &Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
-    let value = snasphot_physical_expr(Arc::clone(value))?;
+    let value = snapshot_physical_expr(Arc::clone(value))?;
     let expr = value.as_any();
 
     if let Some(expr) = expr.downcast_ref::<Column>() {
