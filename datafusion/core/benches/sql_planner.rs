@@ -45,14 +45,12 @@ const BENCHMARKS_PATH_2: &str = "./benchmarks/";
 const CLICKBENCH_DATA_PATH: &str = "data/hits_partitioned/";
 
 /// Create a logical plan from the specified sql
-fn logical_plan(ctx: &SessionContext, sql: &str) {
-    let rt = Runtime::new().unwrap();
+fn logical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     criterion::black_box(rt.block_on(ctx.sql(sql)).unwrap());
 }
 
 /// Create a physical ExecutionPlan (by way of logical plan)
-fn physical_plan(ctx: &SessionContext, sql: &str) {
-    let rt = Runtime::new().unwrap();
+fn physical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     criterion::black_box(rt.block_on(async {
         ctx.sql(sql)
             .await
@@ -104,9 +102,8 @@ fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
     ctx
 }
 
-fn register_clickbench_hits_table() -> SessionContext {
+fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
     let ctx = SessionContext::new();
-    let rt = Runtime::new().unwrap();
 
     // use an external table for clickbench benchmarks
     let path =
@@ -128,7 +125,11 @@ fn register_clickbench_hits_table() -> SessionContext {
 
 /// Target of this benchmark: control that placeholders replacing does not get slower,
 /// if the query does not contain placeholders at all.
-fn benchmark_with_param_values_many_columns(ctx: &SessionContext, b: &mut Bencher) {
+fn benchmark_with_param_values_many_columns(
+    ctx: &SessionContext,
+    rt: &Runtime,
+    b: &mut Bencher,
+) {
     const COLUMNS_NUM: usize = 200;
     let mut aggregates = String::new();
     for i in 0..COLUMNS_NUM {
@@ -140,7 +141,6 @@ fn benchmark_with_param_values_many_columns(ctx: &SessionContext, b: &mut Benche
     // SELECT max(attr0), ..., max(attrN) FROM t1.
     let query = format!("SELECT {} FROM t1", aggregates);
     let statement = ctx.state().sql_to_statement(&query, "Generic").unwrap();
-    let rt = Runtime::new().unwrap();
     let plan =
         rt.block_on(async { ctx.state().statement_to_plan(statement).await.unwrap() });
     b.iter(|| {
@@ -230,33 +230,35 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 
     let ctx = create_context();
+    let rt = Runtime::new().unwrap();
 
     // Test simplest
     // https://github.com/apache/datafusion/issues/5157
     c.bench_function("logical_select_one_from_700", |b| {
-        b.iter(|| logical_plan(&ctx, "SELECT c1 FROM t700"))
+        b.iter(|| logical_plan(&ctx, &rt, "SELECT c1 FROM t700"))
     });
 
     // Test simplest
     // https://github.com/apache/datafusion/issues/5157
     c.bench_function("physical_select_one_from_700", |b| {
-        b.iter(|| physical_plan(&ctx, "SELECT c1 FROM t700"))
+        b.iter(|| physical_plan(&ctx, &rt, "SELECT c1 FROM t700"))
     });
 
     // Test simplest
     c.bench_function("logical_select_all_from_1000", |b| {
-        b.iter(|| logical_plan(&ctx, "SELECT * FROM t1000"))
+        b.iter(|| logical_plan(&ctx, &rt, "SELECT * FROM t1000"))
     });
 
     // Test simplest
     c.bench_function("physical_select_all_from_1000", |b| {
-        b.iter(|| physical_plan(&ctx, "SELECT * FROM t1000"))
+        b.iter(|| physical_plan(&ctx, &rt, "SELECT * FROM t1000"))
     });
 
     c.bench_function("logical_trivial_join_low_numbered_columns", |b| {
         b.iter(|| {
             logical_plan(
                 &ctx,
+                &rt,
                 "SELECT t1.a2, t2.b2  \
                  FROM t1, t2 WHERE a1 = b1",
             )
@@ -267,6 +269,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             logical_plan(
                 &ctx,
+                &rt,
                 "SELECT t1.a99, t2.b99  \
                  FROM t1, t2 WHERE a199 = b199",
             )
@@ -277,6 +280,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             logical_plan(
                 &ctx,
+                &rt,
                 "SELECT t1.a99, MIN(t2.b1), MAX(t2.b199), AVG(t2.b123), COUNT(t2.b73)  \
                  FROM t1 JOIN t2 ON t1.a199 = t2.b199 GROUP BY t1.a99",
             )
@@ -293,7 +297,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         }
         let query = format!("SELECT {} FROM t1", aggregates);
         b.iter(|| {
-            physical_plan(&ctx, &query);
+            physical_plan(&ctx, &rt, &query);
         });
     });
 
@@ -302,6 +306,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             physical_plan(
                 &ctx,
+                &rt,
                 "SELECT t1.a7, t2.b8  \
                  FROM t1, t2 WHERE a7 = b7 \
                  ORDER BY a7",
@@ -313,6 +318,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             physical_plan(
                 &ctx,
+                &rt,
                 "SELECT t1.a7, t2.b8  \
                  FROM t1, t2 WHERE a7 < b7 \
                  ORDER BY a7",
@@ -324,6 +330,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             physical_plan(
                 &ctx,
+                &rt,
                 "SELECT ta.a9, tb.a10, tc.a11, td.a12, te.a13, tf.a14 \
                  FROM t1 AS ta, t1 AS tb, t1 AS tc, t1 AS td, t1 AS te, t1 AS tf \
                  WHERE ta.a9 = tb.a10 AND tb.a10 = tc.a11 AND tc.a11 = td.a12 AND \
@@ -336,6 +343,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             physical_plan(
                 &ctx,
+                &rt,
                 "SELECT t1.a7  \
                  FROM t1 WHERE a7 = (SELECT b8 FROM t2)",
             );
@@ -346,6 +354,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             physical_plan(
                 &ctx,
+                &rt,
                 "SELECT t1.a7 FROM t1  \
                  INTERSECT SELECT t2.b8 FROM t2",
             );
@@ -356,6 +365,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             logical_plan(
                 &ctx,
+                &rt,
                 "SELECT DISTINCT t1.a7  \
                  FROM t1, t2 WHERE t1.a7 = t2.b8",
             );
@@ -370,7 +380,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("physical_sorted_union_orderby", |b| {
         // SELECT ... UNION ALL ...
         let query = union_orderby_query(20);
-        b.iter(|| physical_plan(&ctx, &query))
+        b.iter(|| physical_plan(&ctx, &rt, &query))
     });
 
     // --- TPC-H ---
@@ -393,7 +403,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let sql =
             std::fs::read_to_string(format!("{benchmarks_path}queries/{q}.sql")).unwrap();
         c.bench_function(&format!("physical_plan_tpch_{}", q), |b| {
-            b.iter(|| physical_plan(&tpch_ctx, &sql))
+            b.iter(|| physical_plan(&tpch_ctx, &rt, &sql))
         });
     }
 
@@ -407,7 +417,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("physical_plan_tpch_all", |b| {
         b.iter(|| {
             for sql in &all_tpch_sql_queries {
-                physical_plan(&tpch_ctx, sql)
+                physical_plan(&tpch_ctx, &rt, sql)
             }
         })
     });
@@ -442,7 +452,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("physical_plan_tpcds_all", |b| {
         b.iter(|| {
             for sql in &all_tpcds_sql_queries {
-                physical_plan(&tpcds_ctx, sql)
+                physical_plan(&tpcds_ctx, &rt, sql)
             }
         })
     });
@@ -468,7 +478,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         .map(|l| l.expect("Could not parse line"))
         .collect_vec();
 
-    let clickbench_ctx = register_clickbench_hits_table();
+    let clickbench_ctx = register_clickbench_hits_table(&rt);
 
     // for (i, sql) in clickbench_queries.iter().enumerate() {
     //     c.bench_function(&format!("logical_plan_clickbench_q{}", i + 1), |b| {
@@ -478,7 +488,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     for (i, sql) in clickbench_queries.iter().enumerate() {
         c.bench_function(&format!("physical_plan_clickbench_q{}", i + 1), |b| {
-            b.iter(|| physical_plan(&clickbench_ctx, sql))
+            b.iter(|| physical_plan(&clickbench_ctx, &rt, sql))
         });
     }
 
@@ -493,13 +503,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("physical_plan_clickbench_all", |b| {
         b.iter(|| {
             for sql in &clickbench_queries {
-                physical_plan(&clickbench_ctx, sql)
+                physical_plan(&clickbench_ctx, &rt, sql)
             }
         })
     });
 
     c.bench_function("with_param_values_many_columns", |b| {
-        benchmark_with_param_values_many_columns(&ctx, b);
+        benchmark_with_param_values_many_columns(&ctx, &rt, b);
     });
 }
 
