@@ -37,7 +37,7 @@ fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
     let file = BufReader::new(File::open(path)?);
     // SAFETY: DataFusion's spill writer strictly follows Arrow IPC specifications
     // with validated schemas and buffers. Skip redundant validation during read
-    // to speedup read operation. This is a deliberate safety-performance tradeoff.
+    // to speedup read operation. This is safe for DataFusion as input guaranteed to be correct when written.
     let reader = unsafe { StreamReader::try_new(file, None)?.with_skip_validation(true) };
     for batch in reader {
         sender
