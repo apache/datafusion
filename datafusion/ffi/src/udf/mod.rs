@@ -28,7 +28,8 @@ use arrow::{
     ffi::{from_ffi, to_ffi, FFI_ArrowSchema},
 };
 use datafusion::{
-    config::ConfigOptions, error::DataFusionError,
+    config::ConfigOptions,
+    error::DataFusionError,
     logical_expr::{
         type_coercion::functions::data_types_with_scalar_udf, ReturnInfo, ReturnTypeArgs,
     },

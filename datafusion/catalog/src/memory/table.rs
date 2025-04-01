@@ -238,6 +238,7 @@ impl TableProvider for MemTable {
         let sort_order = self.sort_order.lock();
         if !sort_order.is_empty() {
             let df_schema = DFSchema::try_from(self.schema.as_ref().clone())?;
+            let config_options = Arc::new(state.config_options().clone());
 
             let file_sort_order = sort_order
                 .iter()
@@ -246,6 +247,7 @@ impl TableProvider for MemTable {
                         sort_exprs,
                         &df_schema,
                         state.execution_props(),
+                        &config_options,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
