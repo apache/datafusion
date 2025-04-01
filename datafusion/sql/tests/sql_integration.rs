@@ -2057,12 +2057,6 @@ fn select_group_by_count_star() {
 #[test]
 fn select_group_by_needs_projection() {
     let sql = "SELECT count(state), state FROM person GROUP BY state";
-    // let expected = "\
-    //     Projection: count(person.state), person.state\
-    //     \n  Aggregate: groupBy=[[person.state]], aggr=[[count(person.state)]]\
-    //     \n    TableScan: person";
-
-    // quick_test(sql, expected);
     let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
