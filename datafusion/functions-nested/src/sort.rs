@@ -212,10 +212,11 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let sorted_array = match arr_ref.data_type() {
                 DataType::Struct(_) => {
                     let sort_columns = vec![SortColumn {
-                        values: arr_ref,
+                        values: arr_ref.clone(),
                         options: sort_option,
                     }];
-                    compute::lexsort(&sort_columns, None)?[0].clone()
+                    let indices = compute::lexsort_to_indices(&sort_columns, None)?;
+                    compute::take(arr_ref.as_ref(), &indices, None)?
                 }
                 _ => {
                     let arr_ref = arr_ref.as_ref();
