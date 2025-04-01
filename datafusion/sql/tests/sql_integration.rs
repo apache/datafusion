@@ -3098,7 +3098,7 @@ fn generate_logical_plan(sql: &str) -> LogicalPlan {
 }
 
 fn quick_test_with_options(sql: &str, expected: &str, options: ParserOptions) {
-    let plan: LogicalPlan = logical_plan_with_options(sql, options).unwrap();
+    let plan = logical_plan_with_options(sql, options).unwrap();
     assert_eq!(format!("{plan}"), expected);
 }
 
