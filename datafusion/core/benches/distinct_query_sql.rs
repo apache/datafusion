@@ -33,8 +33,7 @@ use parking_lot::Mutex;
 use std::{sync::Arc, time::Duration};
 use tokio::runtime::Runtime;
 
-fn query(ctx: Arc<Mutex<SessionContext>>, sql: &str) {
-    let rt = Runtime::new().unwrap();
+fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
     criterion::black_box(rt.block_on(df.collect()).unwrap());
 }
@@ -55,6 +54,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
     let array_len = 1 << 26; // 64 M
     let batch_size = 8192;
     let ctx = create_context(partitions_len, array_len, batch_size).unwrap();
+    let rt = Runtime::new().unwrap();
 
     let mut group = c.benchmark_group("custom-measurement-time");
     group.measurement_time(Duration::from_secs(40));
@@ -63,6 +63,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT DISTINCT u64_narrow FROM t GROUP BY u64_narrow LIMIT 10",
             )
         })
@@ -72,6 +73,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT DISTINCT u64_narrow FROM t GROUP BY u64_narrow LIMIT 100",
             )
         })
@@ -81,6 +83,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT DISTINCT u64_narrow FROM t GROUP BY u64_narrow LIMIT 1000",
             )
         })
@@ -90,6 +93,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT DISTINCT u64_narrow FROM t GROUP BY u64_narrow LIMIT 10000",
             )
         })
@@ -99,6 +103,7 @@ fn criterion_benchmark_limited_distinct(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
+                &rt,
                 "SELECT u64_narrow, u64_wide, utf8, f64 FROM t GROUP BY 1, 2, 3, 4 LIMIT 10",
             )
         })
