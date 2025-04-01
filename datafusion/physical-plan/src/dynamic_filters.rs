@@ -21,12 +21,13 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use datafusion_common::Result;
+use datafusion_common::{
+    tree_node::{Transformed, TransformedResult, TreeNode},
+    Result,
+};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::{utils::conjunction, PhysicalExpr};
-use datafusion_physical_expr_common::physical_expr::{
-    with_new_children_if_necessary, DynEq, DynHash,
-};
+use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
 
 /// A source of dynamic runtime filters.
 ///
@@ -55,23 +56,20 @@ impl PartialEq for dyn DynamicFilterSource {
 
 impl Eq for dyn DynamicFilterSource {}
 
-#[derive(Debug, Eq, PartialEq, Hash)]
-enum Children {
-    Remapped(Vec<Arc<dyn PhysicalExpr>>),
-    Original(Vec<Arc<dyn PhysicalExpr>>),
-}
-
 /// A wrapper around a [`DynamicFilterSource`] that allows it to be used as a physical expression.
 /// This will call [`DynamicFilterSource::snapshot_current_filters`] to get the current filters for each call to
 /// [`PhysicalExpr::evaluate`], [`PhysicalExpr::data_type`], and [`PhysicalExpr::nullable`].
 /// It also implements [`PhysicalExpr::snapshot`] by forwarding the call to [`DynamicFilterSource::snapshot_current_filters`].
 #[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
-    /// The children of this expression.
-    /// In particular, it is important that if the dynamic expression will reference any columns
-    /// those columns be marked as children of this expression so that the expression can be properly
-    /// bound to the schema.
-    children: Children,
+    /// The original children of this PhysicalExpr, if any.
+    /// This is necessary because the dynamic filter may be initialized with a placeholder (e.g. `lit(true)`)
+    /// and later remapped to the actual expressions that are being filtered.
+    /// But we need to know the children (e.g. columns referenced in the expression) ahead of time to evaluate the expression correctly.
+    children: Vec<Arc<dyn PhysicalExpr>>,
+    /// If any of the children were remapped / modified (e.g. to adjust for projections) we need to keep track of the new children
+    /// so that when we update `current()` in subsequent iterations we can re-apply the replacements.
+    remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
     /// The source of dynamic filters.
     inner: Arc<dyn DynamicFilterSource>,
     /// For testing purposes track the data type and nullability to make sure they don't change.
@@ -85,12 +83,15 @@ impl Hash for DynamicFilterPhysicalExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.inner.dyn_hash(state);
         self.children.dyn_hash(state);
+        self.remapped_children.dyn_hash(state);
     }
 }
 
 impl PartialEq for DynamicFilterPhysicalExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.dyn_eq(other.inner.as_any()) && self.children == other.children
+        self.inner.dyn_eq(other.inner.as_any())
+            && self.children == other.children
+            && self.remapped_children == other.remapped_children
     }
 }
 
@@ -108,7 +109,8 @@ impl DynamicFilterPhysicalExpr {
         inner: Arc<dyn DynamicFilterSource>,
     ) -> Self {
         Self {
-            children: Children::Original(children),
+            children,
+            remapped_children: None, // Initially no remapped children
             inner,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
@@ -117,17 +119,29 @@ impl DynamicFilterPhysicalExpr {
 
     fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
         let current = conjunction(self.inner.snapshot_current_filters()?);
-        match self.children {
-            Children::Original(_) => {
-                // If the children are the original ones, we can just return the current expression
-                Ok(current)
-            }
-            Children::Remapped(ref remapped_children) => {
-                // If we have remapped children, we need to replace them in the current expression
-                let new_current =
-                    with_new_children_if_necessary(current, remapped_children.clone())?;
-                Ok(new_current)
-            }
+        if let Some(remapped_children) = &self.remapped_children {
+            // Remap children to the current children
+            // of the expression.
+            current
+                .transform_up(|expr| {
+                    // Check if this is any of our original children
+                    if let Some(pos) = self
+                        .children
+                        .iter()
+                        .position(|c| c.as_ref() == expr.as_ref())
+                    {
+                        // If so, remap it to the current children
+                        // of the expression.
+                        let new_child = Arc::clone(&remapped_children[pos]);
+                        Ok(Transformed::yes(new_child))
+                    } else {
+                        // Otherwise, just return the expression
+                        Ok(Transformed::no(expr))
+                    }
+                })
+                .data()
+        } else {
+            Ok(current)
         }
     }
 }
@@ -138,10 +152,11 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        match &self.children {
-            Children::Original(children) => children.iter().collect(),
-            Children::Remapped(children) => children.iter().collect(),
-        }
+        self.remapped_children
+            .as_ref()
+            .unwrap_or(&self.children)
+            .iter()
+            .collect()
     }
 
     fn with_new_children(
@@ -149,7 +164,8 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(Self {
-            children: Children::Remapped(children),
+            children: self.children.clone(),
+            remapped_children: Some(children),
             inner: Arc::clone(&self.inner),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),

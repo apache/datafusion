@@ -1249,7 +1249,12 @@ impl ExecutionPlan for SortExec {
                         while let Some(batch) = input.next().await {
                             let batch = batch?;
                             topk.insert_batch(batch)?;
-                            if context.session_config().options().optimizer.enable_dynamic_filter_pushdown {
+                            if context
+                                .session_config()
+                                .options()
+                                .optimizer
+                                .enable_dynamic_filter_pushdown
+                            {
                                 if let Some(values) = topk.get_threshold_values()? {
                                     dynamic_filter_source.update_values(&values)?;
                                 }
@@ -1348,7 +1353,7 @@ impl ExecutionPlan for SortExec {
     }
 
     fn supports_filter_pushdown(&self) -> bool {
-        true
+        true // SortExec doesn't accept filters itself but it's happy for them to be forwarded down to it's children
     }
 }
 

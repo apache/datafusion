@@ -438,7 +438,7 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn supports_filter_pushdown(&self) -> bool {
-        true
+        true // FilterExec both accepts filters and is happy for them to be pushed onto its children
     }
 
     fn filters_for_pushdown(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
@@ -469,8 +469,6 @@ impl ExecutionPlan for FilterExec {
             .collect::<Vec<_>>();
 
         let predicate = conjunction(new_filters);
-
-        println!("predicate: {:?}", predicate);
 
         if predicate.eq(&lit(true)) && self.projection.is_none() {
             return Ok(Some(Arc::clone(self.input())));

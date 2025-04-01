@@ -426,8 +426,16 @@ impl FileGroup {
 
         // ObjectStore::list does not guarantee any consistent order and for some
         // implementations such as LocalFileSystem, it may be inconsistent. Thus
-        // Sort files by path to ensure consistent plans when run more than once.
-        self.files.sort_by(|a, b| a.path().cmp(b.path()));
+        // Sort files by last_modified desc, path asc to ensure consistent plans when run more than once.
+        // The choice of sorting by last_modified desc is somewhat arbitrary, but the idea is that it will
+        // help speed up queries such as `select * from t1 order by timestamp_column desc limit 100`
+        // and that wanting "the latest" data is generally more common and latency senstive than wanting "the oldest" data.
+        self.files.sort_by(|a, b| {
+            b.object_meta
+                .last_modified
+                .cmp(&a.object_meta.last_modified)
+                .then_with(|| a.path().cmp(b.path()))
+        });
 
         // effectively this is div with rounding up instead of truncating
         let chunk_size = self.len().div_ceil(n);

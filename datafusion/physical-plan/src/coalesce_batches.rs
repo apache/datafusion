@@ -214,7 +214,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn supports_filter_pushdown(&self) -> bool {
-        true
+        true // CoalesceBatchesExec does not itself accept any filters but it is happy to have them pushed to it's children
     }
 }
 

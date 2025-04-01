@@ -581,11 +581,11 @@ impl FileSource for ParquetSource {
         &self,
         filters: &[&Arc<dyn PhysicalExpr>],
     ) -> datafusion_common::Result<Option<FileSourceFilterPushdownResult>> {
-        let mut conf = self.clone();
         if !self.pushdown_filters() {
             // If pushdown filters is not enabled, return early
             return Ok(None);
         }
+        let mut conf = self.clone();
         let predicate = match self.predicate.as_ref() {
             Some(existing_predicate) => {
                 // Combine existing predicate with new filters

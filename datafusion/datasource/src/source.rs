@@ -208,13 +208,14 @@ impl ExecutionPlan for DataSourceExec {
     }
 
     fn supports_filter_pushdown(&self) -> bool {
-        true
+        true // DataSourceExec can receive filter pushdowns from upstream operators
     }
 
     fn push_down_filters_from_parents(
         &self,
         filters: &[&Arc<dyn PhysicalExpr>],
     ) -> datafusion_common::Result<Option<ExecutionPlanFilterPushdownResult>> {
+        // we forward filter pushdown to our data source
         if let Some(pushdown_result) = self.data_source.push_down_filters(filters)? {
             let new_self = Arc::new(DataSourceExec::new(pushdown_result.inner));
             return Ok(Some(ExecutionPlanFilterPushdownResult::new(

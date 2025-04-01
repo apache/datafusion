@@ -725,7 +725,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn supports_filter_pushdown(&self) -> bool {
-        true
+        true // RepartitionExec does not accept filters itself but is happy for them to be pushed down to its children
     }
 }
 
