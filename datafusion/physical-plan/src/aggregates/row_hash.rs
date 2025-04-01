@@ -507,6 +507,16 @@ impl GroupedHashAggregateStream {
             AggregateMode::Partial,
         )?;
 
+        // Need to update the group by expressions to point to the correct column after schema change
+        let merging_group_by_expr = agg_group_by
+            .expr
+            .iter()
+            .enumerate()
+            .map(|(idx, (_, name))| {
+                (Arc::new(Column::new(name.as_str(), idx)) as _, name.clone())
+            })
+            .collect();
+
         let partial_agg_schema = Arc::new(partial_agg_schema);
 
         let spill_expr = group_schema
@@ -550,7 +560,7 @@ impl GroupedHashAggregateStream {
             spill_schema: partial_agg_schema,
             is_stream_merging: false,
             merging_aggregate_arguments,
-            merging_group_by: PhysicalGroupBy::new_single(agg_group_by.expr.clone()),
+            merging_group_by: PhysicalGroupBy::new_single(merging_group_by_expr),
             peak_mem_used: MetricBuilder::new(&agg.metrics)
                 .gauge("peak_mem_used", partition),
             spill_manager,
