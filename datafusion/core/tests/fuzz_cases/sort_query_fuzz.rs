@@ -115,7 +115,7 @@ impl SortQueryFuzzer {
         let config_variations_per_query = 5;
         let time_limit = None;
 
-        // Filtered out one column due to a known bug https://github.com/apache/datafusion/issues/14748#issuecomment-2718234906
+        // Filtered out one column due to a known bug https://github.com/apache/datafusion/issues/14748
         // TODO: Remove this once the bug is fixed
         let candidate_columns = get_supported_types_columns(seed)
             .into_iter()
