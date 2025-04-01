@@ -17,6 +17,7 @@
 
 //! ParquetSource implementation for reading parquet files
 use std::any::Any;
+use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -581,10 +582,6 @@ impl FileSource for ParquetSource {
         &self,
         filters: &[&Arc<dyn PhysicalExpr>],
     ) -> datafusion_common::Result<Option<FileSourceFilterPushdownResult>> {
-        if !self.pushdown_filters() {
-            // If pushdown filters is not enabled, return early
-            return Ok(None);
-        }
         let mut conf = self.clone();
         let predicate = match self.predicate.as_ref() {
             Some(existing_predicate) => {

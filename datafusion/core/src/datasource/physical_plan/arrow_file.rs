@@ -201,7 +201,7 @@ impl ExecutionPlan for ArrowExec {
 
 /// Arrow configuration struct that is given to DataSourceExec
 /// Does not hold anything special, since [`FileScanConfig`] is sufficient for arrow
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct ArrowSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,

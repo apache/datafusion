@@ -26,6 +26,43 @@ use datafusion_physical_plan::{
 
 use crate::PhysicalOptimizerRule;
 
+#[derive(Clone, Copy, Debug)]
+enum FilterPushdownSupportState {
+    ChildExact,
+    ChildInexact,
+    NoChild,
+}
+
+impl FilterPushdownSupportState {
+    fn combine_with_other(
+        &self,
+        other: &FilterPushdownSupport,
+    ) -> FilterPushdownSupportState {
+        match (other, self) {
+            (FilterPushdownSupport::Exact, FilterPushdownSupportState::NoChild) => {
+                FilterPushdownSupportState::ChildExact
+            }
+            (FilterPushdownSupport::Exact, FilterPushdownSupportState::ChildInexact) => {
+                FilterPushdownSupportState::ChildInexact
+            }
+            (FilterPushdownSupport::Inexact, FilterPushdownSupportState::NoChild) => {
+                FilterPushdownSupportState::ChildInexact
+            }
+            (FilterPushdownSupport::Inexact, FilterPushdownSupportState::ChildExact) => {
+                FilterPushdownSupportState::ChildInexact
+            }
+            (
+                FilterPushdownSupport::Inexact,
+                FilterPushdownSupportState::ChildInexact,
+            ) => FilterPushdownSupportState::ChildInexact,
+            (FilterPushdownSupport::Exact, FilterPushdownSupportState::ChildExact) => {
+                // If both are exact, keep it as exact
+                FilterPushdownSupportState::ChildExact
+            }
+        }
+    }
+}
+
 fn pushdown_filters(
     node: &Arc<dyn ExecutionPlan>,
     parent_filters: &[Arc<dyn PhysicalExpr>],
@@ -38,27 +75,19 @@ fn pushdown_filters(
         .chain(node_filters.iter())
         .cloned()
         .collect::<Vec<_>>();
-    let mut filter_pushdown_result = if children.is_empty() {
-        vec![FilterPushdownSupport::Inexact; all_filters.len()]
-    } else {
-        vec![FilterPushdownSupport::Exact; all_filters.len()]
-    };
+    let mut filter_pushdown_result =
+        vec![FilterPushdownSupportState::NoChild; all_filters.len()];
     for child in children {
         if child.supports_filter_pushdown() {
             if let Some(result) = pushdown_filters(child, &all_filters)? {
                 new_children.push(result.inner);
                 for (all_filters_idx, support) in result.support.iter().enumerate() {
-                    if !matches!(support, FilterPushdownSupport::Exact) {
-                        filter_pushdown_result[all_filters_idx] =
-                            FilterPushdownSupport::Inexact;
-                    }
+                    filter_pushdown_result[all_filters_idx] = filter_pushdown_result
+                        [all_filters_idx]
+                        .combine_with_other(support)
                 }
             } else {
                 new_children.push(Arc::clone(child));
-                // If the child does not support filter pushdown, mark all filters as inexact
-                for support in filter_pushdown_result.iter_mut() {
-                    *support = FilterPushdownSupport::Inexact;
-                }
             }
         } else {
             // Reset the filters we are pushing down.
@@ -67,24 +96,32 @@ fn pushdown_filters(
             } else {
                 new_children.push(Arc::clone(child));
             }
-            filter_pushdown_result =
-                vec![FilterPushdownSupport::Inexact; all_filters.len()];
         };
     }
 
-    let mut result_node = with_new_children_if_necessary(Arc::clone(node), new_children)?;
+    let mut node = with_new_children_if_necessary(Arc::clone(node), new_children)?;
 
     // Now update the node with the result of the pushdown of it's filters
-    let pushdown_result = filter_pushdown_result[parent_filters.len()..].to_vec();
+    let pushdown_result = filter_pushdown_result[parent_filters.len()..]
+        .iter()
+        .map(|s| match s {
+            FilterPushdownSupportState::ChildExact => FilterPushdownSupport::Exact,
+            FilterPushdownSupportState::ChildInexact => FilterPushdownSupport::Inexact,
+            FilterPushdownSupportState::NoChild => FilterPushdownSupport::Inexact,
+        })
+        .collect::<Vec<_>>();
     if let Some(new_node) =
-        Arc::clone(node).with_filter_pushdown_result(&pushdown_result)?
+        Arc::clone(&node).with_filter_pushdown_result(&pushdown_result)?
     {
-        result_node = new_node;
+        node = new_node;
     };
 
     // And check if it can absorb the remaining filters
     let remaining_filter_indexes = (0..parent_filters.len())
-        .filter(|&i| !matches!(filter_pushdown_result[i], FilterPushdownSupport::Exact))
+        .filter(|&i| match filter_pushdown_result[i] {
+            FilterPushdownSupportState::ChildExact => false,
+            _ => true,
+        })
         .collect::<Vec<_>>();
     if !remaining_filter_indexes.is_empty() {
         let remaining_filters = remaining_filter_indexes
@@ -92,22 +129,25 @@ fn pushdown_filters(
             .map(|&i| &parent_filters[i])
             .collect::<Vec<_>>();
         if let Some(result) = node.push_down_filters_from_parents(&remaining_filters)? {
-            result_node = result.inner;
+            node = result.inner;
             for (parent_filter_index, support) in
                 remaining_filter_indexes.iter().zip(result.support)
             {
-                // If any of the remaining filters are not exact, mark them as inexact
-                if !matches!(support, FilterPushdownSupport::Exact) {
-                    filter_pushdown_result[*parent_filter_index] =
-                        FilterPushdownSupport::Inexact;
-                }
+                filter_pushdown_result[*parent_filter_index] = filter_pushdown_result
+                    [*parent_filter_index]
+                    .combine_with_other(&support)
             }
         }
     }
-    Ok(Some(ExecutionPlanFilterPushdownResult::new(
-        result_node,
-        filter_pushdown_result[..parent_filters.len()].to_vec(), // only return the support for the original parent filters
-    )))
+    let support = filter_pushdown_result[..parent_filters.len()]
+        .iter()
+        .map(|s| match s {
+            FilterPushdownSupportState::ChildExact => FilterPushdownSupport::Exact,
+            FilterPushdownSupportState::ChildInexact => FilterPushdownSupport::Inexact,
+            FilterPushdownSupportState::NoChild => FilterPushdownSupport::Inexact,
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(ExecutionPlanFilterPushdownResult::new(node, support)))
 }
 
 #[derive(Debug)]
