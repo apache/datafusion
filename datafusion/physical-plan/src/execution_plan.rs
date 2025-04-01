@@ -468,11 +468,42 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(None)
     }
 
-    fn push_down_filters(
+    /// Returns a set of filters that this operator owns but would like to be pushed down.
+    /// For example, a `TopK` operator may produce dynamic filters that reference it's currrent state,
+    /// while a `FilterExec` will just hand of the filters it has as is.
+    /// The default implementation returns an empty vector.
+    fn filters_for_pushdown(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+        Ok(Vec::new())
+    }
+
+    /// After we've attempted to push down filters into this node's children
+    /// this will be called with the result for each filter that this node gave in `filters_for_pushdown`.
+    /// The node should update itself to possibly drop filters that were pushed down as `Exact`.
+    fn with_filter_pushdown_result(
         self: Arc<Self>,
+        _pushdown: &[FilterPushdownSupport],
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
+
+    /// Push down the given filters into this `ExecutionPlan`.
+    /// This is called after `with_filter_pushdown_result`.
+    /// Operators can accept filters from their parents, either as Exact or Unsupported.
+    /// If the operator accepts a filter as Exact, it should return a new `ExecutionPlan` with the filter applied
+    /// and the parent that generated the filter might not apply it anymore.
+    fn push_down_filters_from_parents(
+        &self,
         _filters: &[&Arc<dyn PhysicalExpr>],
     ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
         Ok(None)
+    }
+
+    /// Returns `true` if this `ExecutionPlan` allows filter pushdown to flow throught it and `false` otherwise.
+    /// Nodes such as aggregations cannot have filters pushed down through them, so they return `false`.
+    /// On the other hand nodes such as repartitions can have filters pushed down through them, so they return `true`.
+    /// The default implementation returns `false`.
+    fn supports_filter_pushdown(&self) -> bool {
+        false
     }
 }
 

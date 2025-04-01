@@ -17,8 +17,6 @@
 
 //! TopK: Combination of Sort / LIMIT
 
-mod filter;
-
 use std::mem::size_of;
 use std::sync::Arc;
 use std::{cmp::Ordering, collections::BinaryHeap};
@@ -29,19 +27,15 @@ use arrow::{
     compute::interleave,
     row::{RowConverter, Rows, SortField},
 };
-use arrow_schema::SortOptions;
-use datafusion_common::Result;
 use datafusion_common::{internal_err, HashMap};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
 };
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{is_not_null, is_null, lit, BinaryExpr};
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use filter::TopKDynamicFilterSource;
 
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::spill::get_record_batch_memory_size;
@@ -99,8 +93,6 @@ pub struct TopK {
     scratch_rows: Rows,
     /// stores the top k values and their sort key values, in order
     heap: TopKHeap,
-    /// stores the current filters derived from this TopK that can be pushed down
-    filters: Option<Arc<TopKDynamicFilterSource>>,
 }
 
 impl std::fmt::Debug for TopK {
@@ -158,24 +150,7 @@ impl TopK {
             row_converter,
             scratch_rows,
             heap: TopKHeap::new(k, batch_size, schema),
-            filters: None,
         })
-    }
-
-    pub(crate) fn dynamic_filter_source(&mut self) -> Arc<dyn PhysicalExpr> {
-        match self.filters {
-            Some(ref filters) => filters.as_dynamic_physical_expr(),
-            None => {
-                let children = self
-                    .expr
-                    .iter()
-                    .map(|e| Arc::clone(&e.expr))
-                    .collect::<Vec<_>>();
-                let filters = Arc::new(TopKDynamicFilterSource::new(children));
-                self.filters = Some(Arc::clone(&filters));
-                filters.as_dynamic_physical_expr()
-            }
-        }
     }
 
     /// Insert `batch`, remembering if any of its values are among
@@ -202,7 +177,6 @@ impl TopK {
         // Idea: filter out rows >= self.heap.max() early (before passing to `RowConverter`)
         //       this avoids some work and also might be better vectorizable.
         let mut batch_entry = self.heap.register_batch(batch);
-        let mut need_to_update_dynamic_filters = false;
         for (index, row) in rows.iter().enumerate() {
             match self.heap.max() {
                 // heap has k items, and the new row is greater than the
@@ -212,22 +186,10 @@ impl TopK {
                 None | Some(_) => {
                     self.heap.add(&mut batch_entry, row, index);
                     self.metrics.row_replacements.add(1);
-                    need_to_update_dynamic_filters = true;
                 }
             }
         }
         self.heap.insert_batch_entry(batch_entry);
-
-        if need_to_update_dynamic_filters {
-            if let Some(filters) = self.filters.as_ref() {
-                if let Some(thresholds) = self.heap.get_threshold_values(&self.expr)? {
-                    if let Some(predicate) = Self::calculate_dynamic_filters(thresholds)?
-                    {
-                        filters.update_filters(predicate)?;
-                    }
-                }
-            }
-        }
 
         // conserve memory
         self.heap.maybe_compact()?;
@@ -237,88 +199,8 @@ impl TopK {
         Ok(())
     }
 
-    fn calculate_dynamic_filters(
-        thresholds: Vec<ColumnThreshold>,
-    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        // Create filter expressions for each threshold
-        let mut filters: Vec<Arc<dyn PhysicalExpr>> =
-            Vec::with_capacity(thresholds.len());
-
-        let mut prev_sort_expr: Option<Arc<dyn PhysicalExpr>> = None;
-        for threshold in thresholds {
-            // Create the appropriate operator based on sort order
-            let op = if threshold.sort_options.descending {
-                // For descending sort, we want col > threshold (exclude smaller values)
-                Operator::Gt
-            } else {
-                // For ascending sort, we want col < threshold (exclude larger values)
-                Operator::Lt
-            };
-
-            let value_null = threshold.value.is_null();
-
-            let comparison = Arc::new(BinaryExpr::new(
-                Arc::clone(&threshold.expr),
-                op,
-                lit(threshold.value.clone()),
-            ));
-
-            let comparison_with_null =
-                match (threshold.sort_options.nulls_first, value_null) {
-                    // For nulls first, transform to (threshold.value is not null) and (threshold.expr is null or comparison)
-                    (true, true) => lit(false),
-                    (true, false) => Arc::new(BinaryExpr::new(
-                        is_null(Arc::clone(&threshold.expr))?,
-                        Operator::Or,
-                        comparison,
-                    )),
-                    // For nulls last, transform to (threshold.value is null and threshold.expr is not null)
-                    // or (threshold.value is not null and comparison)
-                    (false, true) => is_not_null(Arc::clone(&threshold.expr))?,
-                    (false, false) => comparison,
-                };
-
-            let mut eq_expr = Arc::new(BinaryExpr::new(
-                Arc::clone(&threshold.expr),
-                Operator::Eq,
-                lit(threshold.value.clone()),
-            ));
-
-            if value_null {
-                eq_expr = Arc::new(BinaryExpr::new(
-                    is_null(Arc::clone(&threshold.expr))?,
-                    Operator::Or,
-                    eq_expr,
-                ));
-            }
-
-            // For a query like order by a, b, the filter for column `b` is only applied if
-            // the condition a = threshold.value (considering null equality) is met.
-            // Therefore, we add equality predicates for all preceding fields to the filter logic of the current field,
-            // and include the current field's equality predicate in `prev_sort_expr` for use with subsequent fields.
-            match prev_sort_expr.take() {
-                None => {
-                    prev_sort_expr = Some(eq_expr);
-                    filters.push(comparison_with_null);
-                }
-                Some(p) => {
-                    filters.push(Arc::new(BinaryExpr::new(
-                        Arc::clone(&p),
-                        Operator::And,
-                        comparison_with_null,
-                    )));
-
-                    prev_sort_expr =
-                        Some(Arc::new(BinaryExpr::new(p, Operator::And, eq_expr)));
-                }
-            }
-        }
-
-        let dynamic_predicate = filters
-            .into_iter()
-            .reduce(|a, b| Arc::new(BinaryExpr::new(a, Operator::Or, b)));
-
-        Ok(dynamic_predicate)
+    pub fn get_threshold_values(&self) -> Result<Option<Vec<ScalarValue>>> {
+        self.heap.get_threshold_values(&self.expr)
     }
 
     /// Returns the top k results broken into `batch_size` [`RecordBatch`]es, consuming the heap
@@ -332,7 +214,6 @@ impl TopK {
             row_converter: _,
             scratch_rows: _,
             mut heap,
-            filters: _,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
@@ -406,16 +287,6 @@ struct TopKHeap {
     owned_bytes: usize,
 }
 
-/// Holds threshold value and sort order information for a column
-struct ColumnThreshold {
-    /// The column expression
-    pub expr: Arc<dyn PhysicalExpr>,
-    /// The threshold value
-    pub value: datafusion_common::ScalarValue,
-    /// Sort options
-    pub sort_options: SortOptions,
-}
-
 impl TopKHeap {
     pub fn new(k: usize, batch_size: usize, schema: SchemaRef) -> Self {
         assert!(k > 0);
@@ -434,7 +305,7 @@ impl TopKHeap {
     pub fn get_threshold_values(
         &self,
         sort_exprs: &[PhysicalSortExpr],
-    ) -> Result<Option<Vec<ColumnThreshold>>> {
+    ) -> Result<Option<Vec<ScalarValue>>> {
         // If the heap doesn't have k elements yet, we can't create thresholds
         let max_row = match self.max() {
             Some(row) => row,
@@ -448,7 +319,7 @@ impl TopKHeap {
         };
 
         // Extract threshold values for each sort expression
-        let mut thresholds = Vec::with_capacity(sort_exprs.len());
+        let mut scalar_values = Vec::with_capacity(sort_exprs.len());
         for sort_expr in sort_exprs {
             // Extract the value for this column from the max row
             let expr = Arc::clone(&sort_expr.expr);
@@ -459,21 +330,17 @@ impl TopKHeap {
                 ColumnarValue::Scalar(scalar) => scalar,
                 ColumnarValue::Array(array) if array.len() == 1 => {
                     // Extract the first (and only) value from the array
-                    datafusion_common::ScalarValue::try_from_array(&array, 0)?
+                    ScalarValue::try_from_array(&array, 0)?
                 }
                 array => {
                     return internal_err!("Expected a scalar value, got {:?}", array)
                 }
             };
 
-            thresholds.push(ColumnThreshold {
-                expr,
-                value: scalar,
-                sort_options: sort_expr.options,
-            });
+            scalar_values.push(scalar);
         }
 
-        Ok(Some(thresholds))
+        Ok(Some(scalar_values))
     }
 
     /// Register a [`RecordBatch`] with the heap, returning the
@@ -841,7 +708,6 @@ impl RecordBatchStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
     use arrow::array::{Float64Array, Int32Array, RecordBatch};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -911,8 +777,8 @@ mod tests {
         .unwrap();
 
         // Initially there should be no filters (empty heap)
-        let filter = topk.dynamic_filter_source().snapshot().unwrap().unwrap();
-        assert!(filter.eq(&lit(true)), "{filter:?}");
+        let filter = topk.get_threshold_values().unwrap();
+        assert_eq!(filter, None, "Expected no filters when heap is empty");
 
         // Insert some data to fill the heap
         let col1 = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
@@ -928,14 +794,12 @@ mod tests {
         topk.insert_batch(batch).unwrap();
 
         // Now there should be a filter
-        let filter = topk.dynamic_filter_source().snapshot().unwrap().unwrap();
-
-        // We expect a filter for col2 > 6.0 (since we're doing descending sort and have 5 values)
-        let expected = Arc::new(BinaryExpr::new(
-            col("col2", &schema).unwrap(),
-            Operator::Gt,
-            lit(6.0),
-        )) as Arc<dyn PhysicalExpr>;
-        assert!(filter.eq(&expected), "{filter:?}");
+        let filter = topk.get_threshold_values().unwrap().unwrap();
+        assert_eq!(filter.len(), 1, "Expected one filter after inserting data");
+        assert_eq!(
+            filter[0],
+            ScalarValue::Float64(Some(6.0)),
+            "Expected filter value to be 6.0"
+        );
     }
 }

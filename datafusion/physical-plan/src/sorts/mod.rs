@@ -22,6 +22,7 @@ mod cursor;
 mod merge;
 pub mod partial_sort;
 pub mod sort;
+pub mod sort_filters;
 pub mod sort_preserving_merge;
 mod stream;
 pub mod streaming_merge;

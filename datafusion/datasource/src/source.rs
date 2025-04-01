@@ -203,8 +203,8 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.try_swapping_with_projection(projection)
     }
 
-    fn push_down_filters(
-        self: Arc<Self>,
+    fn push_down_filters_from_parents(
+        &self,
         filters: &[&Arc<dyn PhysicalExpr>],
     ) -> datafusion_common::Result<Option<ExecutionPlanFilterPushdownResult>> {
         if let Some(pushdown_result) = self.data_source.push_down_filters(filters)? {

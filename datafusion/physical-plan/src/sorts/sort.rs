@@ -22,13 +22,10 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::common::spawn_buffered;
-use crate::dynamic_filters::DynamicFilterSource;
-use crate::execution_plan::{
-    Boundedness, CardinalityEffect, EmissionType, ExecutionPlanFilterPushdownResult,
-};
+use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{
@@ -54,7 +51,7 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{
-    exec_datafusion_err, internal_datafusion_err, internal_err, DataFusionError, Result
+    exec_datafusion_err, internal_datafusion_err, internal_err, Result,
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -65,6 +62,8 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
+
+use super::sort_filters::SortDynamicFilterSource;
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -972,7 +971,7 @@ pub struct SortExec {
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
     /// Dynamic filter sources
-    dynamic_filter_source: SortExecDynamicFilterSource,
+    dynamic_filter_source: Arc<SortDynamicFilterSource>,
 }
 
 impl SortExec {
@@ -981,6 +980,7 @@ impl SortExec {
     pub fn new(expr: LexOrdering, input: Arc<dyn ExecutionPlan>) -> Self {
         let preserve_partitioning = false;
         let cache = Self::compute_properties(&input, expr.clone(), preserve_partitioning);
+        let dynamic_filter_source = Arc::new(SortDynamicFilterSource::new(&expr));
         Self {
             expr,
             input,
@@ -988,7 +988,7 @@ impl SortExec {
             preserve_partitioning,
             fetch: None,
             cache,
-            dynamic_filter_source: SortExecDynamicFilterSource::new(),
+            dynamic_filter_source,
         }
     }
 
@@ -1233,13 +1233,16 @@ impl ExecutionPlan for SortExec {
                     context.runtime_env(),
                     &self.metrics_set,
                 )?;
-                self.dynamic_filter_source.add_filter(topk.dynamic_filter_source())?;
+                let dynamic_filter_source = Arc::clone(&self.dynamic_filter_source);
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
                         while let Some(batch) = input.next().await {
                             let batch = batch?;
                             topk.insert_batch(batch)?;
+                            if let Some(values) = topk.get_threshold_values()? {
+                                dynamic_filter_source.update_values(&values);
+                            }
                         }
                         topk.emit()
                     })
@@ -1328,61 +1331,12 @@ impl ExecutionPlan for SortExec {
         )))
     }
 
-    // Pass though filter pushdown.
-    // This often happens in partitioned plans with a TopK because we end up with 1 TopK per partition + a final TopK at the end.
-    // Implementing this pass-through allows global/top/final TopK to push down filters to the partitions.
-    fn push_down_filters(
-        self: Arc<Self>,
-        filters: &[&Arc<dyn PhysicalExpr>],
-    ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
-        let input = Arc::clone(&self.input);
-        if let Some(result) = input.push_down_filters(filters)? {
-            let new_self = Arc::new(SortExec {
-                input: result.inner,
-                expr: self.expr.clone(),
-                metrics_set: self.metrics_set.clone(),
-                preserve_partitioning: self.preserve_partitioning,
-                fetch: self.fetch,
-                cache: self.cache.clone(),
-                dynamic_filter_source: self.dynamic_filter_source.clone(),
-            });
-            Ok(Some(ExecutionPlanFilterPushdownResult::new(
-                new_self,
-                result.support,
-            )))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct SortExecDynamicFilterSource {
-    filters: Arc<RwLock<Vec<Arc<dyn PhysicalExpr>>>>,
-}
-
-impl SortExecDynamicFilterSource {
-    pub fn new() -> Self {
-        Self {
-            filters: Arc::new(RwLock::new(Vec::new())),
-        }
+    fn filters_for_pushdown(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+        Ok(vec![self.dynamic_filter_source.as_physical_expr()])
     }
 
-    pub fn add_filter(&self, filter: Arc<dyn PhysicalExpr>) -> Result<()> {
-        let mut filters = self.filters.write().map_err(|_| DataFusionError::Internal(
-            format!("Failed to acquire write lock on topk filters for adding a new filter.",
-        )))?;
-        filters.push(filter);
-        Ok(())
-    }
-}
-
-impl DynamicFilterSource for SortExecDynamicFilterSource {
-    fn snapshot_current_filters(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
-        let Ok(filters) = self.filters.read() else {
-            return internal_err!("Failed to acquire read lock on topk filters");
-        };
-        Ok(filters.clone())
+    fn supports_filter_pushdown(&self) -> bool {
+        true
     }
 }
 
