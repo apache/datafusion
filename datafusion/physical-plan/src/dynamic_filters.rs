@@ -90,7 +90,7 @@ impl Hash for DynamicFilterPhysicalExpr {
 
 impl PartialEq for DynamicFilterPhysicalExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.dyn_eq(&*other.inner.as_any()) && self.children == other.children
+        self.inner.dyn_eq(other.inner.as_any()) && self.children == other.children
     }
 }
 

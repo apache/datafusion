@@ -129,9 +129,7 @@ impl PhysicalOptimizerRule for FilterPushdown {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        println!("plan before: {:?}", plan);
         if let Some(result) = pushdown_filters(&plan, &[])? {
-            println!("plan after filter pushdown: {:?}", result.inner);
             Ok(result.inner)
         } else {
             Ok(plan)

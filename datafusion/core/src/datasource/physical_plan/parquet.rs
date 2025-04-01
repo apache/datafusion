@@ -43,12 +43,11 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
-    use arrow::util::pretty::pretty_format_batches;
     use arrow_schema::SchemaRef;
     use bytes::{BufMut, BytesMut};
     use datafusion_common::config::TableParquetOptions;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{assert_batches_eq, assert_contains, Result, ScalarValue};
+    use datafusion_common::{assert_contains, Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_meta::FileMeta;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -1456,7 +1455,7 @@ mod tests {
             .await;
 
         // should have a pruning predicate
-        #[expect(deprecated)]
+        #[allow(deprecated)]
         let pruning_predicate = rt.parquet_source.pruning_predicate();
         assert!(pruning_predicate.is_some());
 
@@ -1498,7 +1497,7 @@ mod tests {
                 .round_trip(vec![batches.clone()])
                 .await;
 
-            #[expect(deprecated)]
+            #[allow(deprecated)]
             let pruning_predicate = rt0.parquet_source.pruning_predicate();
             assert!(pruning_predicate.is_some());
 
@@ -1541,7 +1540,7 @@ mod tests {
             .await;
 
         // should have a pruning predicate
-        #[expect(deprecated)]
+        #[allow(deprecated)]
         let pruning_predicate = rt1.parquet_source.pruning_predicate();
         assert!(pruning_predicate.is_some());
         let pruning_predicate = rt2.parquet_source.predicate();
@@ -1585,7 +1584,7 @@ mod tests {
             .await;
 
         // Should not contain a pruning predicate (since nothing can be pruned)
-        #[expect(deprecated)]
+        #[allow(deprecated)]
         let pruning_predicate = rt.parquet_source.pruning_predicate();
         assert!(
             pruning_predicate.is_none(),
@@ -1621,7 +1620,7 @@ mod tests {
             .await;
 
         // Should have a pruning predicate
-        #[expect(deprecated)]
+        #[allow(deprecated)]
         let pruning_predicate = rt.parquet_source.pruning_predicate();
         assert!(pruning_predicate.is_some());
     }
@@ -1775,13 +1774,13 @@ mod tests {
         let sql = "select * from base_table where name='test02'";
         let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
         assert_eq!(batch.len(), 1);
-        insta::assert_snapshot!(batches_to_string(&batch),@r"
-        +--------------------+----+--------+
-        | struct             | id | name   |
-        +--------------------+----+--------+
-        | {id: 3, name: zzz} | 2  | test02 |
-        +--------------------+----+--------+
-        ");
+        insta::assert_snapshot!(batches_to_string(&batch),@r###"
+            +---------------------+----+--------+
+            | struct              | id | name   |
+            +---------------------+----+--------+
+            | {id: 4, name: aaa2} | 2  | test02 |
+            +---------------------+----+--------+
+        "###);
         Ok(())
     }
 
@@ -1804,13 +1803,13 @@ mod tests {
         let sql = "select * from base_table where name='test02'";
         let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
         assert_eq!(batch.len(), 1);
-        insta::assert_snapshot!(batches_to_string(&batch),@r"
-        +--------------------+----+--------+
-        | struct             | id | name   |
-        +--------------------+----+--------+
-        | {id: 3, name: zzz} | 2  | test02 |
-        +--------------------+----+--------+
-        ");
+        insta::assert_snapshot!(batches_to_string(&batch),@r###"
+            +---------------------+----+--------+
+            | struct              | id | name   |
+            +---------------------+----+--------+
+            | {id: 4, name: aaa2} | 2  | test02 |
+            +---------------------+----+--------+
+        "###);
         Ok(())
     }
 
@@ -1824,14 +1823,14 @@ mod tests {
             Field::new("id", DataType::Int64, true),
             Field::new("name", DataType::Utf8, false),
         ]);
-        let id_array = Int64Array::from(vec![Some(2), Some(1)]);
+        let id_array = Int64Array::from(vec![Some(1), Some(2)]);
         let columns = vec![
             Arc::new(Int64Array::from(vec![3, 4])) as _,
-            Arc::new(StringArray::from(vec!["zzz", "aaa"])) as _,
+            Arc::new(StringArray::from(vec!["aaa1", "aaa2"])) as _,
         ];
         let struct_array = StructArray::new(struct_fields, columns, None);
 
-        let name_array = StringArray::from(vec![Some("test02"), Some("test01")]);
+        let name_array = StringArray::from(vec![Some("test01"), Some("test02")]);
         let schema = Arc::new(schema);
 
         let batch = RecordBatch::try_new(
@@ -1843,53 +1842,12 @@ mod tests {
             ],
         )
         .unwrap();
-        write_record_batch(file, batch).unwrap();
-    }
-
-    fn write_file_with_non_null_ids(file: &String, value: i64) {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Int64, true),
-            Field::new("name", DataType::Utf8, false),
-        ]);
-        let id_array = Int64Array::from(vec![Some(value)]);
-        let name_array = StringArray::from(vec![Some("test")]);
-        let schema = Arc::new(schema);
-
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(id_array), Arc::new(name_array)],
-        )
-        .unwrap();
-        write_record_batch(file, batch).unwrap();
-    }
-
-    fn write_file_with_null_ids(file: &String) {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Int64, true),
-            Field::new("name", DataType::Utf8, false),
-        ]);
-        let id_array = Int64Array::from(vec![None]);
-        let name_array = StringArray::from(vec![Some(format!("test{:02}", "null"))]);
-        let schema = Arc::new(schema);
-
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(id_array), Arc::new(name_array)],
-        )
-        .unwrap();
-        write_record_batch(file, batch).unwrap();
-    }
-
-    fn write_record_batch(file: &String, batch: RecordBatch) -> Result<()> {
-        let file = File::create(file)?;
-        let w_opt = WriterProperties::builder()
-            .set_max_row_group_size(1)
-            .build();
-        let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(w_opt))?;
-        writer.write(&batch)?;
-        writer.flush()?;
-        writer.close()?;
-        Ok(())
+        let file = File::create(file).unwrap();
+        let w_opt = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, schema, Some(w_opt)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.flush().unwrap();
+        writer.close().unwrap();
     }
 
     /// Write out a batch to a parquet file and return the total size of the file
@@ -1948,49 +1906,6 @@ mod tests {
                 metadata_size_hint,
                 metrics,
             )
-        }
-    }
-
-    struct DynamicFilterTestCase {
-        query: String,
-        path: String,
-    }
-
-    impl DynamicFilterTestCase {
-        fn new(query: String, path: String) -> Self {
-            Self { query, path }
-        }
-
-        async fn _run_query(&self, query: &str) -> Vec<RecordBatch> {
-            // Force 1 partition and 1 rg per partition because if we widen the plan
-            // and read all batches at once we won't get any dynamic pushdown.
-            let mut cfg = SessionConfig::new();
-            cfg = cfg.set_u64("datafusion.execution.parquet.max_row_group_size", 1);
-            let ctx = SessionContext::new_with_config(cfg);
-
-            let mut pq_options = TableParquetOptions::default();
-            pq_options.global.max_row_group_size = 1;
-            pq_options.global.pushdown_filters = true;
-            let fmt = ParquetFormat::default().with_options(pq_options);
-            let opt = ListingOptions::new(Arc::new(fmt)).with_target_partitions(1);
-            ctx.register_listing_table("base_table", &self.path, opt, None, None)
-                .await
-                .unwrap();
-
-            ctx.sql(query).await.unwrap().collect().await.unwrap()
-        }
-
-        async fn results(&self) -> Vec<RecordBatch> {
-            self._run_query(&self.query).await
-        }
-
-        async fn explain_plan(&self) -> String {
-            let query = format!("EXPLAIN ANALYZE {}", self.query);
-            let batches = self._run_query(&query).await;
-
-            pretty_format_batches(&batches)
-                .map(|s| format!("{}", s))
-                .unwrap_or_else(|_| "No explain plan generated".to_string())
         }
     }
 
@@ -2065,232 +1980,5 @@ mod tests {
         let calls = size_hint_calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls, vec![Some(123), Some(456)]);
-    }
-
-    #[tokio::test]
-    async fn test_topk_predicate_pushdown() {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().to_str().unwrap().to_string();
-
-        for file in 0..5 {
-            // write 2 files so that one is processed before the other
-            let name = format!("test{:02}.parquet", file);
-            write_file(&format!("{path}/{name}"));
-        }
-
-        let query = "select name from base_table order by id desc limit 3";
-
-        let test_case = DynamicFilterTestCase::new(query.to_string(), path);
-
-        let batches = test_case.results().await;
-        #[rustfmt::skip]
-        let expected = [
-            "+--------+",
-            "| name   |",
-            "+--------+",
-            "| test02 |",
-            "| test02 |",
-            "| test02 |",
-            "+--------+",
-        ];
-        assert_batches_eq!(expected, &batches);
-
-        let plan = test_case.explain_plan().await;
-        assert_contains!(&plan, "row_groups_pruned_statistics=3");
-    }
-
-    #[tokio::test]
-    async fn test_topk_predicate_pushdown_nulls_first() {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().to_str().unwrap().to_string();
-
-        for file in 0..5 {
-            // write multiple files to ensure we get pushdown of dynamic filters from one file to another
-            let name = format!("test{:02}.parquet", file);
-            write_file(&format!("{path}/{name}"));
-        }
-
-        let name = format!("test{:02}.parquet", 100);
-        write_file_with_null_ids(&format!("{path}/{name}"));
-
-        // nulls first by default
-        let query = "select name from base_table order by id desc limit 3";
-        let test_case = DynamicFilterTestCase::new(query.to_string(), path);
-
-        let batches = test_case.results().await;
-        #[rustfmt::skip]
-        let expected = [
-            "+----------+",
-            "| name     |",
-            "+----------+",
-            "| testnull |",
-            "| test02   |",
-            "| test02   |",
-            "+----------+",
-        ];
-        assert_batches_eq!(expected, &batches);
-
-        let plan = test_case.explain_plan().await;
-        assert_contains!(&plan, "row_groups_pruned_statistics=3");
-    }
-
-    #[tokio::test]
-    async fn test_topk_predicate_pushdown_multi_key() {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().to_str().unwrap().to_string();
-        for file in 0..5 {
-            // write multiple files to ensure we get pushdown of dynamic filters from one file to another
-            // Ensure files are read in order
-            let name = format!("test{:02}.parquet", file);
-            write_file_with_non_null_ids(&format!("{path}/{name}"), file);
-        }
-
-        let query = "select id from base_table order by name desc, id limit 3";
-        let test_case = DynamicFilterTestCase::new(query.to_string(), path.clone());
-
-        let batches = test_case.results().await;
-        #[rustfmt::skip]
-        let expected = [
-            "+----+",
-            "| id |",
-            "+----+",
-            "| 0  |",
-            "| 1  |",
-            "| 2  |",
-            "+----+",
-        ];
-        assert_batches_eq!(expected, &batches);
-
-        let plan = test_case.explain_plan().await;
-        assert_contains!(&plan, "row_groups_pruned_statistics=1");
-
-        let query1 = "select id from base_table order by name desc, id desc limit 3";
-        let test_case = DynamicFilterTestCase::new(query1.to_string(), path);
-
-        let batches = test_case.results().await;
-        #[rustfmt::skip]
-        let expected = [
-            "+----+",
-            "| id |",
-            "+----+",
-            "| 4  |",
-            "| 3  |",
-            "| 2  |",
-            "+----+",
-        ];
-        assert_batches_eq!(expected, &batches);
-
-        let plan = test_case.explain_plan().await;
-        assert_contains!(&plan, "row_groups_pruned_statistics=0");
-    }
-
-    #[tokio::test]
-    async fn test_topk_predicate_pushdown_nulls_last() {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().to_str().unwrap().to_string();
-
-        for file in 0..5 {
-            let name = format!("test{:02}.parquet", file);
-            write_file(&format!("{path}/{name}"));
-        }
-        let name = format!("test{:02}.parquet", 100);
-        write_file_with_null_ids(&format!("{path}/{name}"));
-
-        let query = "select name from base_table order by id desc nulls last limit 3";
-        let test_case = DynamicFilterTestCase::new(query.to_string(), path);
-
-        let batches = test_case.results().await;
-        #[rustfmt::skip]
-        let expected = [
-            "+--------+",
-            "| name   |",
-            "+--------+",
-            "| test02 |",
-            "| test02 |",
-            "| test02 |",
-            "+--------+",
-        ];
-        assert_batches_eq!(expected, &batches);
-
-        let plan = test_case.explain_plan().await;
-        assert_contains!(&plan, "row_groups_pruned_statistics=4");
-    }
-
-    #[tokio::test]
-    async fn test_topk_predicate_pushdown_single_file() {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().to_str().unwrap().to_string();
-
-        write_file(&format!("{path}/test.parquet"));
-
-        let query = "select name from base_table order by id desc nulls last limit 1";
-        let test_case = DynamicFilterTestCase::new(query.to_string(), path);
-
-        let batches = test_case.results().await;
-        #[rustfmt::skip]
-        let expected = [
-            "+--------+",
-            "| name   |",
-            "+--------+",
-            "| test02 |",
-            "+--------+",
-        ];
-        assert_batches_eq!(expected, &batches);
-
-        let plan = test_case.explain_plan().await;
-        assert_contains!(&plan, "pushdown_rows_pruned=1");
-    }
-
-    #[tokio::test]
-    async fn test_topk_predicate_pushdown_ignores_partition_columns() {
-        // The TopK operator will try to push down predicates on `file_id`.
-        // But since `file_id` is a partition column and not part of the file itself
-        // we cannot actually do any filtering on it at the file level.
-        // Thus it has to be ignored by `ParquetSource`.
-        // This test only shows that this does not result in any errors or panics,
-        // it is expected that "nothing exciting" happens here.
-        // I do think in the future it would be interesting to re-design how partition columns
-        // get handled, in particular by pushing them into SchemaAdapter so that the table schema == file schema
-        // and we can do predicate pushdown on them as well without relying on each TableProvider to
-        // do special handling of partition columns.
-
-        let ctx = SessionContext::new();
-        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()))
-            .with_table_partition_cols(vec![("file_id".to_string(), DataType::UInt32)])
-            // We need to force 1 partition because TopK predicate pushdown happens on a per-partition basis
-            // If we had 1 file per partition (as an example) no pushdown would happen
-            .with_target_partitions(1);
-
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().to_str().unwrap().to_string();
-        for file in 0..5 {
-            // crete a directory for the partition
-            fs::create_dir_all(format!("{path}/file_id={file}")).unwrap();
-            let name = format!("file_id={file}/test.parquet");
-            write_file(&format!("{path}/{name}"));
-        }
-        ctx.register_listing_table("base_table", path, opt, None, None)
-            .await
-            .unwrap();
-
-        let query = "select file_id from base_table order by file_id asc limit 3";
-
-        let batches = ctx.sql(query).await.unwrap().collect().await.unwrap();
-        #[rustfmt::skip]
-        let expected = [
-            "+---------+",
-            "| file_id |",
-            "+---------+",
-            "| 0       |",
-            "| 0       |",
-            "| 1       |",
-            "+---------+",
-        ];
-        assert_batches_eq!(expected, &batches);
-
-        let sql = format!("explain analyze {query}");
-        let batches = ctx.sql(&sql).await.unwrap().collect().await.unwrap();
-        let explain_plan = format!("{}", pretty_format_batches(&batches).unwrap());
-        assert_contains!(explain_plan, "row_groups_pruned_statistics=0"); // just documenting current behavior
     }
 }

@@ -459,15 +459,18 @@ impl ExecutionPlan for FilterExec {
             .zip(pushdown.iter())
             .filter_map(|(f, p)| {
                 if matches!(p, FilterPushdownSupport::Exact) {
-                    // Exact pushdown support means we keep this filter
-                    Some(Arc::clone(f))
-                } else {
+                    // Exact pushdown support means we keep discard filter
                     None
+                } else {
+                    // Otherwise we still have to apply it
+                    Some(Arc::clone(f))
                 }
             })
             .collect::<Vec<_>>();
 
         let predicate = conjunction(new_filters);
+
+        println!("predicate: {:?}", predicate);
 
         if predicate.eq(&lit(true)) && self.projection.is_none() {
             return Ok(Some(Arc::clone(self.input())));

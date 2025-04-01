@@ -201,7 +201,7 @@ fn write_files(table_path: &Path, schemas: Vec<Schema>) {
         let schema = Arc::new(schema);
         let filename = format!("part-{i}.parquet");
         let path = table_path.join(filename);
-        let file = fs::File::create(path).unwrap();
+        let file = File::create(path).unwrap();
         let mut writer = ArrowWriter::try_new(file, schema.clone(), None).unwrap();
 
         // create mock record batch

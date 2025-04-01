@@ -1041,7 +1041,7 @@ impl SortExec {
             preserve_partitioning: self.preserve_partitioning,
             fetch,
             cache,
-            dynamic_filter_source: self.dynamic_filter_source.clone(),
+            dynamic_filter_source: Arc::clone(&self.dynamic_filter_source),
         }
     }
 
