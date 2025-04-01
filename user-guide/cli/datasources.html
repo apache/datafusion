@@ -709,8 +709,7 @@ additional configuration options.</p>
 <section id="create-external-table">
 <h1><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code><a class="headerlink" href="#create-external-table" title="Link to this heading">¶</a></h1>
 <p>It is also possible to create a table backed by files or remote locations via
-<code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> as shown below. Note that wildcards (e.g. <code class="docutils literal notranslate"><span class="pre">*</span></code>) are also
-supported</p>
+<code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> as shown below. Note that DataFusion does not support wildcards (e.g. <code class="docutils literal notranslate"><span class="pre">*</span></code>) in file paths; instead, specify the directory path directly to read all compatible files in that directory.</p>
 <p>For example, to create a table <code class="docutils literal notranslate"><span class="pre">hits</span></code> backed by a local parquet file, use:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">hits</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
@@ -733,6 +732,26 @@ supported</p>
 <span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span><span class="w"> </span><span class="n">Query</span><span class="w"> </span><span class="n">took</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">344</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
 </pre></div>
 </div>
+<p><strong>Why Wildcards Are Not Supported</strong></p>
+<p>Although wildcards (e.g., <em>.parquet or **/</em>.parquet) may work for local filesystems in some cases, they are not officially supported by DataFusion. This is because wildcards are not universally applicable across all storage backends (e.g., S3, GCS). Instead, DataFusion expects the user to specify the directory path, and it will automatically read all compatible files within that directory.</p>
+<p>For example, the following usage is not supported:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="n">message</span><span class="w"> </span><span class="nb">TEXT</span><span class="p">,</span>
+<span class="w">    </span><span class="k">day</span><span class="w"> </span><span class="nb">DATE</span>
+<span class="p">)</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;gs://bucket/*.parquet&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Instead, you should use:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="n">message</span><span class="w"> </span><span class="nb">TEXT</span><span class="p">,</span>
+<span class="w">    </span><span class="k">day</span><span class="w"> </span><span class="nb">DATE</span>
+<span class="p">)</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;gs://bucket/my_table&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
 </section>
 <section id="formats">
 <h1>Formats<a class="headerlink" href="#formats" title="Link to this heading">¶</a></h1>
@@ -750,12 +769,6 @@ parquet files and have compatible schemas</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">taxi</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi/&#39;</span><span class="p">;</span>
-</pre></div>
-</div>
-<p>Register a single folder parquet datasource by specifying a wildcard for files to read</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">taxi</span>
-<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
-<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi/*.parquet&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
