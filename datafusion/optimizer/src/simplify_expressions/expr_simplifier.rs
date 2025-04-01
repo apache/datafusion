@@ -17,24 +17,20 @@
 
 //! Expression simplification API
 
-use std::borrow::Cow;
-use std::collections::HashSet;
-use std::ops::Not;
-
+use arrow::array::Array;
 use arrow::{
     array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
-
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
-    WindowFunctionDefinition,
+    and, lit, or, wildcard, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr, Like,
+    Operator, Volatility, WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
@@ -43,6 +39,9 @@ use datafusion_expr::{
 };
 use datafusion_expr::{simplify::ExprSimplifyResult, Cast, TryCast};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+use std::borrow::Cow;
+use std::collections::HashSet;
+use std::ops::Not;
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
@@ -58,6 +57,10 @@ use crate::{
     analyzer::type_coercion::TypeCoercionRewriter,
     simplify_expressions::unwrap_cast::try_cast_literal_to_type,
 };
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
+use datafusion_expr::Operator::{BitwiseShiftLeft, BitwiseShiftRight, Plus};
+use datafusion_functions_aggregate::count::Count;
+use datafusion_functions_aggregate::sum::Sum;
 use indexmap::IndexSet;
 use regex::Regex;
 
@@ -1444,6 +1447,92 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                         }))
                     }
                     ExprSimplifyResult::Simplified(expr) => Transformed::yes(expr),
+                }
+            }
+
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                ref func,
+                ref params,
+            }) => {
+                let inner = func.inner().as_ref();
+                // println!("inner: {:?}", inner);
+
+                if let Some(sum) = inner.as_any().downcast_ref::<Sum>() {
+                    // println!("sum: {:?}", sum);
+                    // println!("params: {:?}", params);
+
+                    if params.args.len() == 1 {
+                        if let Some(aggExpr) = params.args.get(0) {
+                            // println!("aggExpr: {:?}", aggExpr);
+                            match aggExpr {
+                                Expr::BinaryExpr(BinaryExpr {
+                                    left,
+                                    op: Plus,
+                                    right,
+                                }) => {
+                                    if let Expr::Literal(const_val) = left.as_ref() {
+                                        Transformed::no(expr)
+                                    } else if let Expr::Literal(const_val) =
+                                        right.as_ref()
+                                    {
+                                        // println!("const_val: {:?}", const_val);
+
+                                        let base_sum = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                                            func: std::sync::Arc::new(AggregateUDF::new_from_impl(Sum::new())),
+                                            params: datafusion_expr::expr::AggregateFunctionParams {
+                                                args: vec![left.as_ref().clone()],
+                                                distinct: false,
+                                                filter: None,
+                                                order_by: None,
+                                                null_treatment: None,
+                                            },
+                                        });
+
+                                        let count_expr = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                                            func: std::sync::Arc::new(AggregateUDF::new_from_impl(Count::new())),
+                                            params: datafusion_expr::expr::AggregateFunctionParams {
+                                                args: vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                                                distinct: false,
+                                                filter: None,
+                                                order_by: None,
+                                                null_treatment: None,
+                                            },
+                                        });
+
+                                        let adjusted_expr =
+                                            Expr::BinaryExpr(BinaryExpr {
+                                                left: Box::new(Expr::Literal(
+                                                    const_val.clone(),
+                                                )),
+                                                op: Multiply,
+                                                right: Box::new(count_expr),
+                                            });
+
+                                        let final_expr = Expr::BinaryExpr(BinaryExpr {
+                                            left: Box::new(base_sum),
+                                            op: Plus,
+                                            right: Box::new(adjusted_expr),
+                                        });
+
+                                        println!("final_expr: {:?}", final_expr);
+                                        return Ok(Transformed::yes(final_expr));
+                                    } else {
+                                        Transformed::no(expr)
+                                    }
+                                }
+                                _ => {
+                                    // println!("aggExpr: {:?}", aggExpr);
+                                    Transformed::no(expr)
+                                }
+                            }
+                        } else {
+                            Transformed::no(expr)
+                        }
+                    } else {
+                        Transformed::no(expr)
+                    }
+                } else {
+                    Transformed::no(expr)
                 }
             }
 
