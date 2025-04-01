@@ -86,8 +86,8 @@ use std::ops::{Index, IndexMut};
 /// tuples must be preserved, multiple files can not be mixed in the same group.
 ///
 /// In this case, the code will split the largest files evenly into any
-/// available empty groups, but the overall distribution may not not be as even
-/// as as even as if the order did not need to be preserved.
+/// available empty groups, but the overall distribution may not be as even
+/// as if the order did not need to be preserved.
 ///
 /// ```text
 ///                                   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
@@ -416,6 +416,11 @@ impl FileGroup {
     /// Adds a file to the group
     pub fn push(&mut self, file: PartitionedFile) {
         self.files.push(file);
+    }
+
+    /// Get the statistics for this group
+    pub fn statistics(&self) -> Option<&Statistics> {
+        self.statistics.as_ref()
     }
 
     /// Partition the list of files into `n` groups

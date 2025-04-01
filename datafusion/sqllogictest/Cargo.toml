@@ -42,7 +42,7 @@ async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
-clap = { version = "4.5.32", features = ["derive", "env"] }
+clap = { version = "4.5.34", features = ["derive", "env"] }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
 futures = { workspace = true }
 half = { workspace = true, default-features = true }

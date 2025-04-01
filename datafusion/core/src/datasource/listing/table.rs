@@ -17,24 +17,22 @@
 
 //! The table implementation.
 
-use std::collections::HashMap;
-use std::{any::Any, str::FromStr, sync::Arc};
-
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
 use super::{ListingTableUrl, PartitionedFile};
+use std::collections::HashMap;
+use std::{any::Any, str::FromStr, sync::Arc};
 
 use crate::datasource::{
     create_ordering,
     file_format::{
         file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
     },
-    get_statistics_with_limit,
     physical_plan::FileSinkConfig,
 };
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
@@ -55,9 +53,12 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_common::stats::Precision;
+use datafusion_datasource::add_row_stats;
+use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use futures::{future, stream, StreamExt, TryStreamExt};
+use futures::{future, stream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
 
@@ -942,7 +943,7 @@ impl TableProvider for ListingTable {
             .format
             .create_physical_plan(
                 session_state,
-                FileScanConfig::new(
+                FileScanConfigBuilder::new(
                     object_store_url,
                     Arc::clone(&self.file_schema),
                     self.options.format.file_source(),
@@ -953,7 +954,8 @@ impl TableProvider for ListingTable {
                 .with_projection(projection.cloned())
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
-                .with_table_partition_cols(table_partition_cols),
+                .with_table_partition_cols(table_partition_cols)
+                .build(),
                 filters.as_ref(),
             )
             .await
@@ -1114,32 +1116,26 @@ impl ListingTable {
         let files = file_list
             .map(|part_file| async {
                 let part_file = part_file?;
-                if self.options.collect_stat {
-                    let statistics =
-                        self.do_collect_statistics(ctx, &store, &part_file).await?;
-                    Ok((part_file, statistics))
+                let statistics = if self.options.collect_stat {
+                    self.do_collect_statistics(ctx, &store, &part_file).await?
                 } else {
-                    Ok((
-                        part_file,
-                        Arc::new(Statistics::new_unknown(&self.file_schema)),
-                    ))
-                }
+                    Arc::new(Statistics::new_unknown(&self.file_schema))
+                };
+                Ok(part_file.with_statistics(statistics))
             })
             .boxed()
             .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
-        let (files, statistics) = get_statistics_with_limit(
-            files,
-            self.schema(),
-            limit,
-            self.options.collect_stat,
-        )
-        .await?;
+        let (file_group, inexact_stats) =
+            get_files_with_limit(files, limit, self.options.collect_stat).await?;
 
-        Ok((
-            files.split_files(self.options.target_partitions),
-            statistics,
-        ))
+        let file_groups = file_group.split_files(self.options.target_partitions);
+        compute_all_files_statistics(
+            file_groups,
+            self.schema(),
+            self.options.collect_stat,
+            inexact_stats,
+        )
     }
 
     /// Collects statistics for a given partitioned file.
@@ -1179,6 +1175,82 @@ impl ListingTable {
             }
         }
     }
+}
+
+/// Processes a stream of partitioned files and returns a `FileGroup` containing the files.
+///
+/// This function collects files from the provided stream until either:
+/// 1. The stream is exhausted
+/// 2. The accumulated number of rows exceeds the provided `limit` (if specified)
+///
+/// # Arguments
+/// * `files` - A stream of `Result<PartitionedFile>` items to process
+/// * `limit` - An optional row count limit. If provided, the function will stop collecting files
+///             once the accumulated number of rows exceeds this limit
+/// * `collect_stats` - Whether to collect and accumulate statistics from the files
+///
+/// # Returns
+/// A `Result` containing a `FileGroup` with the collected files
+/// and a boolean indicating whether the statistics are inexact.
+///
+/// # Note
+/// The function will continue processing files if statistics are not available or if the
+/// limit is not provided. If `collect_stats` is false, statistics won't be accumulated
+/// but files will still be collected.
+async fn get_files_with_limit(
+    files: impl Stream<Item = Result<PartitionedFile>>,
+    limit: Option<usize>,
+    collect_stats: bool,
+) -> Result<(FileGroup, bool)> {
+    let mut file_group = FileGroup::default();
+    // Fusing the stream allows us to call next safely even once it is finished.
+    let mut all_files = Box::pin(files.fuse());
+    enum ProcessingState {
+        ReadingFiles,
+        ReachedLimit,
+    }
+
+    let mut state = ProcessingState::ReadingFiles;
+    let mut num_rows = Precision::Absent;
+
+    while let Some(file_result) = all_files.next().await {
+        // Early exit if we've already reached our limit
+        if matches!(state, ProcessingState::ReachedLimit) {
+            break;
+        }
+
+        let file = file_result?;
+
+        // Update file statistics regardless of state
+        if collect_stats {
+            if let Some(file_stats) = &file.statistics {
+                num_rows = if file_group.is_empty() {
+                    // For the first file, just take its row count
+                    file_stats.num_rows
+                } else {
+                    // For subsequent files, accumulate the counts
+                    add_row_stats(num_rows, file_stats.num_rows)
+                };
+            }
+        }
+
+        // Always add the file to our group
+        file_group.push(file);
+
+        // Check if we've hit the limit (if one was specified)
+        if let Some(limit) = limit {
+            if let Precision::Exact(row_count) = num_rows {
+                if row_count > limit {
+                    state = ProcessingState::ReachedLimit;
+                }
+            }
+        }
+    }
+    // If we still have files in the stream, it means that the limit kicked
+    // in, and the statistic could have been different had we processed the
+    // files in a different order.
+    let inexact_stats = all_files.next().await.is_some();
+    Ok((file_group, inexact_stats))
 }
 
 #[cfg(test)]
