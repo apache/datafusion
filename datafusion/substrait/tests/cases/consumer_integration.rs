@@ -486,7 +486,6 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_joins() -> Result<()> {
         let plan_str = test_plan_to_string("multiple_joins.json").await?;
-        println!("{}", plan_str);
         assert_eq!(
             plan_str,
             "Projection: left.count(Int64(1)) AS count_first, left.category, left.count(Int64(1)):1 AS count_second, right.count(Int64(1)) AS count_third\
