@@ -203,6 +203,10 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.try_swapping_with_projection(projection)
     }
 
+    fn supports_filter_pushdown(&self) -> bool {
+        true
+    }
+
     fn push_down_filters_from_parents(
         &self,
         filters: &[&Arc<dyn PhysicalExpr>],

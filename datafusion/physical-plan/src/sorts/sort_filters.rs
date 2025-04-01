@@ -106,17 +106,14 @@ impl SortDynamicFilterSource {
                 .expect("Failed to acquire read lock on threshold");
             // Check if the new value is more or less selective than the current value given the sorting
             if let Some(ref mut current_value) = *current_value {
-                let new_value_is_greater = new_value > &current_value;
+                let new_value_is_greater = new_value > current_value;
                 let new_value_is_null = new_value.is_null();
                 let current_value_is_null = current_value.is_null();
-                if nulls_first && new_value_is_null && !current_value_is_null {
+                if (nulls_first && new_value_is_null && !current_value_is_null)
+                    || (descending && new_value_is_greater)
+                    || (!descending && !new_value_is_greater)
+                {
                     *current_value = new_value.clone();
-                } else {
-                    if (descending && new_value_is_greater)
-                        || (!descending && !new_value_is_greater)
-                    {
-                        *current_value = new_value.clone();
-                    }
                 }
             } else {
                 *current_value = Some(new_value.clone());

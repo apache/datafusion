@@ -470,7 +470,7 @@ impl ExecutionPlan for FilterExec {
             return Ok(Some(Arc::clone(self.input())));
         }
 
-        let predicate = conjunction(new_filters.into_iter());
+        let predicate = conjunction(new_filters);
 
         let new = FilterExec::try_new(predicate, Arc::clone(self.input()))
             .and_then(|e| {
