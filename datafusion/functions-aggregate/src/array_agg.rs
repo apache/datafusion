@@ -18,6 +18,7 @@
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
 use arrow::array::{new_empty_array, Array, ArrayRef, AsArray, StructArray};
+use arrow::compute::{filter, is_not_null};
 use arrow::datatypes::DataType;
 
 use arrow_schema::{Field, Fields};
@@ -118,11 +119,17 @@ impl AggregateUDFImpl for ArrayAgg {
         let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
 
         if acc_args.is_distinct {
-            return Ok(Box::new(DistinctArrayAggAccumulator::try_new(&data_type)?));
+            return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
+                &data_type,
+                acc_args.ignore_nulls,
+            )?));
         }
 
         if acc_args.ordering_req.is_empty() {
-            return Ok(Box::new(ArrayAggAccumulator::try_new(&data_type)?));
+            return Ok(Box::new(ArrayAggAccumulator::try_new(
+                &data_type,
+                acc_args.ignore_nulls,
+            )?));
         }
 
         let ordering_dtypes = acc_args
@@ -178,14 +185,16 @@ fn get_array_agg_doc() -> &'static Documentation {
 pub struct ArrayAggAccumulator {
     values: Vec<ArrayRef>,
     datatype: DataType,
+    ignore_nulls: bool,
 }
 
 impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
+    pub fn try_new(datatype: &DataType, ignore_nulls: bool) -> Result<Self> {
         Ok(Self {
             values: vec![],
             datatype: datatype.clone(),
+            ignore_nulls,
         })
     }
 }
@@ -201,7 +210,11 @@ impl Accumulator for ArrayAggAccumulator {
             return internal_err!("expects single batch");
         }
 
-        let val = Arc::clone(&values[0]);
+        let mut val = Arc::clone(&values[0]);
+
+        if self.ignore_nulls {
+            val = filter(&val, &is_not_null(&val)?)?;
+        }
         if val.len() > 0 {
             self.values.push(val);
         }
@@ -261,13 +274,15 @@ impl Accumulator for ArrayAggAccumulator {
 struct DistinctArrayAggAccumulator {
     values: HashSet<ScalarValue>,
     datatype: DataType,
+    ignore_nulls: bool,
 }
 
 impl DistinctArrayAggAccumulator {
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
+    pub fn try_new(datatype: &DataType, ignore_nulls: bool) -> Result<Self> {
         Ok(Self {
             values: HashSet::new(),
             datatype: datatype.clone(),
+            ignore_nulls,
         })
     }
 }
@@ -282,7 +297,11 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return internal_err!("expects single batch");
         }
 
-        let array = &values[0];
+        let mut array = values[0].clone();
+
+        if self.ignore_nulls {
+            array = filter(&array, &is_not_null(&array)?)?;
+        }
 
         for i in 0..array.len() {
             let scalar = ScalarValue::try_from_array(&array, i)?;
