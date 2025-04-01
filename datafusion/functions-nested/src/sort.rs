@@ -209,6 +209,9 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         } else {
             let arr_ref = list_array.value(i);
 
+            // arrow sort kernel does not support Structs, so use
+            // lexsort_to_indices instead:
+            // https://github.com/apache/arrow-rs/issues/6911#issuecomment-2562928843
             let sorted_array = match arr_ref.data_type() {
                 DataType::Struct(_) => {
                     let sort_columns: Vec<SortColumn> = vec![SortColumn {
