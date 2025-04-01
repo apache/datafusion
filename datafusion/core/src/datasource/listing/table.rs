@@ -51,10 +51,11 @@ use datafusion_physical_expr::{
     create_physical_expr, LexOrdering, PhysicalSortRequirement,
 };
 
-use crate::datasource::statistics::compute_all_files_statistics;
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_common::stats::Precision;
+use datafusion_datasource::add_row_stats;
+use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
@@ -1233,10 +1234,7 @@ async fn get_files_with_limit(
                 // provide any information or provides an inexact value, we demote
                 // the statistic precision to inexact.
                 if let Some(file_stats) = &file.statistics {
-                    num_rows = crate::datasource::statistics::add_row_stats(
-                        num_rows,
-                        file_stats.num_rows,
-                    );
+                    num_rows = add_row_stats(num_rows, file_stats.num_rows);
                 }
                 file_group.push(file);
 
