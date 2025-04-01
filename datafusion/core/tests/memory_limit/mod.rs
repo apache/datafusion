@@ -563,7 +563,7 @@ async fn setup_context(
 /// (specified by `max_temp_directory_size` in `DiskManager`)
 #[tokio::test]
 async fn test_disk_spill_limit_reached() -> Result<()> {
-    let ctx = setup_context(100 * 1024 * 1024, 60 * 1024 * 1024).await?;
+    let ctx = setup_context(10 * 1024 * 1024, 60 * 1024 * 1024).await?;
 
     let df = ctx
         .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1")
@@ -574,12 +574,14 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
     assert_contains!(
     err.to_string(),
     "The used disk space during the spilling process has exceeded the allowable limit"
-);
+    );
 
     Ok(())
 }
 
 /// External query should succeed, if the spilled bytes is less than the disk limit
+/// Also verify that after the query is finished, all the disk usage accounted by
+/// tempfiles are cleaned up.
 #[tokio::test]
 async fn test_disk_spill_limit_not_reached() -> Result<()> {
     let disk_spill_limit = 100 * 1024 * 1024; // 100MB
@@ -602,6 +604,11 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
     println!("spill count {}, spill bytes {}", spill_count, spilled_bytes);
     assert!(spill_count > 0);
     assert!((spilled_bytes as u64) < disk_spill_limit);
+
+    // Verify that all temporary files have been properly cleaned up by checking
+    // that the total disk usage tracked by the disk manager is zero
+    let current_disk_usage = ctx.runtime_env().disk_manager.used_disk_space();
+    assert_eq!(current_disk_usage, 0);
 
     Ok(())
 }
