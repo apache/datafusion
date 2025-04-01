@@ -611,16 +611,6 @@ pub fn coerce_int96_to_resolution(
         .map(|field| match parquet_fields.get(field.name().as_str()) {
             Some(Type::INT96) => {
                 field_with_new_type(field, DataType::Timestamp(*time_unit, None))
-
-                // match field.data_type() {
-                //     DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-                //         field_with_new_type(field, DataType::Timestamp(*time_unit,None))
-                //     }
-                //     DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => {
-                //         field_with_new_type(field, DataType::Timestamp(*time_unit,Some(tz.clone())))
-                //     }
-                //     _ => unreachable!()
-                // }
             }
             _ => Arc::clone(field),
         })
