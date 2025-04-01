@@ -2748,10 +2748,13 @@ mod tests {
         let t1_field_1 = Field::new("a", DataType::Int32, false);
         let t2_field_1 = Field::new("a", DataType::Int32, false);
         let t2_field_3 = Field::new("a", DataType::Int32, false);
+        let t2_field_4 = Field::new("a:1", DataType::Int32, false);
         let t1_field_2 = Field::new("b", DataType::Int32, false);
         let t2_field_2 = Field::new("b", DataType::Int32, false);
 
-        let field_vec = vec![t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3];
+        let field_vec = vec![
+            t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3, t2_field_4,
+        ];
         let remove_redundant = change_redundant_column(&Fields::from(field_vec));
 
         assert_eq!(
@@ -2762,6 +2765,7 @@ mod tests {
                 Field::new("b", DataType::Int32, false),
                 Field::new("b:1", DataType::Int32, false),
                 Field::new("a:2", DataType::Int32, false),
+                Field::new("a:1:1", DataType::Int32, false),
             ]
         );
         Ok(())
