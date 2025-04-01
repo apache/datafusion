@@ -136,11 +136,39 @@ impl SortDynamicFilterSource {
                 let new_value_is_greater = new_value > current_value;
                 let new_value_is_null = new_value.is_null();
                 let current_value_is_null = current_value.is_null();
-                if (nulls_first && new_value_is_null && !current_value_is_null)
-                    || (descending && new_value_is_greater)
-                    || (!descending && !new_value_is_greater)
-                {
-                    // *current_value = new_value.clone();
+
+                let update_needed = match (nulls_first, descending) {
+                    // For nulls_first + descending: update if new value is null (and current is not) or if new value is greater
+                    (true, true) => {
+                        (new_value_is_null && !current_value_is_null)
+                            || (!new_value_is_null
+                                && !current_value_is_null
+                                && new_value_is_greater)
+                    }
+                    // For nulls_first + ascending: update if new value is null (and current is not) or if new value is smaller
+                    (true, false) => {
+                        (new_value_is_null && !current_value_is_null)
+                            || (!new_value_is_null
+                                && !current_value_is_null
+                                && !new_value_is_greater)
+                    }
+                    // For nulls_last + descending: update if new value is not null (and current is null) or if new value is greater
+                    (false, true) => {
+                        (!new_value_is_null && current_value_is_null)
+                            || (!new_value_is_null
+                                && !current_value_is_null
+                                && new_value_is_greater)
+                    }
+                    // For nulls_last + ascending: update if new value is not null (and current is null) or if new value is smaller
+                    (false, false) => {
+                        (!new_value_is_null && current_value_is_null)
+                            || (!new_value_is_null
+                                && !current_value_is_null
+                                && !new_value_is_greater)
+                    }
+                };
+
+                if update_needed {
                     threshold.value = Some(new_value.clone());
                 }
             } else {

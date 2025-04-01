@@ -1266,7 +1266,7 @@ async fn test_topk_predicate_pushdown_nulls_first() {
     assert_batches_eq!(expected, &batches);
 
     let plan = test_case.explain_plan().await;
-    assert_contains!(&plan, "row_groups_pruned_statistics=3");
+    assert_contains!(&plan, "row_groups_pruned_statistics=5");
 }
 
 #[tokio::test]
@@ -1282,7 +1282,6 @@ async fn test_topk_predicate_pushdown_multi_key() {
 
     let query = "select id from base_table order by name desc, id limit 3";
     let test_case = DynamicFilterTestCase::new(query.to_string(), path.clone());
-
     let batches = test_case.results().await;
     #[rustfmt::skip]
     let expected = [
@@ -1295,13 +1294,11 @@ async fn test_topk_predicate_pushdown_multi_key() {
         "+----+",
     ];
     assert_batches_eq!(expected, &batches);
-
     let plan = test_case.explain_plan().await;
-    assert_contains!(&plan, "row_groups_pruned_statistics=1");
+    assert_contains!(&plan, "row_groups_pruned_statistics=0");
 
     let query1 = "select id from base_table order by name desc, id desc limit 3";
-    let test_case = DynamicFilterTestCase::new(query1.to_string(), path);
-
+    let test_case = DynamicFilterTestCase::new(query1.to_string(), path.clone());
     let batches = test_case.results().await;
     #[rustfmt::skip]
     let expected = [
@@ -1314,9 +1311,25 @@ async fn test_topk_predicate_pushdown_multi_key() {
         "+----+",
     ];
     assert_batches_eq!(expected, &batches);
-
     let plan = test_case.explain_plan().await;
-    assert_contains!(&plan, "row_groups_pruned_statistics=0");
+    assert_contains!(&plan, "row_groups_pruned_statistics=1");
+
+    let query1 = "select id from base_table order by name asc, id desc limit 3";
+    let test_case = DynamicFilterTestCase::new(query1.to_string(), path);
+    let batches = test_case.results().await;
+    #[rustfmt::skip]
+    let expected = [
+        "+----+",
+        "| id |",
+        "+----+",
+        "| 4  |",
+        "| 3  |",
+        "| 2  |",
+        "+----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    let plan = test_case.explain_plan().await;
+    assert_contains!(&plan, "row_groups_pruned_statistics=1");
 }
 
 #[tokio::test]
@@ -1348,7 +1361,7 @@ async fn test_topk_predicate_pushdown_nulls_last() {
     assert_batches_eq!(expected, &batches);
 
     let plan = test_case.explain_plan().await;
-    assert_contains!(&plan, "row_groups_pruned_statistics=4");
+    assert_contains!(&plan, "row_groups_pruned_statistics=3");
 }
 
 #[tokio::test]
