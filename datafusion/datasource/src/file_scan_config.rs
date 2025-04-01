@@ -879,7 +879,7 @@ impl FileScanConfig {
     /// # Returns
     /// A new set of file groups, where files within each group are non-overlapping with respect to
     /// their min/max statistics and maintain the specified sort order.
-    pub fn split_groups_by_statistics_v2(
+    pub fn split_groups_by_statistics_with_target_partitions(
         table_schema: &SchemaRef,
         file_groups: &[FileGroup],
         sort_order: &LexOrdering,

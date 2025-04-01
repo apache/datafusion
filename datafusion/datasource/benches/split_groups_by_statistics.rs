@@ -165,7 +165,7 @@ pub fn compare_split_groups_by_statistics_algorithms(c: &mut Criterion) {
                     |b, (fg, schema, order, target)| {
                         let mut result = Vec::new();
                         b.iter(|| {
-                            result = FileScanConfig::split_groups_by_statistics_v2(
+                            result = FileScanConfig::split_groups_by_statistics_with_target_partitions(
                                 schema, fg, order, *target,
                             )
                             .unwrap();
