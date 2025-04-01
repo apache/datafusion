@@ -18,8 +18,7 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::test_util::generate_test_files;
-use datafusion_datasource::test_util::verify_sort_integrity;
+use datafusion_datasource::{generate_test_files, verify_sort_integrity};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;

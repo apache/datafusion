@@ -1467,7 +1467,10 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 
 #[cfg(test)]
 mod tests {
-    use crate::{test_util::MockSource, tests::aggr_test_schema};
+    use crate::{
+        generate_test_files, test_util::MockSource, tests::aggr_test_schema,
+        verify_sort_integrity,
+    };
 
     use super::*;
     use arrow::{
@@ -2311,9 +2314,10 @@ mod tests {
         );
         assert_eq!(new_config.constraints, Constraints::default());
         assert!(new_config.new_lines_in_values);
+    }
+
+    #[test]
     fn test_split_groups_by_statistics_with_target_partitions() -> Result<()> {
-        use crate::test_util::generate_test_files;
-        use crate::test_util::verify_sort_integrity;
         use datafusion_common::DFSchema;
         use datafusion_expr::{col, execution_props::ExecutionProps};
 
