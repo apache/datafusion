@@ -238,7 +238,7 @@ impl AggregateExprBuilder {
     ///         expr: Arc::new(Column::new("x", 1)) as Arc<dyn PhysicalExpr>,
     ///         options: Default::default(),
     ///     }];
-    /// 
+    ///
     ///     let first_value = AggregateUDF::from(FirstValueUdf::new());
     ///     
     ///     let aggregate_expr = AggregateExprBuilder::new(
