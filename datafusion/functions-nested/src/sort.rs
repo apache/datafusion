@@ -20,6 +20,7 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{new_null_array, Array, ArrayRef, ListArray, NullBufferBuilder};
 use arrow::buffer::OffsetBuffer;
+use arrow::compute::SortColumn;
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List};
 use arrow::datatypes::{DataType, Field};
 use arrow::{compute, compute::SortOptions};
@@ -207,9 +208,20 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             valid.append_null();
         } else {
             let arr_ref = list_array.value(i);
-            let arr_ref = arr_ref.as_ref();
 
-            let sorted_array = compute::sort(arr_ref, sort_option)?;
+            let sorted_array = match arr_ref.data_type() {
+                DataType::Struct(_) => {
+                    let sort_columns = vec![SortColumn {
+                        values: arr_ref,
+                        options: sort_option,
+                    }];
+                    compute::lexsort(&sort_columns, None)?[0].clone()
+                }
+                _ => {
+                    let arr_ref = arr_ref.as_ref();
+                    compute::sort(arr_ref, sort_option)?
+                }
+            };
             array_lengths.push(sorted_array.len());
             arrays.push(sorted_array);
             valid.append_non_null();
