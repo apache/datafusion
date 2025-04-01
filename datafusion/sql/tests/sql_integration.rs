@@ -3518,11 +3518,11 @@ fn hive_aggregate_with_filter() -> Result<()> {
 
     assert_snapshot!(
         plan,
-        @r###"
+        @r##"
         Projection: sum(person.age) FILTER (WHERE person.age > Int64(4))
           Aggregate: groupBy=[[]], aggr=[[sum(person.age) FILTER (WHERE person.age > Int64(4))]]
             TableScan: person
-        "###
+        "##
     );
 
     Ok(())
