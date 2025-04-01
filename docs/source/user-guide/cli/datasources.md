@@ -148,7 +148,7 @@ CREATE EXTERNAL TABLE test (
     day DATE
 )
 STORED AS PARQUET
-LOCATION 'gs://bucket/';
+LOCATION 'gs://bucket/my_table';
 ```
 
 # Formats
