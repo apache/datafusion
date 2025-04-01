@@ -518,8 +518,8 @@ impl ExecutionPlan for SortMergeJoinExec {
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         estimate_join_statistics(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
+            self.left.statistics()?,
+            self.right.statistics()?,
             self.on.clone(),
             &self.join_type,
             &self.schema,

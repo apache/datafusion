@@ -170,12 +170,11 @@ impl FilterExec {
 
     /// Calculates `Statistics` for `FilterExec`, by applying selectivity (either default, or estimated) to input statistics.
     fn statistics_helper(
-        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+        input_stats: Statistics,
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
     ) -> Result<Statistics> {
-        let input_stats = input.statistics()?;
-        let schema = input.schema();
         if !check_support(predicate, &schema) {
             let selectivity = default_selectivity as f64 / 100.0;
             let mut stats = input_stats.to_inexact();
@@ -189,7 +188,7 @@ impl FilterExec {
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
         let input_analysis_ctx = AnalysisContext::try_from_statistics(
-            &input.schema(),
+            &schema,
             &input_stats.column_statistics,
         )?;
 
@@ -256,7 +255,12 @@ impl FilterExec {
     ) -> Result<PlanProperties> {
         // Combine the equal predicates with the input equivalence properties
         // to construct the equivalence properties:
-        let stats = Self::statistics_helper(input, predicate, default_selectivity)?;
+        let stats = Self::statistics_helper(
+            input.schema(),
+            input.statistics()?,
+            predicate,
+            default_selectivity,
+        )?;
         let mut eq_properties = input.equivalence_properties().clone();
         let (equal_pairs, _) = collect_columns_from_predicate(predicate);
         for (lhs, rhs) in equal_pairs {
@@ -397,11 +401,27 @@ impl ExecutionPlan for FilterExec {
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Result<Statistics> {
         let stats = Self::statistics_helper(
-            &self.input,
+            self.schema(),
+            self.input().statistics()?,
             self.predicate(),
             self.default_selectivity,
         )?;
         Ok(stats.project(self.projection.as_ref()))
+    }
+
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        let input_stats = self.input.statistics_by_partition()?;
+        let mut stats = Vec::with_capacity(input_stats.len());
+        for input_stat in input_stats {
+            let stat = Self::statistics_helper(
+                self.schema(),
+                input_stat,
+                self.predicate(),
+                self.default_selectivity,
+            )?;
+            stats.push(stat.project(self.projection.as_ref()));
+        }
+        Ok(stats)
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {

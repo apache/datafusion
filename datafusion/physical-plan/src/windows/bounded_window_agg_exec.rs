@@ -226,6 +226,23 @@ impl BoundedWindowAggExec {
                 .unwrap_or_else(Vec::new)
         }
     }
+
+    fn statistics_helper(&self, statistics: Statistics) -> Result<Statistics> {
+        let win_cols = self.window_expr.len();
+        let input_cols = self.input.schema().fields().len();
+        // TODO stats: some windowing function will maintain invariants such as min, max...
+        let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
+        // copy stats of the input to the beginning of the schema.
+        column_statistics.extend(statistics.column_statistics);
+        for _ in 0..win_cols {
+            column_statistics.push(ColumnStatistics::new_unknown())
+        }
+        Ok(Statistics {
+            num_rows: statistics.num_rows,
+            column_statistics,
+            total_byte_size: Precision::Absent,
+        })
+    }
 }
 
 impl DisplayAs for BoundedWindowAggExec {
@@ -344,20 +361,17 @@ impl ExecutionPlan for BoundedWindowAggExec {
 
     fn statistics(&self) -> Result<Statistics> {
         let input_stat = self.input.statistics()?;
-        let win_cols = self.window_expr.len();
-        let input_cols = self.input.schema().fields().len();
-        // TODO stats: some windowing function will maintain invariants such as min, max...
-        let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
-        // copy stats of the input to the beginning of the schema.
-        column_statistics.extend(input_stat.column_statistics);
-        for _ in 0..win_cols {
-            column_statistics.push(ColumnStatistics::new_unknown())
+        self.statistics_helper(input_stat)
+    }
+
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        let input_stats = self.input.statistics_by_partition()?;
+        let mut output_stats = Vec::with_capacity(input_stats.len());
+        for stat in input_stats {
+            let output_stat = self.statistics_helper(stat.clone())?;
+            output_stats.push(output_stat);
         }
-        Ok(Statistics {
-            num_rows: input_stat.num_rows,
-            column_statistics,
-            total_byte_size: Precision::Absent,
-        })
+        Ok(output_stats)
     }
 }
 
