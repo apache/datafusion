@@ -2311,5 +2311,163 @@ mod tests {
         );
         assert_eq!(new_config.constraints, Constraints::default());
         assert!(new_config.new_lines_in_values);
+    fn test_split_groups_by_statistics_with_target_partitions() -> Result<()> {
+        use crate::test_util::generate_test_files;
+        use crate::test_util::verify_sort_integrity;
+        use datafusion_common::DFSchema;
+        use datafusion_expr::{col, execution_props::ExecutionProps};
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            false,
+        )]));
+
+        // Setup sort expression
+        let exec_props = ExecutionProps::new();
+        let df_schema = DFSchema::try_from_qualified_schema("test", schema.as_ref())?;
+        let sort_expr = vec![col("value").sort(true, false)];
+
+        let physical_sort_exprs: Vec<_> = sort_expr
+            .iter()
+            .map(|expr| create_physical_sort_expr(expr, &df_schema, &exec_props).unwrap())
+            .collect();
+
+        let sort_ordering = LexOrdering::from(physical_sort_exprs);
+
+        // Test case parameters
+        struct TestCase {
+            name: String,
+            file_count: usize,
+            overlap_factor: f64,
+            target_partitions: usize,
+            expected_partition_count: usize,
+        }
+
+        let test_cases = vec![
+            // Basic cases
+            TestCase {
+                name: "no_overlap_10_files_4_partitions".to_string(),
+                file_count: 10,
+                overlap_factor: 0.0,
+                target_partitions: 4,
+                expected_partition_count: 4,
+            },
+            TestCase {
+                name: "medium_overlap_20_files_5_partitions".to_string(),
+                file_count: 20,
+                overlap_factor: 0.5,
+                target_partitions: 5,
+                expected_partition_count: 5,
+            },
+            TestCase {
+                name: "high_overlap_30_files_3_partitions".to_string(),
+                file_count: 30,
+                overlap_factor: 0.8,
+                target_partitions: 3,
+                expected_partition_count: 7,
+            },
+            // Edge cases
+            TestCase {
+                name: "fewer_files_than_partitions".to_string(),
+                file_count: 3,
+                overlap_factor: 0.0,
+                target_partitions: 10,
+                expected_partition_count: 3, // Should only create as many partitions as files
+            },
+            TestCase {
+                name: "single_file".to_string(),
+                file_count: 1,
+                overlap_factor: 0.0,
+                target_partitions: 5,
+                expected_partition_count: 1, // Should create only one partition
+            },
+            TestCase {
+                name: "empty_files".to_string(),
+                file_count: 0,
+                overlap_factor: 0.0,
+                target_partitions: 3,
+                expected_partition_count: 0, // Empty result for empty input
+            },
+        ];
+
+        for case in test_cases {
+            println!("Running test case: {}", case.name);
+
+            // Generate files using bench utility function
+            let file_groups = generate_test_files(case.file_count, case.overlap_factor);
+
+            // Call the function under test
+            let result =
+                FileScanConfig::split_groups_by_statistics_with_target_partitions(
+                    &schema,
+                    &file_groups,
+                    &sort_ordering,
+                    case.target_partitions,
+                )?;
+
+            // Verify results
+            println!(
+                "Created {} partitions (target was {})",
+                result.len(),
+                case.target_partitions
+            );
+
+            // Check partition count
+            assert_eq!(
+                result.len(),
+                case.expected_partition_count,
+                "Case '{}': Unexpected partition count",
+                case.name
+            );
+
+            // Verify sort integrity
+            assert!(
+                verify_sort_integrity(&result),
+                "Case '{}': Files within partitions are not properly ordered",
+                case.name
+            );
+
+            // Distribution check for partitions
+            if case.file_count > 1 && case.expected_partition_count > 1 {
+                let group_sizes: Vec<usize> = result.iter().map(FileGroup::len).collect();
+                let max_size = *group_sizes.iter().max().unwrap();
+                let min_size = *group_sizes.iter().min().unwrap();
+
+                // Check partition balancing - difference shouldn't be extreme
+                let avg_files_per_partition =
+                    case.file_count as f64 / case.expected_partition_count as f64;
+                assert!(
+                    (max_size as f64) < 2.0 * avg_files_per_partition,
+                    "Case '{}': Unbalanced distribution. Max partition size {} exceeds twice the average {}",
+                    case.name,
+                    max_size,
+                    avg_files_per_partition
+                );
+
+                println!(
+                    "Distribution - min files: {}, max files: {}",
+                    min_size, max_size
+                );
+            }
+        }
+
+        // Test error case: zero target partitions
+        let empty_groups: Vec<FileGroup> = vec![];
+        let err = FileScanConfig::split_groups_by_statistics_with_target_partitions(
+            &schema,
+            &empty_groups,
+            &sort_ordering,
+            0,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("target_partitions must be greater than 0"),
+            "Expected error for zero target partitions"
+        );
+
+        Ok(())
     }
 }

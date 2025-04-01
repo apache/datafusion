@@ -43,8 +43,8 @@ pub mod sink;
 pub mod source;
 mod statistics;
 
-#[cfg(test)]
-mod test_util;
+#[cfg(any(test))]
+pub mod test_util;
 
 pub mod url;
 pub mod write;
