@@ -1249,8 +1249,10 @@ impl ExecutionPlan for SortExec {
                         while let Some(batch) = input.next().await {
                             let batch = batch?;
                             topk.insert_batch(batch)?;
-                            if let Some(values) = topk.get_threshold_values()? {
-                                dynamic_filter_source.update_values(&values)?;
+                            if context.session_config().options().optimizer.enable_dynamic_filter_pushdown {
+                                if let Some(values) = topk.get_threshold_values()? {
+                                    dynamic_filter_source.update_values(&values)?;
+                                }
                             }
                         }
                         topk.emit()
