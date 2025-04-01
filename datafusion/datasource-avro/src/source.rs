@@ -141,6 +141,10 @@ impl ExecutionPlan for AvroExec {
         self.inner.statistics()
     }
 
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        self.inner.statistics_by_partition()
+    }
+
     fn metrics(&self) -> Option<MetricsSet> {
         self.inner.metrics()
     }

@@ -1301,7 +1301,18 @@ impl ExecutionPlan for SortExec {
     }
 
     fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
-        todo!()
+        let input_stats = self.input.statistics_by_partition()?;
+        let mut stats = Vec::with_capacity(input_stats.len());
+        for stat in input_stats {
+            stats.push(Statistics::with_fetch(
+                stat,
+                self.schema(),
+                self.fetch,
+                0,
+                1,
+            )?);
+        }
+        Ok(stats)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
