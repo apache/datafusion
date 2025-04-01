@@ -55,7 +55,7 @@ pub struct DynamicFilterPhysicalExpr {
     /// as the children of the dynamic filter source.
     remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
     /// The source of dynamic filters.
-    inner: Arc<dyn DynamicFilterSource>,
+    pub inner: Arc<dyn DynamicFilterSource>, // TODO: remove pub
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in tests.

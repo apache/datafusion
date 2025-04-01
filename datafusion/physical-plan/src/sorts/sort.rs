@@ -1128,6 +1128,14 @@ impl SortExec {
             boundedness,
         )
     }
+
+    fn with_dynamic_filter_source(
+        mut self,
+        dynamic_filter_source: Arc<SortDynamicFilterSource>,
+    ) -> Self {
+        self.dynamic_filter_source = dynamic_filter_source;
+        self
+    }
 }
 
 impl DisplayAs for SortExec {
@@ -1192,7 +1200,8 @@ impl ExecutionPlan for SortExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let new_sort = SortExec::new(self.expr.clone(), Arc::clone(&children[0]))
             .with_fetch(self.fetch)
-            .with_preserve_partitioning(self.preserve_partitioning);
+            .with_preserve_partitioning(self.preserve_partitioning)
+            .with_dynamic_filter_source(Arc::clone(&self.dynamic_filter_source));
 
         Ok(Arc::new(new_sort))
     }
@@ -1241,7 +1250,7 @@ impl ExecutionPlan for SortExec {
                             let batch = batch?;
                             topk.insert_batch(batch)?;
                             if let Some(values) = topk.get_threshold_values()? {
-                                dynamic_filter_source.update_values(&values);
+                                dynamic_filter_source.update_values(&values)?;
                             }
                         }
                         topk.emit()
@@ -1327,12 +1336,13 @@ impl ExecutionPlan for SortExec {
         Ok(Some(Arc::new(
             SortExec::new(updated_exprs, make_with_child(projection, self.input())?)
                 .with_fetch(self.fetch())
-                .with_preserve_partitioning(self.preserve_partitioning()),
+                .with_preserve_partitioning(self.preserve_partitioning())
+                .with_dynamic_filter_source(Arc::clone(&self.dynamic_filter_source)),
         )))
     }
 
     fn filters_for_pushdown(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
-        Ok(vec![self.dynamic_filter_source.as_physical_expr()])
+        Ok(vec![self.dynamic_filter_source.as_physical_expr()?])
     }
 
     fn supports_filter_pushdown(&self) -> bool {

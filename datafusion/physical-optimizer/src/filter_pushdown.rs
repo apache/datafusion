@@ -20,7 +20,8 @@ use std::sync::Arc;
 use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::{
-    execution_plan::{ExecutionPlanFilterPushdownResult, FilterPushdownSupport}, with_new_children_if_necessary, ExecutionPlan
+    execution_plan::{ExecutionPlanFilterPushdownResult, FilterPushdownSupport},
+    with_new_children_if_necessary, ExecutionPlan,
 };
 
 use crate::PhysicalOptimizerRule;
@@ -83,17 +84,11 @@ fn pushdown_filters(
     let remaining_filter_indexes = (0..parent_filters.len())
         .filter(|&i| !matches!(filter_pushdown_result[i], FilterPushdownSupport::Exact))
         .collect::<Vec<_>>();
-    println!("Remaining filter indexes: {:?}", remaining_filter_indexes);
     if !remaining_filter_indexes.is_empty() {
         let remaining_filters = remaining_filter_indexes
             .iter()
             .map(|&i| &parent_filters[i])
             .collect::<Vec<_>>();
-        let remaining_filters_dbg = format!(
-            "Remaining filters being pushed down into {:?} {:?}",
-            remaining_filters, node
-        );
-        println!("{}", remaining_filters_dbg);
         if let Some(result) = node.push_down_filters_from_parents(&remaining_filters)? {
             result_node = result.inner;
             for (parent_filter_index, support) in
@@ -134,7 +129,9 @@ impl PhysicalOptimizerRule for FilterPushdown {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        println!("plan before: {:?}", plan);
         if let Some(result) = pushdown_filters(&plan, &[])? {
+            println!("plan after filter pushdown: {:?}", result.inner);
             Ok(result.inner)
         } else {
             Ok(plan)

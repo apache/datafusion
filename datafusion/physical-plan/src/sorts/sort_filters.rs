@@ -31,7 +31,7 @@ use crate::dynamic_filters::{DynamicFilterPhysicalExpr, DynamicFilterSource};
 #[derive(Debug, Clone)]
 struct ColumnThreshold {
     /// The current threshold value
-    pub value: Arc<RwLock<Option<ScalarValue>>>,
+    pub value: Option<ScalarValue>,
     /// The column expression
     pub expr: Arc<dyn PhysicalExpr>,
     /// Sort options
@@ -73,9 +73,9 @@ struct ColumnThreshold {
 // Once we get to file 2 however we can skip it entirely because we know that all values in file 2 are smaller than 30.
 // The same goes for file 1.
 // So this optimization just saved us 50% of the work of scanning the data.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SortDynamicFilterSource {
-    thresholds: Vec<ColumnThreshold>,
+    thresholds: Arc<RwLock<Vec<ColumnThreshold>>>,
 }
 
 impl SortDynamicFilterSource {
@@ -83,29 +83,36 @@ impl SortDynamicFilterSource {
         let thresholds = ordering
             .iter()
             .map(|sort_expr| ColumnThreshold {
-                value: Arc::new(RwLock::new(None)),
+                value: None,
                 expr: Arc::clone(&sort_expr.expr),
                 sort_options: sort_expr.options,
             })
             .collect();
 
+        let thresholds = Arc::new(RwLock::new(thresholds));
+
         Self { thresholds }
     }
 
-    pub fn update_values(&self, new_values: &[ScalarValue]) {
-        if new_values.len() != self.thresholds.len() {
-            panic!("New values length does not match the number of thresholds");
+    pub fn update_values(&self, new_values: &[ScalarValue]) -> Result<()> {
+        let mut thresholds = self.thresholds.write().map_err(|_| {
+            datafusion_common::DataFusionError::Execution(
+                "Failed to acquire write lock on thresholds".to_string(),
+            )
+        })?;
+        if new_values.len() != thresholds.len() {
+            return Err(datafusion_common::DataFusionError::Execution(
+                "The number of new values does not match the number of thresholds"
+                    .to_string(),
+            ));
         }
         for (i, new_value) in new_values.iter().enumerate() {
-            let threshold = &self.thresholds[i];
+            let threshold = &mut thresholds[i];
             let descending = threshold.sort_options.descending;
             let nulls_first = threshold.sort_options.nulls_first;
-            let mut current_value = threshold
-                .value
-                .write()
-                .expect("Failed to acquire read lock on threshold");
+            let current_value = &threshold.value;
             // Check if the new value is more or less selective than the current value given the sorting
-            if let Some(ref mut current_value) = *current_value {
+            if let Some(current_value) = current_value {
                 let new_value_is_greater = new_value > current_value;
                 let new_value_is_null = new_value.is_null();
                 let current_value_is_null = current_value.is_null();
@@ -113,40 +120,49 @@ impl SortDynamicFilterSource {
                     || (descending && new_value_is_greater)
                     || (!descending && !new_value_is_greater)
                 {
-                    *current_value = new_value.clone();
+                    // *current_value = new_value.clone();
+                    threshold.value = Some(new_value.clone());
                 }
             } else {
-                *current_value = Some(new_value.clone());
+                threshold.value = Some(new_value.clone());
             }
         }
+        Ok(())
     }
 
-    pub fn as_physical_expr(&self) -> Arc<dyn PhysicalExpr> {
+    pub fn as_physical_expr(self: &Arc<Self>) -> Result<Arc<dyn PhysicalExpr>> {
         let children = self
             .thresholds
+            .read()
+            .map_err(|_| {
+                datafusion_common::DataFusionError::Execution(
+                    "Failed to acquire read lock on thresholds".to_string(),
+                )
+            })?
             .iter()
             .map(|threshold| Arc::clone(&threshold.expr))
             .collect::<Vec<_>>();
-        Arc::new(DynamicFilterPhysicalExpr::new(
+        Ok(Arc::new(DynamicFilterPhysicalExpr::new(
             children,
-            Arc::new(self.clone()) as Arc<dyn DynamicFilterSource>,
-        ))
+            Arc::clone(self) as Arc<dyn DynamicFilterSource>,
+        )))
     }
 }
 
 impl DynamicFilterSource for SortDynamicFilterSource {
     fn snapshot_current_filters(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+        let thresholds = self.thresholds.read().map_err(|_| {
+            datafusion_common::DataFusionError::Execution(
+                "Failed to acquire read lock on thresholds".to_string(),
+            )
+        })?;
         // Create filter expressions for each threshold
         let mut filters: Vec<Arc<dyn PhysicalExpr>> =
-            Vec::with_capacity(self.thresholds.len());
+            Vec::with_capacity(thresholds.len());
 
         let mut prev_sort_expr: Option<Arc<dyn PhysicalExpr>> = None;
-        for threshold in &self.thresholds {
-            let value = threshold
-                .value
-                .read()
-                .expect("Failed to acquire read lock on threshold")
-                .clone();
+        for threshold in thresholds.iter() {
+            let value = &threshold.value;
 
             let Some(value) = value else {
                 // If the value is None, we cannot create a filter for this threshold

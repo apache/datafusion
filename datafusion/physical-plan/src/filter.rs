@@ -36,6 +36,7 @@ use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
 };
+use datafusion_physical_expr::expressions::lit;
 
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
@@ -466,20 +467,21 @@ impl ExecutionPlan for FilterExec {
             })
             .collect::<Vec<_>>();
 
-        if new_filters.is_empty() {
+        let predicate = conjunction(new_filters);
+
+        if predicate.eq(&lit(true)) && self.projection.is_none() {
             return Ok(Some(Arc::clone(self.input())));
         }
 
-        let predicate = conjunction(new_filters);
-
-        let new = FilterExec::try_new(predicate, Arc::clone(self.input()))
-            .and_then(|e| {
-                let selectivity = e.default_selectivity();
-                e.with_default_selectivity(selectivity)
-            })
-            .and_then(|e| e.with_projection(self.projection().cloned()))
-            .map(|e| Arc::new(e) as _)?;
-        Ok(Some(new))
+        let new = FilterExec {
+            predicate,
+            input: Arc::clone(self.input()),
+            metrics: self.metrics.clone(),
+            default_selectivity: self.default_selectivity,
+            cache: self.cache.clone(),
+            projection: self.projection.clone(),
+        };
+        Ok(Some(Arc::new(new)))
     }
 
     fn push_down_filters_from_parents(
