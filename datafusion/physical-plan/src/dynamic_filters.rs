@@ -17,6 +17,7 @@
 
 use std::{
     any::Any,
+    fmt::Display,
     hash::Hash,
     sync::{Arc, RwLock},
 };
@@ -36,7 +37,7 @@ use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
 ///
 /// See `TopKDynamicFilterSource` in datafusion/physical-plan/src/topk/mod.rs for examples.
 pub trait DynamicFilterSource:
-    Send + Sync + std::fmt::Debug + DynEq + DynHash + 'static
+    Send + Sync + std::fmt::Debug + DynEq + DynHash + Display + 'static
 {
     /// Take a snapshot of the current state of filtering, returning a non-dynamic PhysicalExpr.
     /// This is used to e.g. serialize dynamic filters across the wire or to pass them into systems
@@ -97,9 +98,9 @@ impl PartialEq for DynamicFilterPhysicalExpr {
 
 impl Eq for DynamicFilterPhysicalExpr {}
 
-impl std::fmt::Display for DynamicFilterPhysicalExpr {
+impl Display for DynamicFilterPhysicalExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DynamicFilterPhysicalExpr")
+        write!(f, "DynamicFilterPhysicalExpr [ {} ]", self.inner)
     }
 }
 
@@ -297,6 +298,16 @@ mod test {
 
             fn as_any(&self) -> &dyn Any {
                 self
+            }
+        }
+
+        impl Display for MockDynamicFilterSource {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(
+                    f,
+                    "MockDynamicFilterSource [ current_expr: {:?} ]",
+                    self.current_expr.read().unwrap()
+                )
             }
         }
 

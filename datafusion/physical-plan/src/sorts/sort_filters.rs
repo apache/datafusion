@@ -16,6 +16,7 @@
 // under the License.
 
 use std::{
+    fmt::Display,
     hash::{Hash, Hasher},
     sync::{Arc, RwLock},
 };
@@ -165,6 +166,19 @@ impl SortDynamicFilterSource {
             children,
             Arc::clone(self) as Arc<dyn DynamicFilterSource>,
         )))
+    }
+}
+
+impl Display for SortDynamicFilterSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let thresholds = self
+            .snapshot_current_filters()
+            .map_err(|_| std::fmt::Error)?
+            .iter()
+            .map(|p| format!("{p}"))
+            .collect::<Vec<String>>();
+        let inner = thresholds.join(",");
+        write!(f, "SortDynamicFilterSource[ {} ]", inner,)
     }
 }
 
