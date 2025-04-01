@@ -16,12 +16,12 @@
 # under the License.
 
 name: Prepare Rust Builder for MacOS
-description: 'Prepare Rust Build Environment for MacOS'
+description: "Prepare Rust Build Environment for MacOS"
 inputs:
   rust-version:
-    description: 'version of rust to install (e.g. stable)'
+    description: "version of rust to install (e.g. stable)"
     required: true
-    default: 'stable'
+    default: "stable"
 runs:
   using: "composite"
   steps:
@@ -44,6 +44,6 @@ runs:
         rustup default stable
         rustup component add rustfmt
     - name: Setup rust cache
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
     - name: Configure rust runtime env
-      uses: ./.github/actions/setup-rust-runtime        
+      uses: ./.github/actions/setup-rust-runtime
