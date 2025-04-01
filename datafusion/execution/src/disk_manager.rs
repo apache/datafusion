@@ -223,7 +223,7 @@ impl RefCountedTempFile {
     /// - Returns an error if the global disk usage exceeds the configured limit.
     pub fn update_disk_usage(&mut self) -> Result<()> {
         // Get new file size from OS
-        let metadata = self.tempfile.as_file().metadata().unwrap();
+        let metadata = self.tempfile.as_file().metadata()?;
         let new_disk_usage = metadata.len();
 
         // Update the global disk usage by:
