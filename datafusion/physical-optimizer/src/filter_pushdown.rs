@@ -67,6 +67,8 @@ fn pushdown_filters(
             } else {
                 new_children.push(Arc::clone(child));
             }
+            filter_pushdown_result =
+                vec![FilterPushdownSupport::Inexact; all_filters.len()];
         };
     }
 
