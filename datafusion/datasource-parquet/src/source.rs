@@ -26,6 +26,7 @@ use crate::opener::ParquetOpener;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
+use datafusion_datasource::file::FileSourceFilterPushdownResult;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
@@ -40,6 +41,7 @@ use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
+use datafusion_physical_plan::execution_plan::FilterPushdownSupport;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion_physical_plan::DisplayFormatType;
 
@@ -575,17 +577,31 @@ impl FileSource for ParquetSource {
         }
     }
 
-    fn push_down_filter(
+    fn push_down_filters(
         &self,
-        expr: Arc<dyn PhysicalExpr>,
-    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
+        filters: &[&Arc<dyn PhysicalExpr>],
+    ) -> datafusion_common::Result<Option<FileSourceFilterPushdownResult>> {
         let mut conf = self.clone();
         conf.predicate = match self.predicate.as_ref() {
             Some(existing_predicate) => {
-                Some(conjunction([Arc::clone(existing_predicate), expr]))
+                // Combine existing predicate with new filters
+                Some(conjunction(
+                    std::iter::once(Arc::clone(existing_predicate))
+                        .chain(filters.iter().cloned().cloned()),
+                ))
             }
-            None => Some(expr),
+            None => {
+                if filters.is_empty() {
+                    None
+                } else {
+                    // If no existing predicate, just use the new filters
+                    Some(conjunction(filters.iter().cloned().cloned()))
+                }
+            }
         };
-        Ok(Some(Arc::new(conf)))
+        Ok(Some(FileSourceFilterPushdownResult::new(
+            Arc::new(conf),
+            vec![FilterPushdownSupport::Exact; filters.len()],
+        )))
     }
 }

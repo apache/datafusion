@@ -48,7 +48,6 @@ use datafusion_physical_plan::{
 };
 use log::{debug, warn};
 
-use crate::file_groups::FileGroup;
 use crate::{
     display::FileGroupsDisplay,
     file::FileSource,
@@ -58,6 +57,7 @@ use crate::{
     statistics::MinMaxStatistics,
     PartitionedFile,
 };
+use crate::{file_groups::FileGroup, source::DataSourceFilterPushdownResult};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -585,18 +585,20 @@ impl DataSource for FileScanConfig {
         }))
     }
 
-    fn push_down_filter(
+    fn push_down_filters(
         &self,
-        expr: Arc<dyn PhysicalExpr>,
-    ) -> Result<Option<Arc<dyn DataSource>>> {
-        // Try to push down to the file source
-        if let Some(file_source) = self.file_source.push_down_filter(expr)? {
-            return Ok(Some(Arc::new(Self {
-                file_source,
-                ..self.clone()
-            })));
+        filters: &[&Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<DataSourceFilterPushdownResult>> {
+        if let Some(file_source_result) = self.file_source.push_down_filters(filters)? {
+            let mut new_self = self.clone();
+            new_self.file_source = file_source_result.inner;
+            Ok(Some(DataSourceFilterPushdownResult {
+                inner: Arc::new(new_self) as Arc<dyn DataSource>,
+                support: file_source_result.support,
+            }))
+        } else {
+            Ok(None)
         }
-        Ok(None)
     }
 }
 

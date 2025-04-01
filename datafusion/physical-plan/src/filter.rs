@@ -25,7 +25,9 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::common::can_project;
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{
+    CardinalityEffect, ExecutionPlanFilterPushdownResult, FilterPushdownSupport,
+};
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
     ProjectionExec,
@@ -434,20 +436,48 @@ impl ExecutionPlan for FilterExec {
         try_embed_projection(projection, self)
     }
 
-    fn push_down_filter(
-        &self,
-        expr: Arc<dyn PhysicalExpr>,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    fn push_down_filters(
+        self: Arc<Self>,
+        filters: &[&Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
         let mut input = Arc::clone(&self.input);
-        if let Some(new_input) = input.push_down_filter(Arc::clone(&expr))? {
-            input = new_input;
+        let all_filters = filters
+            .iter()
+            .map(|f| *f)
+            .chain(split_conjunction(&self.predicate))
+            .collect::<Vec<_>>();
+        let mut new_predicate = None;
+        if let Some(result) = Arc::clone(&input).push_down_filters(&all_filters)? {
+            // Any filters that our input didn't accept as Exact we apply ourselves
+            if !result.is_exact() {
+                new_predicate = Some(conjunction(
+                    (0..all_filters.len())
+                        .zip(result.support)
+                        .filter_map(|(i, s)| {
+                            matches!(s, FilterPushdownSupport::Exact)
+                                .then_some(Arc::clone(all_filters[i]))
+                        }),
+                ));
+            }
+            input = result.inner;
+        };
+        if let Some(new_predicate) = new_predicate {
+            // If we have a new predicate, create a new FilterExec
+            return FilterExec::try_new(new_predicate, input)
+                .and_then(|e| {
+                    let selectivity = self.default_selectivity();
+                    e.with_default_selectivity(selectivity)
+                })
+                .map(|e| {
+                    Some(ExecutionPlanFilterPushdownResult {
+                        inner: Arc::new(e) as Arc<dyn ExecutionPlan>,
+                        support: vec![FilterPushdownSupport::Exact; all_filters.len()],
+                    })
+                });
+        } else {
+            // No new predicate was created, return None
+            Ok(None)
         }
-        let new_predicate = conjunction([Arc::clone(&self.predicate), expr]);
-        Ok(Some(Arc::new(Self {
-            input,
-            predicate: Arc::clone(&new_predicate),
-            ..self.clone()
-        })))
     }
 }
 

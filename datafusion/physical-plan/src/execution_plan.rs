@@ -468,13 +468,41 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(None)
     }
 
-    fn push_down_filter(
-        &self,
-        _expr: Arc<dyn PhysicalExpr>,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    fn push_down_filters(
+        self: Arc<Self>,
+        _filters: &[&Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
         Ok(None)
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub enum FilterPushdownSupport {
+    Inexact,
+    Exact,
+}
+
+pub struct FilterPushdownResult<T> {
+    pub inner: T,
+    pub support: Vec<FilterPushdownSupport>,
+}
+
+impl<T> FilterPushdownResult<T> {
+    pub fn new(plan: T, support: Vec<FilterPushdownSupport>) -> Self {
+        Self {
+            inner: plan,
+            support,
+        }
+    }
+
+    pub fn is_exact(&self) -> bool {
+        self.support
+            .iter()
+            .all(|s| matches!(s, FilterPushdownSupport::Exact))
+    }
+}
+
+pub type ExecutionPlanFilterPushdownResult = FilterPushdownResult<Arc<dyn ExecutionPlan>>;
 
 /// [`ExecutionPlan`] Invariant Level
 ///

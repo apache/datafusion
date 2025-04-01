@@ -29,7 +29,9 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{
+    CardinalityEffect, ExecutionPlanFilterPushdownResult, FilterPushdownResult,
+};
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
@@ -724,18 +726,20 @@ impl ExecutionPlan for RepartitionExec {
         )?)))
     }
 
-    fn push_down_filter(
-        &self,
-        expr: Arc<dyn PhysicalExpr>,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // Try to push down to the input
-        if let Some(input) = self.input.push_down_filter(expr)? {
-            return Ok(Some(Arc::new(Self {
-                input,
-                ..self.clone()
-            })));
+    fn push_down_filters(
+        self: Arc<Self>,
+        filters: &[&Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
+        let input = Arc::clone(&self.input);
+        if let Some(result) = input.push_down_filters(filters)? {
+            let new_self = Arc::new(RepartitionExec::try_new(
+                result.inner,
+                self.partitioning().clone(),
+            )?);
+            Ok(Some(FilterPushdownResult::new(new_self, result.support)))
+        } else {
+            Ok(None)
         }
-        Ok(None)
     }
 }
 

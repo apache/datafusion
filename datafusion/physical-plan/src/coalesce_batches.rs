@@ -35,7 +35,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, ExecutionPlanFilterPushdownResult};
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -214,18 +214,23 @@ impl ExecutionPlan for CoalesceBatchesExec {
         CardinalityEffect::Equal
     }
 
-    fn push_down_filter(
-        &self,
-        expr: Arc<dyn PhysicalExpr>,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // Try to push down to the input
-        if let Some(input) = self.input.push_down_filter(expr)? {
-            return Ok(Some(Arc::new(Self {
-                input,
-                ..self.clone()
-            })));
+    fn push_down_filters(
+        self: Arc<Self>,
+        filters: &[&Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
+        let input = Arc::clone(&self.input);
+        if let Some(result) = input.push_down_filters(filters)? {
+            let new_self = Arc::new(
+                CoalesceBatchesExec::new(result.inner, self.target_batch_size)
+                    .with_fetch(self.fetch),
+            );
+            Ok(Some(ExecutionPlanFilterPushdownResult::new(
+                new_self,
+                result.support,
+            )))
+        } else {
+            Ok(None)
         }
-        Ok(None)
     }
 }
 

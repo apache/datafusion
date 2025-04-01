@@ -25,7 +25,9 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
-use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
+use crate::execution_plan::{
+    Boundedness, CardinalityEffect, EmissionType, ExecutionPlanFilterPushdownResult,
+};
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{
@@ -1239,9 +1241,14 @@ impl ExecutionPlan for SortExec {
                     // Try to push down the dynamic filter. If the execution plan doesn't
                     // support it, push_down_filter will return None and we'll
                     // keep the original input_exec.
-                    input_exec
-                        .push_down_filter(topk.dynamic_filter_source())?
-                        .unwrap_or(input_exec)
+                    let filter = topk.dynamic_filter_source();
+                    if let Some(pushdown_result) =
+                        Arc::clone(&input_exec).push_down_filters(&[&filter])?
+                    {
+                        pushdown_result.inner
+                    } else {
+                        input_exec
+                    }
                 } else {
                     input_exec
                 };
@@ -1344,20 +1351,24 @@ impl ExecutionPlan for SortExec {
     // Pass though filter pushdown.
     // This often happens in partitioned plans with a TopK because we end up with 1 TopK per partition + a final TopK at the end.
     // Implementing this pass-through allows global/top/final TopK to push down filters to the partitions.
-    fn push_down_filter(
-        &self,
-        expr: Arc<dyn PhysicalExpr>,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let new_input = self.input.push_down_filter(expr)?;
-        if let Some(new_input) = new_input {
-            Ok(Some(Arc::new(SortExec {
-                input: new_input,
+    fn push_down_filters(
+        self: Arc<Self>,
+        filters: &[&Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
+        let input = Arc::clone(&self.input);
+        if let Some(result) = input.push_down_filters(filters)? {
+            let new_self = Arc::new(SortExec {
+                input: result.inner,
                 expr: self.expr.clone(),
                 metrics_set: self.metrics_set.clone(),
                 preserve_partitioning: self.preserve_partitioning,
                 fetch: self.fetch,
                 cache: self.cache.clone(),
-            })))
+            });
+            Ok(Some(ExecutionPlanFilterPushdownResult::new(
+                new_self,
+                result.support,
+            )))
         } else {
             Ok(None)
         }
