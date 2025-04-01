@@ -19,8 +19,8 @@
 
 use arrow::array::{
     builder::{Int64Builder, StringBuilder},
-    ArrayRef, Float32Array, Float64Array, RecordBatch, StringArray,
-    StringViewBuilder, UInt64Array,
+    ArrayRef, Float32Array, Float64Array, RecordBatch, StringArray, StringViewBuilder,
+    UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
