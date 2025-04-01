@@ -249,6 +249,7 @@ mod tests {
         let exec = scan_format(
             &state,
             &format,
+            None,
             root,
             "aggregate_test_100_with_nulls.csv",
             projection,
@@ -299,6 +300,7 @@ mod tests {
         let exec = scan_format(
             &state,
             &format,
+            None,
             root,
             "aggregate_test_100_with_nulls.csv",
             projection,
@@ -581,7 +583,7 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let root = format!("{}/csv", arrow_test_data());
         let format = CsvFormat::default().with_has_header(has_header);
-        scan_format(state, &format, &root, file_name, projection, limit).await
+        scan_format(state, &format, None, &root, file_name, projection, limit).await
     }
 
     #[tokio::test]
