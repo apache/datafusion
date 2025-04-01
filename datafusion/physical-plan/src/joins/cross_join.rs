@@ -343,6 +343,31 @@ impl ExecutionPlan for CrossJoinExec {
         ))
     }
 
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        todo!()
+        /*
+        let left_stats = self.left.statistics_by_partition()?;
+        // Summarize the `left_stats`
+        let statistics =
+            compute_summary_statistics(file_group.iter(), &file_schema, |file| {
+                file.statistics.as_ref().map(|stats| stats.as_ref())
+            });
+        let right_stats = self.right.statistics_by_partition()?;
+
+        if left_stats.is_empty() || right_stats.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut stats = Vec::new();
+        for left in left_stats.iter() {
+            for right in right_stats.iter() {
+                stats.push(stats_cartesian_product(left.clone(), right.clone()));
+            }
+        }
+        Ok(stats)
+         */
+    }
+
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
     /// it returns the new swapped version having the [`CrossJoinExec`] as the top plan.
     /// Otherwise, it returns None.

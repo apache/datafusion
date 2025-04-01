@@ -202,6 +202,10 @@ impl ExecutionPlan for GlobalLimitExec {
         )
     }
 
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        Ok(vec![self.statistics()?])
+    }
+
     fn fetch(&self) -> Option<usize> {
         self.fetch
     }
