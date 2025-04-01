@@ -29,13 +29,19 @@ use arrow::{
 };
 use datafusion::{
     config::ConfigOptions, error::DataFusionError,
-    logical_expr::type_coercion::functions::data_types_with_scalar_udf,
+    logical_expr::{
+        type_coercion::functions::data_types_with_scalar_udf, ReturnInfo, ReturnTypeArgs,
+    },
 };
 use datafusion::{
     error::Result,
     logical_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     },
+};
+use return_info::FFI_ReturnInfo;
+use return_type_args::{
+    FFI_ReturnTypeArgs, ForeignReturnTypeArgs, ForeignReturnTypeArgsOwned,
 };
 
 use crate::{
@@ -44,6 +50,9 @@ use crate::{
     util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
     volatility::FFI_Volatility,
 };
+
+pub mod return_info;
+pub mod return_type_args;
 
 /// A stable struct for sharing a [`ScalarUDF`] across FFI boundaries.
 #[repr(C)]
@@ -65,6 +74,14 @@ pub struct FFI_ScalarUDF {
         udf: &Self,
         arg_types: RVec<WrappedSchema>,
     ) -> RResult<WrappedSchema, RString>,
+
+    /// Determines the return info of the underlying [`ScalarUDF`]. Either this
+    /// or return_type may be implemented on a UDF.
+    pub return_type_from_args: unsafe extern "C" fn(
+        udf: &Self,
+        args: FFI_ReturnTypeArgs,
+    )
+        -> RResult<FFI_ReturnInfo, RString>,
 
     /// Execute the underlying [`ScalarUDF`] and return the result as a `FFI_ArrowArray`
     /// within an AbiStable wrapper.
@@ -119,6 +136,23 @@ unsafe extern "C" fn return_type_fn_wrapper(
         .return_type(&arg_types)
         .and_then(|v| FFI_ArrowSchema::try_from(v).map_err(DataFusionError::from))
         .map(WrappedSchema);
+
+    rresult!(return_type)
+}
+
+unsafe extern "C" fn return_type_from_args_fn_wrapper(
+    udf: &FFI_ScalarUDF,
+    args: FFI_ReturnTypeArgs,
+) -> RResult<FFI_ReturnInfo, RString> {
+    let private_data = udf.private_data as *const ScalarUDFPrivateData;
+    let udf = &(*private_data).udf;
+
+    let args: ForeignReturnTypeArgsOwned = rresult_return!((&args).try_into());
+    let args_ref: ForeignReturnTypeArgs = (&args).into();
+
+    let return_type = udf
+        .return_type_from_args((&args_ref).into())
+        .and_then(FFI_ReturnInfo::try_from);
 
     rresult!(return_type)
 }
@@ -213,6 +247,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             short_circuits,
             invoke_with_args: invoke_with_args_fn_wrapper,
             return_type: return_type_fn_wrapper,
+            return_type_from_args: return_type_from_args_fn_wrapper,
             coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
@@ -283,6 +318,16 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         let result = df_result!(result);
 
         result.and_then(|r| (&r.0).try_into().map_err(DataFusionError::from))
+    }
+
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        let args: FFI_ReturnTypeArgs = args.try_into()?;
+
+        let result = unsafe { (self.udf.return_type_from_args)(&self.udf, args) };
+
+        let result = df_result!(result);
+
+        result.and_then(|r| r.try_into())
     }
 
     fn invoke_with_args(&self, invoke_args: ScalarFunctionArgs) -> Result<ColumnarValue> {

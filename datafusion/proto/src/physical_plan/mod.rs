@@ -49,7 +49,9 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::physical_plan::AvroSource;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, JsonSource};
+use datafusion::datasource::physical_plan::{
+    CsvSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
+};
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -241,16 +243,17 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     .with_comment(comment),
                 );
 
-                let conf = parse_protobuf_file_scan_config(
+                let conf = FileScanConfigBuilder::from(parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
                     config_options,
                     extension_codec,
                     source,
-                )?
+                )?)
                 .with_newlines_in_values(scan.newlines_in_values)
-                .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
-                Ok(conf.build())
+                .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+                .build();
+                Ok(DataSourceExec::from_data_source(conf))
             }
             PhysicalPlanType::JsonScan(scan) => {
                 let scan_conf = parse_protobuf_file_scan_config(
@@ -260,7 +263,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     extension_codec,
                     Arc::new(JsonSource::new()),
                 )?;
-                Ok(scan_conf.build())
+                Ok(DataSourceExec::from_data_source(scan_conf))
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
@@ -299,7 +302,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         extension_codec,
                         Arc::new(source),
                     )?;
-                    Ok(base_config.build())
+                    Ok(DataSourceExec::from_data_source(base_config))
                 }
                 #[cfg(not(feature = "parquet"))]
                 panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
@@ -315,7 +318,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         extension_codec,
                         Arc::new(AvroSource::new()),
                     )?;
-                    Ok(conf.build())
+                    Ok(DataSourceExec::from_data_source(conf))
                 }
                 #[cfg(not(feature = "avro"))]
                 panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
@@ -1806,31 +1809,27 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
         #[cfg(feature = "parquet")]
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let data_source_exec = exec.data_source();
-            if let Some(maybe_parquet) =
-                data_source_exec.as_any().downcast_ref::<FileScanConfig>()
+            if let Some((maybe_parquet, conf)) =
+                exec.downcast_to_file_source::<ParquetSource>()
             {
-                let source = maybe_parquet.file_source();
-                if let Some(conf) = source.as_any().downcast_ref::<ParquetSource>() {
-                    let predicate = conf
-                        .predicate()
-                        .map(|pred| serialize_physical_expr(pred, extension_codec))
-                        .transpose()?;
-                    return Ok(protobuf::PhysicalPlanNode {
-                        physical_plan_type: Some(PhysicalPlanType::ParquetScan(
-                            protobuf::ParquetScanExecNode {
-                                base_conf: Some(serialize_file_scan_config(
-                                    maybe_parquet,
-                                    extension_codec,
-                                )?),
-                                predicate,
-                                parquet_options: Some(
-                                    conf.table_parquet_options().try_into()?,
-                                ),
-                            },
-                        )),
-                    });
-                }
+                let predicate = conf
+                    .predicate()
+                    .map(|pred| serialize_physical_expr(pred, extension_codec))
+                    .transpose()?;
+                return Ok(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::ParquetScan(
+                        protobuf::ParquetScanExecNode {
+                            base_conf: Some(serialize_file_scan_config(
+                                maybe_parquet,
+                                extension_codec,
+                            )?),
+                            predicate,
+                            parquet_options: Some(
+                                conf.table_parquet_options().try_into()?,
+                            ),
+                        },
+                    )),
+                });
             }
         }
 
