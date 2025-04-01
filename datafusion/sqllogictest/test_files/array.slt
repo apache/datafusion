@@ -2397,9 +2397,9 @@ NULL NULL
 NULL NULL
 
 query ?
-select array_sort([struct('foo', 3), struct('foo', 1)])
+select array_sort([struct('foo', 3), struct('foo', 1), struct('bar', 1)])
 ----
-[{c0: foo, c1: 1}, {c0: foo, c1: 3}]
+[{c0: bar, c1: 1}, {c0: foo, c1: 1}, {c0: foo, c1: 3}]
 
 ## test with argument of incorrect types
 query error DataFusion error: Execution error: the second parameter of array_sort expects DESC or ASC
