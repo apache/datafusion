@@ -166,103 +166,14 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        use DataType::*;
-        matches!(
-            args.return_type,
-            Int8 | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float16
-                | Float32
-                | Float64
-                | Decimal128(_, _)
-                | Decimal256(_, _)
-                | Date32
-                | Date64
-                | Time32(_)
-                | Time64(_)
-                | Timestamp(_, _)
-        )
+        groups_accumulator_supported(args.return_type)
     }
 
     fn create_groups_accumulator(
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        fn create_accumulator<T>(
-            args: AccumulatorArgs,
-        ) -> Result<Box<dyn GroupsAccumulator>>
-        where
-            T: ArrowPrimitiveType + Send,
-        {
-            let ordering_dtypes = args
-                .ordering_req
-                .iter()
-                .map(|e| e.expr.data_type(args.schema))
-                .collect::<Result<Vec<_>>>()?;
-
-            Ok(Box::new(FirstPrimitiveGroupsAccumulator::<T>::try_new(
-                args.ordering_req.clone(),
-                args.ignore_nulls,
-                args.return_type,
-                &ordering_dtypes,
-            )?))
-        }
-
-        match args.return_type {
-            DataType::Int8 => create_accumulator::<Int8Type>(args),
-            DataType::Int16 => create_accumulator::<Int16Type>(args),
-            DataType::Int32 => create_accumulator::<Int32Type>(args),
-            DataType::Int64 => create_accumulator::<Int64Type>(args),
-            DataType::UInt8 => create_accumulator::<UInt8Type>(args),
-            DataType::UInt16 => create_accumulator::<UInt16Type>(args),
-            DataType::UInt32 => create_accumulator::<UInt32Type>(args),
-            DataType::UInt64 => create_accumulator::<UInt64Type>(args),
-            DataType::Float16 => create_accumulator::<Float16Type>(args),
-            DataType::Float32 => create_accumulator::<Float32Type>(args),
-            DataType::Float64 => create_accumulator::<Float64Type>(args),
-
-            DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(args),
-            DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(args),
-
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                create_accumulator::<TimestampSecondType>(args)
-            }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                create_accumulator::<TimestampMillisecondType>(args)
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                create_accumulator::<TimestampMicrosecondType>(args)
-            }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                create_accumulator::<TimestampNanosecondType>(args)
-            }
-
-            DataType::Date32 => create_accumulator::<Date32Type>(args),
-            DataType::Date64 => create_accumulator::<Date64Type>(args),
-            DataType::Time32(TimeUnit::Second) => {
-                create_accumulator::<Time32SecondType>(args)
-            }
-            DataType::Time32(TimeUnit::Millisecond) => {
-                create_accumulator::<Time32MillisecondType>(args)
-            }
-
-            DataType::Time64(TimeUnit::Microsecond) => {
-                create_accumulator::<Time64MicrosecondType>(args)
-            }
-            DataType::Time64(TimeUnit::Nanosecond) => {
-                create_accumulator::<Time64NanosecondType>(args)
-            }
-
-            _ => internal_err!(
-                "GroupsAccumulator not supported for first({})",
-                args.return_type
-            ),
-        }
+        create_group_acc(args, true)
     }
 
     fn aliases(&self) -> &[String] {
@@ -291,7 +202,121 @@ impl AggregateUDFImpl for FirstValue {
     }
 }
 
-struct FirstPrimitiveGroupsAccumulator<T>
+fn create_group_acc(
+    args: AccumulatorArgs,
+    pick_first_in_group: bool,
+) -> std::result::Result<Box<dyn GroupsAccumulator>, DataFusionError> {
+    fn create_accumulator<T>(
+        args: AccumulatorArgs,
+        pick_first_in_group: bool,
+    ) -> Result<Box<dyn GroupsAccumulator>>
+    where
+        T: ArrowPrimitiveType + Send,
+    {
+        let ordering_dtypes = args
+            .ordering_req
+            .iter()
+            .map(|e| e.expr.data_type(args.schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Box::new(PrimitiveGroupsAccumulator::<T>::try_new(
+            args.ordering_req.clone(),
+            args.ignore_nulls,
+            args.return_type,
+            &ordering_dtypes,
+            pick_first_in_group,
+        )?))
+    }
+
+    match args.return_type {
+        DataType::Int8 => create_accumulator::<Int8Type>(args, pick_first_in_group),
+        DataType::Int16 => create_accumulator::<Int16Type>(args, pick_first_in_group),
+        DataType::Int32 => create_accumulator::<Int32Type>(args, pick_first_in_group),
+        DataType::Int64 => create_accumulator::<Int64Type>(args, pick_first_in_group),
+        DataType::UInt8 => create_accumulator::<UInt8Type>(args, pick_first_in_group),
+        DataType::UInt16 => create_accumulator::<UInt16Type>(args, pick_first_in_group),
+        DataType::UInt32 => create_accumulator::<UInt32Type>(args, pick_first_in_group),
+        DataType::UInt64 => create_accumulator::<UInt64Type>(args, pick_first_in_group),
+        DataType::Float16 => create_accumulator::<Float16Type>(args, pick_first_in_group),
+        DataType::Float32 => create_accumulator::<Float32Type>(args, pick_first_in_group),
+        DataType::Float64 => create_accumulator::<Float64Type>(args, pick_first_in_group),
+
+        DataType::Decimal128(_, _) => {
+            create_accumulator::<Decimal128Type>(args, pick_first_in_group)
+        }
+        DataType::Decimal256(_, _) => {
+            create_accumulator::<Decimal256Type>(args, pick_first_in_group)
+        }
+
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            create_accumulator::<TimestampSecondType>(args, pick_first_in_group)
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            create_accumulator::<TimestampMillisecondType>(args, pick_first_in_group)
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            create_accumulator::<TimestampMicrosecondType>(args, pick_first_in_group)
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            create_accumulator::<TimestampNanosecondType>(args, pick_first_in_group)
+        }
+
+        DataType::Date32 => create_accumulator::<Date32Type>(args, pick_first_in_group),
+        DataType::Date64 => create_accumulator::<Date64Type>(args, pick_first_in_group),
+        DataType::Time32(TimeUnit::Second) => {
+            create_accumulator::<Time32SecondType>(args, pick_first_in_group)
+        }
+        DataType::Time32(TimeUnit::Millisecond) => {
+            create_accumulator::<Time32MillisecondType>(args, pick_first_in_group)
+        }
+
+        DataType::Time64(TimeUnit::Microsecond) => {
+            create_accumulator::<Time64MicrosecondType>(args, pick_first_in_group)
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            create_accumulator::<Time64NanosecondType>(args, pick_first_in_group)
+        }
+
+        _ => {
+            let agg_func = if pick_first_in_group {
+                "first_value"
+            } else {
+                "last_value"
+            };
+            internal_err!(
+                "GroupsAccumulator not supported for {}({})",
+                agg_func,
+                args.return_type
+            )
+        }
+    }
+}
+
+fn groups_accumulator_supported(data_type: &DataType) -> bool {
+    use DataType::*;
+    matches!(
+        data_type,
+        Int8 | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float16
+            | Float32
+            | Float64
+            | Decimal128(_, _)
+            | Decimal256(_, _)
+            | Date32
+            | Date64
+            | Time32(_)
+            | Time64(_)
+            | Timestamp(_, _)
+    )
+}
+
+struct PrimitiveGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
 {
@@ -313,15 +338,18 @@ where
     // to avoid calling `ScalarValue::size_of_vec` by Self.size.
     size_of_orderings: usize,
 
-    // buffer for `get_filtered_min_of_each_group`
+    // buffer for `get_filtered_extreme_of_each_group`
     // filter_min_of_each_group_buf.0[group_idx] -> idx_in_val
     // only valid if filter_min_of_each_group_buf.1[group_idx] == true
-    min_of_each_group_buf: (Vec<usize>, BooleanBufferBuilder),
+    extreme_of_each_group_buf: (Vec<usize>, BooleanBufferBuilder),
 
     // =========== option ============
 
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
+    // true: take first element in an aggregation group according to the requested ordering.
+    // false: take last element in an aggregation group according to the requested ordering.
+    pick_first_in_group: bool,
     // derived from `ordering_req`.
     sort_options: Vec<SortOptions>,
     // Stores whether incoming data already satisfies the ordering requirement.
@@ -333,7 +361,7 @@ where
     default_orderings: Vec<ScalarValue>,
 }
 
-impl<T> FirstPrimitiveGroupsAccumulator<T>
+impl<T> PrimitiveGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
 {
@@ -342,6 +370,7 @@ where
         ignore_nulls: bool,
         data_type: &DataType,
         ordering_dtypes: &[DataType],
+        pick_first_in_group: bool,
     ) -> Result<Self> {
         let requirement_satisfied = ordering_req.is_empty();
 
@@ -364,7 +393,8 @@ where
             orderings: Vec::new(),
             is_sets: BooleanBufferBuilder::new(0),
             size_of_orderings: 0,
-            min_of_each_group_buf: (Vec::new(), BooleanBufferBuilder::new(0)),
+            extreme_of_each_group_buf: (Vec::new(), BooleanBufferBuilder::new(0)),
+            pick_first_in_group,
         })
     }
 
@@ -391,8 +421,13 @@ where
 
         assert!(new_ordering_values.len() == self.ordering_req.len());
         let current_ordering = &self.orderings[group_idx];
-        compare_rows(current_ordering, new_ordering_values, &self.sort_options)
-            .map(|x| x.is_gt())
+        compare_rows(current_ordering, new_ordering_values, &self.sort_options).map(|x| {
+            if self.pick_first_in_group {
+                x.is_gt()
+            } else {
+                x.is_lt()
+            }
+        })
     }
 
     fn take_orderings(&mut self, emit_to: EmitTo) -> Vec<Vec<ScalarValue>> {
@@ -453,8 +488,8 @@ where
 
         self.is_sets.resize(new_size);
 
-        self.min_of_each_group_buf.0.resize(new_size, 0);
-        self.min_of_each_group_buf.1.resize(new_size);
+        self.extreme_of_each_group_buf.0.resize(new_size, 0);
+        self.extreme_of_each_group_buf.1.resize(new_size);
     }
 
     fn update_state(
@@ -481,10 +516,10 @@ where
         &mut self,
         emit_to: EmitTo,
     ) -> (ArrayRef, Vec<Vec<ScalarValue>>, BooleanBuffer) {
-        emit_to.take_needed(&mut self.min_of_each_group_buf.0);
-        self.min_of_each_group_buf
+        emit_to.take_needed(&mut self.extreme_of_each_group_buf.0);
+        self.extreme_of_each_group_buf
             .1
-            .truncate(self.min_of_each_group_buf.0.len());
+            .truncate(self.extreme_of_each_group_buf.0.len());
 
         (
             self.take_vals_and_null_buf(emit_to),
@@ -503,9 +538,10 @@ where
     }
 
     /// Returns a vector of tuples `(group_idx, idx_in_val)` representing the index of the
-    /// minimum value in `orderings` for each group, using lexicographical comparison.
+    /// minimum or maximum value in `orderings` for each group, using lexicographical comparison.
+    /// When self.pick_first_in_group is true, returns index of minimum values; otherwise returns index of maximum values.
     /// Values are filtered using `opt_filter` and `is_set_arr` if provided.
-    fn get_filtered_min_of_each_group(
+    fn get_filtered_extreme_of_each_group(
         &mut self,
         orderings: &[ArrayRef],
         group_indices: &[usize],
@@ -514,8 +550,8 @@ where
         is_set_arr: Option<&BooleanArray>,
     ) -> Result<Vec<(usize, usize)>> {
         // Set all values in min_of_each_group_buf.1 to false.
-        self.min_of_each_group_buf.1.truncate(0);
-        self.min_of_each_group_buf
+        self.extreme_of_each_group_buf.1.truncate(0);
+        self.extreme_of_each_group_buf
             .1
             .append_n(self.vals.len(), false);
 
@@ -555,25 +591,29 @@ where
                 continue;
             }
 
-            let is_valid = self.min_of_each_group_buf.1.get_bit(group_idx);
-            if is_valid
-                && comparator
-                    .compare(self.min_of_each_group_buf.0[group_idx], idx_in_val)
-                    .is_gt()
-            {
-                self.min_of_each_group_buf.0[group_idx] = idx_in_val;
-            } else if !is_valid {
-                self.min_of_each_group_buf.1.set_bit(group_idx, true);
-                self.min_of_each_group_buf.0[group_idx] = idx_in_val;
+            let is_valid = self.extreme_of_each_group_buf.1.get_bit(group_idx);
+
+            if !is_valid {
+                self.extreme_of_each_group_buf.1.set_bit(group_idx, true);
+                self.extreme_of_each_group_buf.0[group_idx] = idx_in_val;
+            } else {
+                let ordering = comparator
+                    .compare(self.extreme_of_each_group_buf.0[group_idx], idx_in_val);
+
+                if (ordering.is_gt() && self.pick_first_in_group)
+                    || (ordering.is_lt() && !self.pick_first_in_group)
+                {
+                    self.extreme_of_each_group_buf.0[group_idx] = idx_in_val;
+                }
             }
         }
 
         Ok(self
-            .min_of_each_group_buf
+            .extreme_of_each_group_buf
             .0
             .iter()
             .enumerate()
-            .filter(|(group_idx, _)| self.min_of_each_group_buf.1.get_bit(*group_idx))
+            .filter(|(group_idx, _)| self.extreme_of_each_group_buf.1.get_bit(*group_idx))
             .map(|(group_idx, idx_in_val)| (group_idx, *idx_in_val))
             .collect::<Vec<_>>())
     }
@@ -589,7 +629,7 @@ where
     }
 }
 
-impl<T> GroupsAccumulator for FirstPrimitiveGroupsAccumulator<T>
+impl<T> GroupsAccumulator for PrimitiveGroupsAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
 {
@@ -609,7 +649,7 @@ where
 
         // The overhead of calling `extract_row_at_idx_to_buf` is somewhat high, so we need to minimize its calls as much as possible.
         for (group_idx, idx) in self
-            .get_filtered_min_of_each_group(
+            .get_filtered_extreme_of_each_group(
                 &values_and_order_cols[1..],
                 group_indices,
                 opt_filter,
@@ -690,7 +730,7 @@ where
 
         let vals = values[0].as_primitive::<T>();
         // The overhead of calling `extract_row_at_idx_to_buf` is somewhat high, so we need to minimize its calls as much as possible.
-        let groups = self.get_filtered_min_of_each_group(
+        let groups = self.get_filtered_extreme_of_each_group(
             &val_and_order_cols[1..],
             group_indices,
             opt_filter,
@@ -719,8 +759,8 @@ where
             + self.null_builder.capacity() / 8 // capacity is in bits, so convert to bytes 
             + self.is_sets.capacity() / 8
             + self.size_of_orderings
-            + self.min_of_each_group_buf.0.capacity() * size_of::<usize>()
-            + self.min_of_each_group_buf.1.capacity() / 8
+            + self.extreme_of_each_group_buf.0.capacity() * size_of::<usize>()
+            + self.extreme_of_each_group_buf.1.capacity() / 8
     }
 
     fn supports_convert_to_state(&self) -> bool {
@@ -1051,6 +1091,17 @@ impl AggregateUDFImpl for LastValue {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        groups_accumulator_supported(args.return_type)
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        create_group_acc(args, false)
     }
 }
 
@@ -1406,11 +1457,12 @@ mod tests {
             options: SortOptions::default(),
         }]);
 
-        let mut group_acc = FirstPrimitiveGroupsAccumulator::<Int64Type>::try_new(
+        let mut group_acc = PrimitiveGroupsAccumulator::<Int64Type>::try_new(
             sort_key,
             true,
             &DataType::Int64,
             &[DataType::Int64],
+            true,
         )?;
 
         let mut val_with_orderings = {
@@ -1485,7 +1537,7 @@ mod tests {
     }
 
     #[test]
-    fn test_frist_group_acc_size_of_ordering() -> Result<()> {
+    fn test_last_group_acc() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true),
             Field::new("b", DataType::Int64, true),
@@ -1499,11 +1551,87 @@ mod tests {
             options: SortOptions::default(),
         }]);
 
-        let mut group_acc = FirstPrimitiveGroupsAccumulator::<Int64Type>::try_new(
+        let mut group_acc = PrimitiveGroupsAccumulator::<Int64Type>::try_new(
             sort_key,
             true,
             &DataType::Int64,
             &[DataType::Int64],
+            false,
+        )?;
+
+        let mut val_with_orderings = {
+            let mut val_with_orderings = Vec::<ArrayRef>::new();
+
+            let vals = Arc::new(Int64Array::from(vec![Some(1), None, Some(3), Some(-6)]));
+            let orderings = Arc::new(Int64Array::from(vec![1, -9, 3, -6]));
+
+            val_with_orderings.push(vals);
+            val_with_orderings.push(orderings);
+
+            val_with_orderings
+        };
+
+        group_acc.update_batch(
+            &val_with_orderings,
+            &[0, 1, 2, 1],
+            Some(&BooleanArray::from(vec![true, true, false, true])),
+            3,
+        )?;
+
+        let state = group_acc.state(EmitTo::All)?;
+
+        let expected_state: Vec<Arc<dyn Array>> = vec![
+            Arc::new(Int64Array::from(vec![Some(1), Some(-6), None])),
+            Arc::new(Int64Array::from(vec![Some(1), Some(-6), None])),
+            Arc::new(BooleanArray::from(vec![true, true, false])),
+        ];
+        assert_eq!(state, expected_state);
+
+        group_acc.merge_batch(
+            &state,
+            &[0, 1, 2],
+            Some(&BooleanArray::from(vec![true, false, false])),
+            3,
+        )?;
+
+        val_with_orderings.clear();
+        val_with_orderings.push(Arc::new(Int64Array::from(vec![66, 6])));
+        val_with_orderings.push(Arc::new(Int64Array::from(vec![66, 6])));
+
+        group_acc.update_batch(&val_with_orderings, &[1, 2], None, 4)?;
+
+        let binding = group_acc.evaluate(EmitTo::All)?;
+        let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        let expect: PrimitiveArray<Int64Type> =
+            Int64Array::from(vec![Some(1), Some(66), Some(6), None]);
+
+        assert_eq!(eval_result, &expect);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_group_acc_size_of_ordering() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+            Field::new("d", DataType::Int32, true),
+            Field::new("e", DataType::Boolean, true),
+        ]));
+
+        let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }]);
+
+        let mut group_acc = PrimitiveGroupsAccumulator::<Int64Type>::try_new(
+            sort_key,
+            true,
+            &DataType::Int64,
+            &[DataType::Int64],
+            true,
         )?;
 
         let val_with_orderings = {
