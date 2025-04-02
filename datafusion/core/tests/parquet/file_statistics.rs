@@ -53,36 +53,38 @@ async fn check_stats_precision_with_filter_pushdown() {
     let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
     let table = get_listing_table(&table_path, None, &opt).await;
     let (_, _, state) = get_cache_runtime_state();
+
+    let filter = Expr::gt(col("id"), lit(1));
+
     // Scan without filter, stats are exact
     let exec = table.scan(&state, None, &[], None).await.unwrap();
     assert_eq!(exec.statistics().unwrap().num_rows, Precision::Exact(8));
 
-    // Scan with filter pushdown, stats are inexact
-    let filter = Expr::gt(col("id"), lit(1));
-
-    let data_source_exec = table
-        .scan(&state, None, &[filter.clone()], None)
-        .await
-        .unwrap();
+    // Apply filter pushdown, this should make the estimate inexact because we don't know
+    // how many rows will be filtered out by the predicate.
     let df_schema = DFSchema::try_from(table.schema()).unwrap();
     let exec = FilterExec::try_new(
         state
             .create_physical_expr(filter.clone(), &df_schema)
             .unwrap(),
-        data_source_exec,
+        exec,
     )
     .unwrap();
     let exec = FilterPushdown::new()
         .optimize(Arc::new(exec), state.config().options())
         .unwrap();
-    println!("exec: {:?}", exec);
-    let filter_exec = exec.as_any().downcast_ref::<FilterExec>().unwrap();
-    // TODO: we need to get the FilterExec to push down its filters
-    // since they no longer get applied to the DataSourceExec directly.
-    // let data_source_exec = Arc::new(
-    //     filter_exec.input().as_any().downcast_ref::<DataSourceExec>().unwrap()
-    // ) as Arc<dyn ExecutionPlan>;
-    // assert_eq!(data_source_exec.statistics().unwrap().num_rows, Precision::Inexact(8));
+    let data_source_exec = exec
+        .as_any()
+        .downcast_ref::<FilterExec>()
+        .unwrap()
+        .input()
+        .as_any()
+        .downcast_ref::<DataSourceExec>()
+        .unwrap();
+    assert_eq!(
+        data_source_exec.statistics().unwrap().num_rows,
+        Precision::Inexact(8)
+    );
 }
 
 #[tokio::test]
