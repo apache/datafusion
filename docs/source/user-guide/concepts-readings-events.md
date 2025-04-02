@@ -37,6 +37,10 @@
 
 This is a list of DataFusion related blog posts, articles, and other resources. Please open a PR to add any new resources you create or find
 
+- **2025-03-21** [Blog: Efficient Filter Pushdown in Parquet](https://datafusion.apache.org/blog/2025/03/21/parquet-pushdown/)
+
+- **2025-03-20** [Blog: Parquet Pruning in DataFusion: Read Only What Matters](https://datafusion.apache.org/blog/2025/03/20/parquet-pruning/)
+
 - **2024-11-22** [Blog: Apache Datafusion Comet and the story of my first contribution to it](https://semyonsinchenko.github.io/ssinchenko/post/comet-first-contribution/)
 
 - **2024-11-21** [Blog: DataFusion is featured as one of the coolest 10 open source software tools by CRN](https://www.crn.com/news/software/2024/the-10-coolest-open-source-software-tools-of-2024?page=3)
@@ -123,6 +127,8 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 - **2021-03-10** [Video: InfluxData Tech Talk: Query Engine Design and Rust-Based DataFusion in Apache Arrow](https://www.youtube.com/watch?v=K6eCAVEk4kU)[Slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
 
 ## 📅 Release Notes & Updates
+
+- **2025-03-24** [Apache DataFusion 46.0.0 Released](https://datafusion.apache.org/blog/2025/03/24/datafusion-46.0.0/)
 
 - **2024-09-14** [Apache DataFusion Python 43.1.0 Released](https://datafusion.apache.org/blog/2024/12/14/datafusion-python-43.1.0/)
 
