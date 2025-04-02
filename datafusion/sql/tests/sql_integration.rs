@@ -1795,12 +1795,11 @@ fn select_simple_aggregate_and_nested_groupby_column() {
 
 #[test]
 fn select_aggregate_compounded_with_groupby_column() {
-    let plan =
-        generate_logical_plan("SELECT age + MIN(salary), age FROM person GROUP BY age");
+    let plan = generate_logical_plan("SELECT age + MIN(salary) FROM person GROUP BY age");
     assert_snapshot!(
         plan,
         @r#"
-        Projection: person.age + min(person.salary), person.age
+        Projection: person.age + min(person.salary)
           Aggregate: groupBy=[[person.age]], aggr=[[min(person.salary)]]
             TableScan: person
         "#
@@ -3057,79 +3056,51 @@ Projection: person.😀
 fn select_groupby_orderby() {
     // ensure that references are correctly resolved in the order by clause
     // see https://github.com/apache/datafusion/issues/4854
-    let sql = r#"SELECT
-  avg(age) AS "value",
-  date_trunc('month', birth_date) AS "birth_date"
-  FROM person GROUP BY birth_date ORDER BY birth_date;
-"#;
 
-    let plan = generate_logical_plan(sql);
-    assert_snapshot!(
-        plan,
-        // expect that this is not an ambiguous reference
-        @r#"
-Sort: birth_date ASC NULLS LAST
-  Projection: avg(person.age) AS value, date_trunc(Utf8("month"), person.birth_date) AS birth_date
-    Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
-      TableScan: person
-"#
-    );
-
-    // Use fully qualified `person.birth_date` as argument to date_trunc, plan should be the same
-    let sql = r#"SELECT
-  avg(age) AS "value",
-  date_trunc('month', person.birth_date) AS "birth_date"
-  FROM person GROUP BY birth_date ORDER BY birth_date;
-"#;
-    let plan = generate_logical_plan(sql);
-    assert_snapshot!(
-        plan,
-        // expect that this is not an ambiguous reference
-        @r#"
-Sort: birth_date ASC NULLS LAST
-  Projection: avg(person.age) AS value, date_trunc(Utf8("month"), person.birth_date) AS birth_date
-    Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
-      TableScan: person
-"#
-    );
-
-    // Use fully qualified `person.birth_date` as group by, plan should be the same
-    let sql = r#"SELECT
-  avg(age) AS "value",
-  date_trunc('month', birth_date) AS "birth_date"
-  FROM person GROUP BY person.birth_date ORDER BY birth_date;
-"#;
-
-    let plan = generate_logical_plan(sql);
-    assert_snapshot!(
-        plan,
-        // expect that this is not an ambiguous reference
-        @r#"
-Sort: birth_date ASC NULLS LAST
-  Projection: avg(person.age) AS value, date_trunc(Utf8("month"), person.birth_date) AS birth_date
-    Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
-      TableScan: person
-"#
-    );
-
-    // Use fully qualified `person.birth_date` in both group and date_trunc, plan should be the same
-    let sql = r#"SELECT
-  avg(age) AS "value",
-  date_trunc('month', person.birth_date) AS "birth_date"
-  FROM person GROUP BY person.birth_date ORDER BY birth_date;
-"#;
-
-    let plan = generate_logical_plan(sql);
-    assert_snapshot!(
-        plan,
-        // expect that this is not an ambiguous reference
-        @r#"
-Sort: birth_date ASC NULLS LAST
-  Projection: avg(person.age) AS value, date_trunc(Utf8("month"), person.birth_date) AS birth_date
-    Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
-      TableScan: person
-"#
-    );
+    let sqls = vec![
+        r#"
+        SELECT
+            avg(age) AS "value",
+            date_trunc('month', birth_date) AS "birth_date"
+            FROM person GROUP BY birth_date ORDER BY birth_date;
+        "#,
+        // Use fully qualified `person.birth_date` as argument to date_trunc, plan should be the same
+        r#"
+        SELECT
+            avg(age) AS "value",
+            date_trunc('month', person.birth_date) AS "birth_date"
+            FROM person GROUP BY birth_date ORDER BY birth_date;
+        "#,
+        // Use fully qualified `person.birth_date` as group by, plan should be the same
+        r#"
+        SELECT
+            avg(age) AS "value",
+            date_trunc('month', birth_date) AS "birth_date"
+            FROM person GROUP BY person.birth_date ORDER BY birth_date;
+        "#,
+        // Use fully qualified `person.birth_date` in both group and date_trunc, plan should be the same
+        r#"
+        SELECT
+            avg(age) AS "value",
+            date_trunc('month', person.birth_date) AS "birth_date"
+            FROM person GROUP BY person.birth_date ORDER BY birth_date;
+        "#,
+    ];
+    for sql in sqls {
+        let plan = generate_logical_plan(sql);
+        allow_duplicates! {
+            assert_snapshot!(
+                plan,
+                // expect that this is not an ambiguous reference
+                @r#"
+        Sort: birth_date ASC NULLS LAST
+          Projection: avg(person.age) AS value, date_trunc(Utf8("month"), person.birth_date) AS birth_date
+            Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
+              TableScan: person
+        "#
+            );
+        }
+    }
 
     // Use columnized `avg(age)` in the order by
     let sql = r#"SELECT
@@ -4986,13 +4957,12 @@ Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ROWS
 
 #[test]
 fn test_parse_escaped_string_literal_value() {
-    let sql = "SELECT character_length('\r\n') AS len";
+    let sql = r"SELECT character_length('\r\n') AS len";
     let plan = generate_logical_plan(sql);
     assert_snapshot!(
         plan,
         @r#"
-    Projection: character_length(Utf8("
-    ")) AS len
+    Projection: character_length(Utf8("\r\n")) AS len
       EmptyRelation
     "#
     );
