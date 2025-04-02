@@ -54,10 +54,10 @@ use datafusion_physical_expr::{
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_common::stats::Precision;
-use datafusion_datasource::add_row_stats;
 use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_plan::statistics::add_row_stats;
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
