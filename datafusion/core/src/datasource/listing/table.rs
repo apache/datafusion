@@ -1129,6 +1129,7 @@ impl ListingTable {
         let file_groups = file_group.split_files(self.options.target_partitions);
         compute_all_files_statistics(
             file_groups,
+            self.schema(),
             self.options.collect_stat,
             inexact_stats,
         )
