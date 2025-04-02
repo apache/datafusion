@@ -29,3 +29,4 @@ mod push_down_filter;
 mod replace_with_order_preserving_variants;
 mod sanity_checker;
 mod test_utils;
+mod partition_statistics;
