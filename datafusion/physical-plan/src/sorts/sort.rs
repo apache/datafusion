@@ -1099,6 +1099,7 @@ impl DisplayAs for SortExec {
             }
             DisplayFormatType::TreeRender => match self.fetch {
                 Some(fetch) => {
+                    writeln!(f, "TopK")?;
                     writeln!(f, "{}", self.expr)?;
                     writeln!(f, "limit={fetch}")
                 }
