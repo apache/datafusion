@@ -365,13 +365,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
-        let input_stats = self.input.statistics_by_partition()?;
-        let mut output_stats = Vec::with_capacity(input_stats.len());
-        for stat in input_stats {
-            let output_stat = self.statistics_helper(stat.clone())?;
-            output_stats.push(output_stat);
-        }
-        Ok(output_stats)
+        self.input
+            .statistics_by_partition()?
+            .into_iter()
+            .map(|stat| self.statistics_helper(stat))
+            .collect()
     }
 }
 
