@@ -19,9 +19,12 @@
 
 use std::any::Any;
 use std::fmt;
+use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::sink::DataSink;
 use crate::source::{DataSource, DataSourceExec};
+use async_trait::async_trait;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::memory::MemoryStream;
 use datafusion_physical_plan::projection::{
@@ -42,6 +45,8 @@ use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use futures::StreamExt;
+use tokio::sync::RwLock;
 
 /// Execution plan for reading in-memory batches of data
 #[derive(Clone)]
@@ -62,7 +67,7 @@ pub struct MemoryExec {
 }
 
 #[allow(unused, deprecated)]
-impl fmt::Debug for MemoryExec {
+impl Debug for MemoryExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.inner.fmt_as(DisplayFormatType::Default, f)
     }
@@ -521,7 +526,7 @@ impl MemorySourceConfig {
         projection: Option<Vec<usize>>,
     ) -> Result<Arc<DataSourceExec>> {
         let source = Self::try_new(partitions, schema, projection)?;
-        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+        Ok(DataSourceExec::from_data_source(source))
     }
 
     /// Create a new execution plan from a list of constant values (`ValuesExec`)
@@ -611,7 +616,7 @@ impl MemorySourceConfig {
             show_sizes: true,
             fetch: None,
         };
-        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+        Ok(DataSourceExec::from_data_source(source))
     }
 
     /// Set the limit of the files
@@ -720,6 +725,91 @@ impl MemorySourceConfig {
     }
 }
 
+/// Type alias for partition data
+pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
+
+/// Implements for writing to a [`MemTable`]
+///
+/// [`MemTable`]: <https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemTable.html>
+pub struct MemSink {
+    /// Target locations for writing data
+    batches: Vec<PartitionData>,
+    schema: SchemaRef,
+}
+
+impl Debug for MemSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemSink")
+            .field("num_partitions", &self.batches.len())
+            .finish()
+    }
+}
+
+impl DisplayAs for MemSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let partition_count = self.batches.len();
+                write!(f, "MemoryTable (partitions={partition_count})")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
+        }
+    }
+}
+
+impl MemSink {
+    /// Creates a new [`MemSink`].
+    ///
+    /// The caller is responsible for ensuring that there is at least one partition to insert into.
+    pub fn try_new(batches: Vec<PartitionData>, schema: SchemaRef) -> Result<Self> {
+        if batches.is_empty() {
+            return plan_err!("Cannot insert into MemTable with zero partitions");
+        }
+        Ok(Self { batches, schema })
+    }
+}
+
+#[async_trait]
+impl DataSink for MemSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    async fn write_all(
+        &self,
+        mut data: SendableRecordBatchStream,
+        _context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let num_partitions = self.batches.len();
+
+        // buffer up the data round robin style into num_partitions
+
+        let mut new_batches = vec![vec![]; num_partitions];
+        let mut i = 0;
+        let mut row_count = 0;
+        while let Some(batch) = data.next().await.transpose()? {
+            row_count += batch.num_rows();
+            new_batches[i].push(batch);
+            i = (i + 1) % num_partitions;
+        }
+
+        // write the outputs into the batches
+        for (target, mut batches) in self.batches.iter().zip(new_batches.into_iter()) {
+            // Append all the new batches in one go to minimize locking overhead
+            target.write().await.append(&mut batches);
+        }
+
+        Ok(row_count as u64)
+    }
+}
+
 #[cfg(test)]
 mod memory_source_tests {
     use std::sync::Arc;
@@ -760,10 +850,10 @@ mod memory_source_tests {
         expected_output_order.extend(sort2.clone());
 
         let sort_information = vec![sort1.clone(), sort2.clone()];
-        let mem_exec = Arc::new(DataSourceExec::new(Arc::new(
+        let mem_exec = DataSourceExec::from_data_source(
             MemorySourceConfig::try_new(&[vec![]], schema, None)?
                 .try_with_sort_information(sort_information)?,
-        )));
+        );
 
         assert_eq!(
             mem_exec.properties().output_ordering().unwrap(),

@@ -46,7 +46,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan, InputOrderMode};
-use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion_physical_optimizer::enforce_sorting::{EnforceSorting, PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort, parallelize_sorts, ensure_sorting};
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
@@ -60,6 +60,8 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 use rstest::rstest;
 
 /// Created a sorted parquet exec
@@ -69,7 +71,7 @@ fn parquet_exec_sorted(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect::<Vec<_>>();
     let source = Arc::new(ParquetSource::default());
-    let mut builder = FileScanConfig::new(
+    let mut builder = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         source,
@@ -78,7 +80,8 @@ fn parquet_exec_sorted(
     if !sort_exprs.is_empty() {
         builder = builder.with_output_ordering(vec![sort_exprs.into()]);
     }
-    builder.build()
+    let config = builder.build();
+    DataSourceExec::from_data_source(config)
 }
 
 /// Create a sorted Csv exec
@@ -87,7 +90,7 @@ fn csv_exec_sorted(
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect::<Vec<_>>();
-    let mut builder = FileScanConfig::new(
+    let mut builder = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         Arc::new(CsvSource::new(false, 0, 0)),
@@ -96,7 +99,9 @@ fn csv_exec_sorted(
     if !sort_exprs.is_empty() {
         builder = builder.with_output_ordering(vec![sort_exprs.into()]);
     }
-    builder.build()
+
+    let config = builder.build();
+    DataSourceExec::from_data_source(config)
 }
 
 /// Runs the sort enforcement optimizer and asserts the plan

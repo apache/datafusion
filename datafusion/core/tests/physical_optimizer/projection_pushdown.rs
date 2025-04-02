@@ -22,7 +22,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig};
+use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
@@ -60,6 +60,7 @@ use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use itertools::Itertools;
 
@@ -373,14 +374,16 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
         Field::new("d", DataType::Int32, true),
         Field::new("e", DataType::Int32, true),
     ]));
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema,
         Arc::new(CsvSource::new(false, 0, 0)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_projection(Some(vec![0, 1, 2, 3, 4]))
-    .build()
+    .build();
+
+    DataSourceExec::from_data_source(config)
 }
 
 fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
@@ -390,14 +393,16 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
         Field::new("c", DataType::Int32, true),
         Field::new("d", DataType::Int32, true),
     ]));
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema,
         Arc::new(CsvSource::new(false, 0, 0)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_projection(Some(vec![3, 2, 1]))
-    .build()
+    .build();
+
+    DataSourceExec::from_data_source(config)
 }
 
 fn create_projecting_memory_exec() -> Arc<dyn ExecutionPlan> {
@@ -1399,7 +1404,7 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
         Field::new("string_col", DataType::Utf8, true),
     ]));
 
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         file_schema.clone(),
         Arc::new(CsvSource::default()),
@@ -1407,7 +1412,9 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_table_partition_cols(vec![Field::new("partition_col", DataType::Utf8, true)])
     .with_projection(Some(vec![0, 1, 2]))
-    .build()
+    .build();
+
+    DataSourceExec::from_data_source(config)
 }
 
 #[test]
