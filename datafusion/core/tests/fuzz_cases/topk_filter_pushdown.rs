@@ -21,6 +21,7 @@ use std::sync::{Arc, LazyLock};
 use arrow::array::{Int32Array, StringArray, StringDictionaryBuilder};
 use arrow::datatypes::Int32Type;
 use arrow::record_batch::RecordBatch;
+use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -200,6 +201,20 @@ struct RunQueryResult {
     expected: Vec<RecordBatch>,
 }
 
+impl RunQueryResult {
+    fn expected_formated(&self) -> String {
+        format!("{}", pretty_format_batches(&self.expected).unwrap())
+    }
+
+    fn result_formated(&self) -> String {
+        format!("{}", pretty_format_batches(&self.result).unwrap())
+    }
+
+    fn is_ok(&self) -> bool {
+        self.expected_formated() == self.result_formated()
+    }
+}
+
 async fn run_query(
     query: String,
     cfg: SessionConfig,
@@ -318,7 +333,22 @@ async fn test_fuzz_topk_filter_pushdown() {
     results.sort_unstable_by(|a, b| a.query.cmp(&b.query));
     println!("Ran {} test cases in {:?}", results.len(), start.elapsed());
 
-    for result in results {
-        assert_eq!(result.result, result.expected, "Query: {}", result.query);
+    let failures = results
+        .iter()
+        .filter(|result| !result.is_ok())
+        .collect::<Vec<_>>();
+
+    for failure in &failures {
+        println!("Failure:");
+        println!("Query:\n{}", failure.query);
+        println!("\nExpected:\n{}", failure.expected_formated());
+        println!("\nResult:\n{}", failure.result_formated());
+        println!("\n\n");
+    }
+
+    if !failures.is_empty() {
+        panic!("Some test cases failed");
+    } else {
+        println!("All test cases passed");
     }
 }
