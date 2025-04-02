@@ -346,7 +346,7 @@ where
             .map(ScalarValue::try_from)
             .collect::<Result<Vec<_>>>()?;
 
-        let sort_options = get_sort_options(ordering_req.as_ref());
+        let sort_options = get_sort_options(&ordering_req);
 
         Ok(Self {
             null_builder: BooleanBufferBuilder::new(0),
@@ -928,7 +928,7 @@ impl Accumulator for FirstValueAccumulator {
                     && compare_rows(
                         &self.orderings,
                         &row[1..],
-                        &get_sort_options(self.ordering_req.as_ref()),
+                        &get_sort_options(&self.ordering_req),
                     )?
                     .is_gt())
             {
@@ -946,10 +946,8 @@ impl Accumulator for FirstValueAccumulator {
         let filtered_states =
             filter_states_according_to_is_set(&states[0..is_set_idx], flags)?;
         // 1..is_set_idx range corresponds to ordering section
-        let sort_columns = convert_to_sort_cols(
-            &filtered_states[1..is_set_idx],
-            self.ordering_req.as_ref(),
-        );
+        let sort_columns =
+            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
         let min = (0..filtered_states[0].len()).min_by(|&a, &b| comparator.compare(a, b));
@@ -958,7 +956,7 @@ impl Accumulator for FirstValueAccumulator {
             let first_row = get_row_at_idx(&filtered_states, first_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let first_ordering = &first_row[1..is_set_idx];
-            let sort_options = get_sort_options(self.ordering_req.as_ref());
+            let sort_options = get_sort_options(&self.ordering_req);
             // Either there is no existing value, or there is an earlier version in new data.
             if !self.is_set
                 || compare_rows(&self.orderings, first_ordering, &sort_options)?.is_gt()
@@ -1295,7 +1293,7 @@ impl Accumulator for LastValueAccumulator {
                 || compare_rows(
                     &self.orderings,
                     orderings,
-                    &get_sort_options(self.ordering_req.as_ref()),
+                    &get_sort_options(&self.ordering_req),
                 )?
                 .is_lt()
             {
@@ -1313,10 +1311,8 @@ impl Accumulator for LastValueAccumulator {
         let filtered_states =
             filter_states_according_to_is_set(&states[0..is_set_idx], flags)?;
         // 1..is_set_idx range corresponds to ordering section
-        let sort_columns = convert_to_sort_cols(
-            &filtered_states[1..is_set_idx],
-            self.ordering_req.as_ref(),
-        );
+        let sort_columns =
+            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
         let max = (0..filtered_states[0].len()).max_by(|&a, &b| comparator.compare(a, b));
@@ -1325,7 +1321,7 @@ impl Accumulator for LastValueAccumulator {
             let last_row = get_row_at_idx(&filtered_states, last_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let last_ordering = &last_row[1..is_set_idx];
-            let sort_options = get_sort_options(self.ordering_req.as_ref());
+            let sort_options = get_sort_options(&self.ordering_req);
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set

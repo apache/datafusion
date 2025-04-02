@@ -977,7 +977,7 @@ impl GroupedHashAggregateStream {
         let Some(emit) = self.emit(EmitTo::All, true)? else {
             return Ok(());
         };
-        let sorted = sort_batch(&emit, self.spill_state.spill_expr.as_ref(), None)?;
+        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
 
         // Spill sorted state to disk
         let spillfile = self.spill_state.spill_manager.spill_record_batch_by_size(
@@ -1044,7 +1044,7 @@ impl GroupedHashAggregateStream {
         streams.push(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
             futures::stream::once(futures::future::lazy(move |_| {
-                sort_batch(&batch, expr.as_ref(), None)
+                sort_batch(&batch, &expr, None)
             })),
         )));
         for spill in self.spill_state.spills.drain(..) {
@@ -1055,7 +1055,7 @@ impl GroupedHashAggregateStream {
         self.input = StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(schema)
-            .with_expressions(self.spill_state.spill_expr.as_ref())
+            .with_expressions(&self.spill_state.spill_expr)
             .with_metrics(self.baseline_metrics.clone())
             .with_batch_size(self.batch_size)
             .with_reservation(self.reservation.new_empty())

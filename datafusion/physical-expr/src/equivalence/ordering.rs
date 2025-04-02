@@ -388,14 +388,14 @@ mod tests {
             Arc::clone(&input_schema),
             &[finer.clone()],
         );
-        assert!(eq_properties_finer.ordering_satisfy(crude.as_ref()));
+        assert!(eq_properties_finer.ordering_satisfy(&crude));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
         let eq_properties_crude = EquivalenceProperties::new_with_orderings(
             Arc::clone(&input_schema),
             &[crude.clone()],
         );
-        assert!(!eq_properties_crude.ordering_satisfy(finer.as_ref()));
+        assert!(!eq_properties_crude.ordering_satisfy(&finer));
         Ok(())
     }
 

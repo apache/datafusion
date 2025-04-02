@@ -192,7 +192,7 @@ impl PhysicalSortExpr {
     }
 
     /// Checks whether this sort expression satisfies the given `sort_expr`.
-    pub fn satisfy_expr(&self, sort_expr: &PhysicalSortExpr, schema: &Schema) -> bool {
+    pub fn satisfy_expr(&self, sort_expr: &Self, schema: &Schema) -> bool {
         // If the column is not nullable, NULLS FIRST/LAST is not important.
         let nullable = self.expr.nullable(schema).unwrap_or(true);
         self.expr.eq(&sort_expr.expr)
@@ -340,12 +340,6 @@ pub struct LexOrdering {
     inner: Vec<PhysicalSortExpr>,
 }
 
-impl AsRef<LexOrdering> for LexOrdering {
-    fn as_ref(&self) -> &LexOrdering {
-        self
-    }
-}
-
 impl LexOrdering {
     /// Creates a new [`LexOrdering`] from a vector
     pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
@@ -441,10 +435,7 @@ impl LexOrdering {
 
     /// Transforms each `PhysicalSortExpr` in the `LexOrdering`
     /// in place using the provided closure `f`.
-    pub fn transform<F>(&mut self, f: F)
-    where
-        F: FnMut(&mut PhysicalSortExpr),
-    {
+    pub fn transform<F: FnMut(&mut PhysicalSortExpr)>(&mut self, f: F) {
         self.inner.iter_mut().for_each(f);
     }
 }

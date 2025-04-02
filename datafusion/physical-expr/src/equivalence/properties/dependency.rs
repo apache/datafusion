@@ -1199,7 +1199,7 @@ mod tests {
                     .collect::<Result<LexOrdering>>()?;
 
                 assert_eq!(
-                    properties.ordering_satisfy(sort.as_ref()),
+                    properties.ordering_satisfy(&sort),
                     case.should_satisfy_ordering,
                     "failed test '{}'",
                     case.name

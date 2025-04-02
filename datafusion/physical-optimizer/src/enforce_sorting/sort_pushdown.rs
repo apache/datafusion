@@ -292,15 +292,11 @@ fn pushdown_requirement_to_children(
         let left_columns_len = smj.left().schema().fields().len();
         let parent_required_expr =
             LexOrdering::from(parent_required.lex_requirement().clone());
-        match expr_source_side(
-            parent_required_expr.as_ref(),
-            smj.join_type(),
-            left_columns_len,
-        ) {
+        match expr_source_side(&parent_required_expr, smj.join_type(), left_columns_len) {
             Some(JoinSide::Left) => try_pushdown_requirements_to_join(
                 smj,
                 parent_required.lex_requirement(),
-                parent_required_expr.as_ref(),
+                &parent_required_expr,
                 JoinSide::Left,
             ),
             Some(JoinSide::Right) => {
@@ -314,7 +310,7 @@ fn pushdown_requirement_to_children(
                 try_pushdown_requirements_to_join(
                     smj,
                     parent_required.lex_requirement(),
-                    new_right_required_expr.as_ref(),
+                    &new_right_required_expr,
                     JoinSide::Right,
                 )
             }

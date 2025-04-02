@@ -461,7 +461,7 @@ pub fn generate_table_for_orderings(
     let batch = RecordBatch::try_from_iter(arrays)?;
 
     // Sort batch according to first ordering expression
-    let sort_columns = get_sort_columns(&batch, orderings[0].as_ref())?;
+    let sort_columns = get_sort_columns(&batch, &orderings[0])?;
     let sort_indices = lexsort_to_indices(&sort_columns, None)?;
     let mut batch = take_record_batch(&batch, &sort_indices)?;
 
