@@ -244,6 +244,159 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 physical_plan_with_stats DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
 physical_plan_with_schema DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true, schema=[a:Int32;N, b:Int32;N, c:Int32;N]
 
+# test SUM function with constant
+# Both the SUM(a + literal) and SUM(literal + a) should be optimized to SUM(a) + count(*) * literal
+query TT
+EXPLAIN VERBOSE SELECT SUM(a + 1), SUM(a + 2), SUM(3 + a) FROM simple_explain_test
+----
+initial_logical_plan
+01)Projection: sum(simple_explain_test.a + Int64(1)), sum(simple_explain_test.a + Int64(2)), sum(Int64(3) + simple_explain_test.a)
+02)--Aggregate: groupBy=[[]], aggr=[[sum(simple_explain_test.a + Int64(1)), sum(simple_explain_test.a + Int64(2)), sum(Int64(3) + simple_explain_test.a)]]
+03)----TableScan: simple_explain_test
+logical_plan after resolve_grouping_function SAME TEXT AS ABOVE
+logical_plan after type_coercion
+01)Projection: sum(simple_explain_test.a + Int64(1)), sum(simple_explain_test.a + Int64(2)), sum(Int64(3) + simple_explain_test.a)
+02)--Aggregate: groupBy=[[]], aggr=[[sum(CAST(simple_explain_test.a AS Int64) + Int64(1)), sum(CAST(simple_explain_test.a AS Int64) + Int64(2)), sum(Int64(3) + CAST(simple_explain_test.a AS Int64))]]
+03)----TableScan: simple_explain_test
+analyzed_logical_plan SAME TEXT AS ABOVE
+logical_plan after eliminate_nested_union SAME TEXT AS ABOVE
+logical_plan after simplify_expressions
+01)Projection: sum(simple_explain_test.a + Int64(1)), sum(simple_explain_test.a + Int64(2)), sum(Int64(3) + simple_explain_test.a)
+02)--Aggregate: groupBy=[[]], aggr=[[sum(CAST(simple_explain_test.a AS Int64)) + count(Int64(1)) AS sum(simple_explain_test.a + Int64(1)), sum(CAST(simple_explain_test.a AS Int64)) + Int64(2) * count(Int64(1)) AS sum(simple_explain_test.a + Int64(2)), Int64(3) * count(Int64(1)) + sum(CAST(simple_explain_test.a AS Int64)) AS sum(Int64(3) + simple_explain_test.a)]]
+03)----TableScan: simple_explain_test
+logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
+logical_plan after eliminate_join SAME TEXT AS ABOVE
+logical_plan after decorrelate_predicate_subquery SAME TEXT AS ABOVE
+logical_plan after scalar_subquery_to_join SAME TEXT AS ABOVE
+logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
+logical_plan after eliminate_duplicated_expr SAME TEXT AS ABOVE
+logical_plan after eliminate_filter SAME TEXT AS ABOVE
+logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
+logical_plan after eliminate_limit SAME TEXT AS ABOVE
+logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
+logical_plan after eliminate_one_union SAME TEXT AS ABOVE
+logical_plan after filter_null_join_keys SAME TEXT AS ABOVE
+logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
+logical_plan after push_down_limit SAME TEXT AS ABOVE
+logical_plan after push_down_filter SAME TEXT AS ABOVE
+logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
+logical_plan after eliminate_group_by_constant SAME TEXT AS ABOVE
+logical_plan after common_sub_expression_eliminate
+01)Projection: sum(simple_explain_test.a + Int64(1)), sum(simple_explain_test.a + Int64(2)), sum(Int64(3) + simple_explain_test.a)
+02)--Projection: __common_expr_2 + __common_expr_3 AS sum(simple_explain_test.a + Int64(1)), __common_expr_2 + Int64(2) * __common_expr_3 AS sum(simple_explain_test.a + Int64(2)), Int64(3) * __common_expr_3 + __common_expr_2 AS sum(Int64(3) + simple_explain_test.a)
+03)----Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1) AS __common_expr_2, count(Int64(1)) AS __common_expr_3]]
+04)------Projection: CAST(simple_explain_test.a AS Int64) AS __common_expr_1, simple_explain_test.a, simple_explain_test.b, simple_explain_test.c
+05)--------TableScan: simple_explain_test
+logical_plan after optimize_projections
+01)Projection: __common_expr_2 + __common_expr_3 AS sum(simple_explain_test.a + Int64(1)), __common_expr_2 + Int64(2) * __common_expr_3 AS sum(simple_explain_test.a + Int64(2)), Int64(3) * __common_expr_3 + __common_expr_2 AS sum(Int64(3) + simple_explain_test.a)
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1) AS __common_expr_2, count(Int64(1)) AS __common_expr_3]]
+03)----Projection: CAST(simple_explain_test.a AS Int64) AS __common_expr_1
+04)------TableScan: simple_explain_test projection=[a]
+logical_plan after eliminate_nested_union SAME TEXT AS ABOVE
+logical_plan after simplify_expressions SAME TEXT AS ABOVE
+logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
+logical_plan after eliminate_join SAME TEXT AS ABOVE
+logical_plan after decorrelate_predicate_subquery SAME TEXT AS ABOVE
+logical_plan after scalar_subquery_to_join SAME TEXT AS ABOVE
+logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
+logical_plan after eliminate_duplicated_expr SAME TEXT AS ABOVE
+logical_plan after eliminate_filter SAME TEXT AS ABOVE
+logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
+logical_plan after eliminate_limit SAME TEXT AS ABOVE
+logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
+logical_plan after eliminate_one_union SAME TEXT AS ABOVE
+logical_plan after filter_null_join_keys SAME TEXT AS ABOVE
+logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
+logical_plan after push_down_limit SAME TEXT AS ABOVE
+logical_plan after push_down_filter SAME TEXT AS ABOVE
+logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
+logical_plan after eliminate_group_by_constant SAME TEXT AS ABOVE
+logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
+logical_plan after optimize_projections SAME TEXT AS ABOVE
+logical_plan
+01)Projection: __common_expr_2 + __common_expr_3 AS sum(simple_explain_test.a + Int64(1)), __common_expr_2 + Int64(2) * __common_expr_3 AS sum(simple_explain_test.a + Int64(2)), Int64(3) * __common_expr_3 + __common_expr_2 AS sum(Int64(3) + simple_explain_test.a)
+02)--Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1) AS __common_expr_2, count(Int64(1)) AS __common_expr_3]]
+03)----Projection: CAST(simple_explain_test.a AS Int64) AS __common_expr_1
+04)------TableScan: simple_explain_test projection=[a]
+initial_physical_plan
+01)ProjectionExec: expr=[__common_expr_2@0 + __common_expr_3@1 as sum(simple_explain_test.a + Int64(1)), __common_expr_2@0 + 2 * __common_expr_3@1 as sum(simple_explain_test.a + Int64(2)), 3 * __common_expr_3@1 + __common_expr_2@0 as sum(Int64(3) + simple_explain_test.a)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[__common_expr_2, __common_expr_3]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[__common_expr_2, __common_expr_3]
+04)------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a], file_type=csv, has_header=true
+initial_physical_plan_with_stats
+01)ProjectionExec: expr=[__common_expr_2@0 + __common_expr_3@1 as sum(simple_explain_test.a + Int64(1)), __common_expr_2@0 + 2 * __common_expr_3@1 as sum(simple_explain_test.a + Int64(2)), 3 * __common_expr_3@1 + __common_expr_2@0 as sum(Int64(3) + simple_explain_test.a)], statistics=[Rows=Exact(1), Bytes=Exact(24), [(Col[0]:),(Col[1]:),(Col[2]:)]]
+02)--AggregateExec: mode=Final, gby=[], aggr=[__common_expr_2, __common_expr_3], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[__common_expr_2, __common_expr_3], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+04)------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a], file_type=csv, has_header=true, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+initial_physical_plan_with_schema
+01)ProjectionExec: expr=[__common_expr_2@0 + __common_expr_3@1 as sum(simple_explain_test.a + Int64(1)), __common_expr_2@0 + 2 * __common_expr_3@1 as sum(simple_explain_test.a + Int64(2)), 3 * __common_expr_3@1 + __common_expr_2@0 as sum(Int64(3) + simple_explain_test.a)], schema=[sum(simple_explain_test.a + Int64(1)):Int64;N, sum(simple_explain_test.a + Int64(2)):Int64;N, sum(Int64(3) + simple_explain_test.a):Int64;N]
+02)--AggregateExec: mode=Final, gby=[], aggr=[__common_expr_2, __common_expr_3], schema=[__common_expr_2:Int64;N, __common_expr_3:Int64]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[__common_expr_2, __common_expr_3], schema=[__common_expr_2[sum]:Int64;N, __common_expr_3[count]:Int64]
+04)------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1], schema=[__common_expr_1:Int64;N]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a], file_type=csv, has_header=true, schema=[a:Int32;N]
+physical_plan after OutputRequirements
+01)OutputRequirementExec
+02)--ProjectionExec: expr=[__common_expr_2@0 + __common_expr_3@1 as sum(simple_explain_test.a + Int64(1)), __common_expr_2@0 + 2 * __common_expr_3@1 as sum(simple_explain_test.a + Int64(2)), 3 * __common_expr_3@1 + __common_expr_2@0 as sum(Int64(3) + simple_explain_test.a)]
+03)----AggregateExec: mode=Final, gby=[], aggr=[__common_expr_2, __common_expr_3]
+04)------AggregateExec: mode=Partial, gby=[], aggr=[__common_expr_2, __common_expr_3]
+05)--------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a], file_type=csv, has_header=true
+physical_plan after aggregate_statistics SAME TEXT AS ABOVE
+physical_plan after join_selection SAME TEXT AS ABOVE
+physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
+physical_plan after EnforceDistribution
+01)OutputRequirementExec
+02)--ProjectionExec: expr=[__common_expr_2@0 + __common_expr_3@1 as sum(simple_explain_test.a + Int64(1)), __common_expr_2@0 + 2 * __common_expr_3@1 as sum(simple_explain_test.a + Int64(2)), 3 * __common_expr_3@1 + __common_expr_2@0 as sum(Int64(3) + simple_explain_test.a)]
+03)----AggregateExec: mode=Final, gby=[], aggr=[__common_expr_2, __common_expr_3]
+04)------CoalescePartitionsExec
+05)--------AggregateExec: mode=Partial, gby=[], aggr=[__common_expr_2, __common_expr_3]
+06)----------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a], file_type=csv, has_header=true
+physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
+physical_plan after EnforceSorting SAME TEXT AS ABOVE
+physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
+physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
+physical_plan after coalesce_batches SAME TEXT AS ABOVE
+physical_plan after OutputRequirements
+01)ProjectionExec: expr=[__common_expr_2@0 + __common_expr_3@1 as sum(simple_explain_test.a + Int64(1)), __common_expr_2@0 + 2 * __common_expr_3@1 as sum(simple_explain_test.a + Int64(2)), 3 * __common_expr_3@1 + __common_expr_2@0 as sum(Int64(3) + simple_explain_test.a)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[__common_expr_2, __common_expr_3]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[__common_expr_2, __common_expr_3]
+05)--------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a], file_type=csv, has_header=true
+physical_plan after LimitAggregation SAME TEXT AS ABOVE
+physical_plan after LimitPushdown SAME TEXT AS ABOVE
+physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
+physical_plan after SanityCheckPlan SAME TEXT AS ABOVE
+physical_plan
+01)ProjectionExec: expr=[__common_expr_2@0 + __common_expr_3@1 as sum(simple_explain_test.a + Int64(1)), __common_expr_2@0 + 2 * __common_expr_3@1 as sum(simple_explain_test.a + Int64(2)), 3 * __common_expr_3@1 + __common_expr_2@0 as sum(Int64(3) + simple_explain_test.a)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[__common_expr_2, __common_expr_3]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[__common_expr_2, __common_expr_3]
+05)--------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a], file_type=csv, has_header=true
+physical_plan_with_stats
+01)ProjectionExec: expr=[__common_expr_2@0 + __common_expr_3@1 as sum(simple_explain_test.a + Int64(1)), __common_expr_2@0 + 2 * __common_expr_3@1 as sum(simple_explain_test.a + Int64(2)), 3 * __common_expr_3@1 + __common_expr_2@0 as sum(Int64(3) + simple_explain_test.a)], statistics=[Rows=Exact(1), Bytes=Exact(24), [(Col[0]:),(Col[1]:),(Col[2]:)]]
+02)--AggregateExec: mode=Final, gby=[], aggr=[__common_expr_2, __common_expr_3], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+03)----CoalescePartitionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+04)------AggregateExec: mode=Partial, gby=[], aggr=[__common_expr_2, __common_expr_3], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+05)--------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a], file_type=csv, has_header=true, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+physical_plan_with_schema
+01)ProjectionExec: expr=[__common_expr_2@0 + __common_expr_3@1 as sum(simple_explain_test.a + Int64(1)), __common_expr_2@0 + 2 * __common_expr_3@1 as sum(simple_explain_test.a + Int64(2)), 3 * __common_expr_3@1 + __common_expr_2@0 as sum(Int64(3) + simple_explain_test.a)], schema=[sum(simple_explain_test.a + Int64(1)):Int64;N, sum(simple_explain_test.a + Int64(2)):Int64;N, sum(Int64(3) + simple_explain_test.a):Int64;N]
+02)--AggregateExec: mode=Final, gby=[], aggr=[__common_expr_2, __common_expr_3], schema=[__common_expr_2:Int64;N, __common_expr_3:Int64]
+03)----CoalescePartitionsExec, schema=[__common_expr_2[sum]:Int64;N, __common_expr_3[count]:Int64]
+04)------AggregateExec: mode=Partial, gby=[], aggr=[__common_expr_2, __common_expr_3], schema=[__common_expr_2[sum]:Int64;N, __common_expr_3[count]:Int64]
+05)--------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1], schema=[__common_expr_1:Int64;N]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[a:Int32;N]
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a], file_type=csv, has_header=true, schema=[a:Int32;N]
+
 ### tests for EXPLAIN with display schema enabled
 
 statement ok
