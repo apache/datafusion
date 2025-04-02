@@ -25,7 +25,9 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
-use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
+use crate::execution_plan::{
+    Boundedness, CardinalityEffect, EmissionType, TransparentFilterPushdown,
+};
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{
@@ -1351,11 +1353,9 @@ impl ExecutionPlan for SortExec {
     fn filters_for_pushdown(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
         Ok(vec![self.dynamic_filter_source.as_physical_expr()?])
     }
-
-    fn supports_filter_pushdown(&self) -> bool {
-        true // SortExec doesn't accept filters itself but it's happy for them to be forwarded down to it's children
-    }
 }
+
+impl TransparentFilterPushdown for SortExec {}
 
 #[cfg(test)]
 mod tests {

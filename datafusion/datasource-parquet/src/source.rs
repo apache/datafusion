@@ -42,7 +42,7 @@ use datafusion_physical_expr::{conjunction, expressions::lit};
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
-use datafusion_physical_plan::execution_plan::FilterPushdownSupport;
+use datafusion_physical_plan::execution_plan::FilterSupport;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion_physical_plan::DisplayFormatType;
 
@@ -581,7 +581,7 @@ impl FileSource for ParquetSource {
 
     fn push_down_filters(
         &self,
-        filters: &[&Arc<dyn PhysicalExpr>],
+        filters: &[Arc<dyn PhysicalExpr>],
     ) -> datafusion_common::Result<Option<FileSourceFilterPushdownResult>> {
         let mut conf = self.clone();
         let predicate = match self.predicate.as_ref() {
@@ -589,10 +589,10 @@ impl FileSource for ParquetSource {
                 // Combine existing predicate with new filters
                 Some(conjunction(
                     std::iter::once(Arc::clone(existing_predicate))
-                        .chain(filters.iter().cloned().cloned()),
+                        .chain(filters.iter().map(Arc::clone)),
                 ))
             }
-            None => Some(conjunction(filters.iter().cloned().cloned())),
+            None => Some(conjunction(filters.iter().map(Arc::clone))),
         };
         match predicate {
             Some(new_predicate) if !new_predicate.eq(&lit(true)) => {
@@ -601,9 +601,9 @@ impl FileSource for ParquetSource {
                 // otherwise we would mark filters as exact but then not filter at the row level
                 // because the setting gets checked again inside the ParquetOpener!
                 let support = if self.table_parquet_options.global.pushdown_filters {
-                    vec![FilterPushdownSupport::HandledExact; filters.len()]
+                    vec![FilterSupport::HandledExact; filters.len()]
                 } else {
-                    vec![FilterPushdownSupport::Unhandled; filters.len()]
+                    vec![FilterSupport::Unhandled; filters.len()]
                 };
                 Ok(Some(FileSourceFilterPushdownResult::new(
                     Arc::new(conf),

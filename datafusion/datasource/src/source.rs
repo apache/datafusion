@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, ExecutionPlanFilterPushdownResult, FilterPushdownResult,
+    FilterSupport,
 };
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -87,7 +88,7 @@ pub trait DataSource: Send + Sync + Debug {
     /// data source and the support level for each filter (exact or inexact).
     fn push_down_filters(
         &self,
-        _filters: &[&Arc<dyn PhysicalExpr>],
+        _filters: &[Arc<dyn PhysicalExpr>],
     ) -> datafusion_common::Result<Option<DataSourceFilterPushdownResult>> {
         Ok(None)
     }
@@ -207,23 +208,25 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.try_swapping_with_projection(projection)
     }
 
-    fn supports_filter_pushdown(&self) -> bool {
-        true // DataSourceExec can receive filter pushdowns from upstream operators
-    }
-
-    fn push_down_filters_from_parents(
-        &self,
-        filters: &[&Arc<dyn PhysicalExpr>],
+    fn with_filter_pushdown_result(
+        self: Arc<Self>,
+        own_filters_result: &[FilterSupport],
+        parent_filters_remaining: &[Arc<dyn PhysicalExpr>],
     ) -> datafusion_common::Result<Option<ExecutionPlanFilterPushdownResult>> {
-        // we forward filter pushdown to our data source
-        if let Some(pushdown_result) = self.data_source.push_down_filters(filters)? {
+        assert!(own_filters_result.is_empty()); // We didn't give out any filters, this should be empty!
+                                                // Forward filter pushdown to our data source.
+        if let Some(pushdown_result) = self
+            .data_source
+            .push_down_filters(parent_filters_remaining)?
+        {
             let new_self = Arc::new(DataSourceExec::new(pushdown_result.inner));
             return Ok(Some(ExecutionPlanFilterPushdownResult::new(
                 new_self,
                 pushdown_result.support,
             )));
+        } else {
+            return Ok(None);
         }
-        Ok(None)
     }
 }
 

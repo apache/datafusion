@@ -587,7 +587,7 @@ impl DataSource for FileScanConfig {
 
     fn push_down_filters(
         &self,
-        filters: &[&Arc<dyn PhysicalExpr>],
+        filters: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Option<DataSourceFilterPushdownResult>> {
         if let Some(file_source_result) = self.file_source.push_down_filters(filters)? {
             let mut new_self = self.clone();

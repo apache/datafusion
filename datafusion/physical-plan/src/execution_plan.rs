@@ -488,42 +488,48 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(Vec::new())
     }
 
-    /// After we've attempted to push down filters into this node's children
-    /// this will be called with the result for each filter that this node gave in `filters_for_pushdown`.
-    /// The node should update itself to possibly drop filters that were pushed down as `Exact`.
-    fn with_filter_pushdown_result(
-        self: Arc<Self>,
-        _pushdown: &[FilterPushdownSupport],
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        Ok(None)
+    /// Checks which filters this node allows to be pushed down through it from a parent to a child.
+    /// For example, a `ProjectionExec` node can allow filters that only refernece
+    /// columns it did not create through but filters that reference columns it is creating cannot be pushed down any further.
+    /// That is, it only allows some filters through because it changes the schema of the data.
+    /// Aggregation nodes may not allow any filters to be pushed down as they change the cardinality of the data.
+    /// RepartitionExec nodes allow all filters to be pushed down as they don't change the schema or cardinality.
+    fn filter_pushdown_request(
+        &self,
+        filters: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Vec<FilterPushdownAllowed>> {
+        Ok(vec![FilterPushdownAllowed::Disallowed; filters.len()])
     }
 
-    /// Push down the given filters into this `ExecutionPlan`.
-    /// This is called after `with_filter_pushdown_result`.
-    /// Operators can accept filters from their parents, either as Exact or Unsupported.
-    /// If the operator accepts a filter as Exact, it should return a new `ExecutionPlan` with the filter applied
-    /// and the parent that generated the filter might not apply it anymore.
-    fn push_down_filters_from_parents(
-        &self,
-        _filters: &[&Arc<dyn PhysicalExpr>],
+    /// After we've attempted to push down filters into this node's children
+    /// this will be called with the result for each filter that this node gave in `filters_for_pushdown`
+    /// **and** any filters that children could not handle.
+    fn with_filter_pushdown_result(
+        self: Arc<Self>,
+        _own_filters_result: &[FilterSupport],
+        _parent_filters_remaining: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
         Ok(None)
     }
-
-    /// Returns `true` if this `ExecutionPlan` allows filter pushdown to flow throught it and `false` otherwise.
-    /// Nodes such as aggregations cannot have filters pushed down through them, so they return `false`.
-    /// On the other hand nodes such as repartitions can have filters pushed down through them, so they return `true`.
-    /// The default implementation returns `false`.
-    fn supports_filter_pushdown(&self) -> bool {
-        false
-    }
 }
 
-/// The result of pushing down each filter.
-/// When a parent plan tries to push down a filter to a child it needs to know if the child
-/// can handle the filter or not to determine if it still needs to apply the filter itself.
+/// The answer to the question: "Can this filter be pushed down through this plan?"
+/// Note that this is different from [`FilterSupport`] which is the answer to "Can *this* plan handle this filter?"
+#[derive(Debug, Clone)]
+pub enum FilterPushdownAllowed {
+    /// The operator allows this filter to be pushed down to its children.
+    /// The operator may choose to return a *different* filter expression
+    /// that is equivalent to the original filter, e.g. to deal with column indexes in a projection
+    /// or because the original filter can't be pushed down as is but a less-selective filter can be.
+    Allowed(Arc<dyn PhysicalExpr>),
+    /// The operator does not allow this filter to be pushed down to its children.
+    Disallowed,
+}
+
+/// The answer to the question: "Can this operator handle this filter itself?"
+/// Note that this is different from [`FilterPushdownAllowed`] which is the answer to "Can *this* plan handle this filter?"
 #[derive(Debug, Clone, Copy)]
-pub enum FilterPushdownSupport {
+pub enum FilterSupport {
     /// Filter may not have been pushed down to the child plan, or the child plan
     /// can only partially apply the filter but may have false positives (but not false negatives).
     /// In this case the parent **must** behave as if the filter was not pushed down
@@ -535,13 +541,35 @@ pub enum FilterPushdownSupport {
     HandledExact,
 }
 
+/// An extension trait to provide a default implementation of [`ExecutionPlan::supports_filter_pushdown`]
+/// that allows all filters to be pushed down.
+/// This is useful for nodes that don't modify the schema or cardinality of the data.
+/// For example, `RepartitionExec` and `CoalescePartitionsExec` can push down all filters.
+pub trait TransparentFilterPushdown {
+    /// Returns a vector of [`FilterPushdownAllowed`] for each filter.
+    /// The default implementation returns [`FilterPushdownAllowed::Allowed`] for all filters.
+    fn supports_filter_pushdown(
+        &self,
+        filters: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Vec<FilterPushdownAllowed>> {
+        Ok(filters
+            .iter()
+            .map(|f| FilterPushdownAllowed::Allowed(Arc::clone(f)))
+            .collect())
+    }
+}
+
+/// The combined result of a filter pushdown operation.
+/// This includes:
+/// * The inner plan that was produced by the pushdown operation.
+/// * The support for each filter that was pushed down.
 pub struct FilterPushdownResult<T> {
     pub inner: T,
-    pub support: Vec<FilterPushdownSupport>,
+    pub support: Vec<FilterSupport>,
 }
 
 impl<T> FilterPushdownResult<T> {
-    pub fn new(plan: T, support: Vec<FilterPushdownSupport>) -> Self {
+    pub fn new(plan: T, support: Vec<FilterSupport>) -> Self {
         Self {
             inner: plan,
             support,
@@ -551,7 +579,7 @@ impl<T> FilterPushdownResult<T> {
     pub fn is_exact(&self) -> bool {
         self.support
             .iter()
-            .all(|s| matches!(s, FilterPushdownSupport::HandledExact))
+            .all(|s| matches!(s, FilterSupport::HandledExact))
     }
 }
 

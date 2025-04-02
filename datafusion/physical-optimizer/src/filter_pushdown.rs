@@ -20,7 +20,9 @@ use std::sync::Arc;
 use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::{
-    execution_plan::{ExecutionPlanFilterPushdownResult, FilterPushdownSupport},
+    execution_plan::{
+        ExecutionPlanFilterPushdownResult, FilterPushdownAllowed, FilterSupport,
+    },
     with_new_children_if_necessary, ExecutionPlan,
 };
 
@@ -28,7 +30,7 @@ use crate::PhysicalOptimizerRule;
 
 /// The state of filter pushdown support for a given filter.
 #[derive(Clone, Copy, Debug)]
-enum PushdownState {
+enum ChildPushdownState {
     /// A child said it can handle the filter exactly.
     ChildExact,
     /// A child exists and took a look at the filter.
@@ -40,32 +42,62 @@ enum PushdownState {
     NoChild,
 }
 
-impl PushdownState {
+impl ChildPushdownState {
     /// Combine the current state with another state.
     /// This is used to combine the results of multiple children.
-    fn combine_with_other(&self, other: &FilterPushdownSupport) -> PushdownState {
+    fn combine_with_other(&self, other: &FilterSupport) -> ChildPushdownState {
         match (other, self) {
-            (FilterPushdownSupport::HandledExact, PushdownState::NoChild) => {
-                PushdownState::ChildExact
+            (FilterSupport::HandledExact, ChildPushdownState::NoChild) => {
+                ChildPushdownState::ChildExact
             }
-            (FilterPushdownSupport::HandledExact, PushdownState::ChildInexact) => {
-                PushdownState::ChildInexact
+            (FilterSupport::HandledExact, ChildPushdownState::ChildInexact) => {
+                ChildPushdownState::ChildInexact
             }
-            (FilterPushdownSupport::Unhandled, PushdownState::NoChild) => {
-                PushdownState::ChildInexact
+            (FilterSupport::Unhandled, ChildPushdownState::NoChild) => {
+                ChildPushdownState::ChildInexact
             }
-            (FilterPushdownSupport::Unhandled, PushdownState::ChildExact) => {
-                PushdownState::ChildInexact
+            (FilterSupport::Unhandled, ChildPushdownState::ChildExact) => {
+                ChildPushdownState::ChildInexact
             }
-            (FilterPushdownSupport::Unhandled, PushdownState::ChildInexact) => {
-                PushdownState::ChildInexact
+            (FilterSupport::Unhandled, ChildPushdownState::ChildInexact) => {
+                ChildPushdownState::ChildInexact
             }
-            (FilterPushdownSupport::HandledExact, PushdownState::ChildExact) => {
+            (FilterSupport::HandledExact, ChildPushdownState::ChildExact) => {
                 // If both are exact, keep it as exact
-                PushdownState::ChildExact
+                ChildPushdownState::ChildExact
             }
         }
     }
+}
+
+fn push_down_into_children(
+    node: &Arc<dyn ExecutionPlan>,
+    filters: &[Arc<dyn PhysicalExpr>],
+) -> Result<ExecutionPlanFilterPushdownResult> {
+    let children = node.children();
+    let mut new_children = Vec::with_capacity(children.len());
+    let mut filter_pushdown_result = vec![ChildPushdownState::NoChild; filters.len()];
+    for child in children {
+        if let Some(result) = pushdown_filters(child, &filters)? {
+            new_children.push(result.inner);
+            for (idx, support) in result.support.iter().enumerate() {
+                filter_pushdown_result[idx] =
+                    filter_pushdown_result[idx].combine_with_other(support)
+            }
+        } else {
+            new_children.push(Arc::clone(child));
+        }
+    }
+    let support = filter_pushdown_result
+        .iter()
+        .map(|s| match s {
+            ChildPushdownState::ChildExact => FilterSupport::HandledExact,
+            ChildPushdownState::ChildInexact => FilterSupport::Unhandled,
+            ChildPushdownState::NoChild => FilterSupport::Unhandled,
+        })
+        .collect::<Vec<_>>();
+    let node = with_new_children_if_necessary(Arc::clone(node), new_children)?;
+    Ok(ExecutionPlanFilterPushdownResult::new(node, support))
 }
 
 /// Recursively a collection of filters down through the execution plan tree in a depth-first manner.
@@ -90,83 +122,71 @@ fn pushdown_filters(
     node: &Arc<dyn ExecutionPlan>,
     parent_filters: &[Arc<dyn PhysicalExpr>],
 ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
+    // Gather the filters from the current node.
+    // These are the filters the current node "owns" or "produces" and wants to push down.
     let node_filters = node.filters_for_pushdown()?;
-    let children = node.children();
-    let mut new_children = Vec::with_capacity(children.len());
-    let all_filters = parent_filters
+    // Check which nodes from parents this node is okay with us trying to push down to it's children.
+    let parent_pushdown_request_result = node.filter_pushdown_request(&parent_filters)?;
+    // Do some index masking so that we only ever call nodes with the filters relevant to them / that they're allowed to touch.
+    // But we still need to reconstruct the full result for our caller.
+    let parent_filter_for_pushdown_indices = parent_pushdown_request_result
         .iter()
-        .chain(node_filters.iter())
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut filter_pushdown_result = vec![PushdownState::NoChild; all_filters.len()];
-    for child in children {
-        if child.supports_filter_pushdown() {
-            if let Some(result) = pushdown_filters(child, &all_filters)? {
-                new_children.push(result.inner);
-                for (all_filters_idx, support) in result.support.iter().enumerate() {
-                    filter_pushdown_result[all_filters_idx] = filter_pushdown_result
-                        [all_filters_idx]
-                        .combine_with_other(support)
-                }
+        .enumerate()
+        .filter_map(|(i, s)| {
+            if matches!(s, FilterPushdownAllowed::Allowed(_)) {
+                Some(i)
             } else {
-                new_children.push(Arc::clone(child));
+                None
             }
-        } else {
-            // Reset the filters we are pushing down.
-            if let Some(result) = pushdown_filters(child, &Vec::new())? {
-                new_children.push(result.inner);
-            } else {
-                new_children.push(Arc::clone(child));
-            }
-        };
-    }
-
-    let mut node = with_new_children_if_necessary(Arc::clone(node), new_children)?;
-
-    // Now update the node with the result of the pushdown of it's filters
-    let pushdown_result = filter_pushdown_result[parent_filters.len()..]
-        .iter()
-        .map(|s| match s {
-            PushdownState::ChildExact => FilterPushdownSupport::HandledExact,
-            PushdownState::ChildInexact => FilterPushdownSupport::Unhandled,
-            PushdownState::NoChild => FilterPushdownSupport::Unhandled,
         })
         .collect::<Vec<_>>();
-    if let Some(new_node) =
-        Arc::clone(&node).with_filter_pushdown_result(&pushdown_result)?
-    {
-        node = new_node;
-    };
-
-    // And check if it can absorb the remaining filters
-    let remaining_filter_indexes = (0..parent_filters.len())
-        .filter(|&i| !matches!(filter_pushdown_result[i], PushdownState::ChildExact))
+    let parent_filters_to_push_down = parent_filter_for_pushdown_indices
+        .iter()
+        .map(|&i| Arc::clone(&parent_filters[i]))
         .collect::<Vec<_>>();
-    if !remaining_filter_indexes.is_empty() {
-        let remaining_filters = remaining_filter_indexes
-            .iter()
-            .map(|&i| &parent_filters[i])
-            .collect::<Vec<_>>();
-        if let Some(result) = node.push_down_filters_from_parents(&remaining_filters)? {
-            node = result.inner;
-            for (parent_filter_index, support) in
-                remaining_filter_indexes.iter().zip(result.support)
-            {
-                filter_pushdown_result[*parent_filter_index] = filter_pushdown_result
-                    [*parent_filter_index]
-                    .combine_with_other(&support)
-            }
+    let all_filters_to_push_down = node_filters
+        .iter()
+        .chain(parent_filters_to_push_down.iter())
+        .map(|f| Arc::clone(f))
+        .collect::<Vec<_>>();
+    // Push down into children
+    let child_pushdown_result = push_down_into_children(node, &all_filters_to_push_down)?;
+    let mut node = child_pushdown_result.inner;
+    // A bit more index masking to construct the final result for our caller.
+    let node_filters_pushdown_result =
+        child_pushdown_result.support[..node_filters.len()].to_vec();
+    let mut parent_filter_pushdown_result =
+        vec![FilterSupport::Unhandled; parent_filters.len()];
+    for (parent_filter_idx, support) in parent_filter_for_pushdown_indices
+        .iter()
+        .zip(child_pushdown_result.support[node_filters.len()..].iter())
+    {
+        parent_filter_pushdown_result[*parent_filter_idx] = *support;
+    }
+    // Collect the remaining unhandled parent filters
+    let unhandled_parent_filter_indices = (0..parent_filters.len())
+        .filter(|&i| matches!(parent_filter_pushdown_result[i], FilterSupport::Unhandled))
+        .collect::<Vec<_>>();
+    let unhandled_parent_filters = unhandled_parent_filter_indices
+        .iter()
+        .map(|&i| Arc::clone(&parent_filters[i]))
+        .collect::<Vec<_>>();
+    // Check if the node can handle the filters
+    if let Some(result) = Arc::clone(&node).with_filter_pushdown_result(
+        &node_filters_pushdown_result,
+        &unhandled_parent_filters,
+    )? {
+        node = result.inner;
+        for (parent_filter_index, support) in
+            unhandled_parent_filter_indices.iter().zip(result.support)
+        {
+            parent_filter_pushdown_result[*parent_filter_index] = support;
         }
     }
-    let support = filter_pushdown_result[..parent_filters.len()]
-        .iter()
-        .map(|s| match s {
-            PushdownState::ChildExact => FilterPushdownSupport::HandledExact,
-            PushdownState::ChildInexact => FilterPushdownSupport::Unhandled,
-            PushdownState::NoChild => FilterPushdownSupport::Unhandled,
-        })
-        .collect::<Vec<_>>();
-    Ok(Some(ExecutionPlanFilterPushdownResult::new(node, support)))
+    Ok(Some(ExecutionPlanFilterPushdownResult::new(
+        node,
+        parent_filter_pushdown_result,
+    )))
 }
 
 /// A physical optimizer rule that pushes down filters in the execution plan.
@@ -274,8 +294,6 @@ fn pushdown_filters(
 ///
 /// There are also cases where we may be able to push down filters within a subtree but not the entire tree.
 /// A good exmaple of this is aggreagation nodes:
-///
-/// projection -> aggregate -> filter -> scan
 ///
 /// ```text
 /// ┌──────────────────────┐
@@ -466,6 +484,7 @@ impl PhysicalOptimizerRule for FilterPushdown {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(result) = pushdown_filters(&plan, &[])? {
+            println!("new plan: {:?}", result.inner);
             Ok(result.inner)
         } else {
             Ok(plan)

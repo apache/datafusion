@@ -97,7 +97,7 @@ pub trait FileSource: Send + Sync {
 
     fn push_down_filters(
         &self,
-        _filters: &[&Arc<dyn PhysicalExpr>],
+        _filters: &[Arc<dyn PhysicalExpr>],
     ) -> datafusion_common::Result<Option<FileSourceFilterPushdownResult>> {
         Ok(None)
     }
