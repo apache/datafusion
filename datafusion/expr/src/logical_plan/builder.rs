@@ -1468,19 +1468,37 @@ impl ValuesFields {
     }
 }
 
+// `name_map` tracks a mapping between a field name and the number of appearances of that field.
+//
+// Some field names might already come to this function with the count (number of times it appeared)
+// as a sufix e.g. id:1, so there's still a chance of name collisions, for example,
+// if these three fields passed to this function: "col:1", "col" and "col", the function
+// would rename them to -> col:1, col, col:1 causing a posteriror error when building the DFSchema.
+// that's why we need the `seen` set, so the fields are always unique.
+//
 pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
     let mut name_map = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
     fields
         .into_iter()
         .map(|field| {
-            let counter = name_map.entry(field.name().to_string()).or_insert(0);
-            *counter += 1;
-            if *counter > 1 {
-                let new_name = format!("{}:{}", field.name(), *counter - 1);
-                Field::new(new_name, field.data_type().clone(), field.is_nullable())
-            } else {
-                field.as_ref().clone()
+            let base_name = field.name();
+            let count = name_map.entry(base_name.clone()).or_insert(0);
+            let mut new_name = base_name.clone();
+
+            // Loop until we find a name that hasn't been used
+            while seen.contains(&new_name) {
+                *count += 1;
+                new_name = format!("{}:{}", base_name, count);
             }
+
+            seen.insert(new_name.clone());
+
+            let mut modified_field =
+                Field::new(&new_name, field.data_type().clone(), field.is_nullable());
+            modified_field.set_metadata(field.metadata().clone());
+            modified_field
         })
         .collect()
 }
@@ -2730,10 +2748,13 @@ mod tests {
         let t1_field_1 = Field::new("a", DataType::Int32, false);
         let t2_field_1 = Field::new("a", DataType::Int32, false);
         let t2_field_3 = Field::new("a", DataType::Int32, false);
+        let t2_field_4 = Field::new("a:1", DataType::Int32, false);
         let t1_field_2 = Field::new("b", DataType::Int32, false);
         let t2_field_2 = Field::new("b", DataType::Int32, false);
 
-        let field_vec = vec![t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3];
+        let field_vec = vec![
+            t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3, t2_field_4,
+        ];
         let remove_redundant = change_redundant_column(&Fields::from(field_vec));
 
         assert_eq!(
@@ -2744,6 +2765,7 @@ mod tests {
                 Field::new("b", DataType::Int32, false),
                 Field::new("b:1", DataType::Int32, false),
                 Field::new("a:2", DataType::Int32, false),
+                Field::new("a:1:1", DataType::Int32, false),
             ]
         );
         Ok(())
