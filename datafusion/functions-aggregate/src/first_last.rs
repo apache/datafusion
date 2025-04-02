@@ -145,7 +145,9 @@ impl AggregateUDFImpl for FirstValue {
                 ordering_req.clone(),
                 acc_args.ignore_nulls,
             )
-            .map(|acc| Box::new(acc) as _);
+            .map(|acc| {
+                Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+            });
         }
         TrivialFirstValueAccumulator::try_new(acc_args.return_type, acc_args.ignore_nulls)
             .map(|acc| Box::new(acc) as _)
@@ -165,7 +167,6 @@ impl AggregateUDFImpl for FirstValue {
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
         args.ordering_req.is_some()
-            && !self.requirement_satisfied
             && matches!(
                 args.return_type,
                 Int8 | Int16
@@ -192,14 +193,11 @@ impl AggregateUDFImpl for FirstValue {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        fn create_accumulator<T>(
+        fn create_accumulator<T: ArrowPrimitiveType + Send>(
             args: AccumulatorArgs,
-        ) -> Result<Box<dyn GroupsAccumulator>>
-        where
-            T: ArrowPrimitiveType + Send,
-        {
+        ) -> Result<Box<dyn GroupsAccumulator>> {
             let Some(ordering_req) = args.ordering_req else {
-                unreachable!("Groups accumulator must have ordering.");
+                return internal_err!("Groups accumulator must have an ordering.");
             };
 
             let ordering_dtypes = ordering_req
@@ -261,7 +259,7 @@ impl AggregateUDFImpl for FirstValue {
             }
 
             _ => internal_err!(
-                "GroupsAccumulator not supported for first({})",
+                "GroupsAccumulator not supported for first_value({})",
                 args.return_type
             ),
         }
@@ -826,12 +824,13 @@ pub struct FirstValueAccumulator {
     first: ScalarValue,
     // Whether we have seen the first value yet.
     is_set: bool,
-    // Stores ordering values, of the aggregator requirement corresponding to
-    // first value of the aggregator. These values are used during merging of
-    // multiple partitions.
+    // Stores values of the ordering columns corresponding to the first value.
+    // These values are used during merging of multiple partitions.
     orderings: Vec<ScalarValue>,
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
+    // Stores whether incoming data already satisfies the ordering requirement.
+    requirement_satisfied: bool,
     // Ignore null values.
     ignore_nulls: bool,
 }
@@ -853,8 +852,14 @@ impl FirstValueAccumulator {
             is_set: false,
             orderings,
             ordering_req,
+            requirement_satisfied: false,
             ignore_nulls,
         })
+    }
+
+    pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
+        self.requirement_satisfied = requirement_satisfied;
+        self
     }
 
     // Updates state with the values in the given row.
@@ -868,6 +873,21 @@ impl FirstValueAccumulator {
         let [value, ordering_values @ ..] = values else {
             return internal_err!("Empty row in FIRST_VALUE");
         };
+        if self.requirement_satisfied {
+            // Get first entry according to the pre-existing ordering (0th index):
+            if self.ignore_nulls {
+                // If ignoring nulls, find the first non-null value.
+                for i in 0..value.len() {
+                    if !value.is_null(i) {
+                        return Ok(Some(i));
+                    }
+                }
+                return Ok(None);
+            } else {
+                // If not ignoring nulls, return the first value if it exists.
+                return Ok((!value.is_empty()).then_some(0));
+            }
+        }
 
         let sort_columns = ordering_values
             .iter()
@@ -904,12 +924,13 @@ impl Accumulator for FirstValueAccumulator {
         if let Some(first_idx) = self.get_first_idx(values)? {
             let row = get_row_at_idx(values, first_idx)?;
             if !self.is_set
-                || compare_rows(
-                    &self.orderings,
-                    &row[1..],
-                    &get_sort_options(self.ordering_req.as_ref()),
-                )?
-                .is_gt()
+                || (!self.requirement_satisfied
+                    && compare_rows(
+                        &self.orderings,
+                        &row[1..],
+                        &get_sort_options(self.ordering_req.as_ref()),
+                    )?
+                    .is_gt())
             {
                 self.update_with_new_row(&row);
             }
@@ -1048,7 +1069,9 @@ impl AggregateUDFImpl for LastValue {
                 ordering_req.clone(),
                 acc_args.ignore_nulls,
             )
-            .map(|acc| Box::new(acc) as _);
+            .map(|acc| {
+                Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+            });
         }
         TrivialLastValueAccumulator::try_new(acc_args.return_type, acc_args.ignore_nulls)
             .map(|acc| Box::new(acc) as _)
@@ -1168,9 +1191,13 @@ struct LastValueAccumulator {
     // This information is used to discriminate genuine NULLs and NULLS that
     // occur due to empty partitions.
     is_set: bool,
+    // Stores values of the ordering columns corresponding to the first value.
+    // These values are used during merging of multiple partitions.
     orderings: Vec<ScalarValue>,
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
+    // Stores whether incoming data already satisfies the ordering requirement.
+    requirement_satisfied: bool,
     // Ignore null values.
     ignore_nulls: bool,
 }
@@ -1192,6 +1219,7 @@ impl LastValueAccumulator {
             is_set: false,
             orderings,
             ordering_req,
+            requirement_satisfied: false,
             ignore_nulls,
         })
     }
@@ -1207,6 +1235,20 @@ impl LastValueAccumulator {
         let [value, ordering_values @ ..] = values else {
             return internal_err!("Empty row in LAST_VALUE");
         };
+        if self.requirement_satisfied {
+            // Get last entry according to the order of data:
+            if self.ignore_nulls {
+                // If ignoring nulls, find the last non-null value.
+                for i in (0..value.len()).rev() {
+                    if !value.is_null(i) {
+                        return Ok(Some(i));
+                    }
+                }
+                return Ok(None);
+            } else {
+                return Ok((!value.is_empty()).then_some(value.len() - 1));
+            }
+        }
 
         let sort_columns = ordering_values
             .iter()
@@ -1228,6 +1270,11 @@ impl LastValueAccumulator {
 
         Ok(max_ind)
     }
+
+    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
+        self.requirement_satisfied = requirement_satisfied;
+        self
+    }
 }
 
 impl Accumulator for LastValueAccumulator {
@@ -1244,6 +1291,7 @@ impl Accumulator for LastValueAccumulator {
             let orderings = &row[1..];
             // Update when there is a more recent entry
             if !self.is_set
+                || self.requirement_satisfied
                 || compare_rows(
                     &self.orderings,
                     orderings,
@@ -1281,6 +1329,7 @@ impl Accumulator for LastValueAccumulator {
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set
+                || self.requirement_satisfied
                 || compare_rows(&self.orderings, last_ordering, &sort_options)?.is_lt()
             {
                 // Update with last value in the state. Note that we should exclude the

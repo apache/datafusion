@@ -33,6 +33,8 @@ use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::{JoinType, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -60,8 +62,6 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_datasource::source::DataSourceExec;
 use rstest::rstest;
 
 /// Created a sorted parquet exec

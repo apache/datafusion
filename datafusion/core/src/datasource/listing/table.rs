@@ -17,11 +17,11 @@
 
 //! The table implementation.
 
-use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
-use super::{ListingTableUrl, PartitionedFile};
 use std::collections::HashMap;
 use std::{any::Any, str::FromStr, sync::Arc};
 
+use super::helpers::{expr_applicable_for_cols, pruned_partition_list};
+use super::{ListingTableUrl, PartitionedFile};
 use crate::datasource::{
     create_ordering,
     file_format::{

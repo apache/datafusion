@@ -23,6 +23,17 @@ use std::{
     fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
 };
 
+use crate::file_groups::FileGroup;
+use crate::{
+    display::FileGroupsDisplay,
+    file::FileSource,
+    file_compression_type::FileCompressionType,
+    file_stream::FileStream,
+    source::{DataSource, DataSourceExec},
+    statistics::MinMaxStatistics,
+    PartitionedFile,
+};
+
 use arrow::{
     array::{
         ArrayData, ArrayRef, BufferBuilder, DictionaryArray, RecordBatch,
@@ -31,8 +42,10 @@ use arrow::{
     buffer::Buffer,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
 };
-use datafusion_common::{exec_err, ColumnStatistics, Constraints, Result, Statistics};
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{
+    exec_err, ColumnStatistics, Constraints, DataFusionError, Result, ScalarValue,
+    Statistics,
+};
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
@@ -46,18 +59,8 @@ use datafusion_physical_plan::{
     projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
     DisplayAs, DisplayFormatType, ExecutionPlan,
 };
-use log::{debug, warn};
 
-use crate::file_groups::FileGroup;
-use crate::{
-    display::FileGroupsDisplay,
-    file::FileSource,
-    file_compression_type::FileCompressionType,
-    file_stream::FileStream,
-    source::{DataSource, DataSourceExec},
-    statistics::MinMaxStatistics,
-    PartitionedFile,
-};
+use log::{debug, warn};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -1384,7 +1387,6 @@ mod tests {
     use crate::{test_util::MockSource, tests::aggr_test_schema};
 
     use arrow::array::{Int32Array, RecordBatch};
-
     use datafusion_common::assert_batches_eq;
     use datafusion_common::stats::Precision;
     use datafusion_expr::SortExpr;
