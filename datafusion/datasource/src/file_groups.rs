@@ -264,7 +264,21 @@ impl FileGroupPartitioner {
             .flatten()
             .chunk_by(|(partition_idx, _)| *partition_idx)
             .into_iter()
-            .map(|(_, group)| FileGroup::new(group.map(|(_, vals)| vals).collect_vec()))
+            .map(|(_, group)| {
+                FileGroup::new(
+                    group
+                        .map(|(_, vals)| {
+                            if let Some(stat) = vals.statistics.clone() {
+                                vals.with_statistics(Arc::new(
+                                    stat.as_ref().clone().to_inexact(),
+                                ))
+                            } else {
+                                vals
+                            }
+                        })
+                        .collect_vec(),
+                )
+            })
             .collect_vec();
 
         Some(repartitioned_files)
@@ -351,8 +365,21 @@ impl FileGroupPartitioner {
                 if i == last_group {
                     range_end = file_size as i64;
                 }
-                target_group
-                    .push(original_file.clone().with_range(range_start, range_end));
+                let updated_file =
+                    original_file.clone().with_range(range_start, range_end);
+                if let Some(stat) = updated_file.statistics.clone() {
+                    target_group.push(
+                        updated_file.with_statistics(Arc::new(
+                            stat.as_ref().clone().to_inexact(),
+                        )),
+                    );
+                } else {
+                    target_group.push(updated_file);
+                }
+                if let Some(statistics) = target_group.statistics.as_mut() {
+                    // Todo: maybe we can evaluate the statistics by range in the future
+                    *statistics = statistics.clone().to_inexact()
+                }
                 range_start = range_end;
                 range_end += range_size;
             }
@@ -525,6 +552,9 @@ impl Ord for ToRepartition {
 #[cfg(test)]
 mod test {
     use super::*;
+    use datafusion_common::stats::Precision;
+    use datafusion_common::ScalarValue;
+    use std::sync::Arc;
 
     /// Empty file won't get partitioned
     #[test]
@@ -939,6 +969,93 @@ mod test {
             FileGroup::new(vec![pfile("c", 40).with_range(20, 40)]),
         ]);
         assert_partitioned_files(expected, actual);
+    }
+
+    #[test]
+    fn repartition_with_statistics_and_with_preserve_order_within_groups(
+    ) -> datafusion_common::Result<()> {
+        // Create test files
+        let mut file1 = pfile("a", 100);
+        let mut file2 = pfile("b", 50);
+
+        // Create statistics for file groups
+        let stats1 = Statistics {
+            num_rows: Precision::Exact(1000),
+            total_byte_size: Precision::Exact(100),
+            column_statistics: vec![
+                // Just add column statistics for a couple columns
+                datafusion_common::ColumnStatistics {
+                    null_count: Precision::Exact(10),
+                    max_value: Precision::Exact(ScalarValue::UInt32(Some(100))),
+                    min_value: Precision::Exact(ScalarValue::UInt32(Some(1))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                },
+            ],
+        };
+
+        file1 = file1.with_statistics(Arc::new(stats1.clone()));
+
+        let stats2 = Statistics {
+            num_rows: Precision::Exact(500),
+            total_byte_size: Precision::Exact(50),
+            column_statistics: vec![
+                // Just add column statistics for a couple columns
+                datafusion_common::ColumnStatistics {
+                    null_count: Precision::Exact(5),
+                    max_value: Precision::Exact(ScalarValue::UInt32(Some(200))),
+                    min_value: Precision::Exact(ScalarValue::UInt32(Some(101))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                },
+            ],
+        };
+
+        file2 = file2.with_statistics(Arc::new(stats2.clone()));
+
+        let file_groups = vec![
+            FileGroup::new(vec![file1]).with_statistics(stats1),
+            FileGroup::new(vec![file2]).with_statistics(stats2),
+        ];
+
+        // Verify initial state
+        assert!(file_groups[0].statistics().is_some());
+        assert!(file_groups[1].statistics().is_some());
+
+        // Repartition files
+        let repartitioned = FileGroupPartitioner::new()
+            .with_preserve_order_within_groups(true)
+            .with_target_partitions(3)
+            .with_repartition_file_min_size(10)
+            .repartition_file_groups(&file_groups)
+            .unwrap();
+
+        // Verify statistics are present and valid
+        assert_eq!(repartitioned.len(), 3, "Should have 3 partitions");
+
+        // Helper function to check statistics are inexact
+        fn assert_stats_are_inexact(stats: &Statistics) {
+            assert!(!stats.num_rows.is_exact().unwrap());
+            assert!(!stats.total_byte_size.is_exact().unwrap());
+            assert!(!stats.column_statistics[0].max_value.is_exact().unwrap());
+        }
+
+        for (idx, group) in repartitioned.into_iter().enumerate() {
+            // Check all files have inexact statistics regardless of group
+            for file in group.files.iter() {
+                let stats = file.statistics.as_ref().unwrap();
+                assert_stats_are_inexact(stats);
+            }
+
+            // Check group statistics based on index
+            if idx == 0 || idx == 1 {
+                let stats = group.statistics.unwrap();
+                assert_stats_are_inexact(&stats);
+            } else if idx == 2 {
+                assert!(group.statistics.is_none());
+            }
+        }
+        Ok(())
     }
 
     /// Asserts that the two groups of [`PartitionedFile`] are the same
