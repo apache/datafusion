@@ -346,6 +346,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self.input.statistics()
     }
 
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        Ok(vec![self.statistics()?])
+    }
+
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
