@@ -503,7 +503,9 @@ impl QueryBuilder {
             let distinct = if *is_distinct { "DISTINCT " } else { "" };
             alias_gen += 1;
 
-            let (order_by, null_opt) = if function_name.eq("first_value") {
+            let (order_by, null_opt) = if function_name.eq("first_value")
+                || function_name.eq("last_value")
+            {
                 (
                     self.order_by(&order_by_black_list), /* Among the order by columns, at most one group by column can be included to avoid all order by column values being identical */
                     self.null_opt(),
