@@ -24,6 +24,9 @@ use super::power::PowerFunc;
 
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use datafusion_common::types::{
+    logical_float32, logical_float64, logical_null, NativeType,
+};
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
@@ -32,9 +35,10 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     lit, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
-    TypeSignature::*,
+    TypeSignature, TypeSignatureClass,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -58,17 +62,45 @@ impl Default for LogFunc {
 
 impl LogFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Float32]),
-                    Exact(vec![Float64]),
-                    Exact(vec![Float32, Float32]),
-                    Exact(vec![Float64, Float64]),
+                    TypeSignature::Coercible(vec![Self::implicit_float::<32>()]),
+                    TypeSignature::Coercible(vec![Self::implicit_float::<64>()]),
+                    TypeSignature::Coercible(vec![
+                        Self::implicit_float::<32>(),
+                        Self::implicit_float::<32>(),
+                    ]),
+                    TypeSignature::Coercible(vec![
+                        Self::implicit_float::<64>(),
+                        Self::implicit_float::<64>(),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),
+        }
+    }
+
+    fn implicit_float<const U: usize>() -> Coercion {
+        match U {
+            32 => Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_float32()),
+                vec![
+                    TypeSignatureClass::Integer,
+                    TypeSignatureClass::Native(logical_null()),
+                ],
+                NativeType::Float32,
+            ),
+            64 => Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_float64()),
+                vec![
+                    TypeSignatureClass::Float,
+                    TypeSignatureClass::Integer,
+                    TypeSignatureClass::Native(logical_null()),
+                ],
+                NativeType::Float64,
+            ),
+            _ => unreachable!("implicit_float only accepts 32 or 64"),
         }
     }
 }

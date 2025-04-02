@@ -23,6 +23,9 @@ use super::log::LogFunc;
 
 use arrow::array::{ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
+use datafusion_common::types::{
+    logical_float64, logical_int64, logical_null, NativeType,
+};
 use datafusion_common::{
     arrow_datafusion_err, exec_datafusion_err, exec_err, internal_datafusion_err,
     plan_datafusion_err, DataFusionError, Result, ScalarValue,
@@ -31,8 +34,10 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF, TypeSignature,
+    TypeSignatureClass,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -56,12 +61,47 @@ impl Default for PowerFunc {
 
 impl PowerFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Exact(vec![Int64, Int64]),
-                    TypeSignature::Exact(vec![Float64, Float64]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_int64()),
+                            vec![
+                                TypeSignatureClass::Integer,
+                                TypeSignatureClass::Native(logical_null()),
+                            ],
+                            NativeType::Int64,
+                        ),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_int64()),
+                            vec![
+                                TypeSignatureClass::Integer,
+                                TypeSignatureClass::Native(logical_null()),
+                            ],
+                            NativeType::Int64,
+                        ),
+                    ]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_float64()),
+                            vec![
+                                TypeSignatureClass::Float,
+                                TypeSignatureClass::Integer,
+                                TypeSignatureClass::Native(logical_null()),
+                            ],
+                            NativeType::Float64,
+                        ),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_float64()),
+                            vec![
+                                TypeSignatureClass::Float,
+                                TypeSignatureClass::Integer,
+                                TypeSignatureClass::Native(logical_null()),
+                            ],
+                            NativeType::Float64,
+                        ),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),

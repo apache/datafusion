@@ -23,14 +23,16 @@ use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type, Int64Type};
+use datafusion_common::types::{logical_null, NativeType};
 use datafusion_common::ScalarValue::Int64;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::TypeSignature;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignatureClass, Volatility,
 };
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -60,7 +62,6 @@ impl Default for TruncFunc {
 
 impl TruncFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             // math expressions expect 1 argument of type f64 or f32
             // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
@@ -69,10 +70,19 @@ impl TruncFunc {
             // will be as good as the number of digits in the number
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Float32, Int64]),
-                    Exact(vec![Float64, Int64]),
-                    Exact(vec![Float64]),
-                    Exact(vec![Float32]),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Float,
+                        vec![TypeSignatureClass::Native(logical_null())],
+                        NativeType::Float64,
+                    )]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Float,
+                            vec![TypeSignatureClass::Native(logical_null())],
+                            NativeType::Float64,
+                        ),
+                        Coercion::new_exact(TypeSignatureClass::Integer),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),
