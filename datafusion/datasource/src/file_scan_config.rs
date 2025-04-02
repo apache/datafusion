@@ -89,7 +89,7 @@ use crate::{
 /// # // Note: crate mock ParquetSource, as ParquetSource is not in the datasource crate
 /// # struct ParquetSource {
 /// #    projected_statistics: Option<Statistics>
-/// # };
+/// # }
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Arc<dyn FileOpener> { unimplemented!() }
 /// #  fn as_any(&self) -> &dyn Any { self  }
@@ -2085,7 +2085,9 @@ mod tests {
                 "test.parquet".to_string(),
                 1024,
             )])])
-            .with_output_ordering(vec![LexOrdering::default()])
+            .with_output_ordering(vec![LexOrdering::new(vec![
+                PhysicalSortExpr::new_default(Arc::new(Column::new("date", 0))),
+            ])])
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
             .with_newlines_in_values(true)
             .build();

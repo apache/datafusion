@@ -239,16 +239,13 @@ impl TableProvider for MemTable {
         if !sort_order.is_empty() {
             let df_schema = DFSchema::try_from(self.schema.as_ref().clone())?;
 
-            let file_sort_order = sort_order
-                .iter()
-                .map(|sort_exprs| {
-                    create_physical_sort_exprs(
-                        sort_exprs,
-                        &df_schema,
-                        state.execution_props(),
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let eqp = state.execution_props();
+            let mut file_sort_order = vec![];
+            for sort_exprs in sort_order.iter() {
+                file_sort_order.push(
+                    create_physical_sort_exprs(sort_exprs, &df_schema, eqp)?.into(),
+                );
+            }
             source = source.try_with_sort_information(file_sort_order)?;
         }
 

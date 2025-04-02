@@ -29,17 +29,18 @@ use crate::datasource::{
     },
     physical_plan::FileSinkConfig,
 };
-use crate::datasource::physical_plan::FileSinkConfig;
-use crate::datasource::{create_ordering, get_statistics_with_limit};
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use datafusion_catalog::{Session, TableProvider};
+use datafusion_common::stats::Precision;
 use datafusion_common::{
     config_datafusion_err, config_err, internal_err, plan_err, project_schema,
     Constraints, DataFusionError, Result, SchemaExt, ToDFSchema,
 };
+use datafusion_datasource::add_row_stats;
+use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_execution::cache::{
@@ -53,12 +54,6 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
 use async_trait::async_trait;
-use datafusion_catalog::Session;
-use datafusion_common::stats::Precision;
-use datafusion_datasource::add_row_stats;
-use datafusion_datasource::compute_all_files_statistics;
-use datafusion_datasource::file_groups::FileGroup;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
