@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{add_offset_to_expr, ProjectionMapping};
-use crate::{
-    expressions::Column, LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef,
-    PhysicalSortExpr, PhysicalSortRequirement,
-};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinType, ScalarValue};
-use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use std::fmt::Display;
 use std::sync::Arc;
 use std::vec::IntoIter;
+
+use super::{add_offset_to_expr, ProjectionMapping};
+use crate::expressions::Column;
+use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
+
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{JoinType, ScalarValue};
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -512,28 +512,27 @@ impl EquivalenceGroup {
     /// This function applies the `normalize_sort_expr` function for all sort
     /// expressions in `sort_exprs` and returns the corresponding normalized
     /// sort expressions.
-    pub fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
-        LexOrdering::new(
-            sort_exprs
-                .iter()
-                .map(|sort_expr| self.normalize_sort_expr(sort_expr.clone()))
-                .collect(),
-        )
-        .collapse()
+    pub fn normalize_sort_exprs<'a>(
+        &self,
+        sort_exprs: impl IntoIterator<Item = &'a PhysicalSortExpr>,
+    ) -> Vec<PhysicalSortExpr> {
+        sort_exprs
+            .into_iter()
+            .map(|sort_expr| self.normalize_sort_expr(sort_expr.clone()))
+            .collect()
     }
 
     /// This function applies the `normalize_sort_requirement` function for all
     /// requirements in `sort_reqs` and returns the corresponding normalized
     /// sort requirements.
-    pub fn normalize_sort_requirements(
+    pub fn normalize_sort_requirements<'a>(
         &self,
-        sort_reqs: &LexRequirement,
-    ) -> Option<LexRequirement> {
-        let reqs = sort_reqs
-            .iter()
+        sort_reqs: impl IntoIterator<Item = &'a PhysicalSortRequirement>,
+    ) -> Vec<PhysicalSortRequirement> {
+        sort_reqs
+            .into_iter()
             .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
-            .collect::<Vec<_>>();
-        (!reqs.is_empty()).then(|| LexRequirement::new(reqs).collapse())
+            .collect()
     }
 
     /// Projects `expr` according to the given projection mapping.

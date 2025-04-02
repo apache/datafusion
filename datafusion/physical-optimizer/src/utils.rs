@@ -40,13 +40,15 @@ pub fn add_sort_above<T: Clone + Default>(
     sort_requirements: LexRequirement,
     fetch: Option<usize>,
 ) -> PlanContext<T> {
-    let mut sort_expr = LexOrdering::from(sort_requirements);
-    sort_expr.retain(|sort_expr| {
+    let sort_expr = LexOrdering::from(sort_requirements);
+    let Some(sort_expr) = sort_expr.retain(|sort_expr| {
         !node
             .plan
             .equivalence_properties()
             .is_expr_constant(&sort_expr.expr)
-    });
+    }) else {
+        return node;
+    };
     let mut new_sort = SortExec::new(sort_expr, Arc::clone(&node.plan)).with_fetch(fetch);
     if node.plan.output_partitioning().partition_count() > 1 {
         new_sort = new_sort.with_preserve_partitioning(true);

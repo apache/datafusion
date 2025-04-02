@@ -402,14 +402,13 @@ pub(crate) fn window_equivalence_properties(
                     // Window function results in a partial constant value in
                     // some ordering. Adjust the ordering equivalences accordingly:
                     let new_lexs = all_satisfied_lexs.into_iter().flat_map(|lex| {
-                        let orderings = lex.take_exprs();
                         let new_partial_consts =
                             sort_options_resolving_constant(Arc::new(window_col.clone()));
 
                         new_partial_consts.into_iter().map(move |partial| {
-                            let mut existing = orderings.clone();
+                            let mut existing = lex.clone();
                             existing.push(partial);
-                            LexOrdering::new(existing)
+                            existing
                         })
                     });
                     window_eq_properties.add_new_orderings(new_lexs);
@@ -446,14 +445,12 @@ pub(crate) fn window_equivalence_properties(
                         window_eq_properties.add_new_orderings(new_ordering);
                     } else {
                         // Reverse set-monotonic cases for all orderings:
-                        for lex in all_satisfied_lexs.into_iter() {
-                            let mut existing = lex.take_exprs();
-                            existing.push(PhysicalSortExpr::new(
+                        for mut lex in all_satisfied_lexs.into_iter() {
+                            lex.push(PhysicalSortExpr::new(
                                 Arc::new(window_col.clone()),
                                 SortOptions::new(increasing, true),
                             ));
-                            window_eq_properties
-                                .add_new_ordering(LexOrdering::new(existing));
+                            window_eq_properties.add_new_ordering(lex);
                         }
                     }
                 }
@@ -476,7 +473,7 @@ pub(crate) fn window_equivalence_properties(
                         if let Some(f) = order.first() {
                             asc = !f.options.descending;
                         }
-                        window_eq_properties.ordering_satisfy(&LexOrdering::new(order))
+                        window_eq_properties.ordering_satisfy(&order)
                     }) {
                         let increasing =
                             set_monotonicity.eq(&SetMonotonicity::Increasing);

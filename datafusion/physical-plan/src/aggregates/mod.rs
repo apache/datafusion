@@ -1116,7 +1116,8 @@ pub fn get_finer_aggregate_exprs_requirement(
         } else {
             requirement.clone()
         };
-        if let Some(finer_ordering) = finer.take_if(|o| eq_properties.ordering_satisfy(o))
+        if let Some(finer_ordering) =
+            finer.take_if(|o| eq_properties.ordering_satisfy(o.as_ref()))
         {
             // Requirement is satisfied by the existing ordering:
             requirement = Some(finer_ordering);
@@ -1139,7 +1140,7 @@ pub fn get_finer_aggregate_exprs_requirement(
                 requirement.clone()
             };
             if let Some(finer_ordering) =
-                finer_rev.take_if(|o| eq_properties.ordering_satisfy(o))
+                finer_rev.take_if(|o| eq_properties.ordering_satisfy(o.as_ref()))
             {
                 // Reverse requirement is satisfied by the existing ordering.
                 // Hence, we need to reverse the aggregate expression:

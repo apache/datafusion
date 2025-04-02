@@ -213,10 +213,9 @@ impl EquivalenceProperties {
     pub fn output_ordering(&self) -> Option<LexOrdering> {
         // Prune out constant expressions:
         let constants = self.constants();
-        let mut output_ordering = self.oeq_class().output_ordering()?;
-        output_ordering
-            .retain(|sort_expr| !const_exprs_contains(constants, &sort_expr.expr));
-        (!output_ordering.is_empty()).then_some(output_ordering)
+        self.oeq_class()
+            .output_ordering()?
+            .retain(|sort_expr| !const_exprs_contains(constants, &sort_expr.expr))
     }
 
     /// Returns the normalized version of the ordering equivalence class within.
@@ -497,7 +496,10 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    pub fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> Option<LexOrdering> {
+    pub fn normalize_sort_exprs<'a>(
+        &self,
+        sort_exprs: impl IntoIterator<Item = &'a PhysicalSortExpr>,
+    ) -> Option<LexOrdering> {
         let normalized_sort_exprs = self.eq_group.normalize_sort_exprs(sort_exprs);
         let mut constant_exprs = vec![];
         constant_exprs.extend(
@@ -528,11 +530,11 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    fn normalize_sort_requirements(
+    fn normalize_sort_requirements<'a>(
         &self,
-        sort_reqs: &LexRequirement,
+        sort_reqs: impl IntoIterator<Item = &'a PhysicalSortRequirement>,
     ) -> Option<LexRequirement> {
-        let normalized_reqs = self.eq_group.normalize_sort_requirements(sort_reqs)?;
+        let normalized_reqs = self.eq_group.normalize_sort_requirements(sort_reqs);
         let mut constant_exprs = vec![];
         constant_exprs.extend(
             self.constants
@@ -550,7 +552,10 @@ impl EquivalenceProperties {
 
     /// Checks whether the given ordering is satisfied by any of the existing
     /// orderings.
-    pub fn ordering_satisfy(&self, given: &LexOrdering) -> bool {
+    pub fn ordering_satisfy<'a>(
+        &self,
+        given: impl IntoIterator<Item = &'a PhysicalSortExpr>,
+    ) -> bool {
         // First, standardize the given ordering:
         let Some(normalized_ordering) = self.normalize_sort_exprs(given) else {
             // If the requirement vanishes after normalization, it is satisfied

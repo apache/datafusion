@@ -19,7 +19,7 @@
 
 use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, DerefMut, Index, Range, RangeFrom, RangeTo};
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::vec::IntoIter;
 
@@ -161,8 +161,7 @@ impl Display for PhysicalSortExpr {
 impl PhysicalSortExpr {
     /// evaluate the sort expression into SortColumn that can be passed into arrow sort kernel
     pub fn evaluate_to_sort_column(&self, batch: &RecordBatch) -> Result<SortColumn> {
-        let value_to_sort = self.expr.evaluate(batch)?;
-        let array_to_sort = match value_to_sort {
+        let array_to_sort = match self.expr.evaluate(batch)? {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(batch.num_rows())?,
         };
@@ -180,25 +179,23 @@ impl PhysicalSortExpr {
         requirement: &PhysicalSortRequirement,
         schema: &Schema,
     ) -> bool {
-        // If the column is not nullable, NULLS FIRST/LAST is not important.
-        let nullable = self.expr.nullable(schema).unwrap_or(true);
         let opts = &requirement.options;
         self.expr.eq(&requirement.expr)
-            && if nullable {
+            && if self.expr.nullable(schema).unwrap_or(true) {
                 opts.is_none_or(|opts| self.options == opts)
             } else {
+                // If the column is not nullable, NULLS FIRST/LAST is not important.
                 opts.is_none_or(|opts| self.options.descending == opts.descending)
             }
     }
 
     /// Checks whether this sort expression satisfies the given `sort_expr`.
     pub fn satisfy_expr(&self, sort_expr: &Self, schema: &Schema) -> bool {
-        // If the column is not nullable, NULLS FIRST/LAST is not important.
-        let nullable = self.expr.nullable(schema).unwrap_or(true);
         self.expr.eq(&sort_expr.expr)
-            && if nullable {
+            && if self.expr.nullable(schema).unwrap_or(true) {
                 self.options == sort_expr.options
             } else {
+                // If the column is not nullable, NULLS FIRST/LAST is not important.
                 self.options.descending == sort_expr.options.descending
             }
     }
@@ -230,26 +227,6 @@ pub struct PhysicalSortRequirement {
     /// Option to specify how the given column should be sorted.
     /// If unspecified, there are no constraints on sort options.
     pub options: Option<SortOptions>,
-}
-
-impl From<PhysicalSortRequirement> for PhysicalSortExpr {
-    /// If options is `None`, the default sort options `ASC, NULLS LAST` is used.
-    ///
-    /// The default is picked to be consistent with
-    /// PostgreSQL: <https://www.postgresql.org/docs/current/queries-order.html>
-    fn from(value: PhysicalSortRequirement) -> Self {
-        let options = value.options.unwrap_or(SortOptions {
-            descending: false,
-            nulls_first: false,
-        });
-        PhysicalSortExpr::new(value.expr, options)
-    }
-}
-
-impl From<PhysicalSortExpr> for PhysicalSortRequirement {
-    fn from(value: PhysicalSortExpr) -> Self {
-        Self::new(value.expr, Some(value.options))
-    }
 }
 
 impl PartialEq for PhysicalSortRequirement {
@@ -329,6 +306,27 @@ fn to_str(options: &SortOptions) -> &str {
     }
 }
 
+// Cross-conversion utilities between `PhysicalSortExpr` and `PhysicalSortRequirement`
+impl From<PhysicalSortExpr> for PhysicalSortRequirement {
+    fn from(value: PhysicalSortExpr) -> Self {
+        Self::new(value.expr, Some(value.options))
+    }
+}
+
+impl From<PhysicalSortRequirement> for PhysicalSortExpr {
+    /// The default sort options `ASC, NULLS LAST` when the requirement does
+    /// not specify sort options. This default is consistent with PostgreSQL.
+    ///
+    /// Reference: <https://www.postgresql.org/docs/current/queries-order.html>
+    fn from(value: PhysicalSortRequirement) -> Self {
+        let options = value.options.unwrap_or(SortOptions {
+            descending: false,
+            nulls_first: false,
+        });
+        Self::new(value.expr, options)
+    }
+}
+
 ///`LexOrdering` contains a `Vec<PhysicalSortExpr>`, which represents
 /// a lexicographical ordering.
 ///
@@ -347,66 +345,38 @@ impl LexOrdering {
         Self { inner }
     }
 
-    /// Returns the number of elements that can be stored in the LexOrdering
+    /// Appends an element to the back of the `LexOrdering`.
+    pub fn push(&mut self, physical_sort_expr: PhysicalSortExpr) {
+        self.inner.push(physical_sort_expr)
+    }
+
+    /// Add all elements from `iter` to the LexOrdering.
+    pub fn extend(&mut self, iter: impl IntoIterator<Item = PhysicalSortExpr>) {
+        self.inner.extend(iter)
+    }
+
+    /// Returns the number of elements that can be stored in the `LexOrdering`
     /// without reallocating.
     pub fn capacity(&self) -> usize {
         self.inner.capacity()
     }
 
-    /// Clears the LexOrdering, removing all elements.
-    pub fn clear(&mut self) {
-        self.inner.clear()
-    }
-
-    /// Takes ownership of the actual vector of `PhysicalSortExpr`s in the LexOrdering.
-    pub fn take_exprs(self) -> Vec<PhysicalSortExpr> {
-        self.inner
-    }
-
-    /// Returns `true` if the LexOrdering contains `expr`
-    pub fn contains(&self, expr: &PhysicalSortExpr) -> bool {
-        self.inner.contains(expr)
-    }
-
-    /// Add all elements from `iter` to the LexOrdering.
-    pub fn extend<I: IntoIterator<Item = PhysicalSortExpr>>(&mut self, iter: I) {
-        self.inner.extend(iter)
-    }
-
     /// Remove all elements from the LexOrdering where `f` evaluates to `false`.
-    pub fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&PhysicalSortExpr) -> bool,
-    {
-        self.inner.retain(f)
+    pub fn retain<F: FnMut(&PhysicalSortExpr) -> bool>(mut self, f: F) -> Option<Self> {
+        self.inner.retain(f);
+        (!self.inner.is_empty()).then_some(self)
     }
 
-    /// Returns `true` if the LexOrdering contains no elements.
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+    /// Removes the last element from the `LexOrdering` and returns it along
+    /// with the resulting `LexOrdering`. If the `LexOrdering` becomes
+    /// degenerate, returns `None` as the first element of the tuple.
+    pub fn pop(mut self) -> (Option<Self>, PhysicalSortExpr) {
+        // The vector is always non-empty, so the `unwrap` call is safe.
+        let sort_expr = self.inner.pop().unwrap();
+        ((!self.inner.is_empty()).then_some(self), sort_expr)
     }
 
-    /// Returns an iterator over each `&PhysicalSortExpr` in the LexOrdering.
-    pub fn iter(&self) -> core::slice::Iter<PhysicalSortExpr> {
-        self.inner.iter()
-    }
-
-    /// Returns the number of elements in the LexOrdering.
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Removes the last element from the LexOrdering and returns it, or `None` if it is empty.
-    pub fn pop(&mut self) -> Option<PhysicalSortExpr> {
-        self.inner.pop()
-    }
-
-    /// Appends an element to the back of the LexOrdering.
-    pub fn push(&mut self, physical_sort_expr: PhysicalSortExpr) {
-        self.inner.push(physical_sort_expr)
-    }
-
-    /// Truncates the LexOrdering, keeping only the first `len` elements.
+    /// Truncates the `LexOrdering`, keeping only the first `len` elements.
     pub fn truncate(&mut self, len: usize) {
         self.inner.truncate(len)
     }
@@ -488,38 +458,6 @@ impl FromIterator<PhysicalSortExpr> for LexOrdering {
     }
 }
 
-impl Index<usize> for LexOrdering {
-    type Output = PhysicalSortExpr;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.inner[index]
-    }
-}
-
-impl Index<Range<usize>> for LexOrdering {
-    type Output = [PhysicalSortExpr];
-
-    fn index(&self, range: Range<usize>) -> &Self::Output {
-        &self.inner[range]
-    }
-}
-
-impl Index<RangeFrom<usize>> for LexOrdering {
-    type Output = [PhysicalSortExpr];
-
-    fn index(&self, range_from: RangeFrom<usize>) -> &Self::Output {
-        &self.inner[range_from]
-    }
-}
-
-impl Index<RangeTo<usize>> for LexOrdering {
-    type Output = [PhysicalSortExpr];
-
-    fn index(&self, range_to: RangeTo<usize>) -> &Self::Output {
-        &self.inner[range_to]
-    }
-}
-
 impl IntoIterator for LexOrdering {
     type Item = PhysicalSortExpr;
     type IntoIter = IntoIter<PhysicalSortExpr>;
@@ -549,14 +487,6 @@ impl LexRequirement {
     pub fn new(inner: Vec<PhysicalSortRequirement>) -> Self {
         debug_assert!(!inner.is_empty());
         Self { inner }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &PhysicalSortRequirement> {
-        self.inner.iter()
     }
 
     pub fn push(&mut self, physical_sort_requirement: PhysicalSortRequirement) {
@@ -621,7 +551,16 @@ impl IntoIterator for LexRequirement {
     }
 }
 
-// Cross-conversions utilities between `LexOrdering` and `LexRequirement`
+impl<'a> IntoIterator for &'a LexRequirement {
+    type Item = &'a PhysicalSortRequirement;
+    type IntoIter = std::slice::Iter<'a, PhysicalSortRequirement>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.iter()
+    }
+}
+
+// Cross-conversion utilities between `LexOrdering` and `LexRequirement`
 impl From<LexOrdering> for LexRequirement {
     fn from(value: LexOrdering) -> Self {
         Self::new(value.into_iter().map(Into::into).collect())

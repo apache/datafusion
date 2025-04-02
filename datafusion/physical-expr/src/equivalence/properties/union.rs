@@ -158,11 +158,13 @@ impl UnionEquivalentOrderingBuilder {
         for mut ordering in orderings.into_iter() {
             // Progressively shorten the ordering to search for a satisfied prefix:
             loop {
-                match self.try_add_ordering(ordering, constants, properties) {
+                ordering = match self.try_add_ordering(ordering, constants, properties) {
                     AddedOrdering::Yes => break,
-                    AddedOrdering::No(o) => {
-                        ordering = o;
-                        ordering.pop();
+                    AddedOrdering::No(ordering) => {
+                        let (Some(short), _) = ordering.pop() else {
+                            break;
+                        };
+                        short
                     }
                 }
             }
