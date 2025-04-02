@@ -724,8 +724,8 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         use datafusion_expr::Operator::{
             And, BitwiseAnd, BitwiseOr, BitwiseShiftLeft, BitwiseShiftRight, BitwiseXor,
-            Divide, Eq, Modulo, Multiply, NotEq, Or, Plus, RegexIMatch, RegexMatch,
-            RegexNotIMatch, RegexNotMatch,
+            Divide, Eq, Minus, Modulo, Multiply, NotEq, Or, Plus, RegexIMatch,
+            RegexMatch, RegexNotIMatch, RegexNotMatch,
         };
 
         let info = self.info;
@@ -1455,6 +1455,8 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             //
 
             // CASE 1:
+
+            // CASE 1-1:
             // Extraction of Constants in Multiple AGG Calls, currently only supports SUM
             //
             // Before Optimization
@@ -1468,6 +1470,10 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             //        SUM(ResolutionWidth) + 89 * COUNT(*)
             // FROM hits;
             //
+
+            // CASE 1-2
+            // SUM(5 * a + b) => 5 * SUM(a) + SUM(b)
+
             // This reduces redundant computations and improves execution efficiency.
 
             // CASE 2:
@@ -1479,46 +1485,85 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 let inner = func.inner().as_ref();
 
                 if let Some(_sum) = inner.as_any().downcast_ref::<Sum>() {
-                    // We only support SUM for one BinaryExpr Plus
                     if params.args.len() == 1 {
                         if let Some(agg_expr) = params.args.first() {
-                            match agg_expr {
+                            match replace_cast_with_inner(agg_expr) {
+                                // Original logic: optimize SUM(5 * a) into 5 * SUM(a)
                                 Expr::BinaryExpr(BinaryExpr {
                                     left,
-                                    op: Plus,
+                                    op: Multiply,
                                     right,
                                 }) => {
-                                    // Left is a Literal and Right is an AggregateFunction SUM
+                                    return match (left.as_ref(), right.as_ref()) {
+                                        (Expr::Literal(const_val), sum_expr)
+                                        | (sum_expr, Expr::Literal(const_val)) => {
+                                            let original_distinct = params.distinct;
+                                            let original_filter = params.filter.clone();
+                                            let original_order_by =
+                                                params.order_by.clone();
+                                            let original_null_treatment =
+                                                params.null_treatment;
+
+                                            let base_sum = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                                                func: std::sync::Arc::new(AggregateUDF::new_from_impl(Sum::new())),
+                                                params: datafusion_expr::expr::AggregateFunctionParams {
+                                                    args: vec![sum_expr.clone()],
+                                                    distinct: original_distinct,
+                                                    filter: original_filter.clone(),
+                                                    order_by: original_order_by.clone(),
+                                                    null_treatment: original_null_treatment,
+                                                },
+                                            });
+
+                                            let final_expr =
+                                                Expr::BinaryExpr(BinaryExpr {
+                                                    left: Box::new(base_sum),
+                                                    op: Multiply,
+                                                    right: Box::new(Expr::Literal(
+                                                        const_val.clone(),
+                                                    )),
+                                                });
+
+                                            Ok(Transformed::yes(final_expr))
+                                        }
+                                        _ => Ok(Transformed::no(expr)),
+                                    };
+                                }
+
+                                // New branch: handle addition and subtraction
+                                // This branch supports optimization for expressions like:
+                                // SUM(5 * a - 3 * b) => 5 * SUM(a) - 3 * SUM(b)
+                                Expr::BinaryExpr(BinaryExpr { left, op, right })
+                                    if *op == Plus || *op == Minus =>
+                                {
+                                    let original_distinct = params.distinct;
+                                    let original_filter = params.filter.clone();
+                                    let original_order_by = params.order_by.clone();
+                                    let original_null_treatment = params.null_treatment;
+
+                                    // If the left side is a literal: SUM(Literal op expr)
+                                    // is optimized to: Literal * COUNT(*) op SUM(expr)
                                     if let Expr::Literal(const_val) = left.as_ref() {
-                                        // We need to apply the original params to the new SUM and COUNT
-                                        let original_distinct = params.distinct;
-                                        let original_filter = params.filter.clone();
-                                        let original_order_by = params.order_by.clone();
-                                        let original_null_treatment =
-                                            params.null_treatment;
-
                                         let base_sum = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                                            func: std::sync::Arc::new(AggregateUDF::new_from_impl(Sum::new())),
-                                            params: datafusion_expr::expr::AggregateFunctionParams {
-                                                args: vec![right.as_ref().clone()],
-                                                distinct: original_distinct,
-                                                filter: original_filter.clone(),
-                                                order_by: original_order_by.clone(),
-                                                null_treatment: original_null_treatment,
-                                            },
-                                        });
-
+                                                func: std::sync::Arc::new(AggregateUDF::new_from_impl(Sum::new())),
+                                                params: datafusion_expr::expr::AggregateFunctionParams {
+                                                    args: vec![right.as_ref().clone()],
+                                                    distinct: original_distinct,
+                                                    filter: original_filter.clone(),
+                                                    order_by: original_order_by.clone(),
+                                                    null_treatment: original_null_treatment,
+                                                },
+                                            });
                                         let count_expr = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                                            func: std::sync::Arc::new(AggregateUDF::new_from_impl(Count::new())),
-                                            params: datafusion_expr::expr::AggregateFunctionParams {
-                                                args: vec![Expr::Literal(COUNT_STAR_EXPANSION)],
-                                                distinct: original_distinct,
-                                                filter: original_filter,
-                                                order_by: original_order_by,
-                                                null_treatment: original_null_treatment,
-                                            },
-                                        });
-
+                                                func: std::sync::Arc::new(AggregateUDF::new_from_impl(Count::new())),
+                                                params: datafusion_expr::expr::AggregateFunctionParams {
+                                                    args: vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                                                    distinct: original_distinct,
+                                                    filter: original_filter,
+                                                    order_by: original_order_by,
+                                                    null_treatment: original_null_treatment,
+                                                },
+                                            });
                                         let adjusted_expr =
                                             Expr::BinaryExpr(BinaryExpr {
                                                 left: Box::new(Expr::Literal(
@@ -1527,48 +1572,46 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                                                 op: Multiply,
                                                 right: Box::new(count_expr),
                                             });
-
-                                        let final_expr = Expr::BinaryExpr(BinaryExpr {
-                                            left: Box::new(adjusted_expr),
-                                            op: Plus,
-                                            right: Box::new(base_sum),
-                                        });
-
+                                        let final_expr = if *op == Plus {
+                                            Expr::BinaryExpr(BinaryExpr {
+                                                left: Box::new(adjusted_expr),
+                                                op: Plus,
+                                                right: Box::new(base_sum),
+                                            })
+                                        } else {
+                                            Expr::BinaryExpr(BinaryExpr {
+                                                left: Box::new(adjusted_expr),
+                                                op: Minus,
+                                                right: Box::new(base_sum),
+                                            })
+                                        };
                                         return Ok(Transformed::yes(final_expr));
 
-                                        // Right is a Literal and Left is an AggregateFunction SUM
+                                    // If the right side is a literal: SUM(expr op Literal)
+                                    // is optimized to: SUM(expr) op Literal * COUNT(*)
                                     } else if let Expr::Literal(const_val) =
                                         right.as_ref()
                                     {
-                                        // We need to apply the original params to the new SUM and COUNT
-                                        let original_distinct = params.distinct;
-                                        let original_filter = params.filter.clone();
-                                        let original_order_by = params.order_by.clone();
-                                        let original_null_treatment =
-                                            params.null_treatment;
-
                                         let base_sum = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                                            func: std::sync::Arc::new(AggregateUDF::new_from_impl(Sum::new())),
-                                            params: datafusion_expr::expr::AggregateFunctionParams {
-                                                args: vec![left.as_ref().clone()],
-                                                distinct: original_distinct,
-                                                filter: original_filter.clone(),
-                                                order_by: original_order_by.clone(),
-                                                null_treatment: original_null_treatment,
-                                            },
-                                        });
-
+                                                func: std::sync::Arc::new(AggregateUDF::new_from_impl(Sum::new())),
+                                                params: datafusion_expr::expr::AggregateFunctionParams {
+                                                    args: vec![left.as_ref().clone()],
+                                                    distinct: original_distinct,
+                                                    filter: original_filter.clone(),
+                                                    order_by: original_order_by.clone(),
+                                                    null_treatment: original_null_treatment,
+                                                },
+                                            });
                                         let count_expr = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                                            func: std::sync::Arc::new(AggregateUDF::new_from_impl(Count::new())),
-                                            params: datafusion_expr::expr::AggregateFunctionParams {
-                                                args: vec![Expr::Literal(COUNT_STAR_EXPANSION)],
-                                                distinct: original_distinct,
-                                                filter: original_filter,
-                                                order_by: original_order_by,
-                                                null_treatment: original_null_treatment,
-                                            },
-                                        });
-
+                                                func: std::sync::Arc::new(AggregateUDF::new_from_impl(Count::new())),
+                                                params: datafusion_expr::expr::AggregateFunctionParams {
+                                                    args: vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                                                    distinct: original_distinct,
+                                                    filter: original_filter,
+                                                    order_by: original_order_by,
+                                                    null_treatment: original_null_treatment,
+                                                },
+                                            });
                                         let adjusted_expr =
                                             Expr::BinaryExpr(BinaryExpr {
                                                 left: Box::new(Expr::Literal(
@@ -1577,17 +1620,51 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                                                 op: Multiply,
                                                 right: Box::new(count_expr),
                                             });
-
-                                        let final_expr = Expr::BinaryExpr(BinaryExpr {
-                                            left: Box::new(base_sum),
-                                            op: Plus,
-                                            right: Box::new(adjusted_expr),
-                                        });
+                                        let final_expr = if *op == Plus {
+                                            Expr::BinaryExpr(BinaryExpr {
+                                                left: Box::new(base_sum),
+                                                op: Plus,
+                                                right: Box::new(adjusted_expr),
+                                            })
+                                        } else {
+                                            Expr::BinaryExpr(BinaryExpr {
+                                                left: Box::new(base_sum),
+                                                op: Minus,
+                                                right: Box::new(adjusted_expr),
+                                            })
+                                        };
                                         return Ok(Transformed::yes(final_expr));
                                     } else {
-                                        Transformed::no(expr)
+                                        // If neither side is a literal, call SUM on both sides and combine them with the operator
+                                        let left_sum = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                                                func: std::sync::Arc::new(AggregateUDF::new_from_impl(Sum::new())),
+                                                params: datafusion_expr::expr::AggregateFunctionParams {
+                                                    args: vec![left.as_ref().clone()],
+                                                    distinct: original_distinct,
+                                                    filter: original_filter.clone(),
+                                                    order_by: original_order_by.clone(),
+                                                    null_treatment: original_null_treatment,
+                                                },
+                                            });
+                                        let right_sum = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                                                func: std::sync::Arc::new(AggregateUDF::new_from_impl(Sum::new())),
+                                                params: datafusion_expr::expr::AggregateFunctionParams {
+                                                    args: vec![right.as_ref().clone()],
+                                                    distinct: original_distinct,
+                                                    filter: original_filter,
+                                                    order_by: original_order_by,
+                                                    null_treatment: original_null_treatment,
+                                                },
+                                            });
+                                        let final_expr = Expr::BinaryExpr(BinaryExpr {
+                                            left: Box::new(left_sum),
+                                            op: *op,
+                                            right: Box::new(right_sum),
+                                        });
+                                        return Ok(Transformed::yes(final_expr));
                                     }
                                 }
+
                                 _ => Transformed::no(expr),
                             }
                         } else {
@@ -1983,6 +2060,15 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // no additional rewrites possible
             expr => Transformed::no(expr),
         })
+    }
+}
+
+pub fn replace_cast_with_inner(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Cast(Cast {
+            expr: inner_expr, ..
+        }) => inner_expr.as_ref(),
+        _ => expr,
     }
 }
 
