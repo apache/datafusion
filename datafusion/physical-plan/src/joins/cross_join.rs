@@ -354,16 +354,15 @@ impl ExecutionPlan for CrossJoinExec {
 
         // Summarize the `left_stats`
         let statistics = compute_summary_statistics(
-            left_stats.iter(),
+            left_stats.into_iter(),
             self.schema.fields().len(),
             |stats| Some(stats),
         );
 
-        let mut stats = Vec::new();
-        for right in right_stats.iter() {
-            stats.push(stats_cartesian_product(statistics.clone(), right.clone()));
-        }
-        Ok(stats)
+        Ok(right_stats
+            .into_iter()
+            .map(|right| stats_cartesian_product(statistics.clone(), right))
+            .collect())
     }
 
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,

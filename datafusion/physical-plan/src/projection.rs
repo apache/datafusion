@@ -252,17 +252,18 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
-        let input_stats = self.input.statistics_by_partition()?;
-        let mut stats = Vec::with_capacity(input_stats.len());
-        for input_stat in input_stats {
-            let stat = stats_projection(
-                input_stat.clone(),
-                self.expr.iter().map(|(e, _)| Arc::clone(e)),
-                Arc::clone(&self.schema),
-            );
-            stats.push(stat);
-        }
-        Ok(stats)
+        Ok(self
+            .input
+            .statistics_by_partition()?
+            .into_iter()
+            .map(|input_stats| {
+                stats_projection(
+                    input_stats,
+                    self.expr.iter().map(|(e, _)| Arc::clone(e)),
+                    Arc::clone(&self.schema),
+                )
+            })
+            .collect())
     }
 
     fn supports_limit_pushdown(&self) -> bool {
