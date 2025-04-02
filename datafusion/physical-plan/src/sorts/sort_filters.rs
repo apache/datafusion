@@ -141,11 +141,9 @@ impl SortDynamicFilterSource {
                             replace = false;
                             break;
                         }
-                    } else {
-                        if !new_value_is_greater_than_current {
-                            replace = false;
-                            break;
-                        }
+                    } else if !new_value_is_greater_than_current {
+                        replace = false;
+                        break;
                     }
                     // Handle the equality case
                     if new_value.eq(current_value) {

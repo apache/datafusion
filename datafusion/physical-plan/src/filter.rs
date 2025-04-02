@@ -448,12 +448,12 @@ impl ExecutionPlan for FilterExec {
         // We do however need to remap the columns.
         let input_schema = self.input.schema();
         let filters = filters
-            .into_iter()
+            .iter()
             .map(|f| reassign_predicate_columns(Arc::clone(f), &input_schema, false))
             .collect::<Result<Vec<_>>>()?;
         Ok(filters
             .into_iter()
-            .map(|f| FilterPushdownAllowed::Allowed(f))
+            .map(FilterPushdownAllowed::Allowed)
             .collect())
     }
 
@@ -484,7 +484,7 @@ impl ExecutionPlan for FilterExec {
                 }
             })
             // Combine that with any leftover filters from parents that our children couldn't handle
-            .chain(parent_filters_remaining.iter().map(|f| Arc::clone(f)));
+            .chain(parent_filters_remaining.iter().map(Arc::clone));
 
         let new_predicate = conjunction(new_filters);
 

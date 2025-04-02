@@ -220,12 +220,12 @@ impl ExecutionPlan for DataSourceExec {
             .push_down_filters(parent_filters_remaining)?
         {
             let new_self = Arc::new(DataSourceExec::new(pushdown_result.inner));
-            return Ok(Some(ExecutionPlanFilterPushdownResult::new(
+            Ok(Some(ExecutionPlanFilterPushdownResult::new(
                 new_self,
                 pushdown_result.support,
-            )));
+            )))
         } else {
-            return Ok(None);
+            Ok(None)
         }
     }
 }

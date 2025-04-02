@@ -75,6 +75,7 @@ async fn check_stats_precision_with_filter_pushdown() {
     let exec = FilterPushdown::new()
         .optimize(Arc::new(exec), state.config().options())
         .unwrap();
+    println!("exec: {:?}", exec);
     let filter_exec = exec.as_any().downcast_ref::<FilterExec>().unwrap();
     // TODO: we need to get the FilterExec to push down its filters
     // since they no longer get applied to the DataSourceExec directly.

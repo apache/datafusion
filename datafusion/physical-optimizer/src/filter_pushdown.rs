@@ -70,6 +70,7 @@ impl ChildPushdownState {
     }
 }
 
+/// See [`pushdown_filters`] for more details.
 fn push_down_into_children(
     node: &Arc<dyn ExecutionPlan>,
     filters: &[Arc<dyn PhysicalExpr>],
@@ -78,7 +79,7 @@ fn push_down_into_children(
     let mut new_children = Vec::with_capacity(children.len());
     let mut filter_pushdown_result = vec![ChildPushdownState::NoChild; filters.len()];
     for child in children {
-        if let Some(result) = pushdown_filters(child, &filters)? {
+        if let Some(result) = pushdown_filters(child, filters)? {
             new_children.push(result.inner);
             for (idx, support) in result.support.iter().enumerate() {
                 filter_pushdown_result[idx] =
@@ -126,7 +127,7 @@ fn pushdown_filters(
     // These are the filters the current node "owns" or "produces" and wants to push down.
     let node_filters = node.filters_for_pushdown()?;
     // Check which nodes from parents this node is okay with us trying to push down to it's children.
-    let parent_pushdown_request_result = node.filter_pushdown_request(&parent_filters)?;
+    let parent_pushdown_request_result = node.filter_pushdown_request(parent_filters)?;
     // Do some index masking so that we only ever call nodes with the filters relevant to them / that they're allowed to touch.
     // But we still need to reconstruct the full result for our caller.
     let parent_filter_for_pushdown_indices = parent_pushdown_request_result
@@ -147,7 +148,7 @@ fn pushdown_filters(
     let all_filters_to_push_down = node_filters
         .iter()
         .chain(parent_filters_to_push_down.iter())
-        .map(|f| Arc::clone(f))
+        .map(Arc::clone)
         .collect::<Vec<_>>();
     // Push down into children
     let child_pushdown_result = push_down_into_children(node, &all_filters_to_push_down)?;
@@ -484,7 +485,6 @@ impl PhysicalOptimizerRule for FilterPushdown {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(result) = pushdown_filters(&plan, &[])? {
-            println!("new plan: {:?}", result.inner);
             Ok(result.inner)
         } else {
             Ok(plan)
