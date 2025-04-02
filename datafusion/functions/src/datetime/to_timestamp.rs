@@ -18,15 +18,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::datetime::common::*;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-
-use crate::datetime::common::*;
-use datafusion_common::{exec_err, Result, ScalarType};
+use datafusion_common::{exec_err, Result, ScalarType, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -329,6 +328,30 @@ impl ScalarUDFImpl for ToTimestampFunc {
             Utf8View | LargeUtf8 | Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(&args, "to_timestamp")
             }
+            Decimal128(_, _) => {
+                match &args[0] {
+                    ColumnarValue::Scalar(ScalarValue::Decimal128(
+                        Some(value),
+                        _,
+                        scale,
+                    )) => {
+                        // Convert decimal to seconds and nanoseconds
+                        let scale_factor = 10_i128.pow(*scale as u32);
+                        let seconds = value / scale_factor;
+                        let fraction = value % scale_factor;
+
+                        let nanos = (fraction * 1_000_000_000) / scale_factor;
+
+                        let timestamp_nanos = seconds * 1_000_000_000 + nanos;
+
+                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                            Some(timestamp_nanos as i64),
+                            None,
+                        )))
+                    }
+                    _ => exec_err!("Invalid decimal value"),
+                }
+            }
             other => {
                 exec_err!(
                     "Unsupported data type {:?} for function to_timestamp",
@@ -377,7 +400,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         }
 
         match args[0].data_type() {
-            Null | Int32 | Int64 | Timestamp(_, None) => {
+            Null | Int32 | Int64 | Timestamp(_, None) | Decimal128(_, _) => {
                 args[0].cast_to(&Timestamp(Second, None), None)
             }
             Timestamp(_, Some(tz)) => args[0].cast_to(&Timestamp(Second, Some(tz)), None),

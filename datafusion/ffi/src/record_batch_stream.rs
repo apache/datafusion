@@ -232,7 +232,8 @@ mod tests {
 
         let batch = ffi_rbs.next().await;
         assert!(batch.is_some());
-        assert!(batch.unwrap().is_ok());
+        assert!(batch.as_ref().unwrap().is_ok());
+        assert_eq!(batch.unwrap().unwrap(), record_batch);
 
         // There should only be one batch
         let no_batch = ffi_rbs.next().await;

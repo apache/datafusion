@@ -39,12 +39,16 @@ use datafusion::{
     common::record_batch,
 };
 use sync_provider::create_sync_table_provider;
-use udf_udaf_udwf::{create_ffi_abs_func, create_ffi_stddev_func, create_ffi_sum_func};
+use udf_udaf_udwf::{
+    create_ffi_abs_func, create_ffi_random_func, create_ffi_stddev_func,
+    create_ffi_sum_func,
+};
 
 mod async_provider;
 pub mod catalog;
 mod sync_provider;
 mod udf_udaf_udwf;
+pub mod utils;
 
 #[repr(C)]
 #[derive(StableAbi)]
@@ -67,6 +71,7 @@ pub struct ForeignLibraryModule {
 
     /// Createa  grouping UDAF using stddev
     pub create_stddev_udaf: extern "C" fn() -> FFI_AggregateUDF,
+    pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -115,6 +120,7 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_scalar_udf: create_ffi_abs_func,
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,
+        create_nullary_udf: create_ffi_random_func,
         version: super::version,
     }
     .leak_into_prefix()

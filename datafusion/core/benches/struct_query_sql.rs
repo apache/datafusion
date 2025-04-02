@@ -27,9 +27,7 @@ use futures::executor::block_on;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-async fn query(ctx: &SessionContext, sql: &str) {
-    let rt = Runtime::new().unwrap();
-
+async fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     // execute the query
     let df = rt.block_on(ctx.sql(sql)).unwrap();
     criterion::black_box(rt.block_on(df.collect()).unwrap());
@@ -68,10 +66,11 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext>
 fn criterion_benchmark(c: &mut Criterion) {
     let array_len = 524_288; // 2^19
     let batch_size = 4096; // 2^12
+    let ctx = create_context(array_len, batch_size).unwrap();
+    let rt = Runtime::new().unwrap();
 
     c.bench_function("struct", |b| {
-        let ctx = create_context(array_len, batch_size).unwrap();
-        b.iter(|| block_on(query(&ctx, "select struct(f32, f64) from t")))
+        b.iter(|| block_on(query(&ctx, &rt, "select struct(f32, f64) from t")))
     });
 }
 
