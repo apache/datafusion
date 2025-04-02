@@ -507,7 +507,7 @@ impl GroupedHashAggregateStream {
             AggregateMode::Partial,
         )?;
 
-        // Need to update the group by expressions to point to the correct column after schema change
+        // Need to update the GROUP BY expressions to point to the correct column after schema change
         let merging_group_by_expr = agg_group_by
             .expr
             .iter()
