@@ -37,6 +37,11 @@
 
 This is a list of DataFusion related blog posts, articles, and other resources. Please open a PR to add any new resources you create or find
 
+
+- **2025-03-21** [Blog: Efficient Filter Pushdown in Parquet](https://datafusion.apache.org/blog/2025/03/21/parquet-pushdown/)
+
+- **2025-03-20** [Blog: Parquet Pruning in DataFusion: Read Only What Matters](https://datafusion.apache.org/blog/2025/03/20/parquet-pruning/)
+
 - **2025-02-12** [Video: Alex Kesling on Apache Arrow DataFusion - Papers We Love NYC ](https://www.youtube.com/watch?v=6A4vFRpSq3k)
 
 - **2025-01-30** [Video: Data & Drinks: Building Next-Gen Data Systems with Apache DataFusion](https://www.youtube.com/watch?v=GruBeVDoWq4)
