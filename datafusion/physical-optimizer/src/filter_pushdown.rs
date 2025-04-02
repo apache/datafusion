@@ -194,21 +194,21 @@ fn pushdown_filters(
 /// For example, consider the following plan:
 ///
 /// ```text
-// ┌──────────────────────┐
-// │ CoalesceBatchesExec  │
-// └──────────────────────┘
-//             │
-//             ▼
-// ┌──────────────────────┐
-// │      FilterExec      │
-// │  filters = [ id=1]   │
-// └──────────────────────┘
-//             │
-//             ▼
-// ┌──────────────────────┐
-// │    DataSourceExec    │
-// │    projection = *    │
-// └──────────────────────┘
+/// ┌──────────────────────┐
+/// │ CoalesceBatchesExec  │
+/// └──────────────────────┘
+///             │
+///             ▼
+/// ┌──────────────────────┐
+/// │      FilterExec      │
+/// │  filters = [ id=1]   │
+/// └──────────────────────┘
+///             │
+///             ▼
+/// ┌──────────────────────┐
+/// │    DataSourceExec    │
+/// │    projection = *    │
+/// └──────────────────────┘
 /// ```
 ///
 /// Our goal is to move the `id = 1` filter from the `FilterExec` node to the `DataSourceExec` node.
@@ -463,6 +463,8 @@ fn pushdown_filters(
 /// Now as we fill our `TopK` heap we can push down the state of the heap to the `DataSourceExec` node
 /// to avoid reading files / row groups / pages / rows that could not possibly be in the top 10.
 /// This is implemented in datafusion/physical-plan/src/sorts/sort_filters.rs.
+///
+// TODO potentially rename this to align with logical optimizer `PushdownFilter`
 #[derive(Debug)]
 pub struct FilterPushdown {}
 

@@ -290,3 +290,13 @@ impl DataSourceExec {
             })
     }
 }
+
+/// Create a new `DataSourceExec` from a `DataSource`
+impl<S> From<S> for DataSourceExec
+where
+    S: DataSource + 'static,
+{
+    fn from(source: S) -> Self {
+        Self::new(Arc::new(source))
+    }
+}
