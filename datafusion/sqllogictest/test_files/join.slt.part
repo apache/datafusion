@@ -625,6 +625,28 @@ FROM t1
 ----
 11 11 11
 
+# join condition is required
+# TODO: query error join condition should not be empty
+# related to: https://github.com/apache/datafusion/issues/13486
+statement ok
+SELECT * FROM t1 JOIN t2
+
+# join condition is required
+query error join condition should not be empty
+SELECT * FROM t1 LEFT JOIN t2
+
+# join condition is required
+query error join condition should not be empty
+SELECT * FROM t1 RIGHT JOIN t2
+
+# join condition is required
+query error join condition should not be empty
+SELECT * FROM t1 FULL JOIN t2
+
+# cross join no need for join condition
+statement ok
+SELECT * FROM t1 CROSS JOIN t2
+
 # multiple inner joins with mixed ON clause and filter
 query III rowsort
 SELECT t1.t1_id, t2.t2_id, t3.t3_id
@@ -1351,26 +1373,21 @@ logical_plan
 06)----TableScan: f projection=[a]
 07)--TableScan: s projection=[b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col1@1, CAST(s.b AS Int64)@1)], projection=[col0@0, col1@1, a@2, b@3]
-03)----ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@0 as a]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[a@0, col0@2, col1@3]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([CAST(f.a AS Int64)@1], 16), input_partitions=1
-08)--------------ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
-10)----------CoalesceBatchesExec: target_batch_size=8192
-11)------------RepartitionExec: partitioning=Hash([col0@0], 16), input_partitions=16
-12)--------------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
-13)----------------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
-14)------------------CoalesceBatchesExec: target_batch_size=8192
-15)--------------------FilterExec: y@1 = x@0
-16)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
-17)----CoalesceBatchesExec: target_batch_size=8192
-18)------RepartitionExec: partitioning=Hash([CAST(s.b AS Int64)@1], 16), input_partitions=1
-19)--------ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
-20)----------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@3 as a, b@0 as b]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(s.b AS Int64)@1, col1@1)], projection=[b@0, col0@2, col1@3, a@4]
+04)------ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@0 as a]
+07)--------CoalesceBatchesExec: target_batch_size=8192
+08)----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[a@0, col0@2, col1@3]
+09)------------ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
+10)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+11)------------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
+12)--------------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
+13)----------------CoalesceBatchesExec: target_batch_size=8192
+14)------------------FilterExec: y@1 = x@0
+15)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table pairs;

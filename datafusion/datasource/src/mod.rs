@@ -39,6 +39,7 @@ pub mod file_sink_config;
 pub mod file_stream;
 pub mod memory;
 pub mod schema_adapter;
+pub mod sink;
 pub mod source;
 mod statistics;
 
@@ -59,6 +60,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 pub use self::url::ListingTableUrl;
+pub use statistics::add_row_stats;
+pub use statistics::compute_all_files_statistics;
 
 /// Stream of files get listed from object store
 pub type PartitionedFileStream =
@@ -105,7 +108,7 @@ pub struct PartitionedFile {
     ///
     /// DataFusion relies on these statistics for planning (in particular to sort file groups),
     /// so if they are incorrect, incorrect answers may result.
-    pub statistics: Option<Statistics>,
+    pub statistics: Option<Arc<Statistics>>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
     /// The estimated size of the parquet metadata, in bytes
@@ -183,6 +186,12 @@ impl PartitionedFile {
         extensions: Arc<dyn std::any::Any + Send + Sync>,
     ) -> Self {
         self.extensions = Some(extensions);
+        self
+    }
+
+    // Update the statistics for this file.
+    pub fn with_statistics(mut self, statistics: Arc<Statistics>) -> Self {
+        self.statistics = Some(statistics);
         self
     }
 }

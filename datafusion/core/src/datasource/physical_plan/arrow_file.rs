@@ -20,7 +20,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileMeta, FileOpenFuture, FileOpener};
 use crate::error::Result;
 
@@ -42,6 +41,7 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 
+use datafusion_datasource::file_groups::FileGroup;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
@@ -124,7 +124,7 @@ impl ArrowExec {
         )
     }
 
-    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+    fn with_file_groups(mut self, file_groups: Vec<FileGroup>) -> Self {
         self.base_config.file_groups = file_groups.clone();
         let mut file_source = self.file_scan_config();
         file_source = file_source.with_file_groups(file_groups);

@@ -2574,7 +2574,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r###"
+        @r"
     +---------------+------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                   |
     +---------------+------------------------------------------------------------------------------------------------------------------------+
@@ -2585,14 +2585,14 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     |               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]                                                                |
     |               |         TableScan: t2 projection=[]                                                                                    |
     | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                            |
-    |               |   HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
+    |               |   HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
     |               |     ProjectionExec: expr=[4 as count(*)]                                                                               |
     |               |       PlaceholderRowExec                                                                                               |
     |               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |
     |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
     |               |                                                                                                                        |
     +---------------+------------------------------------------------------------------------------------------------------------------------+
-    "###
+    "
     );
 
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
@@ -2620,7 +2620,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     // make sure sql plan same with df plan
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r###"
+        @r"
     +---------------+------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                   |
     +---------------+------------------------------------------------------------------------------------------------------------------------+
@@ -2630,14 +2630,14 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     |               |     Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]                                                      |
     |               |       TableScan: t2 projection=[]                                                                                      |
     | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                            |
-    |               |   HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
+    |               |   HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
     |               |     ProjectionExec: expr=[4 as count(*)]                                                                               |
     |               |       PlaceholderRowExec                                                                                               |
     |               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |
     |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
     |               |                                                                                                                        |
     +---------------+------------------------------------------------------------------------------------------------------------------------+
-    "###
+    "
     );
 
     Ok(())
@@ -2851,7 +2851,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r###"
+        @r"
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                      |
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
@@ -2867,10 +2867,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                               |
     |               |   FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |
     |               |     CoalesceBatchesExec: target_batch_size=8192                                                                           |
-    |               |       HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
-    |               |         CoalesceBatchesExec: target_batch_size=8192                                                                       |
-    |               |           RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                                |
-    |               |             DataSourceExec: partitions=1, partition_sizes=[1]                                                             |
+    |               |       HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
+    |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                 |
     |               |         ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                             |
     |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]                                    |
     |               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |
@@ -2880,7 +2878,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |
     |               |                                                                                                                           |
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
-    "###
+    "
     );
 
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
@@ -2910,7 +2908,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r###"
+        @r"
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                      |
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
@@ -2926,10 +2924,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                               |
     |               |   FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |
     |               |     CoalesceBatchesExec: target_batch_size=8192                                                                           |
-    |               |       HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
-    |               |         CoalesceBatchesExec: target_batch_size=8192                                                                       |
-    |               |           RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                                |
-    |               |             DataSourceExec: partitions=1, partition_sizes=[1]                                                             |
+    |               |       HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |
+    |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                 |
     |               |         ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                    |
     |               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                           |
     |               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |
@@ -2939,7 +2935,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |
     |               |                                                                                                                           |
     +---------------+---------------------------------------------------------------------------------------------------------------------------+
-    "###
+    "
     );
 
     Ok(())
@@ -5211,6 +5207,40 @@ fn union_fields() -> UnionFields {
 }
 
 #[tokio::test]
+async fn union_literal_is_null_and_not_null() -> Result<()> {
+    let str_array_1 = StringArray::from(vec![None::<String>]);
+    let str_array_2 = StringArray::from(vec![Some("a")]);
+
+    let batch_1 =
+        RecordBatch::try_from_iter(vec![("arr", Arc::new(str_array_1) as ArrayRef)])?;
+    let batch_2 =
+        RecordBatch::try_from_iter(vec![("arr", Arc::new(str_array_2) as ArrayRef)])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("union_batch_1", batch_1)?;
+    ctx.register_batch("union_batch_2", batch_2)?;
+
+    let df1 = ctx.table("union_batch_1").await?;
+    let df2 = ctx.table("union_batch_2").await?;
+
+    let batches = df1.union(df2)?.collect().await?;
+    let schema = batches[0].schema();
+
+    for batch in batches {
+        // Verify schema is the same for all batches
+        if !schema.contains(&batch.schema()) {
+            return Err(DataFusionError::Internal(format!(
+                "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
+                &schema,
+                batch.schema()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn sparse_union_is_null() {
     // union of [{A=1}, {A=}, {B=3.2}, {B=}, {C="a"}, {C=}]
     let int_array = Int32Array::from(vec![Some(1), None, None, None, None, None]);
@@ -5479,6 +5509,64 @@ async fn boolean_dictionary_as_filter() {
     +----------------+
     "###
     );
+}
+
+#[tokio::test]
+async fn test_union_by_name() -> Result<()> {
+    let df = create_test_table("test")
+        .await?
+        .select(vec![col("a"), col("b"), lit(1).alias("c")])?
+        .alias("table_alias")?;
+
+    let df2 = df.clone().select_columns(&["c", "b", "a"])?;
+    let result = df.union_by_name(df2)?.sort_by(vec![col("a"), col("b")])?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&result.collect().await?),
+        @r"
+    +-----------+-----+---+
+    | a         | b   | c |
+    +-----------+-----+---+
+    | 123AbcDef | 100 | 1 |
+    | 123AbcDef | 100 | 1 |
+    | CBAdef    | 10  | 1 |
+    | CBAdef    | 10  | 1 |
+    | abc123    | 10  | 1 |
+    | abc123    | 10  | 1 |
+    | abcDEF    | 1   | 1 |
+    | abcDEF    | 1   | 1 |
+    +-----------+-----+---+
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_union_by_name_distinct() -> Result<()> {
+    let df = create_test_table("test")
+        .await?
+        .select(vec![col("a"), col("b"), lit(1).alias("c")])?
+        .alias("table_alias")?;
+
+    let df2 = df.clone().select_columns(&["c", "b", "a"])?;
+    let result = df
+        .union_by_name_distinct(df2)?
+        .sort_by(vec![col("a"), col("b")])?;
+
+    assert_snapshot!(
+        batches_to_sort_string(&result.collect().await?),
+        @r"
+    +-----------+-----+---+
+    | a         | b   | c |
+    +-----------+-----+---+
+    | 123AbcDef | 100 | 1 |
+    | CBAdef    | 10  | 1 |
+    | abc123    | 10  | 1 |
+    | abcDEF    | 1   | 1 |
+    +-----------+-----+---+
+    "
+    );
+    Ok(())
 }
 
 #[tokio::test]
