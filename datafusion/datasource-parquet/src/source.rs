@@ -596,9 +596,17 @@ impl FileSource for ParquetSource {
         match predicate {
             Some(new_predicate) if !new_predicate.eq(&lit(true)) => {
                 conf.predicate = Some(new_predicate);
+                // Respect the current pushdown filters setting,
+                // otherwise we would mark filters as exact but then not filter at the row level
+                // because the setting gets checked again inside the ParquetOpener!
+                let support = if self.table_parquet_options.global.pushdown_filters {
+                    vec![FilterPushdownSupport::Exact; filters.len()]
+                } else {
+                    vec![FilterPushdownSupport::Inexact; filters.len()]
+                };
                 Ok(Some(FileSourceFilterPushdownResult::new(
                     Arc::new(conf),
-                    vec![FilterPushdownSupport::Exact; filters.len()],
+                    support,
                 )))
             }
             _no_op_predicate => Ok(None),
