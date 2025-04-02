@@ -31,7 +31,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource_parquet::source::ParquetSource;
-use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion_physical_optimizer::filter_pushdown::PushdownFilter;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::{displayable, ExecutionPlan};
@@ -47,7 +47,7 @@ fn test_pushdown_into_scan() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}),
+        OptimizationTest::new(plan, PushdownFilter{}),
         @r"
     OptimizationTest:
       input:
@@ -71,7 +71,7 @@ fn test_parquet_pushdown() {
     let plan = Arc::new(FilterExec::try_new(predicate2, filter1).unwrap());
 
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown{}),
+        OptimizationTest::new(plan, PushdownFilter{}),
         @r"
     OptimizationTest:
       input:
@@ -80,9 +80,8 @@ fn test_parquet_pushdown() {
         -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet
       output:
         Ok:
-          - FilterExec: b@1 = bar
-          -   FilterExec: a@0 = foo AND b@1 = bar
-          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=b@1 = bar AND a@0 = foo
+          - FilterExec: a@0 = foo AND b@1 = bar
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=a@0 = foo AND b@1 = bar
     "
     );
 }

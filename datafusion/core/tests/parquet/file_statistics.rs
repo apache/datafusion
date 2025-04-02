@@ -38,7 +38,7 @@ use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{col, lit, Expr};
 
 use datafusion::datasource::physical_plan::FileScanConfig;
-use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion_physical_optimizer::filter_pushdown::PushdownFilter;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::ExecutionPlan;
@@ -70,7 +70,7 @@ async fn check_stats_precision_with_filter_pushdown() {
         exec,
     )
     .unwrap();
-    let exec = FilterPushdown::new()
+    let exec = PushdownFilter::new()
         .optimize(Arc::new(exec), state.config().options())
         .unwrap();
     let data_source_exec = exec

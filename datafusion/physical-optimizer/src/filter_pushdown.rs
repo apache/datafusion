@@ -463,24 +463,22 @@ fn pushdown_filters(
 /// Now as we fill our `TopK` heap we can push down the state of the heap to the `DataSourceExec` node
 /// to avoid reading files / row groups / pages / rows that could not possibly be in the top 10.
 /// This is implemented in datafusion/physical-plan/src/sorts/sort_filters.rs.
-///
-// TODO potentially rename this to align with logical optimizer `PushdownFilter`
 #[derive(Debug)]
-pub struct FilterPushdown {}
+pub struct PushdownFilter {}
 
-impl Default for FilterPushdown {
+impl Default for PushdownFilter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl FilterPushdown {
+impl PushdownFilter {
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl PhysicalOptimizerRule for FilterPushdown {
+impl PhysicalOptimizerRule for PushdownFilter {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
