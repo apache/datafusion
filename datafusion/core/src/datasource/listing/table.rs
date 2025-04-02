@@ -36,22 +36,19 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
+use datafusion_expr::{Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_common::{
-    config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
-    SchemaExt, ToDFSchema,
+    config_datafusion_err, internal_err, plan_err, project_schema, Constraints, SchemaExt,
 };
 use datafusion_execution::cache::{
     cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache,
 };
-use datafusion_physical_expr::{
-    create_physical_expr, LexOrdering, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{LexOrdering, PhysicalSortRequirement};
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
@@ -918,19 +915,6 @@ impl TableProvider for ListingTable {
             None => {} // no ordering required
         };
 
-        let filters = match conjunction(filters.to_vec()) {
-            Some(expr) => {
-                let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
-                let filters = create_physical_expr(
-                    &expr,
-                    &table_df_schema,
-                    state.execution_props(),
-                )?;
-                Some(filters)
-            }
-            None => None,
-        };
-
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)
         else {
@@ -955,7 +939,7 @@ impl TableProvider for ListingTable {
                 .with_output_ordering(output_ordering)
                 .with_table_partition_cols(table_partition_cols)
                 .build(),
-                filters.as_ref(),
+                None,
             )
             .await
     }

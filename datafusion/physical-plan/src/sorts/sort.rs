@@ -980,7 +980,7 @@ impl SortExec {
     pub fn new(expr: LexOrdering, input: Arc<dyn ExecutionPlan>) -> Self {
         let preserve_partitioning = false;
         let cache = Self::compute_properties(&input, expr.clone(), preserve_partitioning);
-        let dynamic_filter_source = Arc::new(SortDynamicFilterSource::new(&expr));
+        let dynamic_filter_source = Arc::new(SortDynamicFilterSource::new(expr.clone()));
         Self {
             expr,
             input,

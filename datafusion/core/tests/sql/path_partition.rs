@@ -42,8 +42,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
-use datafusion_expr::{col, lit, Expr, Operator};
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion_expr::{col, lit, Expr};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -90,18 +89,9 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
     if let Some((_, parquet_config)) =
         data_source_exec.downcast_to_file_source::<ParquetSource>()
     {
-        let pred = parquet_config.predicate().unwrap();
-        // Only the last filter should be pushdown to TableScan
-        let expected = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
-            Operator::Gt,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-        ));
-
-        assert!(pred.as_any().is::<BinaryExpr>());
-        let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
-
-        assert_eq!(pred, expected.as_ref());
+        assert!(parquet_config.predicate().is_none());
+    } else {
+        panic!("Expected parquet source");
     }
     Ok(())
 }

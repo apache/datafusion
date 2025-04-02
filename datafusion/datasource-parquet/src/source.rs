@@ -489,6 +489,7 @@ impl FileSource for ParquetSource {
             reorder_filters: self.reorder_filters(),
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
+            enable_stats_pruning: self.table_parquet_options.global.pruning,
             schema_adapter_factory,
         })
     }

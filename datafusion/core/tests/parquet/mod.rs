@@ -1231,7 +1231,7 @@ async fn test_topk_predicate_pushdown() {
     assert_batches_eq!(expected, &batches);
 
     let plan = test_case.explain_plan().await;
-    assert_contains!(&plan, "row_groups_pruned_statistics=3");
+    assert_contains!(&plan, "row_groups_pruned_statistics=2");
 }
 
 #[tokio::test]
@@ -1266,7 +1266,7 @@ async fn test_topk_predicate_pushdown_nulls_first() {
     assert_batches_eq!(expected, &batches);
 
     let plan = test_case.explain_plan().await;
-    assert_contains!(&plan, "row_groups_pruned_statistics=5");
+    assert_contains!(&plan, "row_groups_pruned_statistics=3");
 }
 
 #[tokio::test]
@@ -1361,7 +1361,7 @@ async fn test_topk_predicate_pushdown_nulls_last() {
     assert_batches_eq!(expected, &batches);
 
     let plan = test_case.explain_plan().await;
-    assert_contains!(&plan, "row_groups_pruned_statistics=3");
+    assert_contains!(&plan, "row_groups_pruned_statistics=0");
 }
 
 #[tokio::test]

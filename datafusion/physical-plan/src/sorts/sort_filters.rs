@@ -21,7 +21,6 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use arrow_schema::SortOptions;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::{
@@ -30,17 +29,6 @@ use datafusion_physical_expr::{
 };
 
 use crate::dynamic_filters::{DynamicFilterPhysicalExpr, DynamicFilterSource};
-
-/// Holds threshold value and sort order information for a column
-#[derive(Debug, Clone)]
-struct ColumnThreshold {
-    /// The current threshold value
-    pub value: Option<ScalarValue>,
-    /// The column expression
-    pub expr: Arc<dyn PhysicalExpr>,
-    /// Sort options
-    pub sort_options: SortOptions,
-}
 
 /// Pushdown of dynamic fitlers from sort + limit operators (aka `TopK`) is used to speed up queries
 /// such as `SELECT * FROM table ORDER BY col DESC LIMIT 10` by pushing down the
@@ -79,7 +67,10 @@ struct ColumnThreshold {
 // So this optimization just saved us 50% of the work of scanning the data.
 #[derive(Debug)]
 pub struct SortDynamicFilterSource {
-    thresholds: Arc<RwLock<Vec<ColumnThreshold>>>,
+    /// Sort expressions
+    expr: LexOrdering,
+    /// Current threshold values
+    thresholds: Arc<RwLock<Vec<Option<ScalarValue>>>>,
 }
 
 impl Hash for SortDynamicFilterSource {
@@ -99,80 +90,78 @@ impl PartialEq for SortDynamicFilterSource {
 impl Eq for SortDynamicFilterSource {}
 
 impl SortDynamicFilterSource {
-    pub fn new(ordering: &LexOrdering) -> Self {
-        let thresholds = ordering
-            .iter()
-            .map(|sort_expr| ColumnThreshold {
-                value: None,
-                expr: Arc::clone(&sort_expr.expr),
-                sort_options: sort_expr.options,
-            })
-            .collect();
-
-        let thresholds = Arc::new(RwLock::new(thresholds));
-
-        Self { thresholds }
+    pub fn new(expr: LexOrdering) -> Self {
+        let thresholds = Arc::new(RwLock::new(vec![None; expr.len()]));
+        Self { expr, thresholds }
     }
 
     pub fn update_values(&self, new_values: &[ScalarValue]) -> Result<()> {
-        let mut thresholds = self.thresholds.write().map_err(|_| {
-            datafusion_common::DataFusionError::Execution(
-                "Failed to acquire write lock on thresholds".to_string(),
-            )
-        })?;
-        if new_values.len() != thresholds.len() {
-            return Err(datafusion_common::DataFusionError::Execution(
-                "The number of new values does not match the number of thresholds"
-                    .to_string(),
-            ));
-        }
-        for (i, new_value) in new_values.iter().enumerate() {
-            let threshold = &mut thresholds[i];
-            let descending = threshold.sort_options.descending;
-            let nulls_first = threshold.sort_options.nulls_first;
-            let current_value = &threshold.value;
-            // Check if the new value is more or less selective than the current value given the sorting
-            if let Some(current_value) = current_value {
-                let new_value_is_greater = new_value > current_value;
-                let new_value_is_null = new_value.is_null();
-                let current_value_is_null = current_value.is_null();
-
-                let update_needed = match (nulls_first, descending) {
-                    // For nulls_first + descending: update if new value is null (and current is not) or if new value is greater
-                    (true, true) => {
-                        (new_value_is_null && !current_value_is_null)
-                            || (!new_value_is_null
-                                && !current_value_is_null
-                                && new_value_is_greater)
+        let replace = {
+            let thresholds = self.thresholds.read().map_err(|_| {
+                datafusion_common::DataFusionError::Execution(
+                    "Failed to acquire write lock on thresholds".to_string(),
+                )
+            })?;
+            if new_values.len() != thresholds.len() {
+                return Err(datafusion_common::DataFusionError::Execution(
+                    "The number of new values does not match the number of thresholds"
+                        .to_string(),
+                ));
+            }
+            // We need to decide if these values replace our current values or not.
+            // They only replace our current values if they would sort before them given our sorting expression.
+            // Importantly, since this may be a multi-expressions sort, we need to check that **the entire expression**
+            // sorts before the current set of values, not just one column.
+            // This means that if we have a sort expression like `a, b` and the new value is `a = 1, b = 2`
+            // and the current value is `a = 1, b = 3` we need to check that `a = 1, b = 2` sorts before `a = 1, b = 3`
+            // and not just that `a = 1` sorts before `a = 1`.
+            // We also have to handle ASC/DESC and NULLS FIRST/LAST for each column.
+            let mut replace = true;
+            for (i, new_value) in new_values.iter().enumerate() {
+                let current_value = &thresholds[i];
+                let sort_expr = &self.expr[i];
+                let descending = sort_expr.options.descending;
+                let nulls_first = sort_expr.options.nulls_first;
+                if let Some(current_value) = current_value {
+                    let new_value_is_greater_than_current = new_value.gt(current_value);
+                    let new_value_is_null = new_value.is_null();
+                    let current_value_is_null = current_value.is_null();
+                    // Handle the null cases
+                    if current_value_is_null && !new_value_is_null && nulls_first {
+                        replace = false;
+                        break;
                     }
-                    // For nulls_first + ascending: update if new value is null (and current is not) or if new value is smaller
-                    (true, false) => {
-                        (new_value_is_null && !current_value_is_null)
-                            || (!new_value_is_null
-                                && !current_value_is_null
-                                && !new_value_is_greater)
+                    if new_value_is_null && !current_value_is_null && !nulls_first {
+                        replace = false;
+                        break;
                     }
-                    // For nulls_last + descending: update if new value is not null (and current is null) or if new value is greater
-                    (false, true) => {
-                        (!new_value_is_null && current_value_is_null)
-                            || (!new_value_is_null
-                                && !current_value_is_null
-                                && new_value_is_greater)
+                    // Handle the descending case
+                    if descending {
+                        if new_value_is_greater_than_current {
+                            replace = false;
+                            break;
+                        }
+                    } else if !new_value_is_greater_than_current {
+                        replace = false;
+                        break;
                     }
-                    // For nulls_last + ascending: update if new value is not null (and current is null) or if new value is smaller
-                    (false, false) => {
-                        (!new_value_is_null && current_value_is_null)
-                            || (!new_value_is_null
-                                && !current_value_is_null
-                                && !new_value_is_greater)
+                    // Handle the equality case
+                    if new_value.eq(current_value) {
+                        replace = false;
+                        break;
                     }
-                };
-
-                if update_needed {
-                    threshold.value = Some(new_value.clone());
                 }
-            } else {
-                threshold.value = Some(new_value.clone());
+            }
+            replace
+        };
+        if replace {
+            let mut thresholds = self.thresholds.write().map_err(|_| {
+                datafusion_common::DataFusionError::Execution(
+                    "Failed to acquire write lock on thresholds".to_string(),
+                )
+            })?;
+            for (i, new_value) in new_values.iter().enumerate() {
+                thresholds[i] = Some(new_value.clone());
             }
         }
         Ok(())
@@ -180,15 +169,9 @@ impl SortDynamicFilterSource {
 
     pub fn as_physical_expr(self: &Arc<Self>) -> Result<Arc<dyn PhysicalExpr>> {
         let children = self
-            .thresholds
-            .read()
-            .map_err(|_| {
-                datafusion_common::DataFusionError::Execution(
-                    "Failed to acquire read lock on thresholds".to_string(),
-                )
-            })?
+            .expr
             .iter()
-            .map(|threshold| Arc::clone(&threshold.expr))
+            .map(|sort_expr| Arc::clone(&sort_expr.expr))
             .collect::<Vec<_>>();
         Ok(Arc::new(DynamicFilterPhysicalExpr::new(
             children,
@@ -226,9 +209,7 @@ impl DynamicFilterSource for SortDynamicFilterSource {
             Vec::with_capacity(thresholds.len());
 
         let mut prev_sort_expr: Option<Arc<dyn PhysicalExpr>> = None;
-        for threshold in thresholds.iter() {
-            let value = &threshold.value;
-
+        for (sort_expr, value) in self.expr.iter().zip(thresholds.iter()) {
             let Some(value) = value else {
                 // If the value is None, we cannot create a filter for this threshold
                 // This means we skip this column for filtering
@@ -236,7 +217,7 @@ impl DynamicFilterSource for SortDynamicFilterSource {
             };
 
             // Create the appropriate operator based on sort order
-            let op = if threshold.sort_options.descending {
+            let op = if sort_expr.options.descending {
                 // For descending sort, we want col > threshold (exclude smaller values)
                 Operator::Gt
             } else {
@@ -247,35 +228,34 @@ impl DynamicFilterSource for SortDynamicFilterSource {
             let value_null = value.is_null();
 
             let comparison = Arc::new(BinaryExpr::new(
-                Arc::clone(&threshold.expr),
+                Arc::clone(&sort_expr.expr),
                 op,
                 lit(value.clone()),
             ));
 
-            let comparison_with_null =
-                match (threshold.sort_options.nulls_first, value_null) {
-                    // For nulls first, transform to (threshold.value is not null) and (threshold.expr is null or comparison)
-                    (true, true) => lit(false),
-                    (true, false) => Arc::new(BinaryExpr::new(
-                        is_null(Arc::clone(&threshold.expr))?,
-                        Operator::Or,
-                        comparison,
-                    )),
-                    // For nulls last, transform to (threshold.value is null and threshold.expr is not null)
-                    // or (threshold.value is not null and comparison)
-                    (false, true) => is_not_null(Arc::clone(&threshold.expr))?,
-                    (false, false) => comparison,
-                };
+            let comparison_with_null = match (sort_expr.options.nulls_first, value_null) {
+                // For nulls first, transform to (threshold.value is not null) and (threshold.expr is null or comparison)
+                (true, true) => lit(false),
+                (true, false) => Arc::new(BinaryExpr::new(
+                    is_null(Arc::clone(&sort_expr.expr))?,
+                    Operator::Or,
+                    comparison,
+                )),
+                // For nulls last, transform to (threshold.value is null and threshold.expr is not null)
+                // or (threshold.value is not null and comparison)
+                (false, true) => is_not_null(Arc::clone(&sort_expr.expr))?,
+                (false, false) => comparison,
+            };
 
             let mut eq_expr = Arc::new(BinaryExpr::new(
-                Arc::clone(&threshold.expr),
+                Arc::clone(&sort_expr.expr),
                 Operator::Eq,
                 lit(value.clone()),
             ));
 
             if value_null {
                 eq_expr = Arc::new(BinaryExpr::new(
-                    is_null(Arc::clone(&threshold.expr))?,
+                    is_null(Arc::clone(&sort_expr.expr))?,
                     Operator::Or,
                     eq_expr,
                 ));

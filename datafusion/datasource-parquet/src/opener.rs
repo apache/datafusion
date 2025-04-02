@@ -76,6 +76,8 @@ pub(super) struct ParquetOpener {
     pub enable_bloom_filter: bool,
     /// Schema adapter factory
     pub schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    /// Should row group pruning be applied
+    pub enable_stats_pruning: bool,
 }
 
 impl FileOpener for ParquetOpener {
@@ -109,6 +111,7 @@ impl FileOpener for ParquetOpener {
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let enable_bloom_filter = self.enable_bloom_filter;
+        let enable_stats_pruning = self.enable_stats_pruning;
         let limit = self.limit;
 
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
@@ -207,13 +210,15 @@ impl FileOpener for ParquetOpener {
             }
             // If there is a predicate that can be evaluated against the metadata
             if let Some(predicate) = predicate.as_ref() {
-                row_groups.prune_by_statistics(
-                    &file_schema,
-                    builder.parquet_schema(),
-                    rg_metadata,
-                    predicate,
-                    &file_metrics,
-                );
+                if enable_stats_pruning {
+                    row_groups.prune_by_statistics(
+                        &file_schema,
+                        builder.parquet_schema(),
+                        rg_metadata,
+                        predicate,
+                        &file_metrics,
+                    );
+                }
 
                 if enable_bloom_filter && !row_groups.is_empty() {
                     row_groups
