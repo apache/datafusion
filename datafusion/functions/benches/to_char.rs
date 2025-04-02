@@ -80,8 +80,27 @@ fn patterns(rng: &mut ThreadRng) -> StringArray {
     StringArray::from(data)
 }
 
+fn patterns_with_time_specifiers(rng: &mut ThreadRng) -> StringArray {
+    let samples = [
+        "%Y:%m:%d %H:%M%S".to_string(),
+        "%Y:%m:%d %_H:%M%S".to_string(),
+        "%Y:%m:%d %k:%M%S".to_string(),
+        "%d-%m-%Y %I%P-%M-%S %f".to_string(),
+        "%d%m%Y %H".to_string(),
+        "%Y%m%d %M-%S %.3f".to_string(),
+        "%Y...%m...%d %T%3f".to_string(),
+        "%c".to_string(),
+    ];
+    let mut data: Vec<String> = vec![];
+    for _ in 0..1000 {
+        data.push(samples.choose(rng).unwrap().to_string());
+    }
+
+    StringArray::from(data)
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("to_char_array_array_1000", |b| {
+    c.bench_function("to_char_array_array_date_only_patterns_1000", |b| {
         let mut rng = rand::thread_rng();
         let data_arr = data(&mut rng);
         let batch_len = data_arr.len();
@@ -101,13 +120,55 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("to_char_array_scalar_1000", |b| {
+    c.bench_function("to_char_array_array_datetime_patterns_1000", |b| {
+        let mut rng = rand::thread_rng();
+        let data_arr = data(&mut rng);
+        let batch_len = data_arr.len();
+        let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
+        let patterns = ColumnarValue::Array(Arc::new(patterns_with_time_specifiers(
+            &mut rng,
+        )) as ArrayRef);
+
+        b.iter(|| {
+            black_box(
+                to_char()
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), patterns.clone()],
+                        number_rows: batch_len,
+                        return_type: &DataType::Utf8,
+                    })
+                    .expect("to_char should work on valid values"),
+            )
+        })
+    });
+
+    c.bench_function("to_char_array_scalar_date_only_pattern_1000", |b| {
         let mut rng = rand::thread_rng();
         let data_arr = data(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
         let patterns =
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".to_string())));
+
+        b.iter(|| {
+            black_box(
+                to_char()
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), patterns.clone()],
+                        number_rows: batch_len,
+                        return_type: &DataType::Utf8,
+                    })
+                    .expect("to_char should work on valid values"),
+            )
+        })
+    });
+
+    c.bench_function("to_char_array_scalar_datetime_pattern_1000", |b| {
+        let mut rng = rand::thread_rng();
+        let data_arr = data(&mut rng);
+        let batch_len = data_arr.len();
+        let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
+        let patterns = ColumnarValue::Scalar(ScalarValue::Utf8(Some("%c".to_string())));
 
         b.iter(|| {
             black_box(
