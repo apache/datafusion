@@ -118,9 +118,11 @@ fn pushdown_filters(
 
     // And check if it can absorb the remaining filters
     let remaining_filter_indexes = (0..parent_filters.len())
-        .filter(|&i| match filter_pushdown_result[i] {
-            FilterPushdownSupportState::ChildExact => false,
-            _ => true,
+        .filter(|&i| {
+            !matches!(
+                filter_pushdown_result[i],
+                FilterPushdownSupportState::ChildExact
+            )
         })
         .collect::<Vec<_>>();
     if !remaining_filter_indexes.is_empty() {

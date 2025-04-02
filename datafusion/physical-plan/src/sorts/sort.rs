@@ -1243,18 +1243,18 @@ impl ExecutionPlan for SortExec {
                     &self.metrics_set,
                 )?;
                 let dynamic_filter_source = Arc::clone(&self.dynamic_filter_source);
+                let enable_dynamic_filter_pushdown = context
+                    .session_config()
+                    .options()
+                    .optimizer
+                    .enable_dynamic_filter_pushdown;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
                         while let Some(batch) = input.next().await {
                             let batch = batch?;
                             topk.insert_batch(batch)?;
-                            if context
-                                .session_config()
-                                .options()
-                                .optimizer
-                                .enable_dynamic_filter_pushdown
-                            {
+                            if enable_dynamic_filter_pushdown {
                                 if let Some(values) = topk.get_threshold_values()? {
                                     dynamic_filter_source.update_values(&values)?;
                                 }
