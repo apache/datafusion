@@ -949,12 +949,8 @@ where
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let (val_arr, is_sets) = self.take_state(emit_to);
-        let mut result = Vec::with_capacity(2);
 
-        result.push(val_arr);
-        result.push(Arc::new(BooleanArray::new(is_sets, None)));
-
-        Ok(result)
+        Ok(vec![val_arr, Arc::new(BooleanArray::new(is_sets, None))])
     }
 
     fn merge_batch(
