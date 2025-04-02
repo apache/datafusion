@@ -34,6 +34,16 @@ use std::io::BufReader;
 use std::str::FromStr;
 use std::sync::Arc;
 
+#[derive(Debug)]
+pub enum Pset {
+    Empty,
+    Format(Option<String>),
+    Pager(Option<String>),
+    MaxRows(Option<String>),
+    Quiet(Option<String>),
+    Color(Option<String>),
+}
+
 /// Command
 #[derive(Debug)]
 pub enum Command {
@@ -45,11 +55,7 @@ pub enum Command {
     Include(Option<String>),
     SearchFunctions(String),
     QuietMode(Option<bool>),
-    OutputFormat(Option<String>),
-}
-
-pub enum OutputFormat {
-    ChangeFormat(String),
+    Pset(Pset),
 }
 
 impl Command {
@@ -58,19 +64,23 @@ impl Command {
         ctx: &dyn CliSessionContext,
         print_options: &mut PrintOptions,
     ) -> Result<()> {
+        let stdout = std::io::stdout();
+        let mut writer = stdout.lock();
+
         match self {
             Self::Help => {
                 let now = Instant::now();
                 let command_batch = all_commands_info();
                 let schema = command_batch.schema();
                 let num_rows = command_batch.num_rows();
-                print_options.print_batches(schema, &[command_batch], now, num_rows)
+                let with_table_format = PrintOptions{format: PrintFormat::Table, quiet: true, ..print_options.clone()};
+                with_table_format.print_batches(&mut writer, schema, &[command_batch], now, num_rows)
             }
             Self::ListTables => {
-                exec_and_print(ctx, print_options, "SHOW TABLES".into()).await
+                exec_and_print(ctx, &mut writer, print_options, "SHOW TABLES".into()).await
             }
             Self::DescribeTableStmt(name) => {
-                exec_and_print(ctx, print_options, format!("SHOW COLUMNS FROM {}", name))
+                exec_and_print(ctx, &mut writer, print_options, format!("SHOW COLUMNS FROM {}", name))
                     .await
             }
             Self::Include(filename) => {
@@ -114,8 +124,8 @@ impl Command {
                     exec_err!("{function} is not a supported function")
                 }
             }
-            Self::OutputFormat(_) => exec_err!(
-                "Unexpected change output format, this should be handled outside"
+            Self::Pset(_) => exec_err!(
+                "Unexpected pset, this should be handled outside"
             ),
         }
     }
@@ -126,15 +136,11 @@ impl Command {
             Self::ListTables => ("\\d", "list tables"),
             Self::DescribeTableStmt(_) => ("\\d name", "describe table"),
             Self::Help => ("\\?", "help"),
-            Self::Include(_) => {
-                ("\\i filename", "reads input from the specified filename")
-            }
+            Self::Include(_) => ("\\i filename", "reads input from the specified filename"),
             Self::ListFunctions => ("\\h", "function list"),
             Self::SearchFunctions(_) => ("\\h function", "search function"),
             Self::QuietMode(_) => ("\\quiet (true|false)?", "print or set quiet mode"),
-            Self::OutputFormat(_) => {
-                ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
-            }
+            Self::Pset(_) => ("\\pset [NAME [VALUE]]", "table display options"),
         }
     }
 }
@@ -148,7 +154,7 @@ const ALL_COMMANDS: [Command; 9] = [
     Command::ListFunctions,
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
-    Command::OutputFormat(None),
+    Command::Pset(Pset::Empty),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -174,12 +180,7 @@ impl FromStr for Command {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (c, arg) = if let Some((a, b)) = s.split_once(' ') {
-            (a, Some(b))
-        } else {
-            (s, None)
-        };
-        Ok(match (c, arg) {
+        Ok(match crate::split_on_first_space(s) {
             ("q", None) => Self::Quit,
             ("d", None) => Self::ListTables,
             ("d", Some(name)) => Self::DescribeTableStmt(name.into()),
@@ -195,47 +196,98 @@ impl FromStr for Command {
                 Self::QuietMode(Some(false))
             }
             ("quiet", None) => Self::QuietMode(None),
-            ("pset", Some(subcommand)) => {
-                Self::OutputFormat(Some(subcommand.to_string()))
-            }
-            ("pset", None) => Self::OutputFormat(None),
+            ("pset", None) => Self::Pset(Pset::Empty),
+            ("pset", Some(rest)) => Self::Pset(rest.parse::<Pset>()?),
             _ => return Err(()),
         })
     }
 }
 
-impl FromStr for OutputFormat {
+impl FromStr for Pset {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (c, arg) = if let Some((a, b)) = s.split_once(' ') {
-            (a, Some(b))
-        } else {
-            (s, None)
-        };
-        Ok(match (c, arg) {
-            ("format", Some(format)) => Self::ChangeFormat(format.to_string()),
+        Ok(match crate::split_on_first_space(s) {
+            ("format", None) => Self::Format(None),
+            ("format", Some(format)) => Self::Format(Some(format.into())),
+            ("pager", None) => Self::Pager(None),
+            ("pager", Some(cmd)) => Self::Pager(Some(cmd.into())),
+            ("maxrows", None) => Self::MaxRows(None),
+            ("maxrows", Some(mxr)) => Self::MaxRows(Some(mxr.into())),
+            ("quiet", None) => Self::Quiet(None),
+            ("quiet", Some(quiet)) => Self::Quiet(Some(quiet.into())),
+            ("color", None) => Self::Color(None),
+            ("color", Some(color)) => Self::Color(Some(color.into())),
+
             _ => return Err(()),
         })
     }
 }
 
-impl OutputFormat {
-    pub async fn execute(&self, print_options: &mut PrintOptions) -> Result<()> {
+impl Pset {
+    pub fn execute(&self, print_options: &mut PrintOptions) -> Result<()> {
         match self {
-            Self::ChangeFormat(format) => {
-                if let Ok(format) = format.parse::<PrintFormat>() {
-                    print_options.format = format;
-                    println!("Output format is {:?}.", print_options.format);
-                    Ok(())
-                } else {
-                    exec_err!(
+            Self::Empty => println!("{:#}", print_options),
+
+            Self::Pager(None) => println!("pager is {}. Possible values: path [cmd-options] | yes | true | no | none | false", print_options.pager.as_ref().unwrap_or(&"not set".into())),
+            Self::Pager(Some(pager)) => {
+                match crate::pager::parse_pset_pager(pager) {
+                    Ok(pager_cmd) => {
+                        print_options.pager = pager_cmd;
+                        Self::Pager(None).execute(print_options)?
+                    }
+                    Err(e) => return exec_err!("pager error {e}"),
+                }
+            },
+
+            Self::Format(None) => println!("Output format is {:?}. Possible values: {:?}", print_options.format, PrintFormat::value_variants()),
+            Self::Format(Some(format)) => {
+                match format.parse::<PrintFormat>() {
+                    Ok(format) => {
+                        print_options.format = format;
+                        Self::Format(None).execute(print_options)?
+                    }
+                    Err(_) => return exec_err!(
                         "{:?} is not a valid format type [possible values: {:?}]",
                         format,
                         PrintFormat::value_variants()
-                    )
+                    ),
+                }
+            },
+
+            Self::MaxRows(None) => println!("maxrows is {}", print_options.maxrows),
+            Self::MaxRows(Some(mxr)) => {
+                match mxr.parse::<crate::print_options::MaxRows>() {
+                    Ok(mxr) => {
+                        print_options.maxrows = mxr;
+                        Self::MaxRows(None).execute(print_options)?
+                    }
+                    Err(e) => return exec_err!("error in maxrows {e}"),
                 }
             }
-        }
+
+            Pset::Quiet(None) => println!("quiet is {}", print_options.quiet),
+            Pset::Quiet(Some(v)) => {
+                match v.parse::<bool>() {
+                    Ok(v) => {
+                        print_options.quiet = v;
+                        Self::Quiet(None).execute(print_options)?
+                    }
+                    Err(e) => return exec_err!("error in quiet {e}"),
+                }
+            },
+
+            Pset::Color(None) => println!("color is {}", print_options.quiet),
+            Pset::Color(Some(v)) => {
+                match v.parse::<bool>() {
+                    Ok(v) => {
+                        print_options.color = v;
+                        Self::Color(None).execute(print_options)?
+                    }
+                    Err(e) => return exec_err!("error in quiet {e}"),
+                }
+            },
+        };
+        Ok(())
     }
 }

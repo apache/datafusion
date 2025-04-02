@@ -21,7 +21,7 @@ use crate::cli_context::CliSessionContext;
 use crate::helper::split_from_semicolon;
 use crate::print_format::PrintFormat;
 use crate::{
-    command::{Command, OutputFormat},
+    command::Command,
     helper::CliHelper,
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
@@ -56,8 +56,11 @@ pub async fn exec_from_commands(
     commands: Vec<String>,
     print_options: &PrintOptions,
 ) -> Result<()> {
+    let stdout = std::io::stdout();
+    let mut writer = stdout.lock();
+
     for sql in commands {
-        exec_and_print(ctx, print_options, sql).await?;
+        exec_and_print(ctx, &mut writer, print_options, sql).await?;
     }
 
     Ok(())
@@ -69,6 +72,8 @@ pub async fn exec_from_lines(
     reader: &mut BufReader<File>,
     print_options: &PrintOptions,
 ) -> Result<()> {
+    let stdout = std::io::stdout();
+    let mut writer = stdout.lock();
     let mut query = "".to_owned();
 
     for line in reader.lines() {
@@ -83,7 +88,7 @@ pub async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match exec_and_print(ctx, print_options, query).await {
+                    match exec_and_print(ctx, &mut writer, print_options, query).await {
                         Ok(_) => {}
                         Err(err) => eprintln!("{err}"),
                     }
@@ -101,7 +106,9 @@ pub async fn exec_from_lines(
     // run the left over query if the last statement doesn't contain ‘;’
     // ignore if it only consists of '\n'
     if query.contains(|c| c != '\n') {
-        exec_and_print(ctx, print_options, query).await?;
+        let stdout = std::io::stdout();
+        let mut writer = stdout.lock();
+        exec_and_print(ctx, &mut writer, print_options, query).await?;
     }
 
     Ok(())
@@ -145,22 +152,10 @@ pub async fn exec_from_repl(
                 if let Ok(cmd) = &command[1..].parse::<Command>() {
                     match cmd {
                         Command::Quit => break,
-                        Command::OutputFormat(subcommand) => {
-                            if let Some(subcommand) = subcommand {
-                                if let Ok(command) = subcommand.parse::<OutputFormat>() {
-                                    if let Err(e) = command.execute(print_options).await {
-                                        eprintln!("{e}")
-                                    }
-                                } else {
-                                    eprintln!(
-                                        "'\\{}' is not a valid command",
-                                        &line[1..]
-                                    );
-                                }
-                            } else {
-                                println!("Output format is {:?}.", print_options.format);
-                            }
-                        }
+                        Command::Pset(pset) => match pset.execute(print_options) {
+                            Ok(()) => (),
+                            Err(e) => eprintln!("pset error {:?}", e),
+                        },
                         _ => {
                             if let Err(e) = cmd.execute(ctx, print_options).await {
                                 eprintln!("{e}")
@@ -174,17 +169,46 @@ pub async fn exec_from_repl(
             Ok(line) => {
                 let lines = split_from_semicolon(&line);
                 for line in lines {
+                    type DisplayChild = (Box<dyn std::io::Write>, Option<std::process::Child>);
+                    let (mut writer, maybe_child) : DisplayChild =
+                    // There must be a better way to do this SELECT comparison
+                    // Really, the test should be on the size of the statement output, but there's no access to that here.
+                    if line.starts_with("select") || line.starts_with("SELECT") || line.starts_with("\\d") {
+                        match crate::pager::build_pager_process(&print_options) {
+                            Ok(mut child) => {
+                                (Box::new(child.stdin.take().unwrap()) as Box<dyn std::io::Write>, Some(child))
+                            },
+                            Err(_) => {
+                                let stdout = std::io::stdout();
+                                (Box::new(stdout.lock()) as Box<dyn std::io::Write>, None)
+                            }
+                        }
+
+                    } else {
+                        (Box::new(std::io::stdout().lock()) as Box<dyn std::io::Write>, None)
+                    };
+
                     rl.add_history_entry(line.trim_end())?;
                     tokio::select! {
-                        res = exec_and_print(ctx, print_options, line) => match res {
-                            Ok(_) => {}
+                        res = exec_and_print(ctx, &mut writer, print_options, line) => match res {
+                            Ok(()) => (),
                             Err(err) => eprintln!("{err}"),
                         },
-                        _ = signal::ctrl_c() => {
-                            println!("^C");
-                            continue
-                        },
+                        _ = signal::ctrl_c() => println!("^C"),
                     }
+
+                    // wait for the pager so it releases resources
+                    if let Some(mut display_child) = maybe_child {
+                        // Ensure that the pager's input is closed, otherwise the pager can block on input.
+                        // It's in here because if we're not writing to a pager,
+                        // this would drop stdout, with most likely unpleasant
+                        // results.
+                        drop(writer);
+
+                        // wait for the pager to exit
+                        display_child.wait()?;
+                    };
+
                     // dialect might have changed
                     rl.helper_mut().unwrap().set_dialect(
                         &ctx.task_ctx().session_config().options().sql_parser.dialect,
@@ -209,8 +233,9 @@ pub async fn exec_from_repl(
     rl.save_history(".history")
 }
 
-pub(super) async fn exec_and_print(
+pub(super) async fn exec_and_print<W : std::io::Write>(
     ctx: &dyn CliSessionContext,
+    writer : &mut W,
     print_options: &PrintOptions,
     sql: String,
 ) -> Result<()> {
@@ -266,7 +291,7 @@ pub(super) async fn exec_and_print(
                 let curr_num_rows = batch.num_rows();
                 // Stop collecting results if the number of rows exceeds the limit
                 // results batch should include the last batch that exceeds the limit
-                if row_count < max_rows + curr_num_rows {
+                if max_rows == usize::MAX || row_count < max_rows + curr_num_rows {
                     // Try to grow the reservation to accommodate the batch in memory
                     reservation.try_grow(get_record_batch_memory_size(&batch))?;
                     results.push(batch);
@@ -275,7 +300,7 @@ pub(super) async fn exec_and_print(
             }
             adjusted
                 .into_inner()
-                .print_batches(schema, &results, now, row_count)?;
+                .print_batches(writer, schema, &results, now, row_count)?;
             reservation.free();
         }
     }

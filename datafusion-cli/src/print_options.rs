@@ -72,6 +72,7 @@ pub struct PrintOptions {
     pub quiet: bool,
     pub maxrows: MaxRows,
     pub color: bool,
+    pub pager: Option<String>,
 }
 
 // Returns the query execution details formatted
@@ -96,31 +97,29 @@ fn get_execution_details_formatted(
 }
 
 impl PrintOptions {
-    /// Print the batches to stdout using the specified format
-    pub fn print_batches(
+    /// Print the batches to the writer using the specified format
+    pub fn print_batches<W : std::io::Write>(
         &self,
+        writer : &mut W,
         schema: SchemaRef,
         batches: &[RecordBatch],
         query_start_time: Instant,
         row_count: usize,
     ) -> Result<()> {
-        let stdout = std::io::stdout();
-        let mut writer = stdout.lock();
-
         self.format
-            .print_batches(&mut writer, schema, batches, self.maxrows, true)?;
-
-        let formatted_exec_details = get_execution_details_formatted(
-            row_count,
-            if self.format == PrintFormat::Table {
-                self.maxrows
-            } else {
-                MaxRows::Unlimited
-            },
-            query_start_time,
-        );
+            .print_batches(writer, schema, batches, self.maxrows, true)?;
 
         if !self.quiet {
+            let formatted_exec_details = get_execution_details_formatted(
+                row_count,
+                if self.format == PrintFormat::Table {
+                    self.maxrows
+                } else {
+                    MaxRows::Unlimited
+                },
+                query_start_time,
+            );
+
             writeln!(writer, "{formatted_exec_details}")?;
         }
 
@@ -158,16 +157,27 @@ impl PrintOptions {
             with_header = false;
         }
 
-        let formatted_exec_details = get_execution_details_formatted(
-            row_count,
-            MaxRows::Unlimited,
-            query_start_time,
-        );
-
         if !self.quiet {
+            let formatted_exec_details = get_execution_details_formatted(
+                row_count,
+                MaxRows::Unlimited,
+                query_start_time,
+            );
+
             writeln!(writer, "{formatted_exec_details}")?;
         }
 
         Ok(())
     }
+}
+
+impl std::fmt::Display for PrintOptions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "format: {}", self.format)?;
+        writeln!(f, "quiet: {}", self.quiet)?;
+        writeln!(f, "maxrows: {}", self.maxrows)?;
+        writeln!(f, "color: {}", self.color)?;
+        writeln!(f, "pager: {}", self.pager.as_ref().unwrap_or(&"none".into()))?;
+        Ok(())
+   }
 }
