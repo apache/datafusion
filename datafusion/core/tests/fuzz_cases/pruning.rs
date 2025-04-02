@@ -21,13 +21,12 @@ use arrow::array::{Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use bytes::{BufMut, Bytes, BytesMut};
 use datafusion::{
-    datasource::{
-        listing::PartitionedFile,
-        physical_plan::{FileScanConfig, ParquetSource},
-    },
+    datasource::{listing::PartitionedFile, physical_plan::ParquetSource},
     prelude::*,
 };
 use datafusion_common::DFSchema;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::{collect, filter::FilterExec, ExecutionPlan};
@@ -281,7 +280,7 @@ async fn execute_with_predicate(
     } else {
         ParquetSource::default()
     };
-    let scan = FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("memory://").unwrap(),
         schema.clone(),
         Arc::new(parquet_source),
@@ -293,8 +292,9 @@ async fn execute_with_predicate(
                 PartitionedFile::new(test_file.path.clone(), test_file.size as u64)
             })
             .collect(),
-    );
-    let exec = scan.build();
+    )
+    .build();
+    let exec = DataSourceExec::from_data_source(config);
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;
 

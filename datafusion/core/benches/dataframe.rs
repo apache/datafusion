@@ -44,9 +44,7 @@ fn create_context(field_count: u32) -> datafusion_common::Result<Arc<SessionCont
     Ok(Arc::new(ctx))
 }
 
-fn run(column_count: u32, ctx: Arc<SessionContext>) {
-    let rt = Runtime::new().unwrap();
-
+fn run(column_count: u32, ctx: Arc<SessionContext>, rt: &Runtime) {
     criterion::black_box(rt.block_on(async {
         let mut data_frame = ctx.table("t").await.unwrap();
 
@@ -67,11 +65,13 @@ fn run(column_count: u32, ctx: Arc<SessionContext>) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
     for column_count in [10, 100, 200, 500] {
         let ctx = create_context(column_count).unwrap();
 
         c.bench_function(&format!("with_column_{column_count}"), |b| {
-            b.iter(|| run(column_count, ctx.clone()))
+            b.iter(|| run(column_count, ctx.clone(), &rt))
         });
     }
 }

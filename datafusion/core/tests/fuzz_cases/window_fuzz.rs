@@ -636,10 +636,10 @@ async fn run_window_test(
             options: Default::default(),
         },
     ]);
-    let mut exec1 = Arc::new(DataSourceExec::new(Arc::new(
+    let mut exec1 = DataSourceExec::from_data_source(
         MemorySourceConfig::try_new(&[vec![concat_input_record]], schema.clone(), None)?
             .try_with_sort_information(vec![source_sort_keys.clone()])?,
-    ))) as _;
+    ) as _;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
     if is_linear {
@@ -662,10 +662,10 @@ async fn run_window_test(
         exec1,
         false,
     )?) as _;
-    let exec2 = Arc::new(DataSourceExec::new(Arc::new(
+    let exec2 = DataSourceExec::from_data_source(
         MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)?
             .try_with_sort_information(vec![source_sort_keys.clone()])?,
-    )));
+    );
     let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
         vec![create_window_expr(
             &window_fn,
