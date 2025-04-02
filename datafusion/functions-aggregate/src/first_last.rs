@@ -164,26 +164,28 @@ impl AggregateUDFImpl for FirstValue {
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
-        args.ordering_req.is_some() && !self.requirement_satisfied && matches!(
-            args.return_type,
-            Int8 | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float16
-                | Float32
-                | Float64
-                | Decimal128(_, _)
-                | Decimal256(_, _)
-                | Date32
-                | Date64
-                | Time32(_)
-                | Time64(_)
-                | Timestamp(_, _)
-        )
+        args.ordering_req.is_some()
+            && !self.requirement_satisfied
+            && matches!(
+                args.return_type,
+                Int8 | Int16
+                    | Int32
+                    | Int64
+                    | UInt8
+                    | UInt16
+                    | UInt32
+                    | UInt64
+                    | Float16
+                    | Float32
+                    | Float64
+                    | Decimal128(_, _)
+                    | Decimal256(_, _)
+                    | Date32
+                    | Date64
+                    | Time32(_)
+                    | Time64(_)
+                    | Timestamp(_, _)
+            )
     }
 
     fn create_groups_accumulator(
