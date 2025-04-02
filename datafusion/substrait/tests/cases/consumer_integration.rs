@@ -520,6 +520,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_multiple_joins() -> Result<()> {
+        let plan_str = test_plan_to_string("multiple_joins.json").await?;
+        assert_eq!(
+            plan_str,
+            "Projection: left.count(Int64(1)) AS count_first, left.category, left.count(Int64(1)):1 AS count_second, right.count(Int64(1)) AS count_third\
+            \n  Left Join: left.id = right.id\
+            \n    SubqueryAlias: left\
+            \n      Left Join: left.id = right.id\
+            \n        SubqueryAlias: left\
+            \n          Left Join: left.id = right.id\
+            \n            SubqueryAlias: left\
+            \n              Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]\
+            \n                Values: (Int64(1)), (Int64(2))\
+            \n            SubqueryAlias: right\
+            \n              Aggregate: groupBy=[[id, category]], aggr=[[]]\
+            \n                Values: (Int64(1), Utf8(\"info\")), (Int64(2), Utf8(\"low\"))\
+            \n        SubqueryAlias: right\
+            \n          Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]\
+            \n            Values: (Int64(1)), (Int64(2))\
+            \n    SubqueryAlias: right\
+            \n      Aggregate: groupBy=[[id]], aggr=[[count(Int64(1))]]\
+            \n        Values: (Int64(1)), (Int64(2))"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_select_window_count() -> Result<()> {
         let plan_str = test_plan_to_string("select_window_count.substrait.json").await?;
 
