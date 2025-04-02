@@ -35,7 +35,8 @@ use datafusion_common::{Result, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
@@ -151,7 +152,10 @@ impl FileFormat for AvroFormat {
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(conf.with_source(self.file_source()).build())
+        let config = FileScanConfigBuilder::from(conf)
+            .with_source(self.file_source())
+            .build();
+        Ok(DataSourceExec::from_data_source(config))
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {

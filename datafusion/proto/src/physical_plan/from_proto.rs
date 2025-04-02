@@ -33,7 +33,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    FileGroup, FileScanConfig, FileSinkConfig, FileSource,
+    FileGroup, FileScanConfig, FileScanConfigBuilder, FileSinkConfig, FileSource,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
@@ -489,11 +489,6 @@ pub fn parse_protobuf_file_scan_config(
         .iter()
         .map(|i| *i as usize)
         .collect::<Vec<_>>();
-    let projection = if projection.is_empty() {
-        None
-    } else {
-        Some(projection)
-    };
 
     let constraints = convert_required!(proto.constraints)?;
     let statistics = convert_required!(proto.statistics)?;
@@ -539,15 +534,16 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.push(sort_expr);
     }
 
-    let config = FileScanConfig::new(object_store_url, file_schema, file_source)
+    let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
-        .with_projection(projection)
+        .with_projection(Some(projection))
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_table_partition_cols(table_partition_cols)
         .with_output_ordering(output_ordering)
-        .with_batch_size(proto.batch_size.map(|s| s as usize));
+        .with_batch_size(proto.batch_size.map(|s| s as usize))
+        .build();
     Ok(config)
 }
 
@@ -569,7 +565,11 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             range: val.range.as_ref().map(|v| v.try_into()).transpose()?,
-            statistics: val.statistics.as_ref().map(|v| v.try_into()).transpose()?,
+            statistics: val
+                .statistics
+                .as_ref()
+                .map(|v| v.try_into().map(Arc::new))
+                .transpose()?,
             extensions: None,
             metadata_size_hint: None,
         })

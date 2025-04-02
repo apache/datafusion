@@ -449,7 +449,7 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
-            statistics: pf.statistics.as_ref().map(|s| s.into()),
+            statistics: pf.statistics.as_ref().map(|s| s.as_ref().into()),
         })
     }
 }
@@ -512,7 +512,7 @@ pub fn serialize_file_scan_config(
         projection: conf
             .projection
             .as_ref()
-            .unwrap_or(&vec![])
+            .unwrap_or(&(0..schema.fields().len()).collect::<Vec<_>>())
             .iter()
             .map(|n| *n as u32)
             .collect(),
