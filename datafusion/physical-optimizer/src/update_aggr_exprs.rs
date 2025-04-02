@@ -90,7 +90,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
                     return Ok(Transformed::no(plan));
                 }
                 let input = aggr_exec.input();
-                let mut aggr_expr = aggr_exec.aggr_expr().to_vec();
+                let mut aggr_exprs = aggr_exec.aggr_expr().to_vec();
 
                 let groupby_exprs = aggr_exec.group_expr().input_exprs();
                 // If the existing ordering satisfies a prefix of the GROUP BY
@@ -109,13 +109,13 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
                     })
                     .collect::<Vec<_>>();
 
-                aggr_expr = try_convert_aggregate_if_better(
-                    aggr_expr,
+                aggr_exprs = try_convert_aggregate_if_better(
+                    aggr_exprs,
                     &requirement,
                     input.equivalence_properties(),
                 )?;
 
-                let aggr_exec = aggr_exec.with_new_aggr_exprs(aggr_expr);
+                let aggr_exec = aggr_exec.with_new_aggr_exprs(aggr_exprs);
 
                 Ok(Transformed::yes(Arc::new(aggr_exec) as _))
             } else {
