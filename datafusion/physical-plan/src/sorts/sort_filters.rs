@@ -30,11 +30,11 @@ use datafusion_physical_expr::{
 
 use crate::dynamic_filters::{DynamicFilterPhysicalExpr, DynamicFilterSource};
 
-/// Pushdown of dynamic fitlers from sort + limit operators (aka `TopK`) is used to speed up queries
+/// Pushdown of dynamic filters from sort + limit operators (aka `TopK`) is used to speed up queries
 /// such as `SELECT * FROM table ORDER BY col DESC LIMIT 10` by pushing down the
 /// threshold values for the sort columns to the data source.
 /// That is, the TopK operator will keep track of the top 10 values for the sort
-/// and before a new file is opened it's statitics will be checked against the
+/// and before a new file is opened its statistics will be checked against the
 /// threshold values to determine if the file can be skipped and predicate pushdown
 /// will use these to skip rows during the scan.
 ///
@@ -141,9 +141,11 @@ impl SortDynamicFilterSource {
                             replace = false;
                             break;
                         }
-                    } else if !new_value_is_greater_than_current {
-                        replace = false;
-                        break;
+                    } else {
+                        if !new_value_is_greater_than_current {
+                            replace = false;
+                            break;
+                        }
                     }
                     // Handle the equality case
                     if new_value.eq(current_value) {

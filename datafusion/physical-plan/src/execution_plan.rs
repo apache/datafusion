@@ -472,6 +472,18 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// For example, a `TopK` operator may produce dynamic filters that reference it's currrent state,
     /// while a `FilterExec` will just hand of the filters it has as is.
     /// The default implementation returns an empty vector.
+    /// These filters are applied row-by row and any that return `false` or `NULL` will be
+    /// filtered out and any that return `true` will be kept.
+    /// The expressions returned **must** always return `true` or `false`;
+    /// other truthy or falsy values are not allowed (e.g. `0`, `1`).
+    ///
+    /// # Returns
+    /// A vector of filters that this operator would like to push down.
+    /// These should be treated as the split conjunction of a `WHERE` clause.
+    /// That is, a query such as `WHERE a = 1 AND b = 2` would return two
+    /// filters: `a = 1` and `b = 2`.
+    /// They can always be assembled into a single filter using
+    /// [`crate::physical_expr::split_conjunction`].
     fn filters_for_pushdown(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
         Ok(Vec::new())
     }
@@ -507,10 +519,20 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 }
 
+/// The result of pushing down each filter.
+/// When a parent plan tries to push down a filter to a child it needs to know if the child
+/// can handle the filter or not to determine if it still needs to apply the filter itself.
 #[derive(Debug, Clone, Copy)]
 pub enum FilterPushdownSupport {
-    Inexact,
-    Exact,
+    /// Filter may not have been pushed down to the child plan, or the child plan
+    /// can only partially apply the filter but may have false positives (but not false negatives).
+    /// In this case the parent **must** behave as if the filter was not pushed down
+    /// and must apply the filter itself.
+    Unhandled,
+    /// Filter was pushed down to the child plan and the child plan promises that
+    /// it will apply the filter correctly with no false positives or false negatives.
+    /// The parent can safely drop the filter.
+    HandledExact,
 }
 
 pub struct FilterPushdownResult<T> {
@@ -529,7 +551,7 @@ impl<T> FilterPushdownResult<T> {
     pub fn is_exact(&self) -> bool {
         self.support
             .iter()
-            .all(|s| matches!(s, FilterPushdownSupport::Exact))
+            .all(|s| matches!(s, FilterPushdownSupport::HandledExact))
     }
 }
 

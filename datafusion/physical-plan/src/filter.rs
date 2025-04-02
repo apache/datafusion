@@ -458,7 +458,7 @@ impl ExecutionPlan for FilterExec {
             .iter()
             .zip(pushdown.iter())
             .filter_map(|(f, p)| {
-                if matches!(p, FilterPushdownSupport::Exact) {
+                if matches!(p, FilterPushdownSupport::HandledExact) {
                     // Exact pushdown support means we keep discard filter
                     None
                 } else {
@@ -498,7 +498,7 @@ impl ExecutionPlan for FilterExec {
                 predicate: new_predicates,
                 ..self.clone()
             }),
-            support: vec![FilterPushdownSupport::Exact; filters.len()],
+            support: vec![FilterPushdownSupport::HandledExact; filters.len()],
         }))
     }
 }

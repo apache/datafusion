@@ -601,9 +601,9 @@ impl FileSource for ParquetSource {
                 // otherwise we would mark filters as exact but then not filter at the row level
                 // because the setting gets checked again inside the ParquetOpener!
                 let support = if self.table_parquet_options.global.pushdown_filters {
-                    vec![FilterPushdownSupport::Exact; filters.len()]
+                    vec![FilterPushdownSupport::HandledExact; filters.len()]
                 } else {
-                    vec![FilterPushdownSupport::Inexact; filters.len()]
+                    vec![FilterPushdownSupport::Unhandled; filters.len()]
                 };
                 Ok(Some(FileSourceFilterPushdownResult::new(
                     Arc::new(conf),
