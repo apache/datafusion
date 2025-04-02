@@ -1386,7 +1386,7 @@ impl Expr {
 
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        Expr::Alias(Alias::new(self, None::<&str>, name.into()))
+        Expr::Alias(Alias::new(self.unalias(), None::<TableReference>, name))
     }
 
     /// Return `self AS name` alias expression with metadata
@@ -1416,7 +1416,7 @@ impl Expr {
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
-        Expr::Alias(Alias::new(self, relation, name.into()))
+        Expr::Alias(Alias::new(self.unalias(), relation, name))
     }
 
     /// Return `self AS name` alias expression with a specific qualifier and metadata
