@@ -77,9 +77,8 @@ fn parse_decimals() {
     for (a, b) in test_data {
         let sql = format!("SELECT {a}");
         let expected = format!("Projection: {b}\n  EmptyRelation");
-        quick_test_with_options(
+        let plan = logical_plan_with_options(
             &sql,
-            &expected,
             ParserOptions {
                 parse_float_as_decimal: true,
                 enable_ident_normalization: false,
@@ -88,7 +87,9 @@ fn parse_decimals() {
                 enable_options_value_normalization: false,
                 collect_spans: false,
             },
-        );
+        )
+        .unwrap();
+        assert_eq!(expected, format!("{plan}"));
     }
 }
 
@@ -3263,11 +3264,6 @@ impl ScalarUDFImpl for DummyUDF {
 
 fn generate_logical_plan(sql: &str) -> LogicalPlan {
     logical_plan_with_options(sql, ParserOptions::default()).unwrap()
-}
-
-fn quick_test_with_options(sql: &str, expected: &str, options: ParserOptions) {
-    let plan = logical_plan_with_options(sql, options).unwrap();
-    assert_eq!(format!("{plan}"), expected);
 }
 
 fn prepare_stmt_quick_test(
