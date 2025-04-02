@@ -133,7 +133,8 @@ pub async fn create_context_sampled_data(
     partition_cnt: i32,
     sample_cnt: i32,
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<TaskContext>)> {
-    let (schema, parts) = make_data(partition_cnt, sample_cnt, false /* asc */).unwrap();
+    let (schema, parts) =
+        make_data(partition_cnt, sample_cnt, false /* asc */, false).unwrap();
     let mem_table = Arc::new(MemTable::try_new(schema, parts).unwrap());
 
     // Create the DataFrame
