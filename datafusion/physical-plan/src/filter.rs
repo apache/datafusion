@@ -410,18 +410,19 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
-        let input_stats = self.input.statistics_by_partition()?;
-        let mut stats = Vec::with_capacity(input_stats.len());
-        for input_stat in input_stats {
-            let stat = Self::statistics_helper(
-                self.schema(),
-                input_stat,
-                self.predicate(),
-                self.default_selectivity,
-            )?;
-            stats.push(stat.project(self.projection.as_ref()));
-        }
-        Ok(stats)
+        self.input
+            .statistics_by_partition()?
+            .into_iter()
+            .map(|input_stat| {
+                Self::statistics_helper(
+                    self.schema(),
+                    input_stat,
+                    self.predicate(),
+                    self.default_selectivity,
+                )
+                .map(|stat| stat.project(self.projection.as_ref()))
+            })
+            .collect()
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {

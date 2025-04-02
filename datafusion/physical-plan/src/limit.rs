@@ -348,19 +348,13 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
-        let input_stats = self.input.statistics_by_partition()?;
-        let mut stats = Vec::with_capacity(input_stats.len());
-        for input_stat in input_stats {
-            let stat = Statistics::with_fetch(
-                input_stat,
-                self.schema(),
-                Some(self.fetch),
-                0,
-                1,
-            )?;
-            stats.push(stat);
-        }
-        Ok(stats)
+        self.input
+            .statistics_by_partition()?
+            .into_iter()
+            .map(|input_stat| {
+                Statistics::with_fetch(input_stat, self.schema(), Some(self.fetch), 0, 1)
+            })
+            .collect()
     }
 
     fn fetch(&self) -> Option<usize> {
