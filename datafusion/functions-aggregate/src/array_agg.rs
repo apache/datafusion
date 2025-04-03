@@ -420,17 +420,10 @@ impl Accumulator for DistinctArrayAggAccumulator {
             None
         };
 
-        match nulls {
-            Some(nulls) if nulls.null_count() >= val.len() => (),
-            Some(nulls) => {
-                for i in 0..val.len() {
-                    if nulls.is_valid(i) {
-                        self.values.insert(ScalarValue::try_from_array(val, i)?);
-                    }
-                }
-            }
-            None => {
-                for i in 0..val.len() {
+        let nulls = nulls.as_ref();
+        if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
+            for i in 0..val.len() {
+                if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
                     self.values.insert(ScalarValue::try_from_array(val, i)?);
                 }
             }
@@ -556,18 +549,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             None
         };
 
-        match nulls {
-            Some(nulls) if nulls.null_count() >= val.len() => (),
-            Some(nulls) => {
-                for i in 0..val.len() {
-                    if nulls.is_valid(i) {
-                        self.values.push(ScalarValue::try_from_array(val, i)?);
-                        self.ordering_values.push(get_row_at_idx(ord, i)?)
-                    }
-                }
-            }
-            None => {
-                for i in 0..val.len() {
+        let nulls = nulls.as_ref();
+        if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
+            for i in 0..val.len() {
+                if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
                     self.values.push(ScalarValue::try_from_array(val, i)?);
                     self.ordering_values.push(get_row_at_idx(ord, i)?)
                 }
