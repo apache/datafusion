@@ -617,13 +617,7 @@ async fn collect_left_input(
     with_visited_left_side: bool,
     probe_threads_count: usize,
 ) -> Result<JoinLeftData> {
-    let schema = input.schema();
-    let merge = if input.output_partitioning().partition_count() != 1 {
-        Arc::new(CoalescePartitionsExec::new(input))
-    } else {
-        input
-    };
-    let stream = merge.execute(0, context)?;
+    let stream = input.execute(0, context)?;
 
     // Load all batches and count the rows
     let (batches, metrics, mut reservation) = stream
@@ -644,7 +638,7 @@ async fn collect_left_input(
         )
         .await?;
 
-    let merged_batch = concat_batches(&schema, &batches)?;
+    let merged_batch = concat_batches(&input.schema(), &batches)?;
 
     // Reserve memory for visited_left_side bitmap if required by join type
     let visited_left_side = if with_visited_left_side {
