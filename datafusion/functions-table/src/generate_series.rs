@@ -145,7 +145,7 @@ impl TableProvider for GenerateSeriesTable {
         let batch_size = state.config_options().execution.batch_size;
         let schema = match projection {
             Some(projection) => Arc::new(self.schema.project(projection)?),
-            None => self.schema.clone()
+            None => self.schema.clone(),
         };
         let state = match self.args {
             // if args have null, then return 0 row
