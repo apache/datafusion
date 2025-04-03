@@ -41,6 +41,7 @@ use log::debug;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::file::metadata::ParquetMetaDataReader;
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -117,52 +118,56 @@ impl FileOpener for ParquetOpener {
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
             .global_counter("num_predicate_creation_errors");
 
-        let (pruning_predicate, page_pruning_predicate) =
-            if let Some(predicate) = &predicate {
-                let pruning_predicate = build_pruning_predicate(
-                    Arc::clone(predicate),
-                    &table_schema,
-                    &predicate_creation_errors,
-                );
-                let page_pruning_predicate =
-                    build_page_pruning_predicate(predicate, &table_schema);
-                (pruning_predicate, Some(page_pruning_predicate))
-            } else {
-                (None, None)
-            };
-
-        let enable_page_index =
-            should_enable_page_index(self.enable_page_index, &page_pruning_predicate);
+        let enable_page_index = self.enable_page_index;
 
         Ok(Box::pin(async move {
-            let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
+            // Don't load the page index yet - we will decide later if we need it
+            let options = ArrowReaderOptions::new().with_page_index(false);
 
             let mut metadata_timer = file_metrics.metadata_load_time.timer();
-            let metadata =
+            let mut metadata =
                 ArrowReaderMetadata::load_async(&mut reader, options.clone()).await?;
-            let mut schema = Arc::clone(metadata.schema());
+            // Note about schemas: we are actually dealing with **3 different schemas** here:
+            // - The table schema as defined by the TableProvider. This is what the user sees, what they get when they `SELECT * FROM table`, etc.
+            // - The "virtual" file schema: this is the table schema minus any hive partition columns and projections. This is what the file schema is coerced to.
+            // - The physical file schema: this is the schema as defined by the parquet file. This is what the parquet file actually contains.
+            let mut physical_file_schema = Arc::clone(metadata.schema());
 
             // read with view types
-            if let Some(merged) = apply_file_schema_type_coercions(&table_schema, &schema)
+            if let Some(merged) =
+                apply_file_schema_type_coercions(&table_schema, &physical_file_schema)
             {
-                schema = Arc::new(merged);
+                physical_file_schema = Arc::new(merged);
             }
 
-            let options = ArrowReaderOptions::new()
-                .with_page_index(enable_page_index)
-                .with_schema(Arc::clone(&schema));
-            let metadata =
-                ArrowReaderMetadata::try_new(Arc::clone(metadata.metadata()), options)?;
+            // Build predicates for this specific file
+            let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
+                &predicate,
+                &physical_file_schema,
+                &predicate_creation_errors,
+            );
+
+            let enable_page_index =
+                should_enable_page_index(enable_page_index, &page_pruning_predicate);
+
+            // Now check if we should load the page index
+            if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
+                metadata = load_page_index(
+                    metadata,
+                    &mut reader,
+                    // Since we're manually loading the page index the option here should not matter but we pass it in for consistency
+                    ArrowReaderOptions::new().with_page_index(true),
+                )
+                .await?;
+            }
 
             metadata_timer.stop();
 
             let mut builder =
                 ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata);
 
-            let file_schema = Arc::clone(builder.schema());
-
             let (schema_mapping, adapted_projections) =
-                schema_adapter.map_schema(&file_schema)?;
+                schema_adapter.map_schema(&physical_file_schema)?;
 
             let mask = ProjectionMask::roots(
                 builder.parquet_schema(),
@@ -173,7 +178,7 @@ impl FileOpener for ParquetOpener {
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
-                    &file_schema,
+                    &physical_file_schema,
                     &table_schema,
                     builder.metadata(),
                     reorder_predicates,
@@ -212,7 +217,7 @@ impl FileOpener for ParquetOpener {
             if let Some(predicate) = predicate.as_ref() {
                 if enable_row_group_stats_pruning {
                     row_groups.prune_by_statistics(
-                        &file_schema,
+                        &physical_file_schema,
                         builder.parquet_schema(),
                         rg_metadata,
                         predicate,
@@ -223,7 +228,7 @@ impl FileOpener for ParquetOpener {
                 if enable_bloom_filter && !row_groups.is_empty() {
                     row_groups
                         .prune_by_bloom_filters(
-                            &file_schema,
+                            &physical_file_schema,
                             &mut builder,
                             predicate,
                             &file_metrics,
@@ -241,7 +246,7 @@ impl FileOpener for ParquetOpener {
                 if let Some(p) = page_pruning_predicate {
                     access_plan = p.prune_plan_with_page_index(
                         access_plan,
-                        &file_schema,
+                        &physical_file_schema,
                         builder.parquet_schema(),
                         file_metadata.as_ref(),
                         &file_metrics,
@@ -316,7 +321,7 @@ fn create_initial_plan(
 /// predicate, return None.
 /// If there is an error creating the pruning predicate it is recorded by incrementing
 /// the `predicate_creation_errors` counter.
-pub(crate) fn build_pruning_predicate(
+pub fn build_pruning_predicate(
     predicate: Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
@@ -338,7 +343,7 @@ pub(crate) fn build_pruning_predicate(
 /// Build a page pruning predicate from an optional predicate expression.
 /// If the predicate is None or the predicate cannot be converted to a page pruning
 /// predicate, return None.
-pub(crate) fn build_page_pruning_predicate(
+pub fn build_page_pruning_predicate(
     predicate: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
 ) -> Arc<PagePruningAccessPlanFilter> {
@@ -346,4 +351,48 @@ pub(crate) fn build_page_pruning_predicate(
         predicate,
         Arc::clone(file_schema),
     ))
+}
+
+fn build_pruning_predicates(
+    predicate: &Option<Arc<dyn PhysicalExpr>>,
+    file_schema: &SchemaRef,
+    predicate_creation_errors: &Count,
+) -> (
+    Option<Arc<PruningPredicate>>,
+    Option<Arc<PagePruningAccessPlanFilter>>,
+) {
+    let Some(predicate) = predicate.as_ref() else {
+        return (None, None);
+    };
+    let pruning_predicate = build_pruning_predicate(
+        Arc::clone(predicate),
+        file_schema,
+        predicate_creation_errors,
+    );
+    let page_pruning_predicate = build_page_pruning_predicate(predicate, file_schema);
+    (pruning_predicate, Some(page_pruning_predicate))
+}
+
+async fn load_page_index<T: AsyncFileReader>(
+    arrow_reader: ArrowReaderMetadata,
+    input: &mut T,
+    options: ArrowReaderOptions,
+) -> Result<ArrowReaderMetadata> {
+    let parquet_metadata = arrow_reader.metadata();
+    let missing_column_index = parquet_metadata.column_index().is_none();
+    let missing_offset_index = parquet_metadata.offset_index().is_none();
+    if missing_column_index || missing_offset_index {
+        let m = Arc::try_unwrap(Arc::clone(&parquet_metadata))
+            .unwrap_or_else(|e| e.as_ref().clone());
+        let mut reader =
+            ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
+        reader.load_page_index(input).await?;
+        let new_parquet_metadata = reader.finish()?;
+        let new_arrow_reader =
+            ArrowReaderMetadata::try_new(Arc::new(new_parquet_metadata), options)?;
+        Ok(new_arrow_reader)
+    } else {
+        // No page index, return the original metadata
+        Ok(arrow_reader)
+    }
 }
