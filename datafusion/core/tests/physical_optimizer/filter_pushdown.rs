@@ -142,7 +142,7 @@ impl FileSource for TestSource {
         filters: &[PhysicalExprRef],
     ) -> datafusion_common::Result<Option<FileSourceFilterPushdownResult>> {
         let new = Arc::new(TestSource {
-            support: self.support.clone(),
+            support: self.support,
             predicate: Some(conjunction(filters.iter().map(Arc::clone))),
             statistics: self.statistics.clone(),
         });
