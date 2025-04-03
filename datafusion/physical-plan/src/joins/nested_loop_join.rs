@@ -490,16 +490,16 @@ impl ExecutionPlan for NestedLoopJoinExec {
             MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
                 .register(context.memory_pool());
 
-        let inner_table = self.inner_table.once(|| {
-            collect_left_input(
+        let inner_table = self.inner_table.try_once(|| {
+            Ok(collect_left_input(
                 Arc::clone(&self.left),
                 Arc::clone(&context),
                 join_metrics.clone(),
                 load_reservation,
                 need_produce_result_in_final(self.join_type),
                 self.right().output_partitioning().partition_count(),
-            )
-        });
+            ))
+        })?;
 
         let batch_size = context.session_config().batch_size();
         let enforce_batch_size_in_joins =

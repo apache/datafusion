@@ -303,14 +303,14 @@ impl ExecutionPlan for CrossJoinExec {
         let enforce_batch_size_in_joins =
             context.session_config().enforce_batch_size_in_joins();
 
-        let left_fut = self.left_fut.once(|| {
-            load_left_input(
+        let left_fut = self.left_fut.try_once(|| {
+            Ok(load_left_input(
                 Arc::clone(&self.left),
                 context,
                 join_metrics.clone(),
                 reservation,
-            )
-        });
+            ))
+        })?;
 
         if enforce_batch_size_in_joins {
             Ok(Box::pin(CrossJoinStream {

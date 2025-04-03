@@ -800,24 +800,22 @@ impl ExecutionPlan for HashJoinExec {
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
-            PartitionMode::CollectLeft => {
+            PartitionMode::CollectLeft => self.left_fut.try_once(|| {
                 let left_stream = self.left.execute(0, Arc::clone(&context))?;
 
-                self.left_fut.once(|| {
-                    let reservation = MemoryConsumer::new("HashJoinInput")
-                        .register(context.memory_pool());
+                let reservation =
+                    MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
 
-                    collect_left_input(
-                        self.random_state.clone(),
-                        left_stream,
-                        on_left.clone(),
-                        join_metrics.clone(),
-                        reservation,
-                        need_produce_result_in_final(self.join_type),
-                        self.right().output_partitioning().partition_count(),
-                    )
-                })
-            }
+                Ok(collect_left_input(
+                    self.random_state.clone(),
+                    left_stream,
+                    on_left.clone(),
+                    join_metrics.clone(),
+                    reservation,
+                    need_produce_result_in_final(self.join_type),
+                    self.right().output_partitioning().partition_count(),
+                ))
+            })?,
             PartitionMode::Partitioned => {
                 let left_stream = self.left.execute(partition, Arc::clone(&context))?;
 
