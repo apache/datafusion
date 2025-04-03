@@ -649,7 +649,7 @@ datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestam
 datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
 datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
 datafusion public rank datafusion public rank FUNCTION true NULL WINDOW Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values. rank()
-datafusion public string_agg datafusion public string_agg FUNCTION true LargeUtf8 AGGREGATE Concatenates the values of string expressions and places separator values between them. string_agg(expression, delimiter)
+datafusion public string_agg datafusion public string_agg FUNCTION true LargeUtf8 AGGREGATE Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression. string_agg([DISTINCT] expression, delimiter [ORDER BY expression])
 
 query B
 select is_deterministic from information_schema.routines where routine_name = 'now';
@@ -717,6 +717,15 @@ datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 1
 datafusion public string_agg 1 IN expression LargeUtf8 NULL false 2
 datafusion public string_agg 2 IN delimiter Null NULL false 2
 datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 2
+datafusion public string_agg 1 IN expression Utf8 NULL false 3
+datafusion public string_agg 2 IN delimiter Utf8 NULL false 3
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 3
+datafusion public string_agg 1 IN expression Utf8 NULL false 4
+datafusion public string_agg 2 IN delimiter LargeUtf8 NULL false 4
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 4
+datafusion public string_agg 1 IN expression Utf8 NULL false 5
+datafusion public string_agg 2 IN delimiter Null NULL false 5
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 5
 
 # test variable length arguments
 query TTTBI rowsort
