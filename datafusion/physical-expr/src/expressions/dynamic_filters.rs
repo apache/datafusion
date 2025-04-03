@@ -23,6 +23,7 @@ use std::{
 };
 
 use crate::{utils::conjunction, PhysicalExpr};
+use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
     Result,
@@ -76,7 +77,7 @@ pub struct DynamicFilterPhysicalExpr {
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in our tests.
-    data_type: Arc<RwLock<Option<arrow::datatypes::DataType>>>,
+    data_type: Arc<RwLock<Option<DataType>>>,
     nullable: Arc<RwLock<Option<bool>>>,
 }
 
@@ -176,8 +177,8 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 
     fn data_type(
         &self,
-        input_schema: &arrow::datatypes::Schema,
-    ) -> Result<arrow::datatypes::DataType> {
+        input_schema: &Schema,
+    ) -> Result<DataType> {
         let res = self.current()?.data_type(input_schema)?;
         #[cfg(test)]
         {
@@ -202,7 +203,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         Ok(res)
     }
 
-    fn nullable(&self, input_schema: &arrow::datatypes::Schema) -> Result<bool> {
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
         let res = self.current()?.nullable(input_schema)?;
         #[cfg(test)]
         {
@@ -258,63 +259,140 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 
 #[cfg(test)]
 mod test {
-    use crate::expressions::lit;
-    use arrow::array::RecordBatch;
+    use crate::{expressions::{col, lit, BinaryExpr}, utils::reassign_predicate_columns};
+    use arrow::{array::RecordBatch, datatypes::{DataType, Field, Schema}};
     use datafusion_common::ScalarValue;
 
     use super::*;
 
+    #[derive(Debug)]
+    struct MockDynamicFilterSource {
+        current_expr: Arc<RwLock<Arc<dyn PhysicalExpr>>>,
+    }
+
+    impl Hash for MockDynamicFilterSource {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            // Hash the current expression to ensure uniqueness
+            self.current_expr.read().unwrap().dyn_hash(state);
+        }
+    }
+
+    impl DynEq for MockDynamicFilterSource {
+        fn dyn_eq(&self, other: &dyn Any) -> bool {
+            if let Some(other) = other.downcast_ref::<MockDynamicFilterSource>() {
+                self.current_expr
+                    .read()
+                    .unwrap()
+                    .eq(&other.current_expr.read().unwrap())
+            } else {
+                false
+            }
+        }
+    }
+
+    impl DynamicFilterSource for MockDynamicFilterSource {
+        fn snapshot_current_filters(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+            let expr = self.current_expr.read().unwrap().clone();
+            Ok(vec![expr])
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    impl Display for MockDynamicFilterSource {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "MockDynamicFilterSource [ current_expr: {:?} ]",
+                self.current_expr.read().unwrap()
+            )
+        }
+    }
+
+    impl MockDynamicFilterSource {
+        fn new(current_expr: Arc<dyn PhysicalExpr>) -> Self {
+            Self {
+                current_expr: Arc::new(RwLock::new(current_expr)),
+            }
+        }
+
+        fn update_current_expr(
+            &self,
+            new_expr: Arc<dyn PhysicalExpr>,
+        ) {
+            let mut current = self.current_expr.write().unwrap();
+            *current = new_expr;
+        }
+    }
+
+    #[test]
+    fn test_remap_children() {
+        let table_schema = Arc::new(
+            Schema::new(
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Int32, false),
+                ]
+            )
+        );
+        let file_schema = Arc::new(
+            Schema::new(
+                vec![
+                    Field::new("b", DataType::Int32, false),
+                    Field::new("a", DataType::Int32, false),
+                ]
+            )
+        );
+        let expr = Arc::new(
+            BinaryExpr::new(
+                col("a", &table_schema).unwrap(),
+                datafusion_expr::Operator::Gt,
+                lit(42) as Arc<dyn PhysicalExpr>,
+            )
+        );
+        let source = Arc::new(MockDynamicFilterSource::new(expr));
+        let dynamic_filter = Arc::new(
+            DynamicFilterPhysicalExpr::new(
+                vec![col("a", &table_schema).unwrap()],
+                Arc::clone(&source) as Arc<dyn DynamicFilterSource>,
+            )
+        );
+        // Take an initial snapshot
+        let snap = dynamic_filter.snapshot().unwrap().unwrap();
+        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Gt, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
+        // Remap the children to the file schema
+        let dynamic_filter = reassign_predicate_columns(dynamic_filter, &file_schema, false).unwrap();
+        // Take a snapshot after remapping, the children in the snapshot should be remapped to the file schema
+        let snap = dynamic_filter.snapshot().unwrap().unwrap();
+        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Gt, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
+    }
+
+    #[test]
+    fn test_snapshot() {
+        let expr = lit(42) as Arc<dyn PhysicalExpr>;
+        let source = Arc::new(MockDynamicFilterSource::new(Arc::clone(&expr)));
+        let dynamic_filter = DynamicFilterPhysicalExpr::new(
+            vec![],
+            Arc::clone(&source) as Arc<dyn DynamicFilterSource>,
+        );
+
+        // Take a snapshot of the current expression
+        let snapshot = dynamic_filter.snapshot().unwrap();
+        assert_eq!(snapshot, Some(expr));
+
+        // Update the current expression
+        let new_expr = lit(100) as Arc<dyn PhysicalExpr>;
+        source.update_current_expr(Arc::clone(&new_expr));
+        // Take another snapshot
+        let snapshot = dynamic_filter.snapshot().unwrap();
+        assert_eq!(snapshot, Some(new_expr));
+    }
+
     #[test]
     fn test_dynamic_filter_physical_expr_misbehaves_data_type_nullable() {
-        #[derive(Debug)]
-        struct MockDynamicFilterSource {
-            current_expr: Arc<RwLock<Arc<dyn PhysicalExpr>>>,
-        }
-
-        impl Hash for MockDynamicFilterSource {
-            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-                // Hash the current expression to ensure uniqueness
-                self.current_expr.read().unwrap().dyn_hash(state);
-            }
-        }
-
-        impl DynEq for MockDynamicFilterSource {
-            fn dyn_eq(&self, other: &dyn Any) -> bool {
-                if let Some(other) = other.downcast_ref::<MockDynamicFilterSource>() {
-                    self.current_expr
-                        .read()
-                        .unwrap()
-                        .eq(&other.current_expr.read().unwrap())
-                } else {
-                    false
-                }
-            }
-        }
-
-        impl DynamicFilterSource for MockDynamicFilterSource {
-            fn snapshot_current_filters(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
-                let expr = self.current_expr.read().unwrap().clone();
-                Ok(vec![expr])
-            }
-
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-        }
-
-        impl Display for MockDynamicFilterSource {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(
-                    f,
-                    "MockDynamicFilterSource [ current_expr: {:?} ]",
-                    self.current_expr.read().unwrap()
-                )
-            }
-        }
-
-        let source = Arc::new(MockDynamicFilterSource {
-            current_expr: Arc::new(RwLock::new(lit(42) as Arc<dyn PhysicalExpr>)),
-        });
+        let source = Arc::new(MockDynamicFilterSource::new(lit(42) as Arc<dyn PhysicalExpr>));
         let dynamic_filter = DynamicFilterPhysicalExpr::new(
             vec![],
             Arc::clone(&source) as Arc<dyn DynamicFilterSource>,
@@ -322,18 +400,18 @@ mod test {
 
         // First call to data_type and nullable should set the initial values.
         let initial_data_type = dynamic_filter
-            .data_type(&arrow::datatypes::Schema::empty())
+            .data_type(&Schema::empty())
             .unwrap();
         let initial_nullable = dynamic_filter
-            .nullable(&arrow::datatypes::Schema::empty())
+            .nullable(&Schema::empty())
             .unwrap();
 
         // Call again and expect no change.
         let second_data_type = dynamic_filter
-            .data_type(&arrow::datatypes::Schema::empty())
+            .data_type(&Schema::empty())
             .unwrap();
         let second_nullable = dynamic_filter
-            .nullable(&arrow::datatypes::Schema::empty())
+            .nullable(&Schema::empty())
             .unwrap();
         assert_eq!(
             initial_data_type, second_data_type,
@@ -352,17 +430,17 @@ mod test {
         // Check that we error if we call data_type, nullable or evaluate after changing the expression.
         assert!(
             dynamic_filter
-                .data_type(&arrow::datatypes::Schema::empty())
+                .data_type(&Schema::empty())
                 .is_err(),
             "Expected err when data_type is called after changing the expression."
         );
         assert!(
             dynamic_filter
-                .nullable(&arrow::datatypes::Schema::empty())
+                .nullable(&Schema::empty())
                 .is_err(),
             "Expected err when nullable is called after changing the expression."
         );
-        let batch = RecordBatch::new_empty(Arc::new(arrow::datatypes::Schema::empty()));
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
         assert!(
             dynamic_filter.evaluate(&batch).is_err(),
             "Expected err when evaluate is called after changing the expression."
