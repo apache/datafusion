@@ -241,7 +241,9 @@ fn parse_ident_normalization_4() {
 fn parse_ident_normalization_5() {
     let sql = "SELECT AGE FROM PERSON";
     let parser_option = ident_normalization_parser_options_no_ident_normalization();
-    let plan = logical_plan_with_options(sql, parser_option).unwrap_err();
+    let plan = logical_plan_with_options(sql, parser_option)
+        .unwrap_err()
+        .strip_backtrace();
     assert_snapshot!(
         plan,
         @r#"
