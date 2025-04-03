@@ -66,7 +66,7 @@ mod test {
     fn check_unchanged_statistics(statistics: Vec<Statistics>) {
         // Check the statistics of each partition
         for stat in &statistics {
-            assert_eq!(stat.num_rows, Precision::Exact(1));
+            assert_eq!(stat.num_rows, Precision::Exact(2));
             // First column (id) should have non-null values
             assert_eq!(stat.column_statistics[0].null_count, Precision::Exact(0));
         }
@@ -77,15 +77,15 @@ mod test {
             Precision::Exact(ScalarValue::Int32(Some(4)))
         );
         assert_eq!(
-            statistics[1].column_statistics[0].max_value,
+            statistics[0].column_statistics[0].min_value,
             Precision::Exact(ScalarValue::Int32(Some(3)))
         );
         assert_eq!(
-            statistics[2].column_statistics[0].max_value,
+            statistics[1].column_statistics[0].max_value,
             Precision::Exact(ScalarValue::Int32(Some(2)))
         );
         assert_eq!(
-            statistics[3].column_statistics[0].max_value,
+            statistics[1].column_statistics[0].min_value,
             Precision::Exact(ScalarValue::Int32(Some(1)))
         );
     }
@@ -93,13 +93,13 @@ mod test {
     #[tokio::test]
     async fn test_statistics_by_partition_of_data_source() -> datafusion_common::Result<()>
     {
-        let scan = generate_listing_table_with_statistics(None).await;
+        let scan = generate_listing_table_with_statistics(Some(2)).await;
         let statistics = scan.statistics_by_partition()?;
         // Check the statistics of each partition
-        assert_eq!(statistics.len(), 4);
+        assert_eq!(statistics.len(), 2);
         for stat in &statistics {
             assert_eq!(stat.column_statistics.len(), 2);
-            assert_eq!(stat.total_byte_size, Precision::Exact(55));
+            assert_eq!(stat.total_byte_size, Precision::Exact(110));
         }
         check_unchanged_statistics(statistics);
         Ok(())
@@ -108,7 +108,7 @@ mod test {
     #[tokio::test]
     async fn test_statistics_by_partition_of_projection() -> datafusion_common::Result<()>
     {
-        let scan = generate_listing_table_with_statistics(None).await;
+        let scan = generate_listing_table_with_statistics(Some(2)).await;
         // Add projection execution plan
         let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(Arc::new(Column::new("id", 0)), "id".to_string())];
@@ -116,7 +116,7 @@ mod test {
         let statistics = projection.statistics_by_partition()?;
         for stat in &statistics {
             assert_eq!(stat.column_statistics.len(), 1);
-            assert_eq!(stat.total_byte_size, Precision::Exact(4));
+            assert_eq!(stat.total_byte_size, Precision::Exact(8));
         }
         check_unchanged_statistics(statistics);
         Ok(())
@@ -192,7 +192,7 @@ mod test {
 
     #[tokio::test]
     async fn test_statistics_by_partition_of_filter() -> datafusion_common::Result<()> {
-        let scan = generate_listing_table_with_statistics(None).await;
+        let scan = generate_listing_table_with_statistics(Some(2)).await;
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
         let predicate = binary(
             Arc::new(Column::new("id", 0)),
@@ -229,7 +229,7 @@ mod test {
         let statistics = filter.statistics_by_partition()?;
         // Also the statistics of each partition is also invalid due to above
         // But we can ensure the current behavior by tests
-        assert_eq!(statistics.len(), 4);
+        assert_eq!(statistics.len(), 2);
         for stat in &statistics {
             assert_eq!(stat.column_statistics.len(), 2);
             assert_eq!(stat.total_byte_size, Precision::Inexact(0));
