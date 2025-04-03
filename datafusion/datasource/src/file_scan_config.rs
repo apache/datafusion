@@ -38,7 +38,7 @@ use datafusion_execution::{
 };
 use datafusion_physical_expr::{
     expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
-    PhysicalSortExpr,
+    PhysicalExprRef, PhysicalSortExpr,
 };
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
@@ -48,7 +48,6 @@ use datafusion_physical_plan::{
 };
 use log::{debug, warn};
 
-use crate::file_groups::FileGroup;
 use crate::{
     display::FileGroupsDisplay,
     file::FileSource,
@@ -58,6 +57,7 @@ use crate::{
     statistics::MinMaxStatistics,
     PartitionedFile,
 };
+use crate::{file_groups::FileGroup, source::DataSourceFilterPushdownResult};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -583,6 +583,22 @@ impl DataSource for FileScanConfig {
                     .build(),
             ) as _
         }))
+    }
+
+    fn push_down_filters(
+        &self,
+        filters: &[PhysicalExprRef],
+    ) -> Result<Option<DataSourceFilterPushdownResult>> {
+        if let Some(file_source_result) = self.file_source.push_down_filters(filters)? {
+            let mut new_self = self.clone();
+            new_self.file_source = file_source_result.inner;
+            Ok(Some(DataSourceFilterPushdownResult {
+                inner: Arc::new(new_self) as Arc<dyn DataSource>,
+                support: file_source_result.support,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -2000,7 +2016,7 @@ mod tests {
                     },
                     partition_values: vec![ScalarValue::from(file.date)],
                     range: None,
-                    statistics: Some(Arc::new(Statistics {
+                    statistics: Some(Statistics {
                         num_rows: Precision::Absent,
                         total_byte_size: Precision::Absent,
                         column_statistics: file
@@ -2020,7 +2036,7 @@ mod tests {
                                     .unwrap_or_default()
                             })
                             .collect::<Vec<_>>(),
-                    })),
+                    }),
                     extensions: None,
                     metadata_size_hint: None,
                 }

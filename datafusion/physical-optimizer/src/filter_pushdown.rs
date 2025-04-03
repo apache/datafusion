@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use datafusion_common::{config::ConfigOptions, Result};
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_plan::{
     execution_plan::{
         ExecutionPlanFilterPushdownResult, FilterPushdownAllowed, FilterSupport,
@@ -73,7 +73,7 @@ impl ChildPushdownState {
 /// See [`pushdown_filters`] for more details.
 fn push_down_into_children(
     node: &Arc<dyn ExecutionPlan>,
-    filters: &[Arc<dyn PhysicalExpr>],
+    filters: &[PhysicalExprRef],
 ) -> Result<ExecutionPlanFilterPushdownResult> {
     let children = node.children();
     let mut new_children = Vec::with_capacity(children.len());
@@ -121,7 +121,7 @@ fn push_down_into_children(
 /// See [`PushdownFilter`] for more details on how this works in practice.
 fn pushdown_filters(
     node: &Arc<dyn ExecutionPlan>,
-    parent_filters: &[Arc<dyn PhysicalExpr>],
+    parent_filters: &[PhysicalExprRef],
 ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
     // Gather the filters from the current node.
     // These are the filters the current node "owns" or "produces" and wants to push down.
