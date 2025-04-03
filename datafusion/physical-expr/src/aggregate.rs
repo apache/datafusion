@@ -128,25 +128,28 @@ impl AggregateExprBuilder {
     /// # impl AggregateUDFImpl for FirstValueUdf {
     /// #     fn as_any(&self) -> &dyn Any {
     /// #         unimplemented!()
-    /// # }
+    /// #     }
+    /// #
     /// #     fn name(&self) -> &str {
     /// #         unimplemented!()
-    /// }
+    /// #     }
+    /// #
     /// #     fn signature(&self) -> &Signature {
     /// #         unimplemented!()
-    /// # }
+    /// #     }
+    /// #
     /// #     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
     /// #         unimplemented!()
     /// #     }
-    /// #     
+    /// #
     /// #     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
     /// #         unimplemented!()
-    /// #         }
-    /// #     
+    /// #     }
+    /// #
     /// #     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
     /// #         unimplemented!()
     /// #     }
-    /// #     
+    /// #
     /// #     fn documentation(&self) -> Option<&Documentation> {
     /// #         unimplemented!()
     /// #     }
@@ -169,16 +172,16 @@ impl AggregateExprBuilder {
     ///     }];
     ///
     ///     let first_value = AggregateUDF::from(FirstValueUdf::new());
-    ///     
+    ///
     ///     let aggregate_expr = AggregateExprBuilder::new(
     ///         Arc::new(first_value),
     ///         args
     ///     )
-    ///     .order_by(order_by.into())
+    ///     .order_by(Some(order_by.into()))
     ///     .alias("first_a_by_x")
     ///     .ignore_nulls()
     ///     .build()?;
-    ///     
+    ///
     ///     Ok(())
     /// }
     /// ```
