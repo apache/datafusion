@@ -213,9 +213,9 @@ impl EquivalenceProperties {
     pub fn output_ordering(&self) -> Option<LexOrdering> {
         // Prune out constant expressions:
         let constants = self.constants();
-        self.oeq_class()
-            .output_ordering()?
-            .retain(|sort_expr| !const_exprs_contains(constants, &sort_expr.expr))
+        let mut sort_exprs = self.oeq_class().output_ordering()?.take();
+        sort_exprs.retain(|item| !const_exprs_contains(constants, &item.expr));
+        (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs))
     }
 
     /// Returns the normalized version of the ordering equivalence class within.

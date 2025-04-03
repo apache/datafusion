@@ -79,8 +79,8 @@ fn calculate_union_binary(
     // Next, calculate valid orderings for the union by searching for prefixes
     // in both sides.
     let mut orderings = UnionEquivalentOrderingBuilder::new();
-    orderings.add_satisfied_orderings(lhs.normalized_oeq_class(), lhs.constants(), &rhs);
-    orderings.add_satisfied_orderings(rhs.normalized_oeq_class(), rhs.constants(), &lhs);
+    orderings.add_satisfied_orderings(&lhs, &rhs);
+    orderings.add_satisfied_orderings(&rhs, &lhs);
     let orderings = orderings.build();
 
     let mut eq_properties =
@@ -137,49 +137,51 @@ impl UnionEquivalentOrderingBuilder {
         Self { orderings: vec![] }
     }
 
-    /// Add all orderings from `orderings` that satisfy `properties`,
-    /// potentially augmented with`constants`.
+    /// Add all orderings from `source` that satisfy `properties`,
+    /// potentially augmented with the constants in `source`.
     ///
-    /// Note: any column that is known to be constant can be inserted into the
-    /// ordering without changing its meaning
+    /// Note: Any column that is known to be constant can be inserted into the
+    /// ordering without changing its meaning.
     ///
     /// For example:
-    /// * `orderings` contains `[a ASC, c ASC]` and `constants` contains `b`
-    /// * `properties` has required ordering `[a ASC, b ASC]`
+    /// * Orderings in `source` contains `[a ASC, c ASC]` and constants contains
+    ///   `b`,
+    /// * `properties` has the ordering `[a ASC, b ASC]`.
     ///
     /// Then this will add `[a ASC, b ASC]` to the `orderings` list (as `a` was
     /// in the sort order and `b` was a constant).
     fn add_satisfied_orderings(
         &mut self,
-        orderings: impl IntoIterator<Item = LexOrdering>,
-        constants: &[ConstExpr],
+        source: &EquivalenceProperties,
         properties: &EquivalenceProperties,
     ) {
-        for mut ordering in orderings.into_iter() {
+        let constants = source.constants();
+        for mut ordering in source.normalized_oeq_class() {
             // Progressively shorten the ordering to search for a satisfied prefix:
             loop {
                 ordering = match self.try_add_ordering(ordering, constants, properties) {
                     AddedOrdering::Yes => break,
                     AddedOrdering::No(ordering) => {
-                        let (Some(short), _) = ordering.pop() else {
+                        let mut sort_exprs = ordering.take();
+                        sort_exprs.pop();
+                        if sort_exprs.is_empty() {
                             break;
-                        };
-                        short
+                        }
+                        LexOrdering::new(sort_exprs)
                     }
                 }
             }
         }
     }
 
-    /// Adds `ordering`, potentially augmented with constants, if it satisfies
-    /// the target `properties` properties.
+    /// Adds `ordering`, potentially augmented with `constants`, if it satisfies
+    /// the given `properties`.
     ///
-    /// Returns
+    /// # Returns
     ///
-    /// * [`AddedOrdering::Yes`] if the ordering was added (either directly or
-    ///   augmented), or was empty.
-    ///
-    /// * [`AddedOrdering::No`] if the ordering was not added
+    /// An [`AddedOrdering::Yes`] instance if the ordering was added (either
+    /// directly or augmented), or was empty. An [`AddedOrdering::No`] instance
+    /// otherwise.
     fn try_add_ordering(
         &mut self,
         ordering: LexOrdering,
@@ -191,79 +193,69 @@ impl UnionEquivalentOrderingBuilder {
             // augment it with constants.
             self.orderings.push(ordering);
             AddedOrdering::Yes
+        } else if self.try_find_augmented_ordering(&ordering, constants, properties) {
+            // Augmented with constants to match the properties.
+            AddedOrdering::Yes
         } else {
-            // Did not satisfy target properties, try and augment with constants
-            //  to match the properties
-            if self.try_find_augmented_ordering(&ordering, constants, properties) {
-                AddedOrdering::Yes
-            } else {
-                AddedOrdering::No(ordering)
-            }
+            AddedOrdering::No(ordering)
         }
     }
 
     /// Attempts to add `constants` to `ordering` to satisfy the properties.
-    ///
-    /// returns true if any orderings were added, false otherwise
+    /// Returns `true` if augmentation took place, `false` otherwise.
     fn try_find_augmented_ordering(
         &mut self,
         ordering: &LexOrdering,
         constants: &[ConstExpr],
         properties: &EquivalenceProperties,
     ) -> bool {
-        // can't augment if there is nothing to augment with
-        if constants.is_empty() {
-            return false;
-        }
-        let start_num_orderings = self.orderings.len();
-
-        // for each equivalent ordering in properties, try and augment
-        // `ordering` it with the constants to match
-        for existing_ordering in properties.oeq_class.iter() {
-            if let Some(augmented_ordering) = self.augment_ordering(
-                ordering,
-                constants,
-                existing_ordering,
-                &properties.constants,
-            ) {
-                assert!(properties.ordering_satisfy(&augmented_ordering));
-                self.orderings.push(augmented_ordering);
+        let mut result = false;
+        // Can only augment if there are constants.
+        if !constants.is_empty() {
+            // For each equivalent ordering in properties, try and augment
+            // `ordering` with the constants to match `existing_ordering`:
+            for existing_ordering in properties.oeq_class.iter() {
+                if let Some(augmented_ordering) = Self::augment_ordering(
+                    ordering,
+                    constants,
+                    existing_ordering,
+                    &properties.constants,
+                ) {
+                    debug_assert!(properties.ordering_satisfy(&augmented_ordering));
+                    self.orderings.push(augmented_ordering);
+                    result = true;
+                }
             }
         }
-
-        self.orderings.len() > start_num_orderings
+        result
     }
 
-    /// Attempts to augment the ordering with constants to match the
-    /// `existing_ordering`
-    ///
-    /// Returns Some(ordering) if an augmented ordering was found, None otherwise
+    /// Attempts to augment the ordering with constants to match `existing_ordering`.
+    /// Returns `Some(ordering)` if an augmented ordering was found, `None` otherwise.
     fn augment_ordering(
-        &mut self,
         ordering: &LexOrdering,
         constants: &[ConstExpr],
         existing_ordering: &LexOrdering,
         existing_constants: &[ConstExpr],
     ) -> Option<LexOrdering> {
         let mut augmented_ordering = vec![];
-        let mut sort_expr_iter = ordering.iter().peekable();
-        let mut existing_sort_expr_iter = existing_ordering.iter().peekable();
+        let mut sort_exprs = ordering.iter().peekable();
+        let mut existing_sort_exprs = existing_ordering.iter().peekable();
 
-        // walk in parallel down the two orderings, trying to match them up
-        while sort_expr_iter.peek().is_some() || existing_sort_expr_iter.peek().is_some()
-        {
-            // If the next expressions are equal, add the next match
-            // otherwise try and match with a constant
+        // Walk in parallel down the two orderings, trying to match them up:
+        while sort_exprs.peek().is_some() || existing_sort_exprs.peek().is_some() {
+            // If the next expressions are equal, add the next match. Otherwise,
+            // try and match with a constant.
             if let Some(expr) =
-                advance_if_match(&mut sort_expr_iter, &mut existing_sort_expr_iter)
+                advance_if_match(&mut sort_exprs, &mut existing_sort_exprs)
             {
                 augmented_ordering.push(expr);
             } else if let Some(expr) =
-                advance_if_matches_constant(&mut sort_expr_iter, existing_constants)
+                advance_if_matches_constant(&mut sort_exprs, existing_constants)
             {
                 augmented_ordering.push(expr);
             } else if let Some(expr) =
-                advance_if_matches_constant(&mut existing_sort_expr_iter, constants)
+                advance_if_matches_constant(&mut existing_sort_exprs, constants)
             {
                 augmented_ordering.push(expr);
             } else {
@@ -318,7 +310,6 @@ fn advance_if_matches_constant(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::equivalence::class::const_exprs_contains;
     use crate::equivalence::tests::{create_test_schema, parse_sort_expr};

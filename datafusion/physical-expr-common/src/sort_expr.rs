@@ -339,7 +339,8 @@ pub struct LexOrdering {
 }
 
 impl LexOrdering {
-    /// Creates a new [`LexOrdering`] from a vector
+    /// Creates a new [`LexOrdering`] from the given vector of sort expressions.
+    /// The vector must not be empty.
     pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
         debug_assert!(!inner.is_empty());
         Self { inner }
@@ -350,7 +351,7 @@ impl LexOrdering {
         self.inner.push(physical_sort_expr)
     }
 
-    /// Add all elements from `iter` to the LexOrdering.
+    /// Add all elements from `iter` to the `LexOrdering`.
     pub fn extend(&mut self, iter: impl IntoIterator<Item = PhysicalSortExpr>) {
         self.inner.extend(iter)
     }
@@ -361,19 +362,10 @@ impl LexOrdering {
         self.inner.capacity()
     }
 
-    /// Remove all elements from the LexOrdering where `f` evaluates to `false`.
-    pub fn retain<F: FnMut(&PhysicalSortExpr) -> bool>(mut self, f: F) -> Option<Self> {
-        self.inner.retain(f);
-        (!self.inner.is_empty()).then_some(self)
-    }
-
-    /// Removes the last element from the `LexOrdering` and returns it along
-    /// with the resulting `LexOrdering`. If the `LexOrdering` becomes
-    /// degenerate, returns `None` as the first element of the tuple.
-    pub fn pop(mut self) -> (Option<Self>, PhysicalSortExpr) {
-        // The vector is always non-empty, so the `unwrap` call is safe.
-        let sort_expr = self.inner.pop().unwrap();
-        ((!self.inner.is_empty()).then_some(self), sort_expr)
+    /// Takes ownership of the underlying vector of sort expressions and
+    /// returns it.
+    pub fn take(self) -> Vec<PhysicalSortExpr> {
+        self.inner
     }
 
     /// Truncates the `LexOrdering`, keeping only the first `len` elements.
@@ -391,12 +383,11 @@ impl LexOrdering {
         self
     }
 
-    /// Collapse a `LexOrdering` into a new duplicate-free `LexOrdering` based on expression.
+    /// Constructs a duplicate-free `LexOrdering` by filtering out duplicate
+    /// entries that have same physical expression inside.
     ///
-    /// This function filters  duplicate entries that have same physical
-    /// expression inside, ignoring [`SortOptions`]. For example:
-    ///
-    /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
+    /// For example, `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a
+    /// Some(ASC)]`.
     pub fn collapse(self) -> Self {
         let mut orderings = Vec::<PhysicalSortExpr>::new();
         for element in self {
@@ -488,24 +479,37 @@ pub struct LexRequirement {
 }
 
 impl LexRequirement {
+    /// Creates a new [`LexOrdering`] from the given vector of sort requirements.
+    /// The vector must not be empty.
     pub fn new(inner: Vec<PhysicalSortRequirement>) -> Self {
         debug_assert!(!inner.is_empty());
         Self { inner }
     }
 
-    pub fn push(&mut self, physical_sort_requirement: PhysicalSortRequirement) {
-        self.inner.push(physical_sort_requirement)
+    /// Appends an element to the back of the `LexRequirement`.
+    pub fn push(&mut self, requirement: PhysicalSortRequirement) {
+        self.inner.push(requirement)
     }
 
-    pub fn extend(
-        &mut self,
-        requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
-    ) {
-        self.inner.extend(requirements)
+    /// Add all elements from `iter` to the `LexRequirement`.
+    pub fn extend(&mut self, iter: impl IntoIterator<Item = PhysicalSortRequirement>) {
+        self.inner.extend(iter)
     }
 
-    /// Constructs a duplicate-free `LexOrderingReq` by filtering out
-    /// duplicate entries that have same physical expression inside.
+    /// Returns the number of elements that can be stored in the `LexRequirement`
+    /// without reallocating.
+    pub fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
+    /// Takes ownership of the underlying vector of sort requirements and
+    /// returns it.
+    pub fn take(self) -> Vec<PhysicalSortRequirement> {
+        self.inner
+    }
+
+    /// Constructs a duplicate-free `LexRequirement` by filtering out duplicate
+    /// entries that have same physical expression inside.
     ///
     /// For example, `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a
     /// Some(ASC)]`.

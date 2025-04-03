@@ -18,7 +18,6 @@
 use std::sync::Arc;
 
 use datafusion_physical_expr::LexRequirement;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -40,16 +39,18 @@ pub fn add_sort_above<T: Clone + Default>(
     sort_requirements: LexRequirement,
     fetch: Option<usize>,
 ) -> PlanContext<T> {
-    let sort_expr = LexOrdering::from(sort_requirements);
-    let Some(sort_expr) = sort_expr.retain(|sort_expr| {
+    let mut sort_reqs = sort_requirements.take();
+    sort_reqs.retain(|sort_expr| {
         !node
             .plan
             .equivalence_properties()
             .is_expr_constant(&sort_expr.expr)
-    }) else {
+    });
+    if sort_reqs.is_empty() {
         return node;
-    };
-    let mut new_sort = SortExec::new(sort_expr, Arc::clone(&node.plan)).with_fetch(fetch);
+    }
+    let mut new_sort =
+        SortExec::new(sort_reqs.into(), Arc::clone(&node.plan)).with_fetch(fetch);
     if node.plan.output_partitioning().partition_count() > 1 {
         new_sort = new_sort.with_preserve_partitioning(true);
     }
