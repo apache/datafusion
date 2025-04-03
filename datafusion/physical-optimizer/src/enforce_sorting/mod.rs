@@ -46,6 +46,7 @@ use crate::enforce_sorting::replace_with_order_preserving_variants::{
 use crate::enforce_sorting::sort_pushdown::{
     assign_initial_requirements, pushdown_sorts, SortPushDown,
 };
+use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above, add_sort_above_with_check, is_coalesce_partitions, is_limit,
     is_repartition, is_sort, is_sort_preserving_merge, is_union, is_window,
@@ -491,7 +492,14 @@ pub fn ensure_sorting(
                 if physical_ordering.is_some() {
                     child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 }
-                child = add_sort_above(child, required.lex_requirement().clone(), None);
+                child = add_sort_above(
+                    child,
+                    required.lex_requirement().clone(),
+                    plan.as_any()
+                        .downcast_ref::<OutputRequirementExec>()
+                        .map(|output| output.fetch())
+                        .unwrap_or(None),
+                );
                 child = update_sort_ctx_children_data(child, true)?;
             }
         } else if physical_ordering.is_none()
