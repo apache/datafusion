@@ -105,7 +105,7 @@ impl Display for DynamicFilterPhysicalExpr {
 }
 
 impl DynamicFilterPhysicalExpr {
-    #[expect(dead_code)] // Only used in tests for now
+    #[allow(dead_code)] // Only used in tests for now
     pub fn new(
         children: Vec<Arc<dyn PhysicalExpr>>,
         inner: Arc<dyn DynamicFilterSource>,
