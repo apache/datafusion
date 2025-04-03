@@ -316,7 +316,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// or needs to serialize this state to bytes may not be able to handle these dynamic references.
     /// In such cases, we should return a simplified version of the `PhysicalExpr` that does not
     /// contain these dynamic references.
-    /// 
+    ///
     /// Systems that implement remote execution of plans, e.g. serialize a portion of the query plan
     /// and send it across the wire to a remote executor may want to call this method after
     /// every batch on the source side and brodcast / update the current snaphot to the remote executor.
