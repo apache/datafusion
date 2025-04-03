@@ -36,7 +36,13 @@ use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
 /// During query execution, operators implementing this trait can provide
 /// filter expressions that other operators can use to dynamically prune data.
 ///
-/// See `TopKDynamicFilterSource` in datafusion/physical-plan/src/topk/mod.rs for examples.
+/// For example:
+/// - A `HashJoin` operator can use this to provide a filter expression
+///   that filters out rows from the right side of the join based on the
+///   values from the left side.
+/// - A `TopK` operator can use this to provide a filter expression
+///   that filters out rows from the input based on the values from the
+///   top K rows.
 pub trait DynamicFilterSource:
     Send + Sync + std::fmt::Debug + DynEq + DynHash + Display + 'static
 {
