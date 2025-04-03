@@ -384,7 +384,7 @@ async fn load_page_index<T: AsyncFileReader>(
     // the page index even if you didn't ask for it (e.g. because it's cached)
     // so it's important to check that here to avoid extra work.
     if missing_column_index || missing_offset_index {
-        let m = Arc::try_unwrap(Arc::clone(&parquet_metadata))
+        let m = Arc::try_unwrap(Arc::clone(parquet_metadata))
             .unwrap_or_else(|e| e.as_ref().clone());
         let mut reader =
             ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
