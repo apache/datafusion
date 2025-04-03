@@ -34,7 +34,7 @@ use arrow::error::ArrowError;
 use datafusion_common::{exec_err, Result};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
-use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
 
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
@@ -54,10 +54,6 @@ pub(super) struct ParquetOpener {
     pub limit: Option<usize>,
     /// Optional predicate to apply during the scan
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
-    /// Optional pruning predicate applied to row group statistics
-    pub pruning_predicate: Option<Arc<PruningPredicate>>,
-    /// Optional pruning predicate applied to data page statistics
-    pub page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
     /// Schema of the output table
     pub table_schema: SchemaRef,
     /// Optional hint for how large the initial request to read parquet metadata
@@ -80,6 +76,8 @@ pub(super) struct ParquetOpener {
     pub enable_bloom_filter: bool,
     /// Schema adapter factory
     pub schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    /// Should row group pruning be applied
+    pub enable_row_group_stats_pruning: bool,
 }
 
 impl FileOpener for ParquetOpener {
@@ -109,17 +107,32 @@ impl FileOpener for ParquetOpener {
             .schema_adapter_factory
             .create(projected_schema, Arc::clone(&self.table_schema));
         let predicate = self.predicate.clone();
-        let pruning_predicate = self.pruning_predicate.clone();
-        let page_pruning_predicate = self.page_pruning_predicate.clone();
         let table_schema = Arc::clone(&self.table_schema);
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
-        let enable_page_index = should_enable_page_index(
-            self.enable_page_index,
-            &self.page_pruning_predicate,
-        );
         let enable_bloom_filter = self.enable_bloom_filter;
+        let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
         let limit = self.limit;
+
+        let predicate_creation_errors = MetricBuilder::new(&self.metrics)
+            .global_counter("num_predicate_creation_errors");
+
+        let (pruning_predicate, page_pruning_predicate) =
+            if let Some(predicate) = &predicate {
+                let pruning_predicate = build_pruning_predicate(
+                    Arc::clone(predicate),
+                    &table_schema,
+                    &predicate_creation_errors,
+                );
+                let page_pruning_predicate =
+                    build_page_pruning_predicate(predicate, &table_schema);
+                (pruning_predicate, Some(page_pruning_predicate))
+            } else {
+                (None, None)
+            };
+
+        let enable_page_index =
+            should_enable_page_index(self.enable_page_index, &page_pruning_predicate);
 
         Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
@@ -197,13 +210,15 @@ impl FileOpener for ParquetOpener {
             }
             // If there is a predicate that can be evaluated against the metadata
             if let Some(predicate) = predicate.as_ref() {
-                row_groups.prune_by_statistics(
-                    &file_schema,
-                    builder.parquet_schema(),
-                    rg_metadata,
-                    predicate,
-                    &file_metrics,
-                );
+                if enable_row_group_stats_pruning {
+                    row_groups.prune_by_statistics(
+                        &file_schema,
+                        builder.parquet_schema(),
+                        rg_metadata,
+                        predicate,
+                        &file_metrics,
+                    );
+                }
 
                 if enable_bloom_filter && !row_groups.is_empty() {
                     row_groups
@@ -294,4 +309,41 @@ fn create_initial_plan(
 
     // default to scanning all row groups
     Ok(ParquetAccessPlan::new_all(row_group_count))
+}
+
+/// Build a pruning predicate from an optional predicate expression.
+/// If the predicate is None or the predicate cannot be converted to a pruning
+/// predicate, return None.
+/// If there is an error creating the pruning predicate it is recorded by incrementing
+/// the `predicate_creation_errors` counter.
+pub(crate) fn build_pruning_predicate(
+    predicate: Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+    predicate_creation_errors: &Count,
+) -> Option<Arc<PruningPredicate>> {
+    match PruningPredicate::try_new(predicate, Arc::clone(file_schema)) {
+        Ok(pruning_predicate) => {
+            if !pruning_predicate.always_true() {
+                return Some(Arc::new(pruning_predicate));
+            }
+        }
+        Err(e) => {
+            debug!("Could not create pruning predicate for: {e}");
+            predicate_creation_errors.add(1);
+        }
+    }
+    None
+}
+
+/// Build a page pruning predicate from an optional predicate expression.
+/// If the predicate is None or the predicate cannot be converted to a page pruning
+/// predicate, return None.
+pub(crate) fn build_page_pruning_predicate(
+    predicate: &Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+) -> Arc<PagePruningAccessPlanFilter> {
+    Arc::new(PagePruningAccessPlanFilter::new(
+        predicate,
+        Arc::clone(file_schema),
+    ))
 }
