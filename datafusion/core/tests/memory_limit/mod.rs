@@ -553,7 +553,9 @@ async fn setup_context(
     });
 
     let config = SessionConfig::new()
-        .with_sort_spill_reservation_bytes(2 * 1024 * 1024) // 2MB
+        .with_sort_spill_reservation_bytes(64 * 1024) // 256KB
+        .with_sort_in_place_threshold_bytes(0)
+        .with_batch_size(64) // To reduce test memory usage
         .with_target_partitions(1);
 
     Ok(SessionContext::new_with_config_rt(config, runtime))
@@ -563,7 +565,7 @@ async fn setup_context(
 /// (specified by `max_temp_directory_size` in `DiskManager`)
 #[tokio::test]
 async fn test_disk_spill_limit_reached() -> Result<()> {
-    let ctx = setup_context(10 * 1024 * 1024, 60 * 1024 * 1024).await?;
+    let ctx = setup_context(1024 * 1024, 1024 * 1024).await?;
 
     let df = ctx
         .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1")
@@ -584,11 +586,11 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
 /// tempfiles are cleaned up.
 #[tokio::test]
 async fn test_disk_spill_limit_not_reached() -> Result<()> {
-    let disk_spill_limit = 10 * 1024 * 1024; // 10MB
-    let ctx = setup_context(disk_spill_limit, 10 * 1024 * 1024).await?;
+    let disk_spill_limit = 1024 * 1024; // 1MB
+    let ctx = setup_context(disk_spill_limit, 128 * 1024).await?; // 1MB memory limit
 
     let df = ctx
-        .sql("select * from generate_series(1, 1000000) as t1(v1) order by v1")
+        .sql("select * from generate_series(1, 10000) as t1(v1) order by v1")
         .await
         .unwrap();
     let plan = df.create_physical_plan().await.unwrap();
