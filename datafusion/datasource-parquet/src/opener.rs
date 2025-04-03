@@ -381,6 +381,11 @@ async fn load_page_index<T: AsyncFileReader>(
     let parquet_metadata = arrow_reader.metadata();
     let missing_column_index = parquet_metadata.column_index().is_none();
     let missing_offset_index = parquet_metadata.offset_index().is_none();
+    // You may ask yourself: why are we even checking if the page index is already loaded here?
+    // Didn't we explicitly *not* load it above?
+    // Well it's possible that a custom implementation of `AsyncFileReader` gives you
+    // the page index even if you didn't ask for it (e.g. because it's cached)
+    // so it's important to check that here to avoid extra work.
     if missing_column_index || missing_offset_index {
         let m = Arc::try_unwrap(Arc::clone(&parquet_metadata))
             .unwrap_or_else(|e| e.as_ref().clone());
