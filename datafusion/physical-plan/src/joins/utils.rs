@@ -328,7 +328,7 @@ pub fn build_join_schema(
 }
 
 /// A [`OnceAsync`] runs an `async` closure once, where multiple calls to
-/// [`OnceAsync::once`] return a [`OnceFut`] that resolves to the result of the
+/// [`OnceAsync::try_once`] return a [`OnceFut`] that resolves to the result of the
 /// same computation.
 ///
 /// This is useful for joins where the results of one child are needed to proceed
