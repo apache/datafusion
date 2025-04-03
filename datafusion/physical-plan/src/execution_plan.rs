@@ -467,7 +467,105 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(None)
     }
+
+    /// Returns a set of filters that this operator owns but would like to be pushed down.
+    /// For example, a `TopK` operator may produce dynamic filters that reference it's currrent state,
+    /// while a `FilterExec` will just hand of the filters it has as is.
+    /// The default implementation returns an empty vector.
+    /// These filters are applied row-by row and any that return `false` or `NULL` will be
+    /// filtered out and any that return `true` will be kept.
+    /// The expressions returned **must** always return `true` or `false`;
+    /// other truthy or falsy values are not allowed (e.g. `0`, `1`).
+    ///
+    /// # Returns
+    /// A vector of filters that this operator would like to push down.
+    /// These should be treated as the split conjunction of a `WHERE` clause.
+    /// That is, a query such as `WHERE a = 1 AND b = 2` would return two
+    /// filters: `a = 1` and `b = 2`.
+    /// They can always be assembled into a single filter using
+    /// [`crate::physical_expr::split_conjunction`].
+    fn filters_for_pushdown(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+        Ok(Vec::new())
+    }
+
+    /// Checks which filters this node allows to be pushed down through it from a parent to a child.
+    /// For example, a `ProjectionExec` node can allow filters that only refernece
+    /// columns it did not create through but filters that reference columns it is creating cannot be pushed down any further.
+    /// That is, it only allows some filters through because it changes the schema of the data.
+    /// Aggregation nodes may not allow any filters to be pushed down as they change the cardinality of the data.
+    /// RepartitionExec nodes allow all filters to be pushed down as they don't change the schema or cardinality.
+    fn filter_pushdown_request(
+        &self,
+        filters: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Vec<FilterPushdownAllowed>> {
+        Ok(vec![FilterPushdownAllowed::Disallowed; filters.len()])
+    }
+
+    /// After we've attempted to push down filters into this node's children
+    /// this will be called with the result for each filter that this node gave in `filters_for_pushdown`
+    /// **and** any filters that children could not handle.
+    fn with_filter_pushdown_result(
+        self: Arc<Self>,
+        _own_filters_result: &[FilterSupport],
+        _parent_filters_remaining: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
+        Ok(None)
+    }
 }
+
+/// The answer to the question: "Can this filter be pushed down through this plan?"
+/// Note that this is different from [`FilterSupport`] which is the answer to "Can *this* plan handle this filter?"
+#[derive(Debug, Clone)]
+pub enum FilterPushdownAllowed {
+    /// The operator allows this filter to be pushed down to its children.
+    /// The operator may choose to return a *different* filter expression
+    /// that is equivalent to the original filter, e.g. to deal with column indexes in a projection
+    /// or because the original filter can't be pushed down as is but a less-selective filter can be.
+    Allowed(Arc<dyn PhysicalExpr>),
+    /// The operator does not allow this filter to be pushed down to its children.
+    Disallowed,
+}
+
+/// The answer to the question: "Can this operator handle this filter itself?"
+/// Note that this is different from [`FilterPushdownAllowed`] which is the answer to "Can *this* plan handle this filter?"
+#[derive(Debug, Clone, Copy)]
+pub enum FilterSupport {
+    /// Filter may not have been pushed down to the child plan, or the child plan
+    /// can only partially apply the filter but may have false positives (but not false negatives).
+    /// In this case the parent **must** behave as if the filter was not pushed down
+    /// and must apply the filter itself.
+    Unhandled,
+    /// Filter was pushed down to the child plan and the child plan promises that
+    /// it will apply the filter correctly with no false positives or false negatives.
+    /// The parent can safely drop the filter.
+    HandledExact,
+}
+
+/// The combined result of a filter pushdown operation.
+/// This includes:
+/// * The inner plan that was produced by the pushdown operation.
+/// * The support for each filter that was pushed down.
+pub struct FilterPushdownResult<T> {
+    pub inner: T,
+    pub support: Vec<FilterSupport>,
+}
+
+impl<T> FilterPushdownResult<T> {
+    pub fn new(plan: T, support: Vec<FilterSupport>) -> Self {
+        Self {
+            inner: plan,
+            support,
+        }
+    }
+
+    pub fn is_exact(&self) -> bool {
+        self.support
+            .iter()
+            .all(|s| matches!(s, FilterSupport::HandledExact))
+    }
+}
+
+pub type ExecutionPlanFilterPushdownResult = FilterPushdownResult<Arc<dyn ExecutionPlan>>;
 
 /// [`ExecutionPlan`] Invariant Level
 ///

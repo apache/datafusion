@@ -21,6 +21,7 @@ mod aggregate_statistics;
 mod combine_partial_final_agg;
 mod enforce_distribution;
 mod enforce_sorting;
+mod filter_pushdown;
 mod join_selection;
 mod limit_pushdown;
 mod limited_distinct_aggregation;
