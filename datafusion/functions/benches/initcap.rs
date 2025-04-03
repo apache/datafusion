@@ -23,6 +23,7 @@ use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode;
 use std::sync::Arc;
@@ -47,6 +48,8 @@ fn create_args<O: OffsetSizeTrait>(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let initcap = unicode::initcap();
+    let config_options = ConfigOptions::default_singleton();
+
     for size in [1024, 4096] {
         let args = create_args::<i32>(size, 8, true);
         c.bench_function(
@@ -57,6 +60,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         number_rows: size,
                         return_type: &DataType::Utf8View,
+                        config_options,
                     }))
                 })
             },
@@ -71,6 +75,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         number_rows: size,
                         return_type: &DataType::Utf8View,
+                        config_options,
                     }))
                 })
             },
@@ -83,6 +88,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args.clone(),
                     number_rows: size,
                     return_type: &DataType::Utf8,
+                    config_options,
                 }))
             })
         });

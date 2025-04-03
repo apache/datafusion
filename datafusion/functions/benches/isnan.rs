@@ -23,12 +23,15 @@ use arrow::{
     util::bench_util::create_primitive_array,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::isnan;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let isnan = isnan();
+    let config_options = ConfigOptions::default_singleton();
+
     for size in [1024, 4096, 8192] {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
         let f32_args = vec![ColumnarValue::Array(f32_array)];
@@ -40,6 +43,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: f32_args.clone(),
                             number_rows: size,
                             return_type: &DataType::Boolean,
+                            config_options,
                         })
                         .unwrap(),
                 )
@@ -55,6 +59,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: f64_args.clone(),
                             number_rows: size,
                             return_type: &DataType::Boolean,
+                            config_options,
                         })
                         .unwrap(),
                 )

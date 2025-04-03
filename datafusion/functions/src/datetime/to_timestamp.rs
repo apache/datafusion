@@ -641,6 +641,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
     use arrow::datatypes::TimeUnit;
     use chrono::Utc;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
 
@@ -1017,6 +1018,7 @@ mod tests {
                     args: vec![array.clone()],
                     number_rows: 4,
                     return_type: &rt,
+                    config_options: ConfigOptions::default_singleton(),
                 };
                 let res = udf
                     .invoke_with_args(args)
@@ -1064,6 +1066,7 @@ mod tests {
                     args: vec![array.clone()],
                     number_rows: 5,
                     return_type: &rt,
+                    config_options: ConfigOptions::default_singleton(),
                 };
                 let res = udf
                     .invoke_with_args(args)

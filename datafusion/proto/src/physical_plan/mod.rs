@@ -85,7 +85,7 @@ use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
-use datafusion_common::config::TableParquetOptions;
+use datafusion_common::config::{ConfigOptions, TableParquetOptions};
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
@@ -118,6 +118,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
     fn try_into_physical_plan(
         &self,
         registry: &dyn FunctionRegistry,
+        config_options: &ConfigOptions,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -140,6 +141,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &projection.input,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
@@ -152,6 +154,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             parse_physical_expr(
                                 expr,
                                 registry,
+                                config_options,
                                 input.schema().as_ref(),
                                 extension_codec,
                             )?,
@@ -165,6 +168,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &filter.input,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
@@ -175,6 +179,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         parse_physical_expr(
                             expr,
                             registry,
+                            config_options,
                             input.schema().as_ref(),
                             extension_codec,
                         )
@@ -241,6 +246,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let conf = FileScanConfigBuilder::from(parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
+                    config_options,
                     extension_codec,
                     source,
                 )?)
@@ -253,6 +259,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let scan_conf = parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
+                    config_options,
                     extension_codec,
                     Arc::new(JsonSource::new()),
                 )?;
@@ -272,6 +279,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             parse_physical_expr(
                                 expr,
                                 registry,
+                                config_options,
                                 schema.as_ref(),
                                 extension_codec,
                             )
@@ -290,6 +298,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     let base_config = parse_protobuf_file_scan_config(
                         scan.base_conf.as_ref().unwrap(),
                         registry,
+                        config_options,
                         extension_codec,
                         Arc::new(source),
                     )?;
@@ -305,6 +314,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     let conf = parse_protobuf_file_scan_config(
                         scan.base_conf.as_ref().unwrap(),
                         registry,
+                        config_options,
                         extension_codec,
                         Arc::new(AvroSource::new()),
                     )?;
@@ -317,6 +327,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &coalesce_batches.input,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
@@ -329,20 +340,27 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 ))
             }
             PhysicalPlanType::Merge(merge) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan(&merge.input, registry, runtime, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &merge.input,
+                    registry,
+                    config_options,
+                    runtime,
+                    extension_codec,
+                )?;
                 Ok(Arc::new(CoalescePartitionsExec::new(input)))
             }
             PhysicalPlanType::Repartition(repart) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &repart.input,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
                 let partitioning = parse_protobuf_partitioning(
                     repart.partitioning.as_ref(),
                     registry,
+                    config_options,
                     input.schema().as_ref(),
                     extension_codec,
                 )?;
@@ -352,8 +370,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::GlobalLimit(limit) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan(&limit.input, registry, runtime, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &limit.input,
+                    registry,
+                    config_options,
+                    runtime,
+                    extension_codec,
+                )?;
                 let fetch = if limit.fetch >= 0 {
                     Some(limit.fetch as usize)
                 } else {
@@ -366,14 +389,20 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 )))
             }
             PhysicalPlanType::LocalLimit(limit) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan(&limit.input, registry, runtime, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &limit.input,
+                    registry,
+                    config_options,
+                    runtime,
+                    extension_codec,
+                )?;
                 Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
             }
             PhysicalPlanType::Window(window_agg) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &window_agg.input,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
@@ -386,6 +415,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         parse_physical_window_expr(
                             window_expr,
                             registry,
+                            config_options,
                             input_schema.as_ref(),
                             extension_codec,
                         )
@@ -399,6 +429,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         parse_physical_expr(
                             expr,
                             registry,
+                            config_options,
                             input.schema().as_ref(),
                             extension_codec,
                         )
@@ -438,6 +469,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &hash_agg.input,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
@@ -471,6 +503,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         parse_physical_expr(
                             expr,
                             registry,
+                            config_options,
                             input.schema().as_ref(),
                             extension_codec,
                         )
@@ -486,6 +519,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         parse_physical_expr(
                             expr,
                             registry,
+                            config_options,
                             input.schema().as_ref(),
                             extension_codec,
                         )
@@ -520,6 +554,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 parse_physical_expr(
                                     e,
                                     registry,
+                                    config_options,
                                     &physical_schema,
                                     extension_codec,
                                 )
@@ -540,9 +575,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         match expr_type {
                             ExprType::AggregateExpr(agg_node) => {
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
-                                    .map(|e| parse_physical_expr(e, registry, &physical_schema, extension_codec)).collect::<Result<Vec<_>>>()?;
+                                    .map(|e| parse_physical_expr(e, registry, config_options, &physical_schema, extension_codec)).collect::<Result<Vec<_>>>()?;
                                 let ordering_req: LexOrdering = agg_node.ordering_req.iter()
-                                    .map(|e| parse_physical_sort_expr(e, registry, &physical_schema, extension_codec))
+                                    .map(|e| parse_physical_sort_expr(e, registry, config_options, &physical_schema, extension_codec))
                                     .collect::<Result<LexOrdering>>()?;
                                 agg_node.aggregate_function.as_ref().map(|func| {
                                     match func {
@@ -595,12 +630,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let left: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &hashjoin.left,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
                 let right: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &hashjoin.right,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
@@ -613,12 +650,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         let left = parse_physical_expr(
                             &col.left.clone().unwrap(),
                             registry,
+                            config_options,
                             left_schema.as_ref(),
                             extension_codec,
                         )?;
                         let right = parse_physical_expr(
                             &col.right.clone().unwrap(),
                             registry,
+                            config_options,
                             right_schema.as_ref(),
                             extension_codec,
                         )?;
@@ -646,7 +685,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             f.expression.as_ref().ok_or_else(|| {
                                 proto_error("Unexpected empty filter expression")
                             })?,
-                            registry, &schema,
+                            registry, config_options, &schema,
                             extension_codec,
                         )?;
                         let column_indices = f.column_indices
@@ -709,12 +748,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let left = into_physical_plan(
                     &sym_join.left,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
                 let right = into_physical_plan(
                     &sym_join.right,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
@@ -727,12 +768,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         let left = parse_physical_expr(
                             &col.left.clone().unwrap(),
                             registry,
+                            config_options,
                             left_schema.as_ref(),
                             extension_codec,
                         )?;
                         let right = parse_physical_expr(
                             &col.right.clone().unwrap(),
                             registry,
+                            config_options,
                             right_schema.as_ref(),
                             extension_codec,
                         )?;
@@ -760,7 +803,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             f.expression.as_ref().ok_or_else(|| {
                                 proto_error("Unexpected empty filter expression")
                             })?,
-                            registry, &schema,
+                            registry, config_options, &schema,
                             extension_codec,
                         )?;
                         let column_indices = f.column_indices
@@ -786,6 +829,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let left_sort_exprs = parse_physical_sort_exprs(
                     &sym_join.left_sort_exprs,
                     registry,
+                    config_options,
                     &left_schema,
                     extension_codec,
                 )?;
@@ -798,6 +842,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let right_sort_exprs = parse_physical_sort_exprs(
                     &sym_join.right_sort_exprs,
                     registry,
+                    config_options,
                     &right_schema,
                     extension_codec,
                 )?;
@@ -840,6 +885,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 for input in &union.inputs {
                     inputs.push(input.try_into_physical_plan(
                         registry,
+                        config_options,
                         runtime,
                         extension_codec,
                     )?);
@@ -851,6 +897,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 for input in &interleave.inputs {
                     inputs.push(input.try_into_physical_plan(
                         registry,
+                        config_options,
                         runtime,
                         extension_codec,
                     )?);
@@ -861,12 +908,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let left: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &crossjoin.left,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
                 let right: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &crossjoin.right,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
@@ -881,8 +930,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 Ok(Arc::new(PlaceholderRowExec::new(schema)))
             }
             PhysicalPlanType::Sort(sort) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &sort.input,
+                    registry,
+                    config_options,
+                    runtime,
+                    extension_codec,
+                )?;
                 let exprs = sort
                     .expr
                     .iter()
@@ -903,7 +957,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 })?
                                 .as_ref();
                             Ok(PhysicalSortExpr {
-                                expr: parse_physical_expr(expr, registry, input.schema().as_ref(), extension_codec)?,
+                                expr: parse_physical_expr(expr, registry, config_options, input.schema().as_ref(), extension_codec)?,
                                 options: SortOptions {
                                     descending: !sort_expr.asc,
                                     nulls_first: sort_expr.nulls_first,
@@ -928,8 +982,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 Ok(Arc::new(new_sort))
             }
             PhysicalPlanType::SortPreservingMerge(sort) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &sort.input,
+                    registry,
+                    config_options,
+                    runtime,
+                    extension_codec,
+                )?;
                 let exprs = sort
                     .expr
                     .iter()
@@ -950,7 +1009,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 })?
                                 .as_ref();
                             Ok(PhysicalSortExpr {
-                                expr: parse_physical_expr(expr, registry, input.schema().as_ref(), extension_codec)?,
+                                expr: parse_physical_expr(expr, registry, config_options, input.schema().as_ref(), extension_codec)?,
                                 options: SortOptions {
                                     descending: !sort_expr.asc,
                                     nulls_first: sort_expr.nulls_first,
@@ -976,7 +1035,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
                     .inputs
                     .iter()
-                    .map(|i| i.try_into_physical_plan(registry, runtime, extension_codec))
+                    .map(|i| {
+                        i.try_into_physical_plan(
+                            registry,
+                            config_options,
+                            runtime,
+                            extension_codec,
+                        )
+                    })
                     .collect::<Result<_>>()?;
 
                 let extension_node = extension_codec.try_decode(
@@ -988,10 +1054,20 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 Ok(extension_node)
             }
             PhysicalPlanType::NestedLoopJoin(join) => {
-                let left: Arc<dyn ExecutionPlan> =
-                    into_physical_plan(&join.left, registry, runtime, extension_codec)?;
-                let right: Arc<dyn ExecutionPlan> =
-                    into_physical_plan(&join.right, registry, runtime, extension_codec)?;
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &join.left,
+                    registry,
+                    config_options,
+                    runtime,
+                    extension_codec,
+                )?;
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &join.right,
+                    registry,
+                    config_options,
+                    runtime,
+                    extension_codec,
+                )?;
                 let join_type =
                     protobuf::JoinType::try_from(join.join_type).map_err(|_| {
                         proto_error(format!(
@@ -1013,7 +1089,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             f.expression.as_ref().ok_or_else(|| {
                                 proto_error("Unexpected empty filter expression")
                             })?,
-                            registry, &schema,
+                            registry, config_options, &schema,
                             extension_codec,
                         )?;
                         let column_indices = f.column_indices
@@ -1059,6 +1135,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
                     &analyze.input,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
@@ -1070,8 +1147,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 )))
             }
             PhysicalPlanType::JsonSink(sink) => {
-                let input =
-                    into_physical_plan(&sink.input, registry, runtime, extension_codec)?;
+                let input = into_physical_plan(
+                    &sink.input,
+                    registry,
+                    config_options,
+                    runtime,
+                    extension_codec,
+                )?;
 
                 let data_sink: JsonSink = sink
                     .sink
@@ -1086,6 +1168,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         parse_physical_sort_exprs(
                             &collection.physical_sort_expr_nodes,
                             registry,
+                            config_options,
                             &sink_schema,
                             extension_codec,
                         )
@@ -1099,8 +1182,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 )))
             }
             PhysicalPlanType::CsvSink(sink) => {
-                let input =
-                    into_physical_plan(&sink.input, registry, runtime, extension_codec)?;
+                let input = into_physical_plan(
+                    &sink.input,
+                    registry,
+                    config_options,
+                    runtime,
+                    extension_codec,
+                )?;
 
                 let data_sink: CsvSink = sink
                     .sink
@@ -1115,6 +1203,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         parse_physical_sort_exprs(
                             &collection.physical_sort_expr_nodes,
                             registry,
+                            config_options,
                             &sink_schema,
                             extension_codec,
                         )
@@ -1134,6 +1223,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     let input = into_physical_plan(
                         &sink.input,
                         registry,
+                        config_options,
                         runtime,
                         extension_codec,
                     )?;
@@ -1151,6 +1241,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             parse_physical_sort_exprs(
                                 &collection.physical_sort_expr_nodes,
                                 registry,
+                                config_options,
                                 &sink_schema,
                                 extension_codec,
                             )
@@ -1170,6 +1261,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 let input = into_physical_plan(
                     &unnest.input,
                     registry,
+                    config_options,
                     runtime,
                     extension_codec,
                 )?;
@@ -2167,6 +2259,7 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
     fn try_into_physical_plan(
         &self,
         registry: &dyn FunctionRegistry,
+        config_options: &ConfigOptions,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>>;
@@ -2257,11 +2350,12 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
 fn into_physical_plan(
     node: &Option<Box<protobuf::PhysicalPlanNode>>,
     registry: &dyn FunctionRegistry,
+    config_options: &ConfigOptions,
     runtime: &RuntimeEnv,
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
     if let Some(field) = node {
-        field.try_into_physical_plan(registry, runtime, extension_codec)
+        field.try_into_physical_plan(registry, config_options, runtime, extension_codec)
     } else {
         Err(proto_error("Missing required field in protobuf"))
     }
