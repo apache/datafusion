@@ -25,7 +25,6 @@ use super::utils::{
     BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
     StatefulStreamResult,
 };
-use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
@@ -196,12 +195,7 @@ async fn load_left_input(
 ) -> Result<JoinLeftData> {
     // merge all left parts into a single stream
     let left_schema = left.schema();
-    let merge = if left.output_partitioning().partition_count() != 1 {
-        Arc::new(CoalescePartitionsExec::new(left))
-    } else {
-        left
-    };
-    let stream = merge.execute(0, context)?;
+    let stream = left.execute(0, context)?;
 
     // Load all batches and count the rows
     let (batches, _metrics, reservation) = stream
