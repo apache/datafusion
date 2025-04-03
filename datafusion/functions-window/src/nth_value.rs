@@ -169,7 +169,8 @@ static NTH_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         "The column from which to retrieve the nth value.",
     )
     .with_argument("n", "Integer. Specifies the row number (starting from 1) in the window frame.")
-    .with_exmaple(r#"-- Sample employees table:
+    .with_exmaple(r#"```sql
+    -- Sample employees table:
 CREATE TABLE employees (id INT, salary INT);
 INSERT INTO employees (id, salary) VALUES
 (1, 30000),
@@ -197,6 +198,7 @@ FROM employees;
 -- The function selects the 2nd row from the window frame. 
 -- By default, the window frame includes all rows up to the current row.
 -- Therefore, the 2nd salary (40000) is returned for every row in the output.
+```
 "#)
     .build()
 });
