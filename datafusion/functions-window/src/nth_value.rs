@@ -160,18 +160,47 @@ fn get_last_value_doc() -> &'static Documentation {
 static NTH_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_ANALYTICAL,
-        "Returns value evaluated at the row that is the nth row of the window \
-            frame (counting from 1); null if no such row.",
+        "Returns the value evaluated at the nth row of the window frame \
+         (counting from 1). Returns NULL if no such row exists.",
         "nth_value(expression, n)",
     )
     .with_argument(
         "expression",
-        "The name the column of which nth \
-        value to retrieve",
+        "The column from which to retrieve the nth value.",
     )
-    .with_argument("n", "Integer. Specifies the n in nth")
+    .with_argument("n", "Integer. Specifies the row number (starting from 1) in the window frame.")
+    .with_exmaple(r#"-- Sample employees table:
+CREATE TABLE employees (id INT, salary INT);
+INSERT INTO employees (id, salary) VALUES
+(1, 30000),
+(2, 40000),
+(3, 50000),
+(4, 60000),
+(5, 70000);
+
+-- Example usage of nth_value:
+SELECT nth_value(salary, 2) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS nth_value
+FROM employees;
+
+-- Expected output:
++-----------+
+| nth_value |
++-----------+
+| 40000     |
+| 40000     |
+| 40000     |
+| 40000     |
+| 40000     |
++-----------+
+
+-- Explanation:
+-- The function selects the 2nd row from the window frame. 
+-- By default, the window frame includes all rows up to the current row.
+-- Therefore, the 2nd salary (40000) is returned for every row in the output.
+"#)
     .build()
 });
+
 
 fn get_nth_value_doc() -> &'static Documentation {
     &NTH_VALUE_DOCUMENTATION

@@ -297,3 +297,27 @@ nth_value(expression, n)
 
 - **expression**: The name the column of which nth value to retrieve
 - **n**: Integer. Specifies the n in nth
+
+#### Exmaple
+
+```sql
+-- nth salary of employees 
+--|Row  | Salary|
+--+-----+------ +
+--|  1  | 30000 |
+--|  2  | 40000 |
+--| 3   | 50000 |
+--| 4   | 60000 |
+--| 5   | 70000 |
+--+-----+-------+
+>SELECT nth_value(salary, 2) OVER (ORDER BY salary) AS nth_value
+FROM employees;
++-----------+
+| nth_value |
++-----------+
+| 40000     |
+| 40000     |
+| 40000     |
+| 40000     |
+| 40000     |
++-----------+
