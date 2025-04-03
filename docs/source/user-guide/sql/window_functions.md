@@ -166,6 +166,21 @@ Relative rank of the current row: (number of rows preceding or peer with current
 cume_dist()
 ```
 
+### `Example`
+
+```sql
+>SELECT salary,
+       cume_dist() OVER (ORDER BY salary) AS cume_dist
+FROM employees;
++--------+-----------+
+| salary | cume_dist |
++--------+-----------+
+| 30000  | 0.33      |
+| 50000  | 0.67      |
+| 70000  | 1.00      |
++--------+-----------+
+```
+
 ### `dense_rank`
 
 Returns the rank of the current row without gaps. This function ranks rows in a dense manner, meaning consecutive ranks are assigned even for identical values.
