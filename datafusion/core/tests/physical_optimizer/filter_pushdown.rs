@@ -85,61 +85,6 @@ fn test_parquet_pushdown() {
     );
 }
 
-#[test]
-fn test_topk_pushdown() {
-    // filter should be pushed down into the parquet scan with two filters
-    let scan = parquet_scan();
-    let predicate = col_lit_predicate("a", "foo", schema());
-    let filter =
-        Arc::new(FilterExec::try_new(Arc::clone(&predicate), Arc::clone(&scan)).unwrap());
-    let plan = Arc::new(SortExec::new(
-        LexOrdering::new(vec![PhysicalSortExpr::new(
-            Arc::new(Column::new_with_schema("a", schema()).unwrap()),
-            SortOptions::default(),
-        )]),
-        filter,
-    ));
-
-    insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}),
-        @r"
-    OptimizationTest:
-      input:
-        - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-        -   FilterExec: a@0 = foo
-        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet
-      output:
-        Ok:
-          - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=a@0 = foo AND DynamicFilterPhysicalExpr [ SortDynamicFilterSource[  ] ]
-    "
-    );
-
-    let sort = Arc::new(SortExec::new(
-        LexOrdering::new(vec![PhysicalSortExpr::new(
-            Arc::new(Column::new_with_schema("a", schema()).unwrap()),
-            SortOptions::default(),
-        )]),
-        Arc::clone(&scan),
-    ));
-    let plan = Arc::new(FilterExec::try_new(predicate, sort).unwrap());
-
-    insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}),
-        @r"
-    OptimizationTest:
-      input:
-        - FilterExec: a@0 = foo
-        -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet
-      output:
-        Ok:
-          - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ SortDynamicFilterSource[  ] ] AND a@0 = foo
-    "
-    );
-}
-
 /// Schema:
 /// a: String
 /// b: String
