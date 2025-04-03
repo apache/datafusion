@@ -318,7 +318,7 @@ fn create_initial_plan(
 /// predicate, return None.
 /// If there is an error creating the pruning predicate it is recorded by incrementing
 /// the `predicate_creation_errors` counter.
-pub fn build_pruning_predicate(
+pub(crate) fn build_pruning_predicate(
     predicate: Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
@@ -340,7 +340,7 @@ pub fn build_pruning_predicate(
 /// Build a page pruning predicate from an optional predicate expression.
 /// If the predicate is None or the predicate cannot be converted to a page pruning
 /// predicate, return None.
-pub fn build_page_pruning_predicate(
+pub(crate) fn build_page_pruning_predicate(
     predicate: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
 ) -> Arc<PagePruningAccessPlanFilter> {
