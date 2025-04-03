@@ -244,7 +244,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
 
             // Claim the memory for the uninitiated partitions
-            self.uninitiated_partitions = VecDeque::new();
+            self.uninitiated_partitions.shrink_to_fit();
             self.init_loser_tree();
         }
 
