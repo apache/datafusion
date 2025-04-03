@@ -56,104 +56,226 @@ mod cases;
 mod common;
 
 #[test]
-fn parse_decimals() {
-    let test_data = [
-        ("1", "Int64(1)"),
-        ("001", "Int64(1)"),
-        ("0.1", "Decimal128(Some(1),1,1)"),
-        ("0.01", "Decimal128(Some(1),2,2)"),
-        ("1.0", "Decimal128(Some(10),2,1)"),
-        ("10.01", "Decimal128(Some(1001),4,2)"),
-        (
-            "10000000000000000000.00",
-            "Decimal128(Some(1000000000000000000000),22,2)",
-        ),
-        ("18446744073709551615", "UInt64(18446744073709551615)"),
-        (
-            "18446744073709551616",
-            "Decimal128(Some(18446744073709551616),20,0)",
-        ),
-    ];
-    for (a, b) in test_data {
-        let sql = format!("SELECT {a}");
-        let expected = format!("Projection: {b}\n  EmptyRelation");
-        let plan = logical_plan_with_options(
-            &sql,
-            ParserOptions {
-                parse_float_as_decimal: true,
-                enable_ident_normalization: false,
-                support_varchar_with_length: false,
-                map_varchar_to_utf8view: false,
-                enable_options_value_normalization: false,
-                collect_spans: false,
-            },
-        )
-        .unwrap();
-        assert_eq!(expected, format!("{plan}"));
-    }
+fn parse_decimals_1() {
+    let sql = "SELECT 1";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Int64(1)
+          EmptyRelation
+        "#
+    );
 }
 
 #[test]
-fn parse_ident_normalization() {
-    let test_data = [
-        (
-            "SELECT CHARACTER_LENGTH('str')",
-            "Ok(Projection: character_length(Utf8(\"str\"))\n  EmptyRelation)",
-            false,
-        ),
-        (
-            "SELECT CONCAT('Hello', 'World')",
-            "Ok(Projection: concat(Utf8(\"Hello\"), Utf8(\"World\"))\n  EmptyRelation)",
-            false,
-        ),
-        (
-            "SELECT age FROM person",
-            "Ok(Projection: person.age\n  TableScan: person)",
-            true,
-        ),
-        (
-            "SELECT AGE FROM PERSON",
-            "Ok(Projection: person.age\n  TableScan: person)",
-            true,
-        ),
-        (
-            "SELECT AGE FROM PERSON",
-            "Error during planning: No table named: PERSON found",
-            false,
-        ),
-        (
-            "SELECT Id FROM UPPERCASE_test",
-            "Ok(Projection: UPPERCASE_test.Id\
-                \n  TableScan: UPPERCASE_test)",
-            false,
-        ),
-        (
-            "SELECT \"Id\", lower FROM \"UPPERCASE_test\"",
-            "Ok(Projection: UPPERCASE_test.Id, UPPERCASE_test.lower\
-                \n  TableScan: UPPERCASE_test)",
-            true,
-        ),
-    ];
+fn parse_decimals_2() {
+    let sql = "SELECT 001";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Int64(1)
+          EmptyRelation
+        "#
+    );
+}
 
-    for (sql, expected, enable_ident_normalization) in test_data {
-        let plan = logical_plan_with_options(
-            sql,
-            ParserOptions {
-                parse_float_as_decimal: false,
-                enable_ident_normalization,
-                support_varchar_with_length: false,
-                map_varchar_to_utf8view: false,
-                enable_options_value_normalization: false,
-                collect_spans: false,
-            },
-        );
-        if plan.is_ok() {
-            let plan = plan.unwrap();
-            assert_eq!(expected, format!("Ok({plan})"));
-        } else {
-            assert_eq!(expected, plan.unwrap_err().strip_backtrace());
-        }
-    }
+#[test]
+fn parse_decimals_3() {
+    let sql = "SELECT 0.1";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(1),1,1)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_4() {
+    let sql = "SELECT 0.01";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(1),2,2)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_5() {
+    let sql = "SELECT 1.0";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(10),2,1)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_6() {
+    let sql = "SELECT 10.01";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(1001),4,2)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_7() {
+    let sql = "SELECT 10000000000000000000.00";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(1000000000000000000000),22,2)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_8() {
+    let sql = "SELECT 18446744073709551615";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: UInt64(18446744073709551615)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_9() {
+    let sql = "SELECT 18446744073709551616";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(18446744073709551616),20,0)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_1() {
+    let sql = "SELECT CHARACTER_LENGTH('str')";
+    let parser_option = ident_normalization_parser_options_no_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: character_length(Utf8("str"))
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_2() {
+    let sql = "SELECT CONCAT('Hello', 'World')";
+    let parser_option = ident_normalization_parser_options_no_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: concat(Utf8("Hello"), Utf8("World"))
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_3() {
+    let sql = "SELECT age FROM person";
+    let parser_option = ident_normalization_parser_options_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: person.age
+          TableScan: person
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_4() {
+    let sql = "SELECT AGE FROM PERSON";
+    let parser_option = ident_normalization_parser_options_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: person.age
+          TableScan: person
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_5() {
+    let sql = "SELECT AGE FROM PERSON";
+    let parser_option = ident_normalization_parser_options_no_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap_err();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Error during planning: No table named: PERSON found
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_6() {
+    let sql = "SELECT Id FROM UPPERCASE_test";
+    let parser_option = ident_normalization_parser_options_no_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: UPPERCASE_test.Id
+          TableScan: UPPERCASE_test
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_7() {
+    let sql = r#"SELECT "Id", lower FROM "UPPERCASE_test""#;
+    let parser_option = ident_normalization_parser_options_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: UPPERCASE_test.Id, UPPERCASE_test.lower
+          TableScan: UPPERCASE_test
+        "#
+    );
 }
 
 #[test]
@@ -1768,11 +1890,11 @@ fn select_simple_aggregate_with_groupby_non_column_expression_and_its_column_sel
 #[test]
 fn select_simple_aggregate_nested_in_binary_expr_with_groupby() {
     let plan =
-        generate_logical_plan("SELECT state, MIN(age) + 1 FROM person GROUP BY state");
+        generate_logical_plan("SELECT state, MIN(age) < 10 FROM person GROUP BY state");
     assert_snapshot!(
         plan,
         @r#"
-        Projection: person.state, min(person.age) + Int64(1)
+        Projection: person.state, min(person.age) < Int64(10)
           Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
             TableScan: person
         "#
@@ -3235,6 +3357,39 @@ impl ScalarUDFImpl for DummyUDF {
 
 fn generate_logical_plan(sql: &str) -> LogicalPlan {
     logical_plan_with_options(sql, ParserOptions::default()).unwrap()
+}
+
+fn parse_decimals_parser_options() -> ParserOptions {
+    ParserOptions {
+        parse_float_as_decimal: true,
+        enable_ident_normalization: false,
+        support_varchar_with_length: false,
+        map_varchar_to_utf8view: false,
+        enable_options_value_normalization: false,
+        collect_spans: false,
+    }
+}
+
+fn ident_normalization_parser_options_no_ident_normalization() -> ParserOptions {
+    ParserOptions {
+        parse_float_as_decimal: true,
+        enable_ident_normalization: false,
+        support_varchar_with_length: false,
+        map_varchar_to_utf8view: false,
+        enable_options_value_normalization: false,
+        collect_spans: false,
+    }
+}
+
+fn ident_normalization_parser_options_ident_normalization() -> ParserOptions {
+    ParserOptions {
+        parse_float_as_decimal: true,
+        enable_ident_normalization: true,
+        support_varchar_with_length: false,
+        map_varchar_to_utf8view: false,
+        enable_options_value_normalization: false,
+        collect_spans: false,
+    }
 }
 
 fn prepare_stmt_quick_test(
