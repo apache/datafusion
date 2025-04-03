@@ -608,7 +608,10 @@ impl EquivalenceProperties {
 
     /// Checks whether the given sort requirements are satisfied by any of the
     /// existing orderings.
-    pub fn ordering_satisfy_requirement(&self, given: &LexRequirement) -> bool {
+    pub fn ordering_satisfy_requirement<'a>(
+        &self,
+        given: impl IntoIterator<Item = &'a PhysicalSortRequirement>,
+    ) -> bool {
         // First, standardize the given requirement:
         let Some(normalized_reqs) = self.normalize_sort_requirements(given) else {
             // If the requirement vanishes after normalization, it is satisfied

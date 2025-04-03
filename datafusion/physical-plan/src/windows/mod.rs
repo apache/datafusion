@@ -48,7 +48,6 @@ use datafusion_physical_expr::{
     window::{SlidingAggregateWindowExpr, StandardWindowFunctionExpr},
     ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use itertools::Itertools;
 
@@ -374,9 +373,8 @@ pub(crate) fn window_equivalence_properties(
             .map(|pb_order| sort_options_resolving_constant(Arc::clone(pb_order)));
         let all_satisfied_lexs = partition_by_orders
             .multi_cartesian_product()
-            .filter(|lex| !lex.is_empty())
+            .filter(|lex| !lex.is_empty() && window_eq_properties.ordering_satisfy(lex))
             .map(LexOrdering::new)
-            .filter(|lex| window_eq_properties.ordering_satisfy(lex))
             .collect::<Vec<_>>();
         // If there is a partitioning, and no possible ordering cannot satisfy
         // the input plan's orderings, then we cannot further introduce any
@@ -614,10 +612,7 @@ pub fn get_window_mode(
         if let Some(ob) = orderbys {
             req.extend(ob.iter().cloned().map(Into::into));
         }
-        if req.is_empty()
-            || partition_by_eqs
-                .ordering_satisfy_requirement(&LexRequirement::new(req).collapse())
-        {
+        if req.is_empty() || partition_by_eqs.ordering_satisfy_requirement(&req) {
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {
                 InputOrderMode::Sorted

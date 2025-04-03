@@ -24,7 +24,6 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Result};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_expr::{
     reverse_order_bys, EquivalenceProperties, PhysicalSortRequirement,
 };
@@ -167,21 +166,23 @@ fn try_convert_aggregate_if_better(
             if !aggr_expr.order_sensitivity().is_beneficial() {
                 Ok(aggr_expr)
             } else if let Some(order_bys) = order_bys {
-                let aggr_sort_reqs = LexRequirement::from(order_bys.clone());
-                let reqs = LexRequirement::new(concat_slices(
+                if eq_properties.ordering_satisfy_requirement(&concat_slices(
                     prefix_requirement,
-                    &aggr_sort_reqs,
-                ));
-
-                if eq_properties.ordering_satisfy_requirement(&reqs) {
+                    &order_bys
+                        .clone()
+                        .into_iter()
+                        .map(Into::into)
+                        .collect::<Vec<_>>(),
+                )) {
                     // Existing ordering satisfies the aggregator requirements:
                     aggr_expr.with_beneficial_ordering(true)?.map(Arc::new)
-                } else if eq_properties.ordering_satisfy_requirement(
-                    &LexRequirement::new(concat_slices(
-                        prefix_requirement,
-                        &LexRequirement::from(reverse_order_bys(order_bys)),
-                    )),
-                ) {
+                } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
+                    prefix_requirement,
+                    &reverse_order_bys(order_bys)
+                        .into_iter()
+                        .map(Into::into)
+                        .collect::<Vec<_>>(),
+                )) {
                     // Converting to reverse enables more efficient execution
                     // given the existing ordering (if possible):
                     aggr_expr
