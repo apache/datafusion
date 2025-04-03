@@ -446,91 +446,60 @@ impl Accumulator for NthValueAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        // First entry in the state is the aggregation result.
-        let array_agg_values = &states[0];
-        let n_required = self.n.unsigned_abs() as usize;
-        if self.ordering_req.is_empty() {
-            let array_agg_res =
-                ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-            for v in array_agg_res.into_iter() {
-                self.values.extend(v);
-                if self.values.len() > n_required {
-                    // There is enough data collected can stop merging
-                    break;
-                }
-            }
-        } else if let Some(agg_orderings) = states[1].as_list_opt::<i32>() {
-            // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside NTH_VALUE list.
-            // For each `StructArray` inside NTH_VALUE list, we will receive an `Array` that stores
-            // values received from its ordering requirement expression. (This information is necessary for during merging).
-
-            // Stores NTH_VALUE results coming from each partition
-            let mut partition_values: Vec<VecDeque<ScalarValue>> = vec![];
-            // Stores ordering requirement expression results coming from each partition
-            let mut partition_ordering_values: Vec<VecDeque<Vec<ScalarValue>>> = vec![];
-
-            // Existing values should be merged also.
-            partition_values.push(self.values.clone());
-
-            partition_ordering_values.push(self.ordering_values.clone());
-
-            let array_agg_res =
-                ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-
-            for v in array_agg_res.into_iter() {
-                partition_values.push(v.into());
-            }
-
-            let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
-
-            let ordering_values = orderings.into_iter().map(|partition_ordering_rows| {
-                // Extract value from struct to ordering_rows for each group/partition
-                partition_ordering_rows.into_iter().map(|ordering_row| {
-                    if let ScalarValue::Struct(s) = ordering_row {
-                        let mut ordering_columns_per_row = vec![];
-
-                        for column in s.columns() {
-                            let sv = ScalarValue::try_from_array(column, 0)?;
-                            ordering_columns_per_row.push(sv);
-                        }
-
-                        Ok(ordering_columns_per_row)
-                    } else {
-                        exec_err!(
-                            "Expects to receive ScalarValue::Struct(Some(..), _) but got: {:?}",
-                            ordering_row.data_type()
-                        )
-                    }
-                }).collect::<Result<Vec<_>>>()
-            }).collect::<Result<Vec<_>>>()?;
-            for ordering_values in ordering_values.into_iter() {
-                partition_ordering_values.push(ordering_values.into());
-            }
-
-            let sort_options = self
-                .ordering_req
-                .iter()
-                .map(|sort_expr| sort_expr.options)
-                .collect::<Vec<_>>();
-            let (new_values, new_orderings) = merge_ordered_arrays(
-                &mut partition_values,
-                &mut partition_ordering_values,
-                &sort_options,
-            )?;
-            self.values = new_values.into();
-            self.ordering_values = new_orderings.into();
-        } else {
+        // Second entry stores values received for ordering requirement columns
+        // for each aggregation value inside NTH_VALUE list. For each `StructArray`
+        // inside this list, we will receive an `Array` that stores values received
+        // from its ordering requirement expression. This information is necessary
+        // during merging.
+        let Some(agg_orderings) = states[1].as_list_opt::<i32>() else {
             return exec_err!("Expects to receive a list array");
+        };
+
+        // Stores NTH_VALUE results coming from each partition
+        let mut partition_values = vec![self.values.clone()];
+        // First entry in the state is the aggregation result.
+        let array_agg_res = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
+        for v in array_agg_res.into_iter() {
+            partition_values.push(v.into());
         }
+        // Stores ordering requirement expression results coming from each partition:
+        let mut partition_ordering_values = vec![self.ordering_values.clone()];
+        let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
+        // Extract value from struct to ordering_rows for each group/partition:
+        for partition_ordering_rows in orderings.into_iter() {
+            let ordering_values = partition_ordering_rows.into_iter().map(|ordering_row| {
+                let ScalarValue::Struct(s_array) = ordering_row else {
+                    return exec_err!(
+                        "Expects to receive ScalarValue::Struct(Some(..), _) but got: {:?}",
+                        ordering_row.data_type()
+                    );
+                };
+                s_array
+                    .columns()
+                    .iter()
+                    .map(|column| ScalarValue::try_from_array(column, 0))
+                    .collect()
+            }).collect::<Result<VecDeque<_>>>()?;
+            partition_ordering_values.push(ordering_values);
+        }
+
+        let sort_options = self
+            .ordering_req
+            .iter()
+            .map(|sort_expr| sort_expr.options)
+            .collect::<Vec<_>>();
+        let (new_values, new_orderings) = merge_ordered_arrays(
+            &mut partition_values,
+            &mut partition_ordering_values,
+            &sort_options,
+        )?;
+        self.values = new_values.into();
+        self.ordering_values = new_orderings.into();
         Ok(())
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut result = vec![self.evaluate_values()];
-        if !self.ordering_req.is_empty() {
-            result.push(self.evaluate_orderings()?);
-        }
-        Ok(result)
+        Ok(vec![self.evaluate_values(), self.evaluate_orderings()?])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {

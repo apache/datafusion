@@ -320,8 +320,6 @@ where
     ordering_req: LexOrdering,
     // derived from `ordering_req`.
     sort_options: Vec<SortOptions>,
-    // Stores whether incoming data already satisfies the ordering requirement.
-    input_requirement_satisfied: bool,
     // Ignore null values.
     ignore_nulls: bool,
     /// The output type
@@ -339,12 +337,10 @@ where
         data_type: &DataType,
         ordering_dtypes: &[DataType],
     ) -> Result<Self> {
-        let requirement_satisfied = ordering_req.is_empty();
-
         let default_orderings = ordering_dtypes
             .iter()
             .map(ScalarValue::try_from)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<_>>()?;
 
         let sort_options = get_sort_options(&ordering_req);
 
@@ -352,7 +348,6 @@ where
             null_builder: BooleanBufferBuilder::new(0),
             ordering_req,
             sort_options,
-            input_requirement_satisfied: requirement_satisfied,
             ignore_nulls,
             default_orderings,
             data_type: data_type.clone(),
@@ -362,18 +357,6 @@ where
             size_of_orderings: 0,
             min_of_each_group_buf: (Vec::new(), BooleanBufferBuilder::new(0)),
         })
-    }
-
-    fn need_update(&self, group_idx: usize) -> bool {
-        if !self.is_sets.get_bit(group_idx) {
-            return true;
-        }
-
-        if self.ignore_nulls && !self.null_builder.get_bit(group_idx) {
-            return true;
-        }
-
-        !self.input_requirement_satisfied
     }
 
     fn should_update_state(
@@ -536,14 +519,9 @@ where
             let group_idx = *group_idx;
 
             let passed_filter = opt_filter.is_none_or(|x| x.value(idx_in_val));
-
             let is_set = is_set_arr.is_none_or(|x| x.value(idx_in_val));
 
             if !passed_filter || !is_set {
-                continue;
-            }
-
-            if !self.need_update(group_idx) {
                 continue;
             }
 
@@ -551,15 +529,13 @@ where
                 continue;
             }
 
-            let is_valid = self.min_of_each_group_buf.1.get_bit(group_idx);
-            if is_valid
-                && comparator
-                    .compare(self.min_of_each_group_buf.0[group_idx], idx_in_val)
-                    .is_gt()
-            {
-                self.min_of_each_group_buf.0[group_idx] = idx_in_val;
-            } else if !is_valid {
+            if !self.min_of_each_group_buf.1.get_bit(group_idx) {
                 self.min_of_each_group_buf.1.set_bit(group_idx, true);
+                self.min_of_each_group_buf.0[group_idx] = idx_in_val;
+            } else if comparator
+                .compare(self.min_of_each_group_buf.0[group_idx], idx_in_val)
+                .is_gt()
+            {
                 self.min_of_each_group_buf.0[group_idx] = idx_in_val;
             }
         }

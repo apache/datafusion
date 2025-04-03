@@ -133,27 +133,26 @@ impl OrderingEquivalenceClass {
         while work {
             work = false;
             let mut idx = 0;
-            while idx < self.orderings.len() {
+            'outer: while idx < self.orderings.len() {
                 let mut ordering_idx = idx + 1;
-                let mut removal = self.orderings[idx].is_empty();
                 while ordering_idx < self.orderings.len() {
-                    work |= self.resolve_overlap(idx, ordering_idx);
-                    if self.orderings[idx].is_empty() {
-                        removal = true;
-                        break;
+                    if let Some(remove) = self.resolve_overlap(idx, ordering_idx) {
+                        work = true;
+                        if remove {
+                            self.orderings.swap_remove(idx);
+                            continue 'outer;
+                        }
                     }
-                    work |= self.resolve_overlap(ordering_idx, idx);
-                    if self.orderings[ordering_idx].is_empty() {
-                        self.orderings.swap_remove(ordering_idx);
-                    } else {
-                        ordering_idx += 1;
+                    if let Some(remove) = self.resolve_overlap(ordering_idx, idx) {
+                        work = true;
+                        if remove {
+                            self.orderings.swap_remove(ordering_idx);
+                            continue;
+                        }
                     }
+                    ordering_idx += 1;
                 }
-                if removal {
-                    self.orderings.swap_remove(idx);
-                } else {
-                    idx += 1;
-                }
+                idx += 1;
             }
         }
     }
@@ -164,18 +163,22 @@ impl OrderingEquivalenceClass {
     /// For example, if `orderings[idx]` is `[a ASC, b ASC, c DESC]` and
     /// `orderings[pre_idx]` is `[b ASC, c DESC]`, then the function will trim
     /// `orderings[idx]` to `[a ASC]`.
-    fn resolve_overlap(&mut self, idx: usize, pre_idx: usize) -> bool {
+    fn resolve_overlap(&mut self, idx: usize, pre_idx: usize) -> Option<bool> {
         let length = self.orderings[idx].len();
         let other_length = self.orderings[pre_idx].len();
         for overlap in 1..=length.min(other_length) {
             if self.orderings[idx][length - overlap..]
                 == self.orderings[pre_idx][..overlap]
             {
-                self.orderings[idx].truncate(length - overlap);
-                return true;
+                return if length == overlap {
+                    Some(true)
+                } else {
+                    self.orderings[idx].truncate(length - overlap).unwrap();
+                    Some(false)
+                };
             }
         }
-        false
+        None
     }
 
     /// Returns the concatenation of all the orderings. This enables merge

@@ -28,7 +28,7 @@ use crate::physical_expr::{fmt_sql, PhysicalExpr};
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{exec_err, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 use itertools::Itertools;
@@ -377,8 +377,12 @@ impl LexOrdering {
     }
 
     /// Truncates the `LexOrdering`, keeping only the first `len` elements.
-    pub fn truncate(&mut self, len: usize) {
-        self.inner.truncate(len)
+    pub fn truncate(&mut self, len: usize) -> Result<()> {
+        if len == 0 {
+            return exec_err!("Degenerate LexOrdering instances are not allowed");
+        }
+        self.inner.truncate(len);
+        Ok(())
     }
 
     /// Merge the contents of `other` into `self`, removing duplicates.

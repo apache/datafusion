@@ -186,9 +186,7 @@ impl UnionEquivalentOrderingBuilder {
         constants: &[ConstExpr],
         properties: &EquivalenceProperties,
     ) -> AddedOrdering {
-        if ordering.is_empty() {
-            AddedOrdering::Yes
-        } else if properties.ordering_satisfy(&ordering) {
+        if properties.ordering_satisfy(&ordering) {
             // If the ordering satisfies the target properties, no need to
             // augment it with constants.
             self.orderings.push(ordering);
@@ -228,10 +226,8 @@ impl UnionEquivalentOrderingBuilder {
                 existing_ordering,
                 &properties.constants,
             ) {
-                if !augmented_ordering.is_empty() {
-                    assert!(properties.ordering_satisfy(&augmented_ordering));
-                    self.orderings.push(augmented_ordering);
-                }
+                assert!(properties.ordering_satisfy(&augmented_ordering));
+                self.orderings.push(augmented_ordering);
             }
         }
 
