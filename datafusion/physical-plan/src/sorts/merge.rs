@@ -18,7 +18,6 @@
 //! Merge that deals with an arbitrary size of streaming inputs.
 //! This is an order-preserving merge.
 
-use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
@@ -147,7 +146,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// it is removed from the vector. If a partition returns `Poll::Pending`, it is moved to the end of the
     /// vector to ensure the next iteration starts with a different partition, preventing the same partition
     /// from being continuously polled.
-    uninitiated_partitions: VecDeque<usize>,
+    uninitiated_partitions: FixedSizeQueue,
 }
 
 impl<C: CursorValues> SortPreservingMergeStream<C> {
@@ -178,7 +177,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             batch_size,
             fetch,
             produced: 0,
-            uninitiated_partitions: (0..stream_count).collect(),
+            uninitiated_partitions: FixedSizeQueue::from(
+                (0..stream_count).collect::<Vec<usize>>(),
+            ),
             enable_round_robin_tie_breaker,
         }
     }
@@ -217,9 +218,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         // we skip the following block. Until then, this function may be called multiple
         // times and can return Poll::Pending if any partition returns Poll::Pending.
         if self.loser_tree.is_empty() {
-            let remaining_partitions = self.uninitiated_partitions.clone();
-            for i in remaining_partitions {
-                match self.maybe_poll_stream(cx, i) {
+            while let Some(partition_idx) = self.uninitiated_partitions.peek() {
+                match self.maybe_poll_stream(cx, partition_idx) {
                     Poll::Ready(Err(e)) => {
                         self.aborted = true;
                         return Poll::Ready(Some(Err(e)));
@@ -228,10 +228,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                         // If a partition returns Poll::Pending, to avoid continuously polling it
                         // and potentially increasing upstream buffer sizes, we move it to the
                         // back of the polling queue.
-                        if let Some(front) = self.uninitiated_partitions.pop_front() {
-                            // This pop_front can never return `None`.
-                            self.uninitiated_partitions.push_back(front);
-                        }
+                        self.uninitiated_partitions.rotate();
+
                         // This function could remain in a pending state, so we manually wake it here.
                         // However, this approach can be investigated further to find a more natural way
                         // to avoid disrupting the runtime scheduler.
@@ -241,10 +239,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     _ => {
                         // If the polling result is Poll::Ready(Some(batch)) or Poll::Ready(None),
                         // we remove this partition from the queue so it is not polled again.
-                        self.uninitiated_partitions.retain(|idx| *idx != i);
+                        self.uninitiated_partitions.pop_front();
                     }
                 }
             }
+
+            // Claim the memory for the uninitiated partitions
+            std::mem::take(&mut self.uninitiated_partitions);
             self.init_loser_tree();
         }
 
@@ -531,5 +532,136 @@ impl<C: CursorValues + Unpin> Stream for SortPreservingMergeStream<C> {
 impl<C: CursorValues + Unpin> RecordBatchStream for SortPreservingMergeStream<C> {
     fn schema(&self) -> SchemaRef {
         Arc::clone(self.in_progress.schema())
+    }
+}
+
+/// Fixed size queue implemented as a circular buffer
+/// The underlying `values` are immutable, so removing elements will not drop them and not change the
+/// capacity/length of the actual vector
+#[derive(Debug, Default)]
+struct FixedSizeQueue {
+    values: Vec<usize>,
+    start: usize,
+    end: usize,
+    len: usize,
+}
+
+impl From<Vec<usize>> for FixedSizeQueue {
+    fn from(values: Vec<usize>) -> Self {
+        let len = values.len();
+
+        Self {
+            values,
+            start: 0,
+            end: len.saturating_sub(1),
+            len,
+        }
+    }
+}
+
+impl FixedSizeQueue {
+    /// Get the value at the top of the queue
+    ///
+    /// # Implementation
+    /// return the value at [`Self::start`]
+    ///
+    /// ## Example
+    ///
+    /// ```plain
+    /// index: | 0  |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    ///        | -------------------------------------------------------- |
+    /// value: | 0  |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    ///        | -------------------------------------------------------- |
+    ///          ^           ^
+    ///         end         start
+    /// ```
+    /// calling `peek()` will return `Some(2)`
+    ///
+    fn peek(&self) -> Option<usize> {
+        if self.len == 0 {
+            None
+        } else {
+            Some(self.values[self.start])
+        }
+    }
+
+    /// Move the current value to last
+    ///
+    /// # Implementation
+    ///
+    /// Swap the `self.values[start]` with `self.values[end + 1]` value and advance both by 1
+    /// (wrapping at the `end + 1` around the underlying vector length)
+    ///
+    /// ## Example
+    ///
+    /// **Current state:**
+    /// ```plain
+    /// index: | 0  |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    ///        | -------------------------------------------------------- |
+    /// value: | 0  |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    ///        | -------------------------------------------------------- |
+    ///          ^           ^
+    ///         end         start
+    /// ```
+    ///
+    /// So calling `move_to_last` on the example above will produce this:
+    /// ```plain
+    /// index: | 0  |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    ///        | -------------------------------------------------------- |
+    /// value: | 0  |  2  |  1  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    ///        | -------------------------------------------------------- |
+    ///                ^           ^
+    ///               end         start
+    /// ```
+    ///
+    /// # Panics
+    /// Must not be empty (if `self.len() == 0`)
+    ///
+    fn rotate(&mut self) {
+        assert_ne!(self.len, 0, "No current value");
+
+        // Wrap around the vector
+        self.end = (self.end + 1) % self.values.len();
+
+        // Swap the current with the last
+        self.values.swap(self.start, self.end);
+        self.start = (self.start + 1) % self.values.len();
+    }
+
+    /// Remove the value at the top of the queue
+    ///
+    /// # Implementation
+    ///
+    /// Advance [`Self::start`] by 1 (wrapping around the underlying vector length)
+    ///
+    /// # Example
+    ///
+    /// **Current state:**
+    /// ```plain
+    /// index: | 0  |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    ///        | -------------------------------------------------------- |
+    /// value: | 0  |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    ///        | -------------------------------------------------------- |
+    ///          ^           ^
+    ///         end         start
+    /// ```
+    ///
+    /// So calling `pop_front` on the example above will produce this:
+    /// ```plain
+    /// index: | 0  |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    ///        | -------------------------------------------------------- |
+    /// value: | 0  |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  |
+    ///        | -------------------------------------------------------- |
+    ///          ^                 ^
+    ///         end               start
+    /// ```
+    ///
+    /// # Panics
+    /// Must not be empty (if `self.len() == 0`)
+    ///
+    fn pop_front(&mut self) {
+        assert_ne!(self.len, 0, "No current value");
+        self.start = (self.start + 1) % self.values.len();
+        self.len -= 1;
     }
 }
