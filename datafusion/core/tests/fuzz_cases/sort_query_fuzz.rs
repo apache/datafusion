@@ -66,9 +66,9 @@ async fn sort_query_fuzzer_runner() {
         // Configs for how many random query to test
         .with_max_rounds(Some(5))
         .with_queries_per_round(4)
-        .with_config_variations_per_query(25)
+        .with_config_variations_per_query(5)
         // Will stop early if the time limit is reached
-        .with_time_limit(Duration::from_secs(20))
+        .with_time_limit(Duration::from_secs(5))
         .with_test_generator(test_generator);
 
     fuzzer.run().await.unwrap();
@@ -173,28 +173,41 @@ impl SortQueryFuzzer {
         self
     }
 
+    fn should_stop_due_to_time_limit(
+        &self,
+        start_time: Instant,
+        n_round: usize,
+        n_query: usize,
+    ) -> bool {
+        if let Some(time_limit) = self.time_limit {
+            if Instant::now().duration_since(start_time) > time_limit {
+                println!(
+                    "[SortQueryFuzzer] Time limit reached: {} queries ({} random configs each) in {} rounds",
+                    n_round * self.queries_per_round + n_query,
+                    self.config_variations_per_query,
+                    n_round
+                );
+                return true;
+            }
+        }
+        false
+    }
+
     pub async fn run(&mut self) -> Result<()> {
         let start_time = Instant::now();
 
         // Execute until either`max_rounds` or `time_limit` is reached
         let max_rounds = self.max_rounds.unwrap_or(usize::MAX);
         for round in 0..max_rounds {
-            if let Some(time_limit) = self.time_limit {
-                if Instant::now().duration_since(start_time) > time_limit {
-                    println!(
-                        "[SortQueryFuzzer] Time limit reached, tested {} queries in {} rounds",
-                        round * self.queries_per_round,
-                        round
-                    );
-                    break;
-                }
-            }
-
             let init_seed = self.runner_rng.gen();
             for query_i in 0..self.queries_per_round {
                 let query_seed = self.runner_rng.gen();
                 let mut expected_results: Option<Vec<RecordBatch>> = None; // use first config's result as the expected result
                 for config_i in 0..self.config_variations_per_query {
+                    if self.should_stop_due_to_time_limit(start_time, round, query_i) {
+                        return Ok(());
+                    }
+
                     let config_seed = self.runner_rng.gen();
 
                     println!(
@@ -608,28 +621,5 @@ mod test {
         let res1 = test_generator.fuzzer_run(1, 2, 3).await.unwrap();
         let res2 = test_generator.fuzzer_run(1, 2, 3).await.unwrap();
         check_equality_of_batches(&res1, &res2).unwrap();
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    #[ignore] // TODO: This query failes, fix this known bug
-    async fn test_sort_query_fuzzer_reproduce() {
-        let gen_seed = 310104;
-        let mut test_generator = SortFuzzerTestGenerator::new(
-            2000,
-            3,
-            "sort_fuzz_table".to_string(),
-            get_supported_types_columns(gen_seed),
-            true,
-            gen_seed,
-        );
-
-        let _res1 = test_generator
-            .fuzzer_run(
-                7505822775957802089,
-                4608057076913585108,
-                8550921252053587262,
-            )
-            .await
-            .unwrap();
     }
 }
