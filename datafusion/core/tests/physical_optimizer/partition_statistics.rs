@@ -38,25 +38,19 @@ mod test {
     async fn generate_listing_table_with_statistics(
         target_partition: Option<usize>,
     ) -> Arc<dyn ExecutionPlan> {
-        // Delete the existing data directory if it exists
-        let data_dir = "./data/";
-        let _ = std::fs::remove_dir_all(data_dir);
         let mut session_config = SessionConfig::new().with_collect_statistics(true);
         if let Some(partition) = target_partition {
             session_config = session_config.with_target_partitions(partition);
         }
         let ctx = SessionContext::new_with_config(session_config);
         // Create table with partition
-        let create_table_sql = "CREATE EXTERNAL TABLE t1 (id INT not null, date DATE) STORED AS PARQUET LOCATION './data/' PARTITIONED BY (date) WITH ORDER (id ASC);";
+        let create_table_sql = "CREATE EXTERNAL TABLE t1 (id INT not null, date DATE) STORED AS PARQUET LOCATION './tests/data/test_statistics_per_partition' PARTITIONED BY (date) WITH ORDER (id ASC);";
         ctx.sql(create_table_sql)
             .await
             .unwrap()
             .collect()
             .await
             .unwrap();
-        // Insert data into the table, will generate partition files with parquet format
-        let insert_data = "INSERT INTO t1 VALUES (4, '2025-03-01'), (3, '2025-3-02'), (2, '2025-03-03'), (1, '2025-03-04');";
-        ctx.sql(insert_data).await.unwrap().collect().await.unwrap();
         let table = ctx.table_provider("t1").await.unwrap();
         let listing_table = table
             .as_any()
@@ -162,7 +156,6 @@ mod test {
         );
         sort_exec = Arc::new(sort.with_preserve_partitioning(true));
         let statistics = sort_exec.statistics_by_partition()?;
-        dbg!(&statistics);
         assert_eq!(statistics.len(), 2);
         assert_eq!(statistics[0].num_rows, Precision::Exact(2));
         assert_eq!(statistics[1].num_rows, Precision::Exact(2));
@@ -318,10 +311,6 @@ mod test {
             statistics[3].column_statistics[0].min_value,
             Precision::Exact(ScalarValue::Int32(Some(1)))
         );
-
-        // Delete the existing data directory if it exists
-        let data_dir = "./data/";
-        let _ = std::fs::remove_dir_all(data_dir);
 
         Ok(())
     }
