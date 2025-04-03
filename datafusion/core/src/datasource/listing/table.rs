@@ -972,9 +972,16 @@ impl TableProvider for ListingTable {
         // Apply schema adapter to source if available
         apply_schema_adapter_to_source(&mut source, self.schema_adapter_factory.clone());
 
-        // Create file scan config with schema adapter factory if available
-        let config =
-            FileScanConfig::new(object_store_url, Arc::clone(&self.file_schema), source)
+        // create the execution plan
+        self.options
+            .format
+            .create_physical_plan(
+                session_state,
+                FileScanConfigBuilder::new(
+                    object_store_url,
+                    Arc::clone(&self.file_schema),
+                    source,
+                )
                 .with_file_groups(partitioned_file_lists)
                 .with_constraints(self.constraints.clone())
                 .with_statistics(statistics)
