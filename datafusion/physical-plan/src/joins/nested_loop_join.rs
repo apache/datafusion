@@ -28,7 +28,6 @@ use super::utils::{
     need_produce_result_in_final, reorder_output_after_swap, swap_join_projection,
     BatchSplitter, BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
 };
-use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::common::can_project;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
