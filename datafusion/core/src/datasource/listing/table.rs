@@ -970,7 +970,8 @@ impl TableProvider for ListingTable {
         let mut source = self.options.format.file_source();
 
         // Apply schema adapter to source if available
-        apply_schema_adapter_to_source(&mut source, self.schema_adapter_factory.clone());
+        source =
+            apply_schema_adapter_to_source(source, self.schema_adapter_factory.clone());
 
         // create the execution plan
         self.options
@@ -1218,9 +1219,9 @@ impl ListingTable {
 /// In the future, this could be generalized to support other file formats
 /// through a trait-based mechanism.
 fn apply_schema_adapter_to_source(
-    source: &mut Arc<dyn FileSource>,
+    source: Arc<dyn FileSource>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
-) {
+) -> Arc<dyn FileSource> {
     // Apply schema adapter to the source if it's a ParquetSource
     // This handles the special case for ParquetSource which supports schema evolution
     // through the schema_adapter_factory
@@ -1235,11 +1236,15 @@ fn apply_schema_adapter_to_source(
         source.as_any().downcast_ref::<ParquetSource>(),
         schema_adapter_factory,
     ) {
-        let updated_source = parquet_source
-            .clone()
-            .with_schema_adapter_factory(schema_adapter_factory);
-        *source = Arc::new(updated_source);
+        return Arc::new(
+            parquet_source
+                .clone()
+                .with_schema_adapter_factory(schema_adapter_factory),
+        );
     }
+
+    // If we didn't apply an adapter, return the original source
+    source
 }
 
 /// Processes a stream of partitioned files and returns a `FileGroup` containing the files.
