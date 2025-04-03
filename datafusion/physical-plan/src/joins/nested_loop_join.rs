@@ -491,9 +491,10 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 .register(context.memory_pool());
 
         let inner_table = self.inner_table.try_once(|| {
+            let stream = self.left.execute(0, Arc::clone(&context))?;
+
             Ok(collect_left_input(
-                Arc::clone(&self.left),
-                Arc::clone(&context),
+                stream,
                 join_metrics.clone(),
                 load_reservation,
                 need_produce_result_in_final(self.join_type),
@@ -610,14 +611,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
 /// Asynchronously collect input into a single batch, and creates `JoinLeftData` from it
 async fn collect_left_input(
-    input: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    stream: SendableRecordBatchStream,
     join_metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     with_visited_left_side: bool,
     probe_threads_count: usize,
 ) -> Result<JoinLeftData> {
-    let stream = input.execute(0, context)?;
+    let schema = stream.schema();
 
     // Load all batches and count the rows
     let (batches, metrics, mut reservation) = stream
@@ -638,7 +638,7 @@ async fn collect_left_input(
         )
         .await?;
 
-    let merged_batch = concat_batches(&input.schema(), &batches)?;
+    let merged_batch = concat_batches(&schema, &batches)?;
 
     // Reserve memory for visited_left_side bitmap if required by join type
     let visited_left_side = if with_visited_left_side {
