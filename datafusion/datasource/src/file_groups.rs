@@ -25,6 +25,7 @@ use std::collections::BinaryHeap;
 use std::iter::repeat_with;
 use std::mem;
 use std::ops::{Index, IndexMut};
+use std::sync::Arc;
 
 /// Repartition input files into `target_partitions` partitions, if total file size exceed
 /// `repartition_file_min_size`
@@ -368,7 +369,7 @@ pub struct FileGroup {
     /// The files in this group
     files: Vec<PartitionedFile>,
     /// Optional statistics for the data across all files in the group
-    statistics: Option<Statistics>,
+    statistics: Option<Arc<Statistics>>,
 }
 
 impl FileGroup {
@@ -386,7 +387,7 @@ impl FileGroup {
     }
 
     /// Set the statistics for this group
-    pub fn with_statistics(mut self, statistics: Statistics) -> Self {
+    pub fn with_statistics(mut self, statistics: Arc<Statistics>) -> Self {
         self.statistics = Some(statistics);
         self
     }
@@ -420,7 +421,7 @@ impl FileGroup {
 
     /// Get the statistics for this group
     pub fn statistics(&self) -> Option<&Statistics> {
-        self.statistics.as_ref()
+        self.statistics.as_deref()
     }
 
     /// Partition the list of files into `n` groups
