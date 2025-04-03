@@ -183,7 +183,7 @@ INSERT INTO employees (id, salary) VALUES
 SELECT nth_value(salary, 2) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS nth_value
 FROM employees;
 
--- Expected output:
+output:
 +-----------+
 | nth_value |
 +-----------+
@@ -194,10 +194,7 @@ FROM employees;
 | 40000     |
 +-----------+
 
--- Explanation:
--- The function selects the 2nd row from the window frame. 
--- By default, the window frame includes all rows up to the current row.
--- Therefore, the 2nd salary (40000) is returned for every row in the output.
+
 ```
 "#)
     .build()

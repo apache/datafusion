@@ -301,17 +301,22 @@ nth_value(expression, n)
 #### Exmaple
 
 ```sql
--- nth salary of employees 
---|Row  | Salary|
---+-----+------ +
---|  1  | 30000 |
---|  2  | 40000 |
---| 3   | 50000 |
---| 4   | 60000 |
---| 5   | 70000 |
---+-----+-------+
->SELECT nth_value(salary, 2) OVER (ORDER BY salary) AS nth_value
+Employee Table
++-----+-------+
+|Row  | Salary|
++-----+------ +
+| 1   | 30000 |
+| 2   | 40000 |
+| 3   | 50000 |
+| 4   | 60000 |
+| 5   | 70000 |
++-----+-------+
+```
+```sql
+
+SELECT nth_value(salary, 2) OVER (ORDER BY salary) AS nth_value
 FROM employees;
+
 +-----------+
 | nth_value |
 +-----------+
