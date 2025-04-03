@@ -553,7 +553,7 @@ async fn setup_context(
     });
 
     let config = SessionConfig::new()
-        .with_sort_spill_reservation_bytes(10 * 1024 * 1024) // 10MB
+        .with_sort_spill_reservation_bytes(2 * 1024 * 1024) // 2MB
         .with_target_partitions(1);
 
     Ok(SessionContext::new_with_config_rt(config, runtime))
@@ -584,11 +584,11 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
 /// tempfiles are cleaned up.
 #[tokio::test]
 async fn test_disk_spill_limit_not_reached() -> Result<()> {
-    let disk_spill_limit = 100 * 1024 * 1024; // 100MB
-    let ctx = setup_context(disk_spill_limit, 60 * 1024 * 1024).await?;
+    let disk_spill_limit = 10 * 1024 * 1024; // 10MB
+    let ctx = setup_context(disk_spill_limit, 10 * 1024 * 1024).await?;
 
     let df = ctx
-        .sql("select * from generate_series(1, 10000000) as t1(v1) order by v1")
+        .sql("select * from generate_series(1, 1000000) as t1(v1) order by v1")
         .await
         .unwrap();
     let plan = df.create_physical_plan().await.unwrap();
