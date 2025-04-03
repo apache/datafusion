@@ -397,7 +397,7 @@ async fn load_page_index<T: AsyncFileReader>(
             ArrowReaderMetadata::try_new(Arc::new(new_parquet_metadata), options)?;
         Ok(new_arrow_reader)
     } else {
-        // No page index, return the original metadata
+        // No need to load the page index again, just return the existing metadata
         Ok(arrow_reader)
     }
 }
