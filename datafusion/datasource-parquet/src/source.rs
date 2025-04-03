@@ -43,6 +43,7 @@ use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion_physical_plan::DisplayFormatType;
 
+use itertools::Itertools;
 use object_store::ObjectStore;
 
 /// Execution plan for reading one or more Parquet files.
@@ -534,8 +535,25 @@ impl FileSource for ParquetSource {
                     .predicate()
                     .map(|p| format!(", predicate={p}"))
                     .unwrap_or_default();
+                let pruning_predicate_string = self
+                    .pruning_predicate
+                    .as_ref()
+                    .map(|pre| {
+                        let mut guarantees = pre
+                            .literal_guarantees()
+                            .iter()
+                            .map(|item| format!("{}", item))
+                            .collect_vec();
+                        guarantees.sort();
+                        format!(
+                            ", pruning_predicate={}, required_guarantees=[{}]",
+                            pre.predicate_expr(),
+                            guarantees.join(", ")
+                        )
+                    })
+                    .unwrap_or_default();
 
-                write!(f, "{}", predicate_string)
+                write!(f, "{}{}", predicate_string, pruning_predicate_string)
             }
             DisplayFormatType::TreeRender => {
                 if let Some(predicate) = self.predicate() {
