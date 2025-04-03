@@ -418,9 +418,11 @@ fn pushdown_filters(
 /// You may notice in this case that the filter is *dynamic*: the hash table is built
 /// _after_ the `departments` table is read and at runtime.
 /// We don't have a concrete `InList` filter or similar to push down at optimization time.
-/// These sorts of dynamic filters are handled by building a specialized [`PhysicalExpr`] that
-/// internally maintains a reference to the hash table or other state.
-/// To make working with these sorts of dynamic filters more tractable we have the method [`PhysicalExpr::snapshot`]
+/// These sorts of dynamic filters are handled by building a specialized
+/// [`PhysicalExpr`][datafusion_physical_expr::PhysicalExpr] that can be evaluated at runtime
+/// and internally maintains a reference to the hash table or other state.
+/// To make working with these sorts of dynamic filters more tractable we have the method `PhysicalExpr::snapshot`
+/// (TODO: add reference after https://github.com/apache/datafusion/pull/15568 is merged)
 /// which attempts to simplify a dynamic filter into a "basic" non-dynamic filter.
 /// For a join this could mean converting it to an `InList` filter or a min/max filter for example.
 /// See `datafusion/physical-plan/src/dynamic_filters.rs` for more details.
