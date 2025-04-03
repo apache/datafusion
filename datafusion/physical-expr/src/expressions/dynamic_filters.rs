@@ -175,10 +175,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         }))
     }
 
-    fn data_type(
-        &self,
-        input_schema: &Schema,
-    ) -> Result<DataType> {
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         let res = self.current()?.data_type(input_schema)?;
         #[cfg(test)]
         {
@@ -259,8 +256,14 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 
 #[cfg(test)]
 mod test {
-    use crate::{expressions::{col, lit, BinaryExpr}, utils::reassign_predicate_columns};
-    use arrow::{array::RecordBatch, datatypes::{DataType, Field, Schema}};
+    use crate::{
+        expressions::{col, lit, BinaryExpr},
+        utils::reassign_predicate_columns,
+    };
+    use arrow::{
+        array::RecordBatch,
+        datatypes::{DataType, Field, Schema},
+    };
     use datafusion_common::ScalarValue;
 
     use super::*;
@@ -318,10 +321,7 @@ mod test {
             }
         }
 
-        fn update_current_expr(
-            &self,
-            new_expr: Arc<dyn PhysicalExpr>,
-        ) {
+        fn update_current_expr(&self, new_expr: Arc<dyn PhysicalExpr>) {
             let mut current = self.current_expr.write().unwrap();
             *current = new_expr;
         }
@@ -329,41 +329,30 @@ mod test {
 
     #[test]
     fn test_remap_children() {
-        let table_schema = Arc::new(
-            Schema::new(
-                vec![
-                    Field::new("a", DataType::Int32, false),
-                    Field::new("b", DataType::Int32, false),
-                ]
-            )
-        );
-        let file_schema = Arc::new(
-            Schema::new(
-                vec![
-                    Field::new("b", DataType::Int32, false),
-                    Field::new("a", DataType::Int32, false),
-                ]
-            )
-        );
-        let expr = Arc::new(
-            BinaryExpr::new(
-                col("a", &table_schema).unwrap(),
-                datafusion_expr::Operator::Gt,
-                lit(42) as Arc<dyn PhysicalExpr>,
-            )
-        );
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+        let expr = Arc::new(BinaryExpr::new(
+            col("a", &table_schema).unwrap(),
+            datafusion_expr::Operator::Gt,
+            lit(42) as Arc<dyn PhysicalExpr>,
+        ));
         let source = Arc::new(MockDynamicFilterSource::new(expr));
-        let dynamic_filter = Arc::new(
-            DynamicFilterPhysicalExpr::new(
-                vec![col("a", &table_schema).unwrap()],
-                Arc::clone(&source) as Arc<dyn DynamicFilterSource>,
-            )
-        );
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![col("a", &table_schema).unwrap()],
+            Arc::clone(&source) as Arc<dyn DynamicFilterSource>,
+        ));
         // Take an initial snapshot
         let snap = dynamic_filter.snapshot().unwrap().unwrap();
         insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Gt, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
         // Remap the children to the file schema
-        let dynamic_filter = reassign_predicate_columns(dynamic_filter, &file_schema, false).unwrap();
+        let dynamic_filter =
+            reassign_predicate_columns(dynamic_filter, &file_schema, false).unwrap();
         // Take a snapshot after remapping, the children in the snapshot should be remapped to the file schema
         let snap = dynamic_filter.snapshot().unwrap().unwrap();
         insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Gt, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
@@ -392,27 +381,21 @@ mod test {
 
     #[test]
     fn test_dynamic_filter_physical_expr_misbehaves_data_type_nullable() {
-        let source = Arc::new(MockDynamicFilterSource::new(lit(42) as Arc<dyn PhysicalExpr>));
+        let source = Arc::new(MockDynamicFilterSource::new(
+            lit(42) as Arc<dyn PhysicalExpr>
+        ));
         let dynamic_filter = DynamicFilterPhysicalExpr::new(
             vec![],
             Arc::clone(&source) as Arc<dyn DynamicFilterSource>,
         );
 
         // First call to data_type and nullable should set the initial values.
-        let initial_data_type = dynamic_filter
-            .data_type(&Schema::empty())
-            .unwrap();
-        let initial_nullable = dynamic_filter
-            .nullable(&Schema::empty())
-            .unwrap();
+        let initial_data_type = dynamic_filter.data_type(&Schema::empty()).unwrap();
+        let initial_nullable = dynamic_filter.nullable(&Schema::empty()).unwrap();
 
         // Call again and expect no change.
-        let second_data_type = dynamic_filter
-            .data_type(&Schema::empty())
-            .unwrap();
-        let second_nullable = dynamic_filter
-            .nullable(&Schema::empty())
-            .unwrap();
+        let second_data_type = dynamic_filter.data_type(&Schema::empty()).unwrap();
+        let second_nullable = dynamic_filter.nullable(&Schema::empty()).unwrap();
         assert_eq!(
             initial_data_type, second_data_type,
             "Data type should not change on second call."
@@ -429,15 +412,11 @@ mod test {
         }
         // Check that we error if we call data_type, nullable or evaluate after changing the expression.
         assert!(
-            dynamic_filter
-                .data_type(&Schema::empty())
-                .is_err(),
+            dynamic_filter.data_type(&Schema::empty()).is_err(),
             "Expected err when data_type is called after changing the expression."
         );
         assert!(
-            dynamic_filter
-                .nullable(&Schema::empty())
-                .is_err(),
+            dynamic_filter.nullable(&Schema::empty()).is_err(),
             "Expected err when nullable is called after changing the expression."
         );
         let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
