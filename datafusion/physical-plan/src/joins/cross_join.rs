@@ -188,14 +188,12 @@ impl CrossJoinExec {
 
 /// Asynchronously collect the result of the left child
 async fn load_left_input(
-    left: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    stream: SendableRecordBatchStream,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
     // merge all left parts into a single stream
-    let left_schema = left.schema();
-    let stream = left.execute(0, context)?;
+    let left_schema = stream.schema();
 
     // Load all batches and count the rows
     let (batches, _metrics, reservation) = stream
@@ -298,9 +296,10 @@ impl ExecutionPlan for CrossJoinExec {
             context.session_config().enforce_batch_size_in_joins();
 
         let left_fut = self.left_fut.try_once(|| {
+            let left_stream = self.left.execute(0, context)?;
+
             Ok(load_left_input(
-                Arc::clone(&self.left),
-                context,
+                left_stream,
                 join_metrics.clone(),
                 reservation,
             ))
