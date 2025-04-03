@@ -889,20 +889,18 @@ explain SELECT * FROM table1 ORDER BY string_col LIMIT 1;
 ----
 physical_plan
 01)┌───────────────────────────┐
-02)│          SortExec         │
+02)│       SortExec(TopK)      │
 03)│    --------------------   │
-04)│            TopK           │
+04)│          limit: 1         │
 05)│                           │
-06)│          limit: 1         │
-07)│                           │
-08)│string_col@1 ASC NULLS LAST│
-09)└─────────────┬─────────────┘
-10)┌─────────────┴─────────────┐
-11)│       DataSourceExec      │
-12)│    --------------------   │
-13)│          files: 1         │
-14)│        format: csv        │
-15)└───────────────────────────┘
+06)│string_col@1 ASC NULLS LAST│
+07)└─────────────┬─────────────┘
+08)┌─────────────┴─────────────┐
+09)│       DataSourceExec      │
+10)│    --------------------   │
+11)│          files: 1         │
+12)│        format: csv        │
+13)└───────────────────────────┘
 
 # Query with projection on csv
 query TT
