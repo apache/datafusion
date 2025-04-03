@@ -713,7 +713,7 @@ impl ListingOptions {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
     /// `file_schema` contains only the columns physically stored in the data files themselves.

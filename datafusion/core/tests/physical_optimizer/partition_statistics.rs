@@ -17,99 +17,312 @@
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-    use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-    use datafusion::execution::SessionStateBuilder;
+    use arrow_schema::{DataType, Field, Schema, SortOptions};
+    use datafusion::datasource::listing::ListingTable;
     use datafusion::prelude::SessionContext;
     use datafusion_catalog::TableProvider;
-    use datafusion_common::config::ConfigOptions;
-    use datafusion_datasource::ListingTableUrl;
-    use datafusion_datasource::source::DataSourceExec;
-    use datafusion_datasource_parquet::ParquetFormat;
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{ScalarValue, Statistics};
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_expr_common::operator::Operator;
+    use datafusion_physical_expr::expressions::{binary, lit, Column};
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_physical_plan::filter::FilterExec;
+    use datafusion_physical_plan::projection::ProjectionExec;
+    use datafusion_physical_plan::sorts::sort::SortExec;
+    use datafusion_physical_plan::union::UnionExec;
     use datafusion_physical_plan::ExecutionPlan;
+    use std::sync::Arc;
 
-    async fn generate_listing_table_with_statistics() -> Arc<dyn ExecutionPlan> {
-        let testdata = datafusion::test_util::parquet_test_data();
-        let filename = format!("{}/{}", testdata, "alltypes_tiny_pages.parquet");
-        let table_path = ListingTableUrl::parse(filename).unwrap();
-        let opt = ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
-        let rt = RuntimeEnvBuilder::new()
-            .build_arc()
-            .expect("could not build runtime environment");
-
-        let state = SessionContext::new_with_config_rt(SessionConfig::default(), rt).state();
-        let schema = opt
-            .infer_schema(
-                &SessionStateBuilder::new().with_default_features().build(),
-                &table_path,
-            )
+    async fn generate_listing_table_with_statistics(
+        target_partition: Option<usize>,
+    ) -> Arc<dyn ExecutionPlan> {
+        // Delete the existing data directory if it exists
+        let data_dir = "./data/";
+        let _ = std::fs::remove_dir_all(data_dir);
+        let mut session_config = SessionConfig::new().with_collect_statistics(true);
+        if let Some(partition) = target_partition {
+            session_config = session_config.with_target_partitions(partition);
+        }
+        let ctx = SessionContext::new_with_config(session_config);
+        // Create table with partition
+        let create_table_sql = "CREATE EXTERNAL TABLE t1 (id INT not null, date DATE) STORED AS PARQUET LOCATION './data/' PARTITIONED BY (date) WITH ORDER (id ASC);";
+        ctx.sql(create_table_sql)
+            .await
+            .unwrap()
+            .collect()
             .await
             .unwrap();
-        let config = ListingTableConfig::new(table_path.clone())
-            .with_listing_options(opt.clone())
-            .with_schema(schema);
-        let table = ListingTable::try_new(config).unwrap();
-        let res=  table.scan(&state, None, &[], None).await.unwrap();
-        dbg!(&res.statistics().unwrap());
-        dbg!(&res.statistics_by_partition().unwrap());
-        let mut config = ConfigOptions::new();
-        config.set("datafusion.optimizer.repartition_file_min_size", "10").unwrap();
-        let res = res.repartitioned(5, &config).unwrap().unwrap();
-        dbg!(&res.statistics_by_partition().unwrap());
-        res
+        // Insert data into the table, will generate partition files with parquet format
+        let insert_data = "INSERT INTO t1 VALUES (4, '2025-03-01'), (3, '2025-3-02'), (2, '2025-03-03'), (1, '2025-03-04');";
+        ctx.sql(insert_data).await.unwrap().collect().await.unwrap();
+        let table = ctx.table_provider("t1").await.unwrap();
+        let listing_table = table
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap()
+            .clone();
+        listing_table
+            .scan(&ctx.state(), None, &[], None)
+            .await
+            .unwrap()
+    }
+
+    fn check_unchanged_statistics(statistics: Vec<Statistics>) {
+        // Check the statistics of each partition
+        for stat in &statistics {
+            assert_eq!(stat.num_rows, Precision::Exact(1));
+            // First column (id) should have non-null values
+            assert_eq!(stat.column_statistics[0].null_count, Precision::Exact(0));
+        }
+
+        // Verify specific id values for each partition
+        assert_eq!(
+            statistics[0].column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(4)))
+        );
+        assert_eq!(
+            statistics[1].column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(3)))
+        );
+        assert_eq!(
+            statistics[2].column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(2)))
+        );
+        assert_eq!(
+            statistics[3].column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(1)))
+        );
     }
 
     #[tokio::test]
-    async fn test_statistics_by_partition_of_data_source() -> datafusion_common::Result<()> {
-        generate_listing_table_with_statistics().await;
+    async fn test_statistics_by_partition_of_data_source() -> datafusion_common::Result<()>
+    {
+        let scan = generate_listing_table_with_statistics(None).await;
+        let statistics = scan.statistics_by_partition()?;
+        // Check the statistics of each partition
+        assert_eq!(statistics.len(), 4);
+        for stat in &statistics {
+            assert_eq!(stat.column_statistics.len(), 2);
+            assert_eq!(stat.total_byte_size, Precision::Exact(55));
+        }
+        check_unchanged_statistics(statistics);
         Ok(())
     }
 
-    #[test]
-    fn test_statistics_by_partition_of_projection() -> datafusion_common::Result<()> {
+    #[tokio::test]
+    async fn test_statistics_by_partition_of_projection() -> datafusion_common::Result<()>
+    {
+        let scan = generate_listing_table_with_statistics(None).await;
+        // Add projection execution plan
+        let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
+            vec![(Arc::new(Column::new("id", 0)), "id".to_string())];
+        let projection = ProjectionExec::try_new(exprs, scan)?;
+        let statistics = projection.statistics_by_partition()?;
+        for stat in &statistics {
+            assert_eq!(stat.column_statistics.len(), 1);
+            assert_eq!(stat.total_byte_size, Precision::Exact(4));
+        }
+        check_unchanged_statistics(statistics);
         Ok(())
     }
 
-    #[test]
-    fn test_statistics_by_partition_of_sort() -> datafusion_common::Result<()> {
+    #[tokio::test]
+    async fn test_statistics_by_partition_of_sort() -> datafusion_common::Result<()> {
+        let scan = generate_listing_table_with_statistics(Some(2)).await;
+        // Add sort execution plan
+        let sort = SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("id", 0)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            }]),
+            scan,
+        );
+        let mut sort_exec = Arc::new(sort.clone());
+        let statistics = sort_exec.statistics_by_partition()?;
+        assert_eq!(statistics.len(), 1);
+        assert_eq!(statistics[0].num_rows, Precision::Exact(4));
+        assert_eq!(statistics[0].column_statistics.len(), 2);
+        assert_eq!(statistics[0].total_byte_size, Precision::Exact(220));
+        assert_eq!(
+            statistics[0].column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+        assert_eq!(
+            statistics[0].column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(4)))
+        );
+        assert_eq!(
+            statistics[0].column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(1)))
+        );
+        sort_exec = Arc::new(sort.with_preserve_partitioning(true));
+        let statistics = sort_exec.statistics_by_partition()?;
+        dbg!(&statistics);
+        assert_eq!(statistics.len(), 2);
+        assert_eq!(statistics[0].num_rows, Precision::Exact(2));
+        assert_eq!(statistics[1].num_rows, Precision::Exact(2));
+        assert_eq!(statistics[0].column_statistics.len(), 2);
+        assert_eq!(statistics[1].column_statistics.len(), 2);
+        assert_eq!(statistics[0].total_byte_size, Precision::Exact(110));
+        assert_eq!(statistics[1].total_byte_size, Precision::Exact(110));
+        assert_eq!(
+            statistics[0].column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+        assert_eq!(
+            statistics[0].column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(4)))
+        );
+        assert_eq!(
+            statistics[0].column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(3)))
+        );
+        assert_eq!(
+            statistics[1].column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+        assert_eq!(
+            statistics[1].column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(2)))
+        );
+        assert_eq!(
+            statistics[1].column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(1)))
+        );
         Ok(())
     }
 
-    #[test]
-    fn test_statistics_by_partition_of_filter() -> datafusion_common::Result<()> {
+    #[tokio::test]
+    async fn test_statistics_by_partition_of_filter() -> datafusion_common::Result<()> {
+        let scan = generate_listing_table_with_statistics(None).await;
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+        let predicate = binary(
+            Arc::new(Column::new("id", 0)),
+            Operator::Lt,
+            lit(1i32),
+            &schema,
+        )?;
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, scan)?);
+        let _full_statistics = filter.statistics()?;
+        // The full statistics is invalid, at least, we can improve the selectivity estimation of the filter
+        /*
+        Statistics {
+           num_rows: Inexact(0),
+           total_byte_size: Inexact(0),
+           column_statistics: [
+               ColumnStatistics {
+                   null_count: Exact(0),
+                   max_value: Exact(NULL),
+                   min_value: Exact(NULL),
+                   sum_value: Exact(NULL),
+                   distinct_count: Exact(0),
+               },
+               ColumnStatistics {
+                   null_count: Exact(0),
+                   max_value: Exact(NULL),
+                   min_value: Exact(NULL),
+                   sum_value: Exact(NULL),
+                   distinct_count: Exact(0),
+               },
+           ],
+        }
+        */
+        let statistics = filter.statistics_by_partition()?;
+        // Also the statistics of each partition is also invalid due to above
+        // But we can ensure the current behavior by tests
+        assert_eq!(statistics.len(), 4);
+        for stat in &statistics {
+            assert_eq!(stat.column_statistics.len(), 2);
+            assert_eq!(stat.total_byte_size, Precision::Inexact(0));
+            assert_eq!(stat.num_rows, Precision::Inexact(0));
+            assert_eq!(stat.column_statistics[0].null_count, Precision::Exact(0));
+            assert_eq!(
+                stat.column_statistics[0].max_value,
+                Precision::Exact(ScalarValue::Null)
+            );
+            assert_eq!(
+                stat.column_statistics[0].min_value,
+                Precision::Exact(ScalarValue::Null)
+            );
+        }
         Ok(())
     }
 
-    #[test]
-    fn test_statistics_by_partition_of_aggregate() -> datafusion_common::Result<()> {
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_union() -> datafusion_common::Result<()> {
+        let scan = generate_listing_table_with_statistics(Some(2)).await;
+        let union_exec = Arc::new(UnionExec::new(vec![scan.clone(), scan]));
+        let statistics = union_exec.statistics_by_partition()?;
+        // Check that we have 4 partitions (2 from each scan)
+        assert_eq!(statistics.len(), 4);
+
+        // Verify first partition (from first scan)
+        assert_eq!(statistics[0].num_rows, Precision::Exact(2));
+        assert_eq!(statistics[0].total_byte_size, Precision::Exact(110));
+        assert_eq!(statistics[0].column_statistics.len(), 2);
+        assert_eq!(
+            statistics[0].column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+        assert_eq!(
+            statistics[0].column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(4)))
+        );
+        assert_eq!(
+            statistics[0].column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(3)))
+        );
+
+        // Verify second partition (from first scan)
+        assert_eq!(statistics[1].num_rows, Precision::Exact(2));
+        assert_eq!(statistics[1].total_byte_size, Precision::Exact(110));
+        assert_eq!(
+            statistics[1].column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+        assert_eq!(
+            statistics[1].column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(2)))
+        );
+        assert_eq!(
+            statistics[1].column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(1)))
+        );
+
+        // Verify third partition (from second scan - same as first partition)
+        assert_eq!(statistics[2].num_rows, Precision::Exact(2));
+        assert_eq!(statistics[2].total_byte_size, Precision::Exact(110));
+        assert_eq!(
+            statistics[2].column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(4)))
+        );
+        assert_eq!(
+            statistics[2].column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(3)))
+        );
+
+        // Verify fourth partition (from second scan - same as second partition)
+        assert_eq!(statistics[3].num_rows, Precision::Exact(2));
+        assert_eq!(statistics[3].total_byte_size, Precision::Exact(110));
+        assert_eq!(
+            statistics[3].column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(2)))
+        );
+        assert_eq!(
+            statistics[3].column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(1)))
+        );
+
+        // Delete the existing data directory if it exists
+        let data_dir = "./data/";
+        let _ = std::fs::remove_dir_all(data_dir);
+
         Ok(())
     }
-
-    #[test]
-    fn test_statistic_by_partition_of_cross_join() -> datafusion_common::Result<()> {
-        Ok(())
-    }
-
-    #[test]
-    fn test_statistic_by_partition_of_union() -> datafusion_common::Result<()> {
-        Ok(())
-    }
-
-    #[test]
-    fn test_statistic_by_partition_of_smp() -> datafusion_common::Result<()> {
-        Ok(())
-    }
-
-    #[test]
-    fn test_statistic_by_partition_of_limit() -> datafusion_common::Result<()> {
-        Ok(())
-    }
-
-    #[test]
-    fn test_statistic_by_partition_of_coalesce() -> datafusion_common::Result<()> {
-        Ok(())
-    }
-
 }
