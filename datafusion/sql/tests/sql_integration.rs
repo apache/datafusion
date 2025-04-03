@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use core::panic;
 use std::any::Any;
 #[cfg(test)]
 use std::collections::HashMap;
