@@ -48,7 +48,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, Constraints, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::stream::{StreamExt, TryStreamExt};
@@ -496,7 +496,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// RepartitionExec nodes allow all filters to be pushed down as they don't change the schema or cardinality.
     fn filter_pushdown_request(
         &self,
-        filters: &[Arc<dyn PhysicalExpr>],
+        filters: &[PhysicalExprRef],
     ) -> Result<Vec<FilterPushdownAllowed>> {
         Ok(vec![FilterPushdownAllowed::Disallowed; filters.len()])
     }
@@ -507,7 +507,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn with_filter_pushdown_result(
         self: Arc<Self>,
         _own_filters_result: &[FilterSupport],
-        _parent_filters_remaining: &[Arc<dyn PhysicalExpr>],
+        _parent_filters_remaining: &[PhysicalExprRef],
     ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
         Ok(None)
     }

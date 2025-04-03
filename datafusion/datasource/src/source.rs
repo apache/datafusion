@@ -22,7 +22,10 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, EmissionType, ExecutionPlanFilterPushdownResult, FilterPushdownResult,
+    FilterSupport,
+};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
@@ -33,7 +36,7 @@ use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Common behaviors in Data Sources for both from Files and Memory.
@@ -79,7 +82,19 @@ pub trait DataSource: Send + Sync + Debug {
         &self,
         _projection: &ProjectionExec,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>>;
+    /// Push down filters from parent execution plans to this data source.
+    /// This is expected to return Ok(None) if the filters cannot be pushed down.
+    /// If they can be pushed down it should return a [`FilterPushdownResult`] containing the new
+    /// data source and the support level for each filter (exact or inexact).
+    fn push_down_filters(
+        &self,
+        _filters: &[PhysicalExprRef],
+    ) -> datafusion_common::Result<Option<DataSourceFilterPushdownResult>> {
+        Ok(None)
+    }
 }
+
+pub type DataSourceFilterPushdownResult = FilterPushdownResult<Arc<dyn DataSource>>;
 
 /// [`ExecutionPlan`] handles different file formats like JSON, CSV, AVRO, ARROW, PARQUET
 ///
@@ -192,6 +207,28 @@ impl ExecutionPlan for DataSourceExec {
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         self.data_source.try_swapping_with_projection(projection)
     }
+
+    fn with_filter_pushdown_result(
+        self: Arc<Self>,
+        own_filters_result: &[FilterSupport],
+        parent_filters_remaining: &[PhysicalExprRef],
+    ) -> datafusion_common::Result<Option<ExecutionPlanFilterPushdownResult>> {
+        // We didn't give out any filters, this should be empty!
+        assert!(own_filters_result.is_empty());
+        // Forward filter pushdown to our data source.
+        if let Some(pushdown_result) = self
+            .data_source
+            .push_down_filters(parent_filters_remaining)?
+        {
+            let new_self = Arc::new(DataSourceExec::new(pushdown_result.inner));
+            Ok(Some(ExecutionPlanFilterPushdownResult::new(
+                new_self,
+                pushdown_result.support,
+            )))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 impl DataSourceExec {
@@ -252,5 +289,15 @@ impl DataSourceExec {
                     .downcast_ref::<T>()
                     .map(|source| (file_scan_conf, source))
             })
+    }
+}
+
+/// Create a new `DataSourceExec` from a `DataSource`
+impl<S> From<S> for DataSourceExec
+where
+    S: DataSource + 'static,
+{
+    fn from(source: S) -> Self {
+        Self::new(Arc::new(source))
     }
 }

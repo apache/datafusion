@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow_schema::SortOptions;
 use datafusion::{
     datasource::object_store::ObjectStoreUrl,
     logical_expr::Operator,
@@ -26,23 +25,149 @@ use datafusion::{
     },
     scalar::ScalarValue,
 };
-use datafusion_common::config::{ConfigOptions, TableParquetOptions};
 use datafusion_common::internal_err;
-use datafusion_datasource::file::FileSource;
+use datafusion_common::{config::ConfigOptions, Statistics};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_datasource_parquet::source::ParquetSource;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_datasource::{
+    file::{FileSource, FileSourceFilterPushdownResult},
+    file_scan_config::FileScanConfig,
+    file_stream::FileOpener,
+};
+use datafusion_physical_expr::{conjunction, PhysicalExprRef};
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::filter_pushdown::PushdownFilter;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::{displayable, ExecutionPlan};
-use datafusion_physical_plan::{filter::FilterExec, sorts::sort::SortExec};
-use std::fmt::{Display, Formatter};
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::{
+    displayable, execution_plan::FilterSupport, metrics::ExecutionPlanMetricsSet,
+    DisplayFormatType, ExecutionPlan,
+};
+use object_store::ObjectStore;
 use std::sync::{Arc, OnceLock};
+use std::{
+    any::Any,
+    fmt::{Display, Formatter},
+};
+
+/// A placeholder data source that accepts filter pushdown
+#[derive(Clone)]
+struct TestSource {
+    support: FilterSupport,
+    predicate: Option<PhysicalExprRef>,
+    statistics: Option<Statistics>,
+}
+
+impl TestSource {
+    fn new(support: FilterSupport) -> Self {
+        Self {
+            support,
+            predicate: None,
+            statistics: None,
+        }
+    }
+}
+
+impl FileSource for TestSource {
+    fn create_file_opener(
+        &self,
+        _object_store: Arc<dyn ObjectStore>,
+        _base_config: &FileScanConfig,
+        _partition: usize,
+    ) -> Arc<dyn FileOpener> {
+        todo!("should not be called")
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        todo!("should not be called")
+    }
+
+    fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+        todo!("should not be called")
+    }
+
+    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
+        todo!("should not be called")
+    }
+
+    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
+        todo!("should not be called")
+    }
+
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        Arc::new(TestSource {
+            statistics: Some(statistics),
+            ..self.clone()
+        })
+    }
+
+    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+        todo!("should not be called")
+    }
+
+    fn statistics(&self) -> datafusion_common::Result<Statistics> {
+        Ok(self
+            .statistics
+            .as_ref()
+            .expect("statistics not set")
+            .clone())
+    }
+
+    fn file_type(&self) -> &str {
+        "test"
+    }
+
+    fn fmt_extra(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let predicate_string = self
+                    .predicate
+                    .as_ref()
+                    .map(|p| format!(", predicate={p}"))
+                    .unwrap_or_default();
+
+                write!(f, "{}", predicate_string)
+            }
+            DisplayFormatType::TreeRender => {
+                if let Some(predicate) = &self.predicate {
+                    writeln!(f, "predicate={}", fmt_sql(predicate.as_ref()))?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn push_down_filters(
+        &self,
+        filters: &[PhysicalExprRef],
+    ) -> datafusion_common::Result<Option<FileSourceFilterPushdownResult>> {
+        let new = Arc::new(TestSource {
+            support: self.support.clone(),
+            predicate: Some(conjunction(filters.iter().map(Arc::clone))),
+            statistics: self.statistics.clone(),
+        });
+        Ok(Some(FileSourceFilterPushdownResult::new(
+            new,
+            vec![self.support; filters.len()],
+        )))
+    }
+}
+
+fn test_scan(support: FilterSupport) -> Arc<dyn ExecutionPlan> {
+    let schema = schema();
+    let source = Arc::new(TestSource::new(support));
+    let base_config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test://").unwrap(),
+        Arc::clone(schema),
+        source,
+    )
+    .build();
+    DataSourceExec::from_data_source(base_config)
+}
 
 #[test]
 fn test_pushdown_into_scan() {
-    let scan = parquet_scan();
+    let scan = test_scan(FilterSupport::HandledExact);
     let predicate = col_lit_predicate("a", "foo", schema());
     let plan = Arc::new(FilterExec::try_new(predicate, scan).unwrap());
 
@@ -53,10 +178,10 @@ fn test_pushdown_into_scan() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
-        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet
+        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
       output:
         Ok:
-          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=a@0 = foo
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
     "
     );
 }
@@ -64,7 +189,7 @@ fn test_pushdown_into_scan() {
 #[test]
 fn test_parquet_pushdown() {
     // filter should be pushed down into the parquet scan with two filters
-    let scan = parquet_scan();
+    let scan = test_scan(FilterSupport::HandledExact);
     let predicate1 = col_lit_predicate("a", "foo", schema());
     let filter1 = Arc::new(FilterExec::try_new(predicate1, scan).unwrap());
     let predicate2 = col_lit_predicate("b", "bar", schema());
@@ -77,10 +202,10 @@ fn test_parquet_pushdown() {
       input:
         - FilterExec: b@1 = bar
         -   FilterExec: a@0 = foo
-        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet
+        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
       output:
         Ok:
-          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=a@0 = foo AND b@1 = bar
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo AND b@1 = bar
     "
     );
 }
@@ -100,21 +225,6 @@ fn schema() -> &'static SchemaRef {
         ];
         Arc::new(Schema::new(fields))
     })
-}
-
-/// Return a execution plan that reads from a parquet file
-fn parquet_scan() -> Arc<dyn ExecutionPlan> {
-    let schema = schema();
-    let mut options = TableParquetOptions::default();
-    options.global.pushdown_filters = true;
-    let source = ParquetSource::new(options).with_schema(Arc::clone(schema));
-    let base_config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test://").unwrap(),
-        Arc::clone(schema),
-        source,
-    )
-    .build();
-    DataSourceExec::from_data_source(base_config)
 }
 
 /// Returns a predicate that is a binary expression col = lit
