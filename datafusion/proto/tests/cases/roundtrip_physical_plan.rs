@@ -21,6 +21,11 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::vec;
 
+use crate::cases::{
+    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
+    MyRegexUdfNode,
+};
+
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
@@ -32,10 +37,6 @@ use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::min_max::max_udaf;
 use prost::Message;
 
-use crate::cases::{
-    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
-    MyRegexUdfNode,
-};
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
@@ -46,9 +47,11 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-    FileSinkConfig, FileSource, ParquetSource,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup,
+    FileScanConfigBuilder, FileSinkConfig, FileSource, ParquetSource,
 };
+use datafusion::datasource::sink::DataSinkExec;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
@@ -68,7 +71,6 @@ use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::insert::DataSinkExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
 };
@@ -741,21 +743,25 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         ParquetSource::new(options).with_predicate(Arc::clone(&file_schema), predicate),
     );
 
-    let scan_config =
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, file_source)
-            .with_file_groups(vec![vec![PartitionedFile::new(
-                "/path/to/file.parquet".to_string(),
-                1024,
-            )]])
-            .with_statistics(Statistics {
-                num_rows: Precision::Inexact(100),
-                total_byte_size: Precision::Inexact(1024),
-                column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
-                    vec![Field::new("col", DataType::Utf8, false)],
-                ))),
-            });
+    let scan_config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        file_schema,
+        file_source,
+    )
+    .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+        "/path/to/file.parquet".to_string(),
+        1024,
+    )])])
+    .with_statistics(Statistics {
+        num_rows: Precision::Inexact(100),
+        total_byte_size: Precision::Inexact(1024),
+        column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+            Field::new("col", DataType::Utf8, false),
+        ]))),
+    })
+    .build();
 
-    roundtrip_test(scan_config.build())
+    roundtrip_test(DataSourceExec::from_data_source(scan_config))
 }
 
 #[tokio::test]
@@ -767,18 +773,22 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
     let file_source = Arc::new(ParquetSource::default());
-    let scan_config =
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, file_source)
-            .with_projection(Some(vec![0, 1]))
-            .with_file_group(vec![file_group])
-            .with_table_partition_cols(vec![Field::new(
-                "part".to_string(),
-                wrap_partition_type_in_dict(DataType::Int16),
-                false,
-            )])
-            .with_newlines_in_values(false);
+    let scan_config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        schema,
+        file_source,
+    )
+    .with_projection(Some(vec![0, 1]))
+    .with_file_group(FileGroup::new(vec![file_group]))
+    .with_table_partition_cols(vec![Field::new(
+        "part".to_string(),
+        wrap_partition_type_in_dict(DataType::Int16),
+        false,
+    )])
+    .with_newlines_in_values(false)
+    .build();
 
-    roundtrip_test(scan_config.build())
+    roundtrip_test(DataSourceExec::from_data_source(scan_config))
 }
 
 #[test]
@@ -795,19 +805,23 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             .with_predicate(Arc::clone(&file_schema), custom_predicate_expr),
     );
 
-    let scan_config =
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, file_source)
-            .with_file_groups(vec![vec![PartitionedFile::new(
-                "/path/to/file.parquet".to_string(),
-                1024,
-            )]])
-            .with_statistics(Statistics {
-                num_rows: Precision::Inexact(100),
-                total_byte_size: Precision::Inexact(1024),
-                column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
-                    vec![Field::new("col", DataType::Utf8, false)],
-                ))),
-            });
+    let scan_config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        file_schema,
+        file_source,
+    )
+    .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+        "/path/to/file.parquet".to_string(),
+        1024,
+    )])])
+    .with_statistics(Statistics {
+        num_rows: Precision::Inexact(100),
+        total_byte_size: Precision::Inexact(1024),
+        column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+            Field::new("col", DataType::Utf8, false),
+        ]))),
+    })
+    .build();
 
     #[derive(Debug, Clone, Eq)]
     struct CustomPredicateExpr {
@@ -918,7 +932,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         }
     }
 
-    let exec_plan = scan_config.build();
+    let exec_plan = DataSourceExec::from_data_source(scan_config);
 
     let ctx = SessionContext::new();
     roundtrip_test_and_return(exec_plan, &ctx, &CustomPhysicalExtensionCodec {})?;
@@ -1296,7 +1310,7 @@ fn roundtrip_json_sink() -> Result<()> {
     let file_sink_config = FileSinkConfig {
         original_url: String::default(),
         object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+        file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
@@ -1333,7 +1347,7 @@ fn roundtrip_csv_sink() -> Result<()> {
     let file_sink_config = FileSinkConfig {
         original_url: String::default(),
         object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+        file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
@@ -1389,7 +1403,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
     let file_sink_config = FileSinkConfig {
         original_url: String::default(),
         object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+        file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
@@ -1604,22 +1618,23 @@ async fn roundtrip_projection_source() -> Result<()> {
     let statistics = Statistics::new_unknown(&schema);
 
     let file_source = ParquetSource::default().with_statistics(statistics.clone());
-    let scan_config = FileScanConfig::new(
+    let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         schema.clone(),
         file_source,
     )
-    .with_file_groups(vec![vec![PartitionedFile::new(
+    .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
         "/path/to/file.parquet".to_string(),
         1024,
-    )]])
+    )])])
     .with_statistics(statistics)
-    .with_projection(Some(vec![0, 1, 2]));
+    .with_projection(Some(vec![0, 1, 2]))
+    .build();
 
     let filter = Arc::new(
         FilterExec::try_new(
             Arc::new(BinaryExpr::new(col("c", &schema)?, Operator::Eq, lit(1))),
-            scan_config.build(),
+            DataSourceExec::from_data_source(scan_config),
         )?
         .with_projection(Some(vec![0, 1]))?,
     );
@@ -1652,5 +1667,12 @@ async fn roundtrip_parquet_select_star_predicate() -> Result<()> {
 async fn roundtrip_parquet_select_projection_predicate() -> Result<()> {
     let ctx = all_types_context().await?;
     let sql = "select string_col, timestamp_col from alltypes_plain where id > 4";
+    roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_empty_projection() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let sql = "select 1 from alltypes_plain";
     roundtrip_test_sql_with_context(sql, &ctx).await
 }

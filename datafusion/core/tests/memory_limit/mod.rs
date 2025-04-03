@@ -49,6 +49,7 @@ use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use rand::Rng;
 use test_utils::AccessLogGenerator;
@@ -119,7 +120,7 @@ async fn join_by_key_multiple_partitions() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[0]",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -156,7 +157,7 @@ async fn join_by_expression() {
 #[tokio::test]
 async fn cross_join() {
     TestCase::new()
-        .with_query("select t1.* from t t1 CROSS JOIN t t2")
+        .with_query("select t1.*, t2.* from t t1 CROSS JOIN t t2")
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: CrossJoinExec",
         ])
@@ -493,6 +494,36 @@ async fn test_in_mem_buffer_almost_full() {
     let _ = df.collect().await.unwrap();
 }
 
+/// External sort should be able to run if there is very little pre-reserved memory
+/// for merge (set configuration sort_spill_reservation_bytes to 0).
+#[tokio::test]
+async fn test_external_sort_zero_merge_reservation() {
+    let config = SessionConfig::new()
+        .with_sort_spill_reservation_bytes(0)
+        .with_target_partitions(14);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(10 * 1024 * 1024)))
+        .build_arc()
+        .unwrap();
+
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+
+    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1;";
+    let df = ctx.sql(query).await.unwrap();
+
+    let physical_plan = df.create_physical_plan().await.unwrap();
+    let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+    let stream = physical_plan.execute(0, task_ctx).unwrap();
+
+    // Ensures execution succeed
+    let _result = collect(stream).await;
+
+    // Ensures the query spilled during execution
+    let metrics = physical_plan.metrics().unwrap();
+    let spill_count = metrics.spill_count().unwrap();
+    assert!(spill_count > 0);
+}
+
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]
@@ -777,7 +808,7 @@ impl Scenario {
                 // Disabling physical optimizer rules to avoid sorts /
                 // repartitions (since RepartitionExec / SortExec also
                 // has a memory budget which we'll likely hit first)
-                Some(vec![])
+                Some(vec![Arc::new(JoinSelection::new())])
             }
             Self::AccessLogStreaming => {
                 // Disable all physical optimizer rules except the
@@ -943,6 +974,6 @@ impl TableProvider for SortedTableProvider {
         )?
         .try_with_sort_information(self.sort_information.clone())?;
 
-        Ok(Arc::new(DataSourceExec::new(Arc::new(mem_conf))))
+        Ok(DataSourceExec::from_data_source(mem_conf))
     }
 }

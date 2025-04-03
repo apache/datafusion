@@ -44,7 +44,6 @@ use datafusion_common::{Constraints, Statistics};
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_datasource::PartitionedFile;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr,
@@ -65,6 +64,7 @@ pub use row_group_filter::RowGroupAccessPlanFilter;
 use source::ParquetSource;
 pub use writer::plan_to_parquet;
 
+use datafusion_datasource::file_groups::FileGroup;
 use log::debug;
 
 #[derive(Debug, Clone)]
@@ -134,7 +134,7 @@ impl ParquetExecBuilder {
     }
 
     /// Update the list of files groups to read
-    pub fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+    pub fn with_file_groups(mut self, file_groups: Vec<FileGroup>) -> Self {
         self.file_scan_config.file_groups = file_groups;
         self
     }
@@ -463,7 +463,7 @@ impl ParquetExec {
     /// that depend on the file groups.
     fn with_file_groups_and_update_partitioning(
         mut self,
-        file_groups: Vec<Vec<PartitionedFile>>,
+        file_groups: Vec<FileGroup>,
     ) -> Self {
         let mut config = self.file_scan_config();
         config.file_groups = file_groups;

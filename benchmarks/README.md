@@ -46,6 +46,7 @@ script. Usage instructions can be found with:
 
 ```shell
 # show usage
+cd ./benchmarks/
 ./bench.sh
 ```
 
@@ -64,8 +65,23 @@ Create / download a specific dataset (TPCH)
 ```shell
 ./bench.sh data tpch
 ```
-
 Data is placed in the `data` subdirectory.
+
+## Running benchmarks
+
+Run benchmark for TPC-H dataset
+```shell
+./bench.sh run tpch
+```
+or for TPC-H dataset scale 10
+```shell
+./bench.sh run tpch10
+```
+
+To run for specific query, for example Q21
+```shell
+./bench.sh run tpch10 21
+```
 
 ## Select join algorithm
 The benchmark runs with `prefer_hash_join == true` by default, which enforces HASH join algorithm.

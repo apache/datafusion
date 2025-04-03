@@ -15,9 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_catalog::Session;
+use std::sync::Arc;
+
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_session::Session;
+
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
@@ -26,7 +29,6 @@ use log::debug;
 use object_store::path::Path;
 use object_store::path::DELIMITER;
 use object_store::{ObjectMeta, ObjectStore};
-use std::sync::Arc;
 use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]

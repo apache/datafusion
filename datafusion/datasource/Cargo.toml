@@ -48,7 +48,6 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 bzip2 = { version = "0.5.2", optional = true }
 chrono = { workspace = true }
-datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -56,6 +55,7 @@ datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-session = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
 futures = { workspace = true }
 glob = "0.3.0"

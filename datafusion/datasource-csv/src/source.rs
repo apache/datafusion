@@ -28,7 +28,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    calculate_range, FileRange, ListingTableUrl, PartitionedFile, RangeCalculation,
+    calculate_range, FileRange, ListingTableUrl, RangeCalculation,
 };
 
 use arrow::csv;
@@ -49,12 +49,12 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 
+use crate::file_format::CsvDecoder;
+use datafusion_datasource::file_groups::FileGroup;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
-
-use crate::file_format::CsvDecoder;
 
 /// Old Csv source, deprecated with DataSourceExec implementation and CsvSource
 ///
@@ -314,7 +314,7 @@ impl CsvExec {
         )
     }
 
-    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+    fn with_file_groups(mut self, file_groups: Vec<FileGroup>) -> Self {
         self.base_config.file_groups = file_groups.clone();
         let mut file_source = self.file_scan_config();
         file_source = file_source.with_file_groups(file_groups);
@@ -407,7 +407,7 @@ impl ExecutionPlan for CsvExec {
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource_csv::source::CsvSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
@@ -424,10 +424,11 @@ impl ExecutionPlan for CsvExec {
 ///     .with_terminator(Some(b'#')
 /// ));
 /// // Create a DataSourceExec for reading the first 100MB of `file1.csv`
-/// let file_scan_config = FileScanConfig::new(object_store_url, file_schema, source)
+/// let config = FileScanConfigBuilder::new(object_store_url, file_schema, source)
 ///     .with_file(PartitionedFile::new("file1.csv", 100*1024*1024))
-///     .with_newlines_in_values(true); // The file contains newlines in values;
-/// let exec = file_scan_config.build();
+///     .with_newlines_in_values(true) // The file contains newlines in values;
+///     .build();
+/// let exec = (DataSourceExec::from_data_source(config));
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct CsvSource {

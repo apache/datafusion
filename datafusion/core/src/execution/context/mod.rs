@@ -17,13 +17,13 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
-use datafusion_catalog::memory::MemorySchemaProvider;
-use datafusion_catalog::MemoryCatalogProvider;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
+use crate::datasource::dynamic_file::DynamicListTableFactory;
+use crate::execution::session_state::SessionStateBuilder;
 use crate::{
     catalog::listing_schema::ListingSchemaProvider,
     catalog::{
@@ -49,39 +49,40 @@ use crate::{
     variable::{VarProvider, VarType},
 };
 
+// backwards compatibility
+pub use crate::execution::session_state::SessionState;
+
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_catalog::memory::MemorySchemaProvider;
+use datafusion_catalog::MemoryCatalogProvider;
+use datafusion_catalog::{
+    DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
+};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
+pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
+pub use datafusion_execution::TaskContext;
+pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
     planner::ExprPlanner,
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
-
-// backwards compatibility
-pub use crate::execution::session_state::SessionState;
-
-use crate::datasource::dynamic_file::DynamicListTableFactory;
-use crate::execution::session_state::SessionStateBuilder;
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion_catalog::{
-    DynamicFileCatalog, SessionStore, TableFunction, TableFunctionImpl, UrlTableFactory,
-};
-use datafusion_common::config::ConfigOptions;
-pub use datafusion_execution::config::SessionConfig;
-pub use datafusion_execution::TaskContext;
-pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
+use datafusion_session::SessionStore;
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;

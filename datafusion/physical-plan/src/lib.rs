@@ -66,7 +66,6 @@ pub mod empty;
 pub mod execution_plan;
 pub mod explain;
 pub mod filter;
-pub mod insert;
 pub mod joins;
 pub mod limit;
 pub mod memory;

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::str;
 use std::sync::Arc;
 
 use crate::fuzz_cases::aggregation_fuzzer::{
@@ -78,6 +77,32 @@ async fn test_min() {
         .with_table_name("fuzz_table")
         .with_aggregate_function("min")
         // min works on all column types
+        .with_aggregate_arguments(data_gen_config.all_columns())
+        .set_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_first_val() {
+    let mut data_gen_config: DatasetGeneratorConfig = baseline_config();
+
+    for i in 0..data_gen_config.columns.len() {
+        if data_gen_config.columns[i].get_max_num_distinct().is_none() {
+            data_gen_config.columns[i] = data_gen_config.columns[i]
+                .clone()
+                // Minimize the chance of identical values in the order by columns to make the test more stable
+                .with_max_num_distinct(usize::MAX);
+        }
+    }
+
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("first_value")
         .with_aggregate_arguments(data_gen_config.all_columns())
         .set_group_by_columns(data_gen_config.all_columns());
 
@@ -328,12 +353,12 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     )
     .unwrap();
 
-    let running_source = Arc::new(DataSourceExec::new(Arc::new(
+    let running_source = DataSourceExec::from_data_source(
         MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
             .unwrap()
             .try_with_sort_information(vec![sort_keys])
             .unwrap(),
-    )));
+    );
 
     let aggregate_expr =
         vec![

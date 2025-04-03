@@ -2023,7 +2023,7 @@ physical_plan
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
 10)------------------CoalesceBatchesExec: target_batch_size=8192
-11)--------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
+11)--------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(col0@0, col0@0)]
 12)----------------------DataSourceExec: partitions=1, partition_sizes=[3]
 13)----------------------DataSourceExec: partitions=1, partition_sizes=[3]
 
@@ -2665,6 +2665,47 @@ TUR [100.0, 75.0] 175
 # test_reverse_aggregate_expr
 # Some of the Aggregators can be reversed, by this way we can still run aggregators without re-ordering
 # that have contradictory requirements at first glance.
+
+statement ok
+CREATE TABLE null_group (
+          a INT, b INT, c INT, d INT
+) as VALUES
+  (6, 6, null, null),
+  (6, 6, 1, null),
+  (6, 6, null, 1)
+
+query III rowsort
+select c, d, first_value(a order by b) from null_group group by c, d;
+----
+1 NULL 6
+NULL 1 6
+NULL NULL 6
+
+
+
+statement ok
+CREATE TABLE first_null (
+          k INT,
+          val INT,
+          o int
+        ) as VALUES
+          (0, NULL, -9),
+          (0, 1, 1),
+          (1, 1, 1);
+
+query II rowsort
+select k, first_value(val order by o) IGNORE NULLS from first_null group by k;
+----
+0 1
+1 1
+
+query II rowsort
+select k, first_value(val order by o) respect NULLS from first_null group by k;
+----
+0 NULL
+1 1
+
+
 query TT
 EXPLAIN SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
@@ -4188,9 +4229,8 @@ EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT CAST(x AS DOUBLE)) 
 logical_plan
 01)Projection: sum(alias1) AS sum(DISTINCT t1.x), max(alias1) AS max(DISTINCT t1.x)
 02)--Aggregate: groupBy=[[t1.y]], aggr=[[sum(alias1), max(alias1)]]
-03)----Aggregate: groupBy=[[t1.y, __common_expr_1 AS t1.x AS alias1]], aggr=[[]]
-04)------Projection: CAST(t1.x AS Float64) AS __common_expr_1, t1.y
-05)--------TableScan: t1 projection=[x, y]
+03)----Aggregate: groupBy=[[t1.y, CAST(t1.x AS Float64) AS alias1]], aggr=[[]]
+04)------TableScan: t1 projection=[x, y]
 physical_plan
 01)ProjectionExec: expr=[sum(alias1)@1 as sum(DISTINCT t1.x), max(alias1)@2 as max(DISTINCT t1.x)]
 02)--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[sum(alias1), max(alias1)]
@@ -4201,9 +4241,8 @@ physical_plan
 07)------------CoalesceBatchesExec: target_batch_size=2
 08)--------------RepartitionExec: partitioning=Hash([y@0, alias1@1], 8), input_partitions=8
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-10)------------------AggregateExec: mode=Partial, gby=[y@1 as y, __common_expr_1@0 as alias1], aggr=[]
-11)--------------------ProjectionExec: expr=[CAST(x@0 AS Float64) as __common_expr_1, y@1 as y]
-12)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)------------------AggregateExec: mode=Partial, gby=[y@1 as y, CAST(x@0 AS Float64) as alias1], aggr=[]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # create an unbounded table that contains ordered timestamp.
 statement ok

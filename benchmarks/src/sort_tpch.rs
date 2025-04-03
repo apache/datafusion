@@ -92,7 +92,7 @@ impl RunOpt {
     /// Payload Columns:
     /// - Thin variant: `l_partkey` column with `BIGINT` type (1 column)
     /// - Wide variant: all columns except for possible key columns (12 columns)
-    const SORT_QUERIES: [&'static str; 10] = [
+    const SORT_QUERIES: [&'static str; 11] = [
         // Q1: 1 sort key (type: INTEGER, cardinality: 7) + 1 payload column
         r#"
         SELECT l_linenumber, l_partkey
@@ -158,6 +158,12 @@ impl RunOpt {
                l_receiptdate, l_shipinstruct, l_shipmode
         FROM lineitem
         ORDER BY l_orderkey, l_suppkey, l_linenumber, l_comment
+        "#,
+        // Q11: 1 sort key (type: VARCHAR, cardinality: 4.5M) + 1 payload column
+        r#"
+        SELECT l_shipmode, l_comment, l_partkey
+        FROM lineitem
+        ORDER BY l_shipmode;
         "#,
     ];
 

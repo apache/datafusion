@@ -571,7 +571,8 @@ pub(crate) fn swap_join_according_to_unboundedness(
             hash_join.swap_inputs(PartitionMode::CollectLeft)
         }
         (PartitionMode::Auto, _) => {
-            internal_err!("Auto is not acceptable for unbounded input here.")
+            // Use `PartitionMode::Partitioned` as default if `Auto` is selected.
+            hash_join.swap_inputs(PartitionMode::Partitioned)
         }
     }
 }

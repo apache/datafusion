@@ -1025,9 +1025,9 @@ mod tests {
             DataType::UInt32,
             vec![1u32, 2u32],
             Operator::Plus,
-            Int32Array,
-            DataType::Int32,
-            [2i32, 4i32],
+            Int64Array,
+            DataType::Int64,
+            [2i64, 4i64],
         );
         test_coercion!(
             Int32Array,

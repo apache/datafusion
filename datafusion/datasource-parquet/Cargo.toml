@@ -45,6 +45,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-session = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }

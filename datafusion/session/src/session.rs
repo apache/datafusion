@@ -29,7 +29,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-/// Interface for accessing [`SessionState`] from the catalog.
+/// Interface for accessing [`SessionState`] from the catalog and data source.
 ///
 /// This trait provides access to the information needed to plan and execute
 /// queries, such as configuration, functions, and runtime environment. See the
@@ -51,7 +51,7 @@ use std::sync::{Arc, Weak};
 /// the required information.
 ///
 /// ```
-/// # use datafusion_catalog::Session;
+/// # use datafusion_session::Session;
 /// # use datafusion_common::{Result, exec_datafusion_err};
 /// # struct SessionState {}
 /// // Given a `Session` reference, get the concrete `SessionState` reference
@@ -64,7 +64,7 @@ use std::sync::{Arc, Weak};
 /// ```
 ///
 /// [`SessionState`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html
-/// [`TableProvider`]: crate::TableProvider
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 #[async_trait]
 pub trait Session: Send + Sync {
     /// Return the session ID

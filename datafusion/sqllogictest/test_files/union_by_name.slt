@@ -88,38 +88,38 @@ SELECT x FROM t1 UNION ALL BY NAME SELECT x FROM t1 ORDER BY x;
 query II
 (SELECT x FROM t1 UNION ALL SELECT x FROM t1) UNION BY NAME SELECT 5 ORDER BY x;
 ----
-NULL 1
-NULL 3
-5 NULL
+1 NULL
+3 NULL
+NULL 5
 
 query II
 (SELECT x FROM t1 UNION ALL SELECT x FROM t1) UNION ALL BY NAME SELECT 5 ORDER BY x;
 ----
-NULL 1
-NULL 1
-NULL 3
-NULL 3
-NULL 3
-NULL 3
-5 NULL
+1 NULL
+1 NULL
+3 NULL
+3 NULL
+3 NULL
+3 NULL
+NULL 5
 
 query II
 (SELECT x FROM t1 UNION ALL SELECT y FROM t1) UNION BY NAME SELECT 5 ORDER BY x;
 ----
-NULL 1
-NULL 3
-5 NULL
+1 NULL
+3 NULL
+NULL 5
 
 query II
 (SELECT x FROM t1 UNION ALL SELECT y FROM t1) UNION ALL BY NAME SELECT 5 ORDER BY x;
 ----
-NULL 1
-NULL 1
-NULL 3
-NULL 3
-NULL 3
-NULL 3
-5 NULL
+1 NULL
+1 NULL
+3 NULL
+3 NULL
+3 NULL
+3 NULL
+NULL 5
 
 
 # Ambiguous name
@@ -152,22 +152,22 @@ NULL 4
 # Limit
 
 query III
-SELECT 1 UNION BY NAME SELECT * FROM unnest(range(2, 100)) UNION BY NAME SELECT 999 ORDER BY 3, 1 LIMIT 5;
+SELECT 1 UNION BY NAME SELECT * FROM unnest(range(2, 100)) UNION BY NAME SELECT 999 ORDER BY 3, 1, 2 LIMIT 5;
 ----
-NULL NULL 2
-NULL NULL 3
-NULL NULL 4
-NULL NULL 5
-NULL NULL 6
+NULL NULL 999
+1 NULL NULL
+NULL 2 NULL
+NULL 3 NULL
+NULL 4 NULL
 
 query III
 SELECT 1 UNION ALL BY NAME SELECT * FROM unnest(range(2, 100)) UNION ALL BY NAME SELECT 999 ORDER BY 3, 1 LIMIT 5;
 ----
-NULL NULL 2
-NULL NULL 3
-NULL NULL 4
-NULL NULL 5
-NULL NULL 6
+NULL NULL 999
+1 NULL NULL
+NULL 2 NULL
+NULL 3 NULL
+NULL 4 NULL
 
 # Order by
 
@@ -287,3 +287,137 @@ SELECT '0' as c UNION ALL BY NAME SELECT 0 as c;
 ----
 0
 0
+
+# Regression tests for https://github.com/apache/datafusion/issues/15236
+# Ensure that the correct output is produced even if the width of an input node's
+# schema is the same as the resulting schema width after the union is applied.
+
+statement ok
+create table t3 (x varchar(255), y varchar(255), z varchar(255));
+
+statement ok
+create table t4 (x varchar(255), y varchar(255), z varchar(255));
+
+statement ok
+insert into t3 values ('a', 'b', 'c');
+
+statement ok
+insert into t4 values ('a', 'b', 'c');
+
+query TTTT rowsort
+select t3.x, t3.y, t3.z from t3 union by name select t3.z, t3.y, t3.x, 'd' as zz from t3;
+----
+a b c NULL
+a b c d
+
+query TTTT rowsort
+select t3.x, t3.y, t3.z from t3 union by name select t4.z, t4.y, t4.x, 'd' as zz from t4;
+----
+a b c NULL
+a b c d
+
+query TTT rowsort
+select x, y, z from t3 union all by name select z, y, x from t3;
+----
+a b c
+a b c
+
+query TTT rowsort
+select x, y, z from t3 union all by name select z, y, x from t4;
+----
+a b c
+a b c
+
+query TTT
+select x, y, z from t3 union all by name select z, y, x from t4 order by x;
+----
+a b c
+a b c
+
+
+# FIXME: The following should pass without error, but currently it is failing
+# due to differing record batch schemas when the SLT runner collects results.
+# This is due to the following issue: https://github.com/apache/datafusion/issues/15394#issue-2943811768
+#
+# More context can be found here: https://github.com/apache/datafusion/pull/15242#issuecomment-2746563234
+query error
+select x, y, z from t3 union all by name select z, y, x, 'd' as zz from t3;
+----
+DataFusion error: Internal error: Schema mismatch. Previously had
+Schema {
+    fields: [
+        Field {
+            name: "x",
+            data_type: Utf8,
+            nullable: true,
+            dict_id: 0,
+            dict_is_ordered: false,
+            metadata: {},
+        },
+        Field {
+            name: "y",
+            data_type: Utf8,
+            nullable: true,
+            dict_id: 0,
+            dict_is_ordered: false,
+            metadata: {},
+        },
+        Field {
+            name: "z",
+            data_type: Utf8,
+            nullable: true,
+            dict_id: 0,
+            dict_is_ordered: false,
+            metadata: {},
+        },
+        Field {
+            name: "zz",
+            data_type: Utf8,
+            nullable: false,
+            dict_id: 0,
+            dict_is_ordered: false,
+            metadata: {},
+        },
+    ],
+    metadata: {},
+}
+
+Got:
+Schema {
+    fields: [
+        Field {
+            name: "x",
+            data_type: Utf8,
+            nullable: true,
+            dict_id: 0,
+            dict_is_ordered: false,
+            metadata: {},
+        },
+        Field {
+            name: "y",
+            data_type: Utf8,
+            nullable: true,
+            dict_id: 0,
+            dict_is_ordered: false,
+            metadata: {},
+        },
+        Field {
+            name: "z",
+            data_type: Utf8,
+            nullable: true,
+            dict_id: 0,
+            dict_is_ordered: false,
+            metadata: {},
+        },
+        Field {
+            name: "zz",
+            data_type: Utf8,
+            nullable: true,
+            dict_id: 0,
+            dict_is_ordered: false,
+            metadata: {},
+        },
+    ],
+    metadata: {},
+}.
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker

@@ -22,11 +22,12 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
+use crate::source::CsvSource;
+
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::error::ArrowError;
-use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
@@ -41,8 +42,9 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
     FileFormat, FileFormatFactory, DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
 use datafusion_datasource::write::BatchSerializer;
@@ -50,17 +52,16 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_session::Session;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_datasource::source::DataSourceExec;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 use regex::Regex;
-
-use crate::source::CsvSource;
 
 #[derive(Default)]
 /// Factory used to create [`CsvFormat`]
@@ -406,10 +407,9 @@ impl FileFormat for CsvFormat {
     async fn create_physical_plan(
         &self,
         state: &dyn Session,
-        mut conf: FileScanConfig,
+        conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        conf.file_compression_type = self.options.compression.into();
         // Consult configuration options for default values
         let has_header = self
             .options
@@ -419,7 +419,10 @@ impl FileFormat for CsvFormat {
             .options
             .newlines_in_values
             .unwrap_or(state.config_options().catalog.newlines_in_values);
-        conf.new_lines_in_values = newlines_in_values;
+
+        let conf_builder = FileScanConfigBuilder::from(conf)
+            .with_file_compression_type(self.options.compression.into())
+            .with_newlines_in_values(newlines_in_values);
 
         let source = Arc::new(
             CsvSource::new(has_header, self.options.delimiter, self.options.quote)
@@ -427,7 +430,10 @@ impl FileFormat for CsvFormat {
                 .with_terminator(self.options.terminator)
                 .with_comment(self.options.comment),
         );
-        Ok(conf.with_source(source).build())
+
+        let config = conf_builder.with_source(source).build();
+
+        Ok(DataSourceExec::from_data_source(config))
     }
 
     async fn create_writer_physical_plan(
@@ -662,7 +668,7 @@ impl DisplayAs for CsvSink {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "CsvSink(file_groups=",)?;
-                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
