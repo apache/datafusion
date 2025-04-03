@@ -565,7 +565,7 @@ async fn setup_context(
 /// (specified by `max_temp_directory_size` in `DiskManager`)
 #[tokio::test]
 async fn test_disk_spill_limit_reached() -> Result<()> {
-    let ctx = setup_context(1024 * 1024, 1024 * 1024).await?;
+    let ctx = setup_context(1024 * 1024, 1024 * 1024).await?; // 1MB disk limit, 1MB memory limit
 
     let df = ctx
         .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1")
@@ -587,7 +587,7 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
 #[tokio::test]
 async fn test_disk_spill_limit_not_reached() -> Result<()> {
     let disk_spill_limit = 1024 * 1024; // 1MB
-    let ctx = setup_context(disk_spill_limit, 128 * 1024).await?; // 1MB memory limit
+    let ctx = setup_context(disk_spill_limit, 128 * 1024).await?; // 1MB disk limit, 128KB memory limit
 
     let df = ctx
         .sql("select * from generate_series(1, 10000) as t1(v1) order by v1")
