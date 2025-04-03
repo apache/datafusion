@@ -1112,7 +1112,10 @@ impl DisplayAs for SortExec {
 
 impl ExecutionPlan for SortExec {
     fn name(&self) -> &'static str {
-        "SortExec"
+        match self.fetch {
+            Some(_) => "SortExec(TopK)",
+            None => "SortExec",
+        }
     }
 
     fn as_any(&self) -> &dyn Any {
