@@ -1465,8 +1465,8 @@ mod tests {
         // batch1: c1(string)
         let batch1 = string_batch();
 
-        // c1 == 'aaa', should prune via stats
-        let filter = col("c1").eq(lit("aaa"));
+        // c1 != 'bar'
+        let filter = col("c1").not_eq(lit("bar"));
 
         let rt = RoundTrip::new()
             .with_predicate(filter)
@@ -1477,7 +1477,7 @@ mod tests {
         let explain = rt.explain.unwrap();
 
         // check that there was a pruning predicate -> row groups got pruned
-        assert_contains!(&explain, "predicate=c1@0 = aaa");
+        assert_contains!(&explain, "predicate=c1@0 != bar");
 
         // there's a single row group, but we can check that it matched
         // if no pruning was done this would be 0 instead of 1
