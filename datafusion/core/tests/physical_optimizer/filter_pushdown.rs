@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::SortOptions;
 use datafusion::{
     datasource::object_store::ObjectStoreUrl,
     logical_expr::Operator,
@@ -31,11 +32,11 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource_parquet::source::ParquetSource;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::filter_pushdown::PushdownFilter;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::{displayable, ExecutionPlan};
-use insta;
+use datafusion_physical_plan::{filter::FilterExec, sorts::sort::SortExec};
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, OnceLock};
 
@@ -55,8 +56,7 @@ fn test_pushdown_into_scan() {
         -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet
       output:
         Ok:
-          - FilterExec: a@0 = foo
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=a@0 = foo
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=a@0 = foo
     "
     );
 }
@@ -80,8 +80,62 @@ fn test_parquet_pushdown() {
         -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet
       output:
         Ok:
-          - FilterExec: a@0 = foo AND b@1 = bar
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=a@0 = foo AND b@1 = bar
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=a@0 = foo AND b@1 = bar
+    "
+    );
+}
+
+#[test]
+fn test_topk_pushdown() {
+    // filter should be pushed down into the parquet scan with two filters
+    let scan = parquet_scan();
+    let predicate = col_lit_predicate("a", "foo", schema());
+    let filter =
+        Arc::new(FilterExec::try_new(Arc::clone(&predicate), Arc::clone(&scan)).unwrap());
+    let plan = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new_with_schema("a", schema()).unwrap()),
+            SortOptions::default(),
+        )]),
+        filter,
+    ));
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownFilter{}),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        -   FilterExec: a@0 = foo
+        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=a@0 = foo AND DynamicFilterPhysicalExpr [ SortDynamicFilterSource[  ] ]
+    "
+    );
+
+    let sort = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new_with_schema("a", schema()).unwrap()),
+            SortOptions::default(),
+        )]),
+        Arc::clone(&scan),
+    ));
+    let plan = Arc::new(FilterExec::try_new(predicate, sort).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownFilter{}),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ SortDynamicFilterSource[  ] ] AND a@0 = foo
     "
     );
 }
@@ -106,8 +160,9 @@ fn schema() -> &'static SchemaRef {
 /// Return a execution plan that reads from a parquet file
 fn parquet_scan() -> Arc<dyn ExecutionPlan> {
     let schema = schema();
-    let source = ParquetSource::new(TableParquetOptions::default())
-        .with_schema(Arc::clone(schema));
+    let mut options = TableParquetOptions::default();
+    options.global.pushdown_filters = true;
+    let source = ParquetSource::new(options).with_schema(Arc::clone(schema));
     let base_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test://").unwrap(),
         Arc::clone(schema),

@@ -118,7 +118,7 @@ fn push_down_into_children(
 ///   We do this by checking if all children are exact (we return exact up) or if any child is inexact (we return inexact).
 /// - If a node has no children this is equivalent to inexact handling (there is no child to handle the filter).
 ///
-/// See [`FilterPushdown`] for more details on how this works in practice.
+/// See [`PushdownFilter`] for more details on how this works in practice.
 fn pushdown_filters(
     node: &Arc<dyn ExecutionPlan>,
     parent_filters: &[Arc<dyn PhysicalExpr>],
@@ -217,7 +217,7 @@ fn pushdown_filters(
 /// 1. Enter the recursion with no filters.
 /// 2. We find the `FilterExec` node and it tells us that it has a filter (see [`ExecutionPlan::filters_for_pushdown`] and `datafusion::physical_plan::filter::FilterExec`).
 /// 3. We recurse down into it's children (the `DataSourceExec` node) now carrying the filters `[id = 1]`.
-/// 4. The `DataSourceExec` node tells us that it can handle the filter and we mark it as handled exact (see [`ExecutionPlan::push_down_filters_from_parents`]).
+/// 4. The `DataSourceExec` node tells us that it can handle the filter and we mark it as handled exact (see [`ExecutionPlan::with_filter_pushdown_result`]).
 /// 5. Since the `DataSourceExec` node has no children we recurse back up the tree.
 /// 6. We now tell the `FilterExec` node that it has a child that can handle the filter and we mark it as handled exact (see [`ExecutionPlan::with_filter_pushdown_result`]).
 ///    The `FilterExec` node can now return a new execution plan, either a copy of itself without that filter or if has no work left to do it can even return the child node directly.
@@ -265,7 +265,7 @@ fn pushdown_filters(
 // └──────────────────────┘
 /// ```
 ///
-/// We want to push down the filters `[id=1]` to the [`DataSourceExec`] node, but can't push down `[cost>50]` because it requires the `ProjectionExec` node to be executed first:
+/// We want to push down the filters [id=1] to the `DataSourceExec` node, but can't push down `cost>50` because it requires the `ProjectionExec` node to be executed first:
 ///
 /// ```text
 // ┌──────────────────────┐
@@ -362,8 +362,8 @@ fn pushdown_filters(
 /// The point here is that:
 /// 1. We cannot push down `sum > 10` through the `AggregateExec` node into the `DataSourceExec` node.
 ///    Any filters above the `AggregateExec` node are not pushed down.
-///    This is determined by calling [`ExecutionPlan::supports_filter_pushdown`] on the `AggregateExec` node.
-/// 2. We need to keep recursing into the tree so that we can discover the other `FilterExec` node and push down the `[id=1]` filter.
+///    This is determined by calling [`ExecutionPlan::filter_pushdown_request`] on the `AggregateExec` node.
+/// 2. We need to keep recursing into the tree so that we can discover the other `FilterExec` node and push down the [id=1] filter.
 ///
 /// It is also possible to push down filters through joins and from joins.
 /// For example, a hash join where we build a hash table of the left side and probe the right side
@@ -393,7 +393,7 @@ fn pushdown_filters(
 /// ```
 ///
 /// There are two pushdowns we can do here:
-/// 1. Push down the `[d.size > 100]` filter through the `HashJoinExec` node to the `DataSourceExec` node for the `departments` table.
+/// 1. Push down the `d.size > 100` filter through the `HashJoinExec` node to the `DataSourceExec` node for the `departments` table.
 /// 2. Push down the hash table state from the `HashJoinExec` node to the `DataSourceExec` node to avoid reading
 ///    rows from teh `users` table that will be eliminated by the join.
 ///    This can be done via a bloom filter or similar.

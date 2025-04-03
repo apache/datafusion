@@ -541,24 +541,6 @@ pub enum FilterSupport {
     HandledExact,
 }
 
-/// An extension trait to provide a default implementation of [`ExecutionPlan::supports_filter_pushdown`]
-/// that allows all filters to be pushed down.
-/// This is useful for nodes that don't modify the schema or cardinality of the data.
-/// For example, `RepartitionExec` and `CoalescePartitionsExec` can push down all filters.
-pub trait TransparentFilterPushdown {
-    /// Returns a vector of [`FilterPushdownAllowed`] for each filter.
-    /// The default implementation returns [`FilterPushdownAllowed::Allowed`] for all filters.
-    fn supports_filter_pushdown(
-        &self,
-        filters: &[Arc<dyn PhysicalExpr>],
-    ) -> Result<Vec<FilterPushdownAllowed>> {
-        Ok(filters
-            .iter()
-            .map(|f| FilterPushdownAllowed::Allowed(Arc::clone(f)))
-            .collect())
-    }
-}
-
 /// The combined result of a filter pushdown operation.
 /// This includes:
 /// * The inner plan that was produced by the pushdown operation.

@@ -213,8 +213,9 @@ impl ExecutionPlan for DataSourceExec {
         own_filters_result: &[FilterSupport],
         parent_filters_remaining: &[Arc<dyn PhysicalExpr>],
     ) -> datafusion_common::Result<Option<ExecutionPlanFilterPushdownResult>> {
-        assert!(own_filters_result.is_empty()); // We didn't give out any filters, this should be empty!
-                                                // Forward filter pushdown to our data source.
+        // We didn't give out any filters, this should be empty!
+        assert!(own_filters_result.is_empty());
+        // Forward filter pushdown to our data source.
         if let Some(pushdown_result) = self
             .data_source
             .push_down_filters(parent_filters_remaining)?

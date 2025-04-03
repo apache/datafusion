@@ -442,15 +442,16 @@ impl ExecutionPlan for FilterExec {
         &self,
         filters: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Vec<FilterPushdownAllowed>> {
-        // Note: we don't have to worry about / deal with the projection here because
-        // `FilterExec`'s projection can only remove columns, not add them.
-        // Thus if a filter was valid applied to our output it should be valid applied to our input.
-        // We do however need to remap the columns.
-        let input_schema = self.input.schema();
-        let filters = filters
-            .iter()
-            .map(|f| reassign_predicate_columns(Arc::clone(f), &input_schema, false))
-            .collect::<Result<Vec<_>>>()?;
+        let filters = if self.projection.is_some() {
+            let input_schema = self.input.schema();
+            filters
+                .iter()
+                .map(|f| reassign_predicate_columns(Arc::clone(f), &input_schema, false))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            filters.to_vec()
+        };
+
         Ok(filters
             .into_iter()
             .map(FilterPushdownAllowed::Allowed)
@@ -458,10 +459,12 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn filters_for_pushdown(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
-        Ok(split_conjunction(self.predicate())
-            .iter()
-            .map(|f| Arc::clone(f))
-            .collect())
+        let predicate = reassign_predicate_columns(
+            Arc::clone(&self.predicate),
+            &self.input.schema(),
+            false,
+        )?;
+        Ok(vec![predicate])
     }
 
     fn with_filter_pushdown_result(

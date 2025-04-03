@@ -29,7 +29,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::execution_plan::{CardinalityEffect, TransparentFilterPushdown};
+use crate::execution_plan::{CardinalityEffect, FilterPushdownAllowed};
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
@@ -723,9 +723,17 @@ impl ExecutionPlan for RepartitionExec {
             new_partitioning,
         )?)))
     }
-}
 
-impl TransparentFilterPushdown for RepartitionExec {}
+    fn filter_pushdown_request(
+        &self,
+        filters: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Vec<FilterPushdownAllowed>> {
+        Ok(filters
+            .iter()
+            .map(|f| FilterPushdownAllowed::Allowed(Arc::clone(f)))
+            .collect())
+    }
+}
 
 impl RepartitionExec {
     /// Create a new RepartitionExec, that produces output `partitioning`, and

@@ -32,9 +32,10 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExpr;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
-use crate::execution_plan::{CardinalityEffect, TransparentFilterPushdown};
+use crate::execution_plan::{CardinalityEffect, FilterPushdownAllowed};
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -212,9 +213,17 @@ impl ExecutionPlan for CoalesceBatchesExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
     }
-}
 
-impl TransparentFilterPushdown for CoalesceBatchesExec {}
+    fn filter_pushdown_request(
+        &self,
+        filters: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Vec<FilterPushdownAllowed>> {
+        Ok(filters
+            .iter()
+            .map(|f| FilterPushdownAllowed::Allowed(Arc::clone(f)))
+            .collect())
+    }
+}
 
 /// Stream for [`CoalesceBatchesExec`]. See [`CoalesceBatchesExec`] for more details.
 struct CoalesceBatchesStream {

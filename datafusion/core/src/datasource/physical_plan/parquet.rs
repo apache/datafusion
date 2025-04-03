@@ -68,7 +68,6 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use datafusion_datasource::file_groups::FileGroup;
     use futures::StreamExt;
-    use insta;
     use insta::assert_snapshot;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
