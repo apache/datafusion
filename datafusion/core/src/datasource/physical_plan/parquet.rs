@@ -1510,6 +1510,8 @@ mod tests {
         // Should not contain a pruning predicate (since nothing can be pruned)
         let explain = rt.explain.unwrap();
 
+        // When both matched and pruned are 0, it means that the pruning predicate
+        // was not used at all.
         assert_contains!(&explain, "row_groups_matched_statistics=0");
         assert_contains!(&explain, "row_groups_pruned_statistics=0");
 
