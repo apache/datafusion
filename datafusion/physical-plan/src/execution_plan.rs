@@ -483,7 +483,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// That is, a query such as `WHERE a = 1 AND b = 2` would return two
     /// filters: `a = 1` and `b = 2`.
     /// They can always be assembled into a single filter using
-    /// [`crate::physical_expr::split_conjunction`].
+    /// [`split_conjunction`][datafusion_physical_expr::split_conjunction].
     fn filters_for_pushdown(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
         Ok(Vec::new())
     }
