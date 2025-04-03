@@ -3215,6 +3215,11 @@ select array_agg(column2 order by column1) ignore nulls from t;
 ----
 [c, a, a, , b]
 
+query ?
+select array_agg(DISTINCT column2 order by column2) ignore nulls from t;
+----
+[, a, b, c]
+
 statement ok
 drop table t;
 
