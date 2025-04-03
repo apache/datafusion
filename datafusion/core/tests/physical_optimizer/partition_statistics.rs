@@ -22,7 +22,7 @@ mod test {
     use datafusion::prelude::SessionContext;
     use datafusion_catalog::TableProvider;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{ScalarValue, Statistics};
+    use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr_common::operator::Operator;
     use datafusion_physical_expr::expressions::{binary, lit, Column};
@@ -35,6 +35,18 @@ mod test {
     use datafusion_physical_plan::ExecutionPlan;
     use std::sync::Arc;
 
+    /// Creates a test table with statistics from the test data directory.
+    ///
+    /// This function:
+    /// - Creates an external table from './tests/data/test_statistics_per_partition'
+    /// - If we set the `target_partition` to `2, the data contains 2 partitions, each with 2 rows
+    /// - Each partition has an "id" column (INT) with the following values:
+    ///   - First partition: [3, 4]
+    ///   - Second partition: [1, 2]
+    /// - Each row is 110 bytes in size
+    ///
+    /// @param target_partition Optional parameter to set the target partitions
+    /// @return ExecutionPlan representing the scan of the table with statistics
     async fn generate_listing_table_with_statistics(
         target_partition: Option<usize>,
     ) -> Arc<dyn ExecutionPlan> {
@@ -63,31 +75,37 @@ mod test {
             .unwrap()
     }
 
-    fn check_unchanged_statistics(statistics: Vec<Statistics>) {
-        // Check the statistics of each partition
-        for stat in &statistics {
-            assert_eq!(stat.num_rows, Precision::Exact(2));
-            // First column (id) should have non-null values
-            assert_eq!(stat.column_statistics[0].null_count, Precision::Exact(0));
+    /// Helper function to create expected statistics for a partition with Int32 column
+    fn create_partition_statistics(
+        num_rows: usize,
+        total_byte_size: usize,
+        min_value: i32,
+        max_value: i32,
+        include_date_column: bool,
+    ) -> Statistics {
+        let mut column_stats = vec![ColumnStatistics {
+            null_count: Precision::Exact(0),
+            max_value: Precision::Exact(ScalarValue::Int32(Some(max_value))),
+            min_value: Precision::Exact(ScalarValue::Int32(Some(min_value))),
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+        }];
+
+        if include_date_column {
+            column_stats.push(ColumnStatistics {
+                null_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+            });
         }
 
-        // Verify specific id values for each partition
-        assert_eq!(
-            statistics[0].column_statistics[0].max_value,
-            Precision::Exact(ScalarValue::Int32(Some(4)))
-        );
-        assert_eq!(
-            statistics[0].column_statistics[0].min_value,
-            Precision::Exact(ScalarValue::Int32(Some(3)))
-        );
-        assert_eq!(
-            statistics[1].column_statistics[0].max_value,
-            Precision::Exact(ScalarValue::Int32(Some(2)))
-        );
-        assert_eq!(
-            statistics[1].column_statistics[0].min_value,
-            Precision::Exact(ScalarValue::Int32(Some(1)))
-        );
+        Statistics {
+            num_rows: Precision::Exact(num_rows),
+            total_byte_size: Precision::Exact(total_byte_size),
+            column_statistics: column_stats,
+        }
     }
 
     #[tokio::test]
@@ -95,13 +113,14 @@ mod test {
     {
         let scan = generate_listing_table_with_statistics(Some(2)).await;
         let statistics = scan.statistics_by_partition()?;
+        let expected_statistic_partition_1 =
+            create_partition_statistics(2, 110, 3, 4, true);
+        let expected_statistic_partition_2 =
+            create_partition_statistics(2, 110, 1, 2, true);
         // Check the statistics of each partition
         assert_eq!(statistics.len(), 2);
-        for stat in &statistics {
-            assert_eq!(stat.column_statistics.len(), 2);
-            assert_eq!(stat.total_byte_size, Precision::Exact(110));
-        }
-        check_unchanged_statistics(statistics);
+        assert_eq!(statistics[0], expected_statistic_partition_1);
+        assert_eq!(statistics[1], expected_statistic_partition_2);
         Ok(())
     }
 
@@ -114,11 +133,14 @@ mod test {
             vec![(Arc::new(Column::new("id", 0)), "id".to_string())];
         let projection = ProjectionExec::try_new(exprs, scan)?;
         let statistics = projection.statistics_by_partition()?;
-        for stat in &statistics {
-            assert_eq!(stat.column_statistics.len(), 1);
-            assert_eq!(stat.total_byte_size, Precision::Exact(8));
-        }
-        check_unchanged_statistics(statistics);
+        let expected_statistic_partition_1 =
+            create_partition_statistics(2, 8, 3, 4, false);
+        let expected_statistic_partition_2 =
+            create_partition_statistics(2, 8, 1, 2, false);
+        // Check the statistics of each partition
+        assert_eq!(statistics.len(), 2);
+        assert_eq!(statistics[0], expected_statistic_partition_1);
+        assert_eq!(statistics[1], expected_statistic_partition_2);
         Ok(())
     }
 
@@ -138,55 +160,20 @@ mod test {
         );
         let mut sort_exec = Arc::new(sort.clone());
         let statistics = sort_exec.statistics_by_partition()?;
+        let expected_statistic_partition =
+            create_partition_statistics(4, 220, 1, 4, true);
         assert_eq!(statistics.len(), 1);
-        assert_eq!(statistics[0].num_rows, Precision::Exact(4));
-        assert_eq!(statistics[0].column_statistics.len(), 2);
-        assert_eq!(statistics[0].total_byte_size, Precision::Exact(220));
-        assert_eq!(
-            statistics[0].column_statistics[0].null_count,
-            Precision::Exact(0)
-        );
-        assert_eq!(
-            statistics[0].column_statistics[0].max_value,
-            Precision::Exact(ScalarValue::Int32(Some(4)))
-        );
-        assert_eq!(
-            statistics[0].column_statistics[0].min_value,
-            Precision::Exact(ScalarValue::Int32(Some(1)))
-        );
+        assert_eq!(statistics[0], expected_statistic_partition);
+
         sort_exec = Arc::new(sort.with_preserve_partitioning(true));
+        let expected_statistic_partition_1 =
+            create_partition_statistics(2, 110, 3, 4, true);
+        let expected_statistic_partition_2 =
+            create_partition_statistics(2, 110, 1, 2, true);
         let statistics = sort_exec.statistics_by_partition()?;
         assert_eq!(statistics.len(), 2);
-        assert_eq!(statistics[0].num_rows, Precision::Exact(2));
-        assert_eq!(statistics[1].num_rows, Precision::Exact(2));
-        assert_eq!(statistics[0].column_statistics.len(), 2);
-        assert_eq!(statistics[1].column_statistics.len(), 2);
-        assert_eq!(statistics[0].total_byte_size, Precision::Exact(110));
-        assert_eq!(statistics[1].total_byte_size, Precision::Exact(110));
-        assert_eq!(
-            statistics[0].column_statistics[0].null_count,
-            Precision::Exact(0)
-        );
-        assert_eq!(
-            statistics[0].column_statistics[0].max_value,
-            Precision::Exact(ScalarValue::Int32(Some(4)))
-        );
-        assert_eq!(
-            statistics[0].column_statistics[0].min_value,
-            Precision::Exact(ScalarValue::Int32(Some(3)))
-        );
-        assert_eq!(
-            statistics[1].column_statistics[0].null_count,
-            Precision::Exact(0)
-        );
-        assert_eq!(
-            statistics[1].column_statistics[0].max_value,
-            Precision::Exact(ScalarValue::Int32(Some(2)))
-        );
-        assert_eq!(
-            statistics[1].column_statistics[0].min_value,
-            Precision::Exact(ScalarValue::Int32(Some(1)))
-        );
+        assert_eq!(statistics[0], expected_statistic_partition_1);
+        assert_eq!(statistics[1], expected_statistic_partition_2);
         Ok(())
     }
 
@@ -202,48 +189,33 @@ mod test {
         )?;
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, scan)?);
-        let _full_statistics = filter.statistics()?;
-        // The full statistics is invalid, at least, we can improve the selectivity estimation of the filter
-        /*
-        Statistics {
-           num_rows: Inexact(0),
-           total_byte_size: Inexact(0),
-           column_statistics: [
-               ColumnStatistics {
-                   null_count: Exact(0),
-                   max_value: Exact(NULL),
-                   min_value: Exact(NULL),
-                   sum_value: Exact(NULL),
-                   distinct_count: Exact(0),
-               },
-               ColumnStatistics {
-                   null_count: Exact(0),
-                   max_value: Exact(NULL),
-                   min_value: Exact(NULL),
-                   sum_value: Exact(NULL),
-                   distinct_count: Exact(0),
-               },
-           ],
-        }
-        */
+        let full_statistics = filter.statistics()?;
+        let expected_full_statistic = Statistics {
+            num_rows: Precision::Inexact(0),
+            total_byte_size: Precision::Inexact(0),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Null),
+                    min_value: Precision::Exact(ScalarValue::Null),
+                    sum_value: Precision::Exact(ScalarValue::Null),
+                    distinct_count: Precision::Exact(0),
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Null),
+                    min_value: Precision::Exact(ScalarValue::Null),
+                    sum_value: Precision::Exact(ScalarValue::Null),
+                    distinct_count: Precision::Exact(0),
+                },
+            ],
+        };
+        assert_eq!(full_statistics, expected_full_statistic);
+
         let statistics = filter.statistics_by_partition()?;
-        // Also the statistics of each partition is also invalid due to above
-        // But we can ensure the current behavior by tests
         assert_eq!(statistics.len(), 2);
-        for stat in &statistics {
-            assert_eq!(stat.column_statistics.len(), 2);
-            assert_eq!(stat.total_byte_size, Precision::Inexact(0));
-            assert_eq!(stat.num_rows, Precision::Inexact(0));
-            assert_eq!(stat.column_statistics[0].null_count, Precision::Exact(0));
-            assert_eq!(
-                stat.column_statistics[0].max_value,
-                Precision::Exact(ScalarValue::Null)
-            );
-            assert_eq!(
-                stat.column_statistics[0].min_value,
-                Precision::Exact(ScalarValue::Null)
-            );
-        }
+        assert_eq!(statistics[0], expected_full_statistic);
+        assert_eq!(statistics[1], expected_full_statistic);
         Ok(())
     }
 
@@ -254,63 +226,18 @@ mod test {
         let statistics = union_exec.statistics_by_partition()?;
         // Check that we have 4 partitions (2 from each scan)
         assert_eq!(statistics.len(), 4);
-
+        let expected_statistic_partition_1 =
+            create_partition_statistics(2, 110, 3, 4, true);
+        let expected_statistic_partition_2 =
+            create_partition_statistics(2, 110, 1, 2, true);
         // Verify first partition (from first scan)
-        assert_eq!(statistics[0].num_rows, Precision::Exact(2));
-        assert_eq!(statistics[0].total_byte_size, Precision::Exact(110));
-        assert_eq!(statistics[0].column_statistics.len(), 2);
-        assert_eq!(
-            statistics[0].column_statistics[0].null_count,
-            Precision::Exact(0)
-        );
-        assert_eq!(
-            statistics[0].column_statistics[0].max_value,
-            Precision::Exact(ScalarValue::Int32(Some(4)))
-        );
-        assert_eq!(
-            statistics[0].column_statistics[0].min_value,
-            Precision::Exact(ScalarValue::Int32(Some(3)))
-        );
-
+        assert_eq!(statistics[0], expected_statistic_partition_1);
         // Verify second partition (from first scan)
-        assert_eq!(statistics[1].num_rows, Precision::Exact(2));
-        assert_eq!(statistics[1].total_byte_size, Precision::Exact(110));
-        assert_eq!(
-            statistics[1].column_statistics[0].null_count,
-            Precision::Exact(0)
-        );
-        assert_eq!(
-            statistics[1].column_statistics[0].max_value,
-            Precision::Exact(ScalarValue::Int32(Some(2)))
-        );
-        assert_eq!(
-            statistics[1].column_statistics[0].min_value,
-            Precision::Exact(ScalarValue::Int32(Some(1)))
-        );
-
+        assert_eq!(statistics[1], expected_statistic_partition_2);
         // Verify third partition (from second scan - same as first partition)
-        assert_eq!(statistics[2].num_rows, Precision::Exact(2));
-        assert_eq!(statistics[2].total_byte_size, Precision::Exact(110));
-        assert_eq!(
-            statistics[2].column_statistics[0].max_value,
-            Precision::Exact(ScalarValue::Int32(Some(4)))
-        );
-        assert_eq!(
-            statistics[2].column_statistics[0].min_value,
-            Precision::Exact(ScalarValue::Int32(Some(3)))
-        );
-
+        assert_eq!(statistics[2], expected_statistic_partition_1);
         // Verify fourth partition (from second scan - same as second partition)
-        assert_eq!(statistics[3].num_rows, Precision::Exact(2));
-        assert_eq!(statistics[3].total_byte_size, Precision::Exact(110));
-        assert_eq!(
-            statistics[3].column_statistics[0].max_value,
-            Precision::Exact(ScalarValue::Int32(Some(2)))
-        );
-        assert_eq!(
-            statistics[3].column_statistics[0].min_value,
-            Precision::Exact(ScalarValue::Int32(Some(1)))
-        );
+        assert_eq!(statistics[3], expected_statistic_partition_2);
 
         Ok(())
     }
