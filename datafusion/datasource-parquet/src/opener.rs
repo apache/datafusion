@@ -147,9 +147,6 @@ impl FileOpener for ParquetOpener {
                 &predicate_creation_errors,
             );
 
-            let enable_page_index =
-                should_enable_page_index(enable_page_index, &page_pruning_predicate);
-
             // Now check if we should load the page index
             if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
                 metadata = load_page_index(
