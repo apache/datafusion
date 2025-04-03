@@ -21,6 +21,7 @@
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
 use std::mem;
+use std::sync::Arc;
 
 /// Represents statistics data grouped by partition.
 ///
@@ -28,42 +29,24 @@ use std::mem;
 /// of a distributed dataset, allowing access to statistics by partition index.
 #[derive(Debug, Clone)]
 pub struct PartitionedStatistics {
-    inner: Vec<Statistics>,
+    inner: Vec<Arc<Statistics>>,
 }
 
 impl PartitionedStatistics {
-    /// Creates a new PartitionedStatistics instance from a vector of Statistics.
-    pub fn new(statistics: Vec<Statistics>) -> Self {
+    pub fn new(statistics: Vec<Arc<Statistics>>) -> Self {
         Self { inner: statistics }
     }
 
-    /// Returns the number of partitions.
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Returns true if there are no partitions.
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    /// Returns the statistics for the specified partition.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `partition_idx` is out of bounds.
     pub fn statistics(&self, partition_idx: usize) -> &Statistics {
         &self.inner[partition_idx]
     }
 
-    /// Returns the statistics for the specified partition, or None if the index is out of bounds.
     pub fn get_statistics(&self, partition_idx: usize) -> Option<&Statistics> {
-        self.inner.get(partition_idx)
+        self.inner.get(partition_idx).map(|arc| arc.as_ref())
     }
 
-    /// Returns an iterator over the statistics.
     pub fn iter(&self) -> impl Iterator<Item = &Statistics> {
-        self.inner.iter()
+        self.inner.iter().map(|arc| arc.as_ref())
     }
 }
 
