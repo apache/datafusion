@@ -191,12 +191,19 @@ strip = false            # Retain debug info for flamegraphs
 inherits = "dev"
 incremental = false
 
-# ci turns off debug info, etc for dependencies to allow for smaller binaries making caching more effective
+# ci turns off debug info, etc. for dependencies to allow for smaller binaries making caching more effective
 [profile.ci.package."*"]
 debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# release inherited profile keeping debug information and symbols
+# for mem/cpu profiling
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
 
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)

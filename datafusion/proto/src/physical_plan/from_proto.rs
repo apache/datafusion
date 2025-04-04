@@ -565,7 +565,11 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             range: val.range.as_ref().map(|v| v.try_into()).transpose()?,
-            statistics: val.statistics.as_ref().map(|v| v.try_into()).transpose()?,
+            statistics: val
+                .statistics
+                .as_ref()
+                .map(|v| v.try_into().map(Arc::new))
+                .transpose()?,
             extensions: None,
             metadata_size_hint: None,
         })

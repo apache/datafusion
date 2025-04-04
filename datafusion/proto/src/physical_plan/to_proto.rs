@@ -449,7 +449,7 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
-            statistics: pf.statistics.as_ref().map(|s| s.into()),
+            statistics: pf.statistics.as_ref().map(|s| s.as_ref().into()),
         })
     }
 }
@@ -507,7 +507,7 @@ pub fn serialize_file_scan_config(
 
     Ok(protobuf::FileScanExecConf {
         file_groups,
-        statistics: Some((&conf.statistics).into()),
+        statistics: Some((&conf.file_source.statistics().unwrap()).into()),
         limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
         projection: conf
             .projection
