@@ -312,11 +312,10 @@ Employee Table
 | 5   | 70000 |
 +-----+-------+
 ```
-```sql
 
+```sql
 SELECT nth_value(salary, 2) OVER (ORDER BY salary) AS nth_value
 FROM employees;
-
 +-----------+
 | nth_value |
 +-----------+
