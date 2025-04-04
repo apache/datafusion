@@ -29,6 +29,7 @@ use arrow::{
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr_common::utils::is_supported_datatype_for_bounds_eval;
 
 /// Represents the column at a given index in a RecordBatch
 ///
@@ -140,6 +141,14 @@ impl PhysicalExpr for Column {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
+    }
+
+    fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        if let Ok(field) = schema.field_with_name(self.name()) {
+            is_supported_datatype_for_bounds_eval(field.data_type())
+        } else {
+            false
+        }
     }
 }
 

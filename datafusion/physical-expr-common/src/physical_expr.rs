@@ -25,7 +25,7 @@ use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -126,6 +126,25 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
         not_impl_err!("Not implemented for {self}")
     }
 
+    /// Checks support of bounds evaluation for this expression, before evaluating bounds.
+    /// Returns None if bounds evaluation is not supported.
+    fn evaluate_bounds_checked(
+        &self,
+        children: &[&Interval],
+        schema: &SchemaRef,
+    ) -> Result<Option<Interval>> {
+        if self.supports_bounds_evaluation(schema) {
+            Some(self.evaluate_bounds(children)).transpose()
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Indicates whether interval arithmetic is supported for this expression.
+    fn supports_bounds_evaluation(&self, _schema: &SchemaRef) -> bool {
+        false
+    }
+
     /// Updates bounds for child expressions, given a known interval for this
     /// expression.
     ///
@@ -178,13 +197,26 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// statistics accordingly. The default implementation simply creates an
     /// unknown output distribution by combining input ranges. This logic loses
     /// distribution information, but is a safe default.
-    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
-        let children_ranges = children
+    fn evaluate_statistics(
+        &self,
+        children: &[&Distribution],
+        schema: &SchemaRef,
+    ) -> Result<Distribution> {
+        let child_ranges = children
             .iter()
             .map(|c| c.range())
             .collect::<Result<Vec<_>>>()?;
-        let children_ranges_refs = children_ranges.iter().collect::<Vec<_>>();
-        let output_interval = self.evaluate_bounds(children_ranges_refs.as_slice())?;
+        let child_ranges = child_ranges.iter().collect::<Vec<_>>();
+
+        let output_interval =
+            if let Some(i) = self.evaluate_bounds_checked(&child_ranges, schema)? {
+                i
+            } else {
+                // fall back to unbounded interval
+                self.data_type(schema.as_ref())
+                    .and_then(|dt| Interval::make_unbounded(&dt))?
+            };
+
         let dt = output_interval.data_type();
         if dt.eq(&DataType::Boolean) {
             let p = if output_interval.eq(&Interval::CERTAINLY_TRUE) {
@@ -411,7 +443,7 @@ where
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
 /// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
 /// # #[derive(Debug, Hash, PartialOrd, PartialEq)]
-/// # struct MyExpr {};
+/// # struct MyExpr {}
 /// # impl PhysicalExpr for MyExpr {fn as_any(&self) -> &dyn Any { unimplemented!() }
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
 /// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }

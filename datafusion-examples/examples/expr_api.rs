@@ -24,7 +24,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::stats::Precision;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{ColumnStatistics, DFSchema};
+use datafusion::common::{internal_datafusion_err, ColumnStatistics, DFSchema};
 use datafusion::common::{ScalarValue, ToDFSchema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::first_last::first_value_udaf;
@@ -264,6 +264,8 @@ fn range_analysis_demo() -> Result<()> {
     // Now, we invoke the analysis code to perform the range analysis
     let df_schema = DFSchema::try_from(schema)?;
     let physical_expr = SessionContext::new().create_physical_expr(expr, &df_schema)?;
+
+    assert!(physical_expr.supports_bounds_evaluation(df_schema.as_ref()));
     let analysis_result = analyze(
         &physical_expr,
         AnalysisContext::new(boundaries),
@@ -305,10 +307,17 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
         distinct_count: Precision::Absent,
     };
 
+    let field = schema.fields().first().ok_or_else(|| {
+        internal_datafusion_err!("schema does not have a field at index 0")
+    })?;
+
     // We can then build our expression boundaries from the column statistics
     // allowing the analysis to be more precise.
-    let initial_boundaries =
-        vec![ExprBoundaries::try_from_column(&schema, &column_stats, 0)?];
+    let initial_boundaries = vec![ExprBoundaries::try_from_column(
+        field.as_ref(),
+        &column_stats,
+        0,
+    )?];
 
     // With the above we can perform the boundary analysis similar to the previous
     // example.
@@ -317,6 +326,8 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
     // Analysis case id >= 5000
     let physical_expr =
         SessionContext::new().create_physical_expr(id_greater_5000, &df_schema)?;
+    assert!(physical_expr.supports_bounds_evaluation(df_schema.as_ref()));
+
     let analysis = analyze(
         &physical_expr,
         AnalysisContext::new(initial_boundaries.clone()),
@@ -359,7 +370,8 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
     let age_between_18_25 = col("age").gt(lit(18i64)).and(col("age").lt_eq(lit(25)));
 
     // As always we need to tell DataFusion the type of the column.
-    let schema = Arc::new(Schema::new(vec![make_field("age", DataType::Int64)]));
+    let age_field = make_field("age", DataType::Int64);
+    let schema = Arc::new(Schema::new(vec![age_field.clone()]));
 
     // Similarly to the example in `boundary_analysis_and_selectivity_demo` we
     // can establish column statistics that can be used to describe certain
@@ -372,8 +384,11 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
         distinct_count: Precision::Absent,
     };
 
-    let initial_boundaries =
-        vec![ExprBoundaries::try_from_column(&schema, &column_stats, 0)?];
+    let initial_boundaries = vec![ExprBoundaries::try_from_column(
+        &age_field,
+        &column_stats,
+        0,
+    )?];
 
     // Before we run the analysis pass; let us describe what we can infer from
     // the initial information.
@@ -394,6 +409,9 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
 
     let physical_expr =
         SessionContext::new().create_physical_expr(age_between_18_25, &df_schema)?;
+
+    assert!(physical_expr.supports_bounds_evaluation(df_schema.as_ref()));
+
     let analysis = analyze(
         &physical_expr,
         // We re-use initial_boundaries elsewhere so we must clone it.
@@ -446,7 +464,11 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
     let physical_expr = SessionContext::new()
         .create_physical_expr(age_greater_than_60_less_than_18, &df_schema)?;
 
-    // Since we don't handle interval arithmetic for `OR` operator this will error out.
+    // This check will return false since we don't handle interval arithmetic
+    // for `OR` operator.
+    assert!(!physical_expr.supports_bounds_evaluation(df_schema.inner()));
+
+    // In consequence, this will error out.
     let analysis = analyze(
         &physical_expr,
         AnalysisContext::new(initial_boundaries),
