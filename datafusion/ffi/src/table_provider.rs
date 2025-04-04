@@ -625,9 +625,6 @@ mod tests {
 
         ctx.register_table("t", Arc::new(foreign_table_provider))?;
 
-        let df = ctx.sql("SELECT COUNT(*) as cnt FROM t").await?;
-        let plan = df.create_physical_plan().await?;
-
         let result = ctx
             .sql("SELECT COUNT(*) as cnt FROM t")
             .await?
