@@ -24,6 +24,7 @@ use std::sync::{Arc, LazyLock};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
+use datafusion::execution::DiskManager;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
@@ -40,6 +41,7 @@ use clap::Parser;
 use datafusion::common::config_err;
 use datafusion::config::ConfigOptions;
 use mimalloc::MiMalloc;
+use datafusion::execution::disk_manager::DiskManagerConfig;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -125,6 +127,14 @@ struct Args {
 
     #[clap(long, help = "Enables console syntax highlighting")]
     color: bool,
+
+    #[clap(
+        short = 'd',
+        long,
+        help = "Available disk space for spilling queries (e.g. '10g'), default to None (no limit)",
+        value_parser(extract_disk_limit)
+    )]
+    disk_limit: Option<usize>,
 }
 
 #[tokio::main]
@@ -163,6 +173,18 @@ async fn main_inner() -> Result<()> {
             PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
         };
         rt_builder = rt_builder.with_memory_pool(pool)
+    }
+
+    // set disk limit
+    if let Some(disk_limit) = args.disk_limit {
+        let disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
+
+        let disk_manager = Arc::try_unwrap(disk_manager)
+            .expect("DiskManager should be a single instance")
+            .with_max_temp_directory_size(disk_limit.try_into().unwrap())?;
+
+        let disk_config = DiskManagerConfig::new_existing(Arc::new(disk_manager));
+        rt_builder = rt_builder.with_disk_manager(disk_config);
     }
 
     let runtime_env = rt_builder.build_arc()?;
@@ -300,21 +322,20 @@ impl ByteUnit {
     }
 }
 
-fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
-    static BYTE_SUFFIXES: LazyLock<HashMap<&'static str, ByteUnit>> =
-        LazyLock::new(|| {
-            let mut m = HashMap::new();
-            m.insert("b", ByteUnit::Byte);
-            m.insert("k", ByteUnit::KiB);
-            m.insert("kb", ByteUnit::KiB);
-            m.insert("m", ByteUnit::MiB);
-            m.insert("mb", ByteUnit::MiB);
-            m.insert("g", ByteUnit::GiB);
-            m.insert("gb", ByteUnit::GiB);
-            m.insert("t", ByteUnit::TiB);
-            m.insert("tb", ByteUnit::TiB);
-            m
-        });
+fn parse_size_string(size: &str, label: &str) -> Result<usize, String> {
+    static BYTE_SUFFIXES: LazyLock<HashMap<&'static str, ByteUnit>> = LazyLock::new(|| {
+        let mut m = HashMap::new();
+        m.insert("b", ByteUnit::Byte);
+        m.insert("k", ByteUnit::KiB);
+        m.insert("kb", ByteUnit::KiB);
+        m.insert("m", ByteUnit::MiB);
+        m.insert("mb", ByteUnit::MiB);
+        m.insert("g", ByteUnit::GiB);
+        m.insert("gb", ByteUnit::GiB);
+        m.insert("t", ByteUnit::TiB);
+        m.insert("tb", ByteUnit::TiB);
+        m
+    });
 
     static SUFFIX_REGEX: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"^(-?[0-9]+)([a-z]+)?$").unwrap());
@@ -323,22 +344,30 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
     if let Some(caps) = SUFFIX_REGEX.captures(&lower) {
         let num_str = caps.get(1).unwrap().as_str();
         let num = num_str.parse::<usize>().map_err(|_| {
-            format!("Invalid numeric value in memory pool size '{}'", size)
+            format!("Invalid numeric value in {} '{}'", label, size)
         })?;
 
         let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("b");
-        let unit = &BYTE_SUFFIXES
+        let unit = BYTE_SUFFIXES
             .get(suffix)
-            .ok_or_else(|| format!("Invalid memory pool size '{}'", size))?;
-        let memory_pool_size = usize::try_from(unit.multiplier())
+            .ok_or_else(|| format!("Invalid {} '{}'", label, size))?;
+        let total_bytes = usize::try_from(unit.multiplier())
             .ok()
             .and_then(|multiplier| num.checked_mul(multiplier))
-            .ok_or_else(|| format!("Memory pool size '{}' is too large", size))?;
+            .ok_or_else(|| format!("{} '{}' is too large", label, size))?;
 
-        Ok(memory_pool_size)
+        Ok(total_bytes)
     } else {
-        Err(format!("Invalid memory pool size '{}'", size))
+        Err(format!("Invalid {} '{}'", label, size))
     }
+}
+
+pub fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
+    parse_size_string(size, "memory pool size")
+}
+
+pub fn extract_disk_limit(size: &str) -> Result<usize, String> {
+    parse_size_string(size, "disk limit")
 }
 
 #[cfg(test)]
