@@ -2007,7 +2007,8 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::config::{
-        ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions, Extensions, TableOptions
+        ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
+        Extensions, TableOptions,
     };
 
     #[derive(Default, Debug, Clone)]
@@ -2113,9 +2114,13 @@ mod tests {
         log::set_logger(&SimpleLogger).unwrap();
         log::set_max_level(LevelFilter::Info);
         let mut sql_parser_options = crate::config::SqlParserOptions::default();
-        sql_parser_options.set("enable_options_value_normalization", "false").unwrap();
+        sql_parser_options
+            .set("enable_options_value_normalization", "false")
+            .unwrap();
         assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 0);
-        sql_parser_options.set("enable_options_value_normalization", "true").unwrap();
+        sql_parser_options
+            .set("enable_options_value_normalization", "true")
+            .unwrap();
         assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
