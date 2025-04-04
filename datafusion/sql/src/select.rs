@@ -46,8 +46,8 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    visit_expressions_mut, Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderBy,
-    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
+    visit_expressions_mut, Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr,
+    OrderBy, SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
