@@ -104,10 +104,8 @@ pub(crate) mod test_util {
 mod tests {
 
     use std::fmt::{self, Display, Formatter};
-    use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::task::{Context, Poll};
     use std::time::Duration;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
@@ -117,7 +115,7 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 
     use arrow::array::RecordBatch;
-    use arrow_schema::{Schema, SchemaRef};
+    use arrow_schema::Schema;
     use datafusion_catalog::Session;
     use datafusion_common::cast::{
         as_binary_array, as_binary_view_array, as_boolean_array, as_float32_array,
@@ -137,7 +135,7 @@ mod tests {
     };
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_execution::{RecordBatchStream, TaskContext};
+    use datafusion_execution::TaskContext;
     use datafusion_expr::dml::InsertOp;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion_physical_plan::{collect, ExecutionPlan};
@@ -150,7 +148,7 @@ mod tests {
     use async_trait::async_trait;
     use datafusion_datasource::file_groups::FileGroup;
     use futures::stream::BoxStream;
-    use futures::{Stream, StreamExt};
+    use futures::StreamExt;
     use insta::assert_snapshot;
     use log::error;
     use object_store::local::LocalFileSystem;
@@ -165,6 +163,8 @@ mod tests {
     use parquet::file::page_index::index::Index;
     use parquet::format::FileMetaData;
     use tokio::fs::File;
+
+    use crate::test_util::bounded_stream;
 
     enum ForceViews {
         Yes,
@@ -1646,42 +1646,110 @@ mod tests {
         Ok(())
     }
 
-    /// Creates an bounded stream for testing purposes.
-    fn bounded_stream(
-        batch: RecordBatch,
-        limit: usize,
-    ) -> datafusion_execution::SendableRecordBatchStream {
-        Box::pin(BoundedStream {
-            count: 0,
-            limit,
-            batch,
-        })
-    }
+    #[tokio::test]
+    async fn test_memory_reservation_column_parallel() -> Result<()> {
+        async fn test_memory_reservation(global: ParquetOptions) -> Result<()> {
+            let field_a = Field::new("a", DataType::Utf8, false);
+            let field_b = Field::new("b", DataType::Utf8, false);
+            let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+            let object_store_url = ObjectStoreUrl::local_filesystem();
 
-    struct BoundedStream {
-        limit: usize,
-        count: usize,
-        batch: RecordBatch,
-    }
+            let file_sink_config = FileSinkConfig {
+                original_url: String::default(),
+                object_store_url: object_store_url.clone(),
+                file_group: FileGroup::new(vec![PartitionedFile::new(
+                    "/tmp".to_string(),
+                    1,
+                )]),
+                table_paths: vec![ListingTableUrl::parse("file:///")?],
+                output_schema: schema.clone(),
+                table_partition_cols: vec![],
+                insert_op: InsertOp::Overwrite,
+                keep_partition_by_columns: false,
+                file_extension: "parquet".into(),
+            };
+            let parquet_sink = Arc::new(ParquetSink::new(
+                file_sink_config,
+                TableParquetOptions {
+                    key_value_metadata: std::collections::HashMap::from([
+                        ("my-data".to_string(), Some("stuff".to_string())),
+                        ("my-data-bool-key".to_string(), None),
+                    ]),
+                    global,
+                    ..Default::default()
+                },
+            ));
 
-    impl Stream for BoundedStream {
-        type Item = Result<RecordBatch>;
+            // create data
+            let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar"]));
+            let col_b: ArrayRef = Arc::new(StringArray::from(vec!["baz", "baz"]));
+            let batch =
+                RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
 
-        fn poll_next(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Option<Self::Item>> {
-            if self.count >= self.limit {
-                return Poll::Ready(None);
+            // create task context
+            let task_context = build_ctx(object_store_url.as_ref());
+            assert_eq!(
+                task_context.memory_pool().reserved(),
+                0,
+                "no bytes are reserved yet"
+            );
+
+            let mut write_task = FileSink::write_all(
+                parquet_sink.as_ref(),
+                Box::pin(RecordBatchStreamAdapter::new(
+                    schema,
+                    bounded_stream(batch, 1000),
+                )),
+                &task_context,
+            );
+
+            // incrementally poll and check for memory reservation
+            let mut reserved_bytes = 0;
+            while futures::poll!(&mut write_task).is_pending() {
+                reserved_bytes += task_context.memory_pool().reserved();
+                tokio::time::sleep(Duration::from_micros(1)).await;
             }
-            self.count += 1;
-            Poll::Ready(Some(Ok(self.batch.clone())))
-        }
-    }
+            assert!(
+                reserved_bytes > 0,
+                "should have bytes reserved during write"
+            );
+            assert_eq!(
+                task_context.memory_pool().reserved(),
+                0,
+                "no leaking byte reservation"
+            );
 
-    impl RecordBatchStream for BoundedStream {
-        fn schema(&self) -> SchemaRef {
-            self.batch.schema()
+            Ok(())
         }
+
+        let write_opts = ParquetOptions {
+            allow_single_file_parallelism: false,
+            ..Default::default()
+        };
+        test_memory_reservation(write_opts)
+            .await
+            .expect("should track for non-parallel writes");
+
+        let row_parallel_write_opts = ParquetOptions {
+            allow_single_file_parallelism: true,
+            maximum_parallel_row_group_writers: 10,
+            maximum_buffered_record_batches_per_stream: 1,
+            ..Default::default()
+        };
+        test_memory_reservation(row_parallel_write_opts)
+            .await
+            .expect("should track for row-parallel writes");
+
+        let col_parallel_write_opts = ParquetOptions {
+            allow_single_file_parallelism: true,
+            maximum_parallel_row_group_writers: 1,
+            maximum_buffered_record_batches_per_stream: 2,
+            ..Default::default()
+        };
+        test_memory_reservation(col_parallel_write_opts)
+            .await
+            .expect("should track for column-parallel writes");
+
+        Ok(())
     }
 }
