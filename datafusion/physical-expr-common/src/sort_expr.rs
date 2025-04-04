@@ -31,8 +31,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
-use itertools::Itertools;
-
 /// Represents Sort operation for a column in a RecordBatch
 ///
 /// Example:
@@ -76,7 +74,7 @@ use itertools::Itertools;
 ///   .nulls_last();
 /// assert_eq!(sort_expr.to_string(), "a DESC NULLS LAST");
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq)]
 pub struct PhysicalSortExpr {
     /// Physical expression representing the column to sort
     pub expr: Arc<dyn PhysicalExpr>,
@@ -130,20 +128,11 @@ impl PhysicalSortExpr {
     }
 }
 
-/// Access the PhysicalSortExpr as a PhysicalExpr
-impl AsRef<dyn PhysicalExpr> for PhysicalSortExpr {
-    fn as_ref(&self) -> &(dyn PhysicalExpr + 'static) {
-        self.expr.as_ref()
-    }
-}
-
 impl PartialEq for PhysicalSortExpr {
     fn eq(&self, other: &Self) -> bool {
         self.options == other.options && self.expr.eq(&other.expr)
     }
 }
-
-impl Eq for PhysicalSortExpr {}
 
 impl Hash for PhysicalSortExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -375,12 +364,6 @@ impl LexOrdering {
         }
         self.inner.truncate(len);
         Ok(())
-    }
-
-    /// Merge the contents of `other` into `self`, removing duplicates.
-    pub fn merge(mut self, other: Self) -> Self {
-        self.inner = self.inner.into_iter().chain(other).unique().collect();
-        self
     }
 
     /// Constructs a duplicate-free `LexOrdering` by filtering out duplicate

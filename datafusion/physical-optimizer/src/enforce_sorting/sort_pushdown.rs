@@ -364,11 +364,11 @@ fn pushdown_would_violate_requirements(
         .iter()
         .any(|child_required| {
             let Some(child_required) = child_required.as_ref() else {
-                // no requirements, so pushing down would not violate anything
+                // No requirements, so pushing down would not violate anything.
                 return false;
             };
-            // check if the plan's requirements would still e satisfied if we pushed
-            // down the parent requirements
+            // Check if the plan's requirements would still be satisfied if we
+            // pushed down the parent requirements:
             child_required
                 .lex_requirement()
                 .iter()
