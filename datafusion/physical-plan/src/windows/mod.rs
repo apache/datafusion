@@ -101,7 +101,7 @@ pub fn create_window_expr(
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: Option<LexOrdering>,
+    order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
     ignore_nulls: bool,
@@ -133,7 +133,7 @@ pub fn create_window_expr(
 /// Creates an appropriate [`WindowExpr`] based on the window frame and
 fn window_expr_from_aggregate_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: Option<LexOrdering>,
+    order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
     aggregate: Arc<AggregateFunctionExpr>,
 ) -> Arc<dyn WindowExpr> {
@@ -590,7 +590,7 @@ pub fn get_best_fitting_window(
 /// the mode this window operator should work in to accommodate the existing ordering.
 pub fn get_window_mode(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_keys: Option<&LexOrdering>,
+    orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
@@ -605,14 +605,13 @@ pub fn get_window_mode(
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
-    let reverse_orderby_keys = orderby_keys.map(|o| o.reverse_each());
+    let reverse_orderby_keys =
+        orderby_keys.iter().map(|e| e.reverse()).collect::<Vec<_>>();
     for (should_swap, orderbys) in
         [(false, orderby_keys), (true, reverse_orderby_keys.as_ref())]
     {
         let mut req = partition_by_reqs.clone();
-        if let Some(ob) = orderbys {
-            req.extend(ob.iter().cloned().map(Into::into));
-        }
+        req.extend(orderbys.iter().cloned().map(Into::into));
         if req.is_empty() || partition_by_eqs.ordering_satisfy_requirement(&req) {
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {
@@ -814,7 +813,7 @@ mod tests {
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],
-                None,
+                &[],
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
                 false,
@@ -1019,11 +1018,8 @@ mod tests {
                 let options = SortOptions::default();
                 order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
-            let res = get_window_mode(
-                &partition_by_exprs,
-                Some(&order_by_exprs.into()),
-                &exec_unbounded,
-            );
+            let res =
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded);
             // Since reversibility is not important in this test. Convert Option<(bool, InputOrderMode)> to Option<InputOrderMode>
             let res = res.map(|(_, mode)| mode);
             assert_eq!(
@@ -1187,7 +1183,7 @@ mod tests {
             }
 
             assert_eq!(
-                get_window_mode(&partition_by_exprs, Some(&order_by_exprs.into()), &exec_unbounded),
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded),
                 *expected,
                 "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );

@@ -146,10 +146,7 @@ pub fn serialize_physical_window_expr(
 
     let args = serialize_physical_exprs(&args, codec)?;
     let partition_by = serialize_physical_exprs(window_expr.partition_by(), codec)?;
-    let order_by = serialize_physical_sort_exprs(
-        window_expr.order_by().map_or_else(Vec::new, |o| o.to_vec()),
-        codec,
-    )?;
+    let order_by = serialize_physical_sort_exprs(window_expr.order_by().to_vec(), codec)?;
     let window_frame: protobuf::WindowFrame = window_frame
         .as_ref()
         .try_into()

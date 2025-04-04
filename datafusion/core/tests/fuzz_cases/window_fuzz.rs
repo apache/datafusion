@@ -284,7 +284,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     fn_name.to_string(),
                     &args,
                     &partitionby_exprs,
-                    None,
+                    &[],
                     Arc::new(window_frame),
                     &extended_schema,
                     false,
@@ -647,14 +647,13 @@ async fn run_window_test(
 
     let extended_schema = schema_add_window_field(&args, &schema, &window_fn, &fn_name)?;
 
-    let orderby = (!orderby_exprs.is_empty()).then(|| orderby_exprs.into());
     let usual_window_exec = Arc::new(WindowAggExec::try_new(
         vec![create_window_expr(
             &window_fn,
             fn_name.clone(),
             &args,
             &partitionby_exprs,
-            orderby.clone(),
+            &orderby_exprs.clone(),
             Arc::new(window_frame.clone()),
             &extended_schema,
             false,
@@ -672,7 +671,7 @@ async fn run_window_test(
             fn_name,
             &args,
             &partitionby_exprs,
-            orderby,
+            &orderby_exprs,
             Arc::new(window_frame.clone()),
             &extended_schema,
             false,

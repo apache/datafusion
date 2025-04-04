@@ -3702,7 +3702,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
             case.func.1,
             &case.func.2,
             &partition_by,
-            None,
+            &[],
             case.window_frame,
             input_schema.as_ref(),
             false,

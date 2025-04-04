@@ -170,12 +170,7 @@ impl OrderingEquivalenceClass {
             if self.orderings[idx][length - overlap..]
                 == self.orderings[pre_idx][..overlap]
             {
-                return if length == overlap {
-                    Some(true)
-                } else {
-                    self.orderings[idx].truncate(length - overlap).unwrap();
-                    Some(false)
-                };
+                return Some(!self.orderings[idx].truncate(length - overlap));
             }
         }
         None

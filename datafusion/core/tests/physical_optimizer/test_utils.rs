@@ -216,7 +216,7 @@ pub fn bounded_window_exec_with_partition(
         "count".to_owned(),
         &[col(col_name, &schema).unwrap()],
         partition_by,
-        (!sort_exprs.is_empty()).then(|| sort_exprs.into()),
+        &sort_exprs,
         Arc::new(WindowFrame::new(Some(false))),
         schema.as_ref(),
         false,

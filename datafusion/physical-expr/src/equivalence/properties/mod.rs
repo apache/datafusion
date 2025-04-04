@@ -662,6 +662,11 @@ impl EquivalenceProperties {
         true
     }
 
+    /// Checks if the sort expressions are satisfied by any of the table
+    /// constraints (primary key or unique). Returns true if any constraint
+    /// fully satisfies the expressions (i.e. constraint indices form a valid
+    /// prefix of an existing ordering that matches the expressions). For
+    /// unique constraints, also verifies nullable columns.
     fn satisfied_by_constraints_ordering(
         &self,
         normalized_exprs: &[PhysicalSortExpr],
@@ -700,90 +705,68 @@ impl EquivalenceProperties {
                         // Check if this ordering matches the prefix:
                         let ordering_len = ordering.len();
                         normalized_exprs.len() >= ordering_len
-                            && normalized_exprs[..ordering_len].iter().zip(ordering).all(
-                                |(req, existing)| {
-                                    req.expr.eq(&existing.expr)
-                                        && req.options == existing.options
-                                },
-                            )
+                            && normalized_exprs[..ordering_len]
+                                .iter()
+                                .zip(ordering)
+                                .all(|(req, existing)| req == existing)
                     })
             }
         })
     }
 
-    /// Checks if the sort requirements are satisfied by any of the table constraints (primary key or unique).
-    /// Returns true if any constraint fully satisfies the requirements.
+    /// Checks if the sort requirements are satisfied by any of the table
+    /// constraints (primary key or unique). Returns true if any constraint
+    /// fully satisfies the requirements (i.e. constraint indices form a valid
+    /// prefix of an existing ordering that matches the requirements). For
+    /// unique constraints, also verifies nullable columns.
     fn satisfied_by_constraints(
         &self,
         normalized_reqs: &[PhysicalSortRequirement],
     ) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
-            Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => self
-                .satisfied_by_constraint(
-                    normalized_reqs,
-                    indices,
-                    matches!(constraint, Constraint::Unique(_)),
-                ),
-        })
-    }
-
-    /// Checks if sort requirements are satisfied by a constraint (primary key or unique).
-    /// Returns true if the constraint indices form a valid prefix of an existing ordering
-    /// that matches the requirements. For unique constraints, also verifies nullable columns.
-    fn satisfied_by_constraint(
-        &self,
-        normalized_reqs: &[PhysicalSortRequirement],
-        indices: &[usize],
-        check_null: bool,
-    ) -> bool {
-        // Requirements must contain indices
-        if indices.len() > normalized_reqs.len() {
-            return false;
-        }
-
-        // Iterate over all orderings
-        self.oeq_class.iter().any(|ordering| {
-            if indices.len() > ordering.len() {
-                return false;
-            }
-
-            // Build a map of column positions in the requirement
-            let mut col_positions = HashMap::with_capacity(ordering.len());
-            for (pos, req) in ordering.iter().enumerate() {
-                if let Some(col) = req.expr.as_any().downcast_ref::<Column>() {
-                    col_positions.insert(
-                        col.index(),
-                        (pos, col.nullable(&self.schema).unwrap_or(true)),
-                    );
-                }
-            }
-
-            // Check if all constraint indices appear in valid positions
-            if !indices.iter().all(|&idx| {
-                col_positions
-                    .get(&idx)
-                    .map(|&(pos, nullable)| {
-                        // For unique constraints, verify column is not nullable if it's first/last
-                        !check_null
-                            || (pos != 0 && pos != ordering.len() - 1)
-                            || !nullable
+            Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
+                let check_null = matches!(constraint, Constraint::Unique(_));
+                indices.len() <= normalized_reqs.len()
+                    && self.oeq_class.iter().any(|ordering| {
+                        if indices.len() > ordering.len() {
+                            return false;
+                        }
+                        // Build a map of column positions in the ordering:
+                        let mut col_positions = HashMap::with_capacity(ordering.len());
+                        for (pos, req) in ordering.iter().enumerate() {
+                            if let Some(col) = req.expr.as_any().downcast_ref::<Column>()
+                            {
+                                let nullable = col.nullable(&self.schema).unwrap_or(true);
+                                col_positions.insert(col.index(), (pos, nullable));
+                            }
+                        }
+                        // Check if all constraint indices appear in valid positions:
+                        if !indices.iter().all(|&idx| {
+                            col_positions
+                                .get(&idx)
+                                .map(|&(pos, nullable)| {
+                                    // For unique constraints, verify column is not nullable if it's first/last:
+                                    !check_null
+                                        || !nullable
+                                        || (pos != 0 && pos != ordering.len() - 1)
+                                })
+                                .unwrap_or(false)
+                        }) {
+                            return false;
+                        }
+                        // Check if this ordering matches the prefix:
+                        let ordering_len = ordering.len();
+                        normalized_reqs.len() >= ordering_len
+                            && normalized_reqs[..ordering_len].iter().zip(ordering).all(
+                                |(req, existing)| {
+                                    req.expr.eq(&existing.expr)
+                                        && req.options.is_none_or(|req_opts| {
+                                            req_opts == existing.options
+                                        })
+                                },
+                            )
                     })
-                    .unwrap_or(false)
-            }) {
-                return false;
             }
-
-            // Check if this ordering matches the prefix
-            let ordering_len = ordering.len();
-            normalized_reqs.len() >= ordering_len
-                && normalized_reqs[..ordering_len].iter().zip(ordering).all(
-                    |(req, existing)| {
-                        req.expr.eq(&existing.expr)
-                            && req
-                                .options
-                                .is_none_or(|req_opts| req_opts == existing.options)
-                    },
-                )
         })
     }
 

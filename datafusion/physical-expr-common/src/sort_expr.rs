@@ -28,7 +28,7 @@ use crate::physical_expr::{fmt_sql, PhysicalExpr};
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::Result;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 /// Represents Sort operation for a column in a RecordBatch
@@ -91,6 +91,15 @@ impl PhysicalSortExpr {
     /// Create a new PhysicalSortExpr with default [`SortOptions`]
     pub fn new_default(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self::new(expr, SortOptions::default())
+    }
+
+    /// Reverses the sort expression. For instance, `[a ASC NULLS LAST]` turns
+    /// into `[a DESC NULLS FIRST]`. Such reversals are useful in planning, e.g.
+    /// when constructing equivalent window expressions.
+    pub fn reverse(&self) -> Self {
+        let mut result = self.clone();
+        result.options = !result.options;
+        result
     }
 
     /// Set the sort sort options to ASC
@@ -384,12 +393,16 @@ impl LexOrdering {
     }
 
     /// Truncates the `LexOrdering`, keeping only the first `len` elements.
-    pub fn truncate(&mut self, len: usize) -> Result<()> {
-        if len == 0 {
-            return plan_err!("Degenerate LexOrdering instances are not allowed");
+    /// Returns `true` if truncation made a change, `false` otherwise. Negative
+    /// cases happen in two scenarios: (1) When `len` is greater than or equal
+    /// to the number of expressions inside this `LexOrdering`, making truncation
+    /// a no-op, or (2) when `len` is `0`, making truncation impossible.
+    pub fn truncate(&mut self, len: usize) -> bool {
+        if len == 0 || len >= self.inner.len() {
+            return false;
         }
         self.inner.truncate(len);
-        Ok(())
+        true
     }
 
     /// Transforms each `PhysicalSortExpr` in the `LexOrdering`
