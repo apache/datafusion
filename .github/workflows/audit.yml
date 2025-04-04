@@ -26,6 +26,8 @@ on:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
+    branches:
+      - main
 
   pull_request:
     paths:
