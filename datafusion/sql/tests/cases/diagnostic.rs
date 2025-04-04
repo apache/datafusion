@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion_functions::string;
+use insta::assert_snapshot;
 use std::{collections::HashMap, sync::Arc};
 
 use datafusion_common::{Diagnostic, Location, Result, Span};
@@ -136,7 +137,7 @@ fn test_table_not_found() -> Result<()> {
     let query = "SELECT * FROM /*a*/personx/*a*/";
     let spans = get_spans(query);
     let diag = do_query(query);
-    assert_eq!(diag.message, "table 'personx' not found");
+    assert_snapshot!(diag.message, @"table 'personx' not found");
     assert_eq!(diag.span, Some(spans["a"]));
     Ok(())
 }
