@@ -195,9 +195,8 @@ output:
 +-----------+
 ```
 "#)
-    .build()
+.build()
 });
-
 
 fn get_nth_value_doc() -> &'static Documentation {
     &NTH_VALUE_DOCUMENTATION
