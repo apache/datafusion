@@ -392,3 +392,21 @@ fn test_unary_op_plus_with_non_column() -> Result<()> {
     assert_eq!(diag.span, None);
     Ok(())
 }
+
+
+#[test]
+fn test_wrong_number_of_arguments_sum() -> Result<()> {
+    let query = "SELECT /*a*/sum(1, 2)/*a*/";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+
+    assert_eq!(
+        diag.message,
+        "sum function requires 1 argument, got 2"
+    );
+
+    // Verify that the span actually targets "sum(1, 2)"
+    assert_eq!(diag.span, Some(spans["a"]));
+
+    Ok(())
+}
