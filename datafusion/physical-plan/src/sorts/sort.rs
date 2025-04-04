@@ -204,7 +204,7 @@ struct ExternalSorter {
     /// Schema of the output (and the input)
     schema: SchemaRef,
     /// Sort expressions
-    expr: Arc<[PhysicalSortExpr]>,
+    expr: LexOrdering,
     /// RowConverter corresponding to the sort expressions
     sort_keys_row_converter: Arc<RowConverter>,
     /// The target number of rows for output batches
@@ -301,7 +301,7 @@ impl ExternalSorter {
             in_mem_batches: vec![],
             in_progress_spill_file: None,
             finished_spill_files: vec![],
-            expr: expr.into(),
+            expr,
             sort_keys_row_converter: Arc::new(converter),
             metrics,
             reservation,

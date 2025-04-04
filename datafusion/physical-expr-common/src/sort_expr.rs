@@ -405,13 +405,6 @@ impl From<Vec<PhysicalSortExpr>> for LexOrdering {
     }
 }
 
-/// Convert a `LexOrdering` into a `Arc[<PhysicalSortExpr>]` for fast copies
-impl From<LexOrdering> for Arc<[PhysicalSortExpr]> {
-    fn from(value: LexOrdering) -> Self {
-        value.inner.into()
-    }
-}
-
 impl Deref for LexOrdering {
     type Target = [PhysicalSortExpr];
 

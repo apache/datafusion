@@ -139,7 +139,7 @@ fn replace_on_columns_of_right_ordering(
 ) {
     for (left_col, right_col) in on_columns {
         right_ordering.transform(|item| {
-            let new_expr = Arc::clone(&item.expr)
+            item.expr = Arc::clone(&item.expr)
                 .transform(|e| {
                     if e.eq(right_col) {
                         Ok(Transformed::yes(Arc::clone(left_col)))
@@ -149,7 +149,6 @@ fn replace_on_columns_of_right_ordering(
                 })
                 .data()
                 .expect("closure is infallible");
-            item.expr = new_expr;
         });
     }
 }

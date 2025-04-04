@@ -17,25 +17,22 @@
 
 //! TopK: Combination of Sort / LIMIT
 
-use arrow::{
-    compute::interleave,
-    row::{RowConverter, Rows, SortField},
-};
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
+
 use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::compute::interleave;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::HashMap;
-use datafusion_common::Result;
+use arrow::row::{RowConverter, Rows, SortField};
+use datafusion_common::{HashMap, Result};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
 };
-use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Global TopK
@@ -83,7 +80,7 @@ pub struct TopK {
     /// The target number of rows for output batches
     batch_size: usize,
     /// sort expressions
-    expr: Arc<[PhysicalSortExpr]>,
+    expr: LexOrdering,
     /// row converter, for sort keys
     row_converter: RowConverter,
     /// scratch space for converting rows
@@ -107,8 +104,6 @@ impl TopK {
     ) -> Result<Self> {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
-
-        let expr: Arc<[PhysicalSortExpr]> = expr.into();
 
         let sort_fields: Vec<_> = expr
             .iter()
