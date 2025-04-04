@@ -147,7 +147,7 @@ fn test_unqualified_column_not_found() -> Result<()> {
     let query = "SELECT /*a*/first_namex/*a*/ FROM person";
     let spans = get_spans(query);
     let diag = do_query(query);
-    assert_eq!(diag.message, "column 'first_namex' not found");
+    assert_snapshot!(diag.message, @"column 'first_namex' not found");
     assert_eq!(diag.span, Some(spans["a"]));
     Ok(())
 }
@@ -157,7 +157,7 @@ fn test_qualified_column_not_found() -> Result<()> {
     let query = "SELECT /*a*/person.first_namex/*a*/ FROM person";
     let spans = get_spans(query);
     let diag = do_query(query);
-    assert_eq!(diag.message, "column 'first_namex' not found in 'person'");
+    assert_snapshot!(diag.message, @"column 'first_namex' not found in 'person'");
     assert_eq!(diag.span, Some(spans["a"]));
     Ok(())
 }
@@ -167,14 +167,11 @@ fn test_union_wrong_number_of_columns() -> Result<()> {
     let query = "/*whole+left*/SELECT first_name FROM person/*left*/ UNION ALL /*right*/SELECT first_name, last_name FROM person/*right+whole*/";
     let spans = get_spans(query);
     let diag = do_query(query);
-    assert_eq!(
-        diag.message,
-        "UNION queries have different number of columns"
-    );
+    assert_snapshot!(diag.message, @"UNION queries have different number of columns");
     assert_eq!(diag.span, Some(spans["whole"]));
-    assert_eq!(diag.notes[0].message, "this side has 1 fields");
+    assert_snapshot!(diag.notes[0].message, @"this side has 1 fields");
     assert_eq!(diag.notes[0].span, Some(spans["left"]));
-    assert_eq!(diag.notes[1].message, "this side has 2 fields");
+    assert_snapshot!(diag.notes[1].message, @"this side has 2 fields");
     assert_eq!(diag.notes[1].span, Some(spans["right"]));
     Ok(())
 }
@@ -184,15 +181,9 @@ fn test_missing_non_aggregate_in_group_by() -> Result<()> {
     let query = "SELECT id, /*a*/first_name/*a*/ FROM person GROUP BY id";
     let spans = get_spans(query);
     let diag = do_query(query);
-    assert_eq!(
-        diag.message,
-        "'person.first_name' must appear in GROUP BY clause because it's not an aggregate expression"
-    );
+    assert_snapshot!(diag.message, @"'person.first_name' must appear in GROUP BY clause because it's not an aggregate expression");
     assert_eq!(diag.span, Some(spans["a"]));
-    assert_eq!(
-        diag.helps[0].message,
-        "Either add 'person.first_name' to GROUP BY clause, or use an aggregare function like ANY_VALUE(person.first_name)"
-    );
+    assert_snapshot!(diag.helps[0].message, @"Either add 'person.first_name' to GROUP BY clause, or use an aggregare function like ANY_VALUE(person.first_name)");
     Ok(())
 }
 
@@ -201,10 +192,10 @@ fn test_ambiguous_reference() -> Result<()> {
     let query = "SELECT /*a*/first_name/*a*/ FROM person a, person b";
     let spans = get_spans(query);
     let diag = do_query(query);
-    assert_eq!(diag.message, "column 'first_name' is ambiguous");
+    assert_snapshot!(diag.message, @"column 'first_name' is ambiguous");
     assert_eq!(diag.span, Some(spans["a"]));
-    assert_eq!(diag.notes[0].message, "possible column a.first_name");
-    assert_eq!(diag.notes[1].message, "possible column b.first_name");
+    assert_snapshot!(diag.notes[0].message, @"possible column a.first_name");
+    assert_snapshot!(diag.notes[1].message, @"possible column b.first_name");
     Ok(())
 }
 
@@ -214,11 +205,11 @@ fn test_incompatible_types_binary_arithmetic() -> Result<()> {
         "SELECT /*whole+left*/id/*left*/ + /*right*/first_name/*right+whole*/ FROM person";
     let spans = get_spans(query);
     let diag = do_query(query);
-    assert_eq!(diag.message, "expressions have incompatible types");
+    assert_snapshot!(diag.message, @"expressions have incompatible types");
     assert_eq!(diag.span, Some(spans["whole"]));
-    assert_eq!(diag.notes[0].message, "has type UInt32");
+    assert_snapshot!(diag.notes[0].message, @"has type UInt32");
     assert_eq!(diag.notes[0].span, Some(spans["left"]));
-    assert_eq!(diag.notes[1].message, "has type Utf8");
+    assert_snapshot!(diag.notes[1].message, @"has type Utf8");
     assert_eq!(diag.notes[1].span, Some(spans["right"]));
     Ok(())
 }
@@ -228,7 +219,7 @@ fn test_field_not_found_suggestion() -> Result<()> {
     let query = "SELECT /*whole*/first_na/*whole*/ FROM person";
     let spans = get_spans(query);
     let diag = do_query(query);
-    assert_eq!(diag.message, "column 'first_na' not found");
+    assert_snapshot!(diag.message, @"column 'first_na' not found");
     assert_eq!(diag.span, Some(spans["whole"]));
     assert_eq!(diag.notes.len(), 1);
 
@@ -244,7 +235,7 @@ fn test_field_not_found_suggestion() -> Result<()> {
         })
         .collect();
     suggested_fields.sort();
-    assert_eq!(suggested_fields[0], "person.first_name");
+    assert_snapshot!(suggested_fields[0], @"person.first_name");
     Ok(())
 }
 
@@ -254,7 +245,7 @@ fn test_ambiguous_column_suggestion() -> Result<()> {
     let spans = get_spans(query);
     let diag = do_query(query);
 
-    assert_eq!(diag.message, "column 'id' is ambiguous");
+    assert_snapshot!(diag.message, @"column 'id' is ambiguous");
     assert_eq!(diag.span, Some(spans["whole"]));
 
     assert_eq!(diag.notes.len(), 2);
@@ -282,8 +273,8 @@ fn test_invalid_function() -> Result<()> {
     let query = "SELECT /*whole*/concat_not_exist/*whole*/()";
     let spans = get_spans(query);
     let diag = do_query(query);
-    assert_eq!(diag.message, "Invalid function 'concat_not_exist'");
-    assert_eq!(diag.notes[0].message, "Possible function 'concat'");
+    assert_snapshot!(diag.message, @"Invalid function 'concat_not_exist'");
+    assert_snapshot!(diag.notes[0].message, @"Possible function 'concat'");
     assert_eq!(diag.span, Some(spans["whole"]));
     Ok(())
 }
@@ -293,10 +284,7 @@ fn test_scalar_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Err
     let spans = get_spans(query);
     let diag = do_query(query);
 
-    assert_eq!(
-        diag.message,
-        "Too many columns! The subquery should only return one column"
-    );
+    assert_snapshot!(diag.message, @"Too many columns! The subquery should only return one column");
 
     let expected_span = Some(Span {
         start: spans["x"].start,
@@ -328,10 +316,7 @@ fn test_in_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Error>>
     let spans = get_spans(query);
     let diag = do_query(query);
 
-    assert_eq!(
-        diag.message,
-        "Too many columns! The subquery should only return one column"
-    );
+    assert_snapshot!(diag.message, @"Too many columns! The subquery should only return one column");
 
     let expected_span = Some(Span {
         start: spans["id"].start,
@@ -361,16 +346,10 @@ fn test_unary_op_plus_with_column() -> Result<()> {
     let query = "SELECT +/*whole*/first_name/*whole*/ FROM person";
     let spans = get_spans(query);
     let diag = do_query(query);
-    assert_eq!(diag.message, "+ cannot be used with Utf8");
+    assert_snapshot!(diag.message, @"+ cannot be used with Utf8");
     assert_eq!(diag.span, Some(spans["whole"]));
-    assert_eq!(
-        diag.notes[0].message,
-        "+ can only be used with numbers, intervals, and timestamps"
-    );
-    assert_eq!(
-        diag.helps[0].message,
-        "perhaps you need to cast person.first_name"
-    );
+    assert_snapshot!(diag.notes[0].message, @"+ can only be used with numbers, intervals, and timestamps");
+    assert_snapshot!(diag.helps[0].message, @"perhaps you need to cast person.first_name");
     Ok(())
 }
 
@@ -380,15 +359,9 @@ fn test_unary_op_plus_with_non_column() -> Result<()> {
     let query = "SELECT +'a'";
     let diag = do_query(query);
     assert_eq!(diag.message, "+ cannot be used with Utf8");
-    assert_eq!(
-        diag.notes[0].message,
-        "+ can only be used with numbers, intervals, and timestamps"
-    );
+    assert_snapshot!(diag.notes[0].message, @"+ can only be used with numbers, intervals, and timestamps");
     assert_eq!(diag.notes[0].span, None);
-    assert_eq!(
-        diag.helps[0].message,
-        "perhaps you need to cast Utf8(\"a\")"
-    );
+    assert_snapshot!(diag.helps[0].message, @r#"perhaps you need to cast Utf8("a")"#);
     assert_eq!(diag.helps[0].span, None);
     assert_eq!(diag.span, None);
     Ok(())
