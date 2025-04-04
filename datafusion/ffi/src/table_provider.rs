@@ -633,7 +633,14 @@ mod tests {
             .await?
             .collect()
             .await?;
-        let expected = ["+-----+", "| cnt |", "+-----+", "| 3   |", "+-----+"];
+        #[rustfmt::skip]
+        let expected = [
+            "+-----+",
+            "| cnt |",
+            "+-----+",
+            "| 3   |",
+            "+-----+"
+        ];
         assert_batches_eq!(expected, &result);
         Ok(())
     }
