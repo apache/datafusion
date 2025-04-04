@@ -87,3 +87,89 @@ jobs:
               comment_id: context.payload.comment.id,
               content: 'rocket'
             });
+
+  # Runs benchmarks on a PR branch when someone comments with `/benchmark benchmark1 benchmark2 ...`
+  run_benchmarks:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/benchmark') }}
+    steps:
+      - name: Parse benchmark arguments
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Extract benchmark names from comment
+            const comment = context.payload.comment.body.trim();
+            const args = comment.split(/\s+/).slice(1); // Skip the command itself
+            
+            // If no benchmarks specified, default to a small set
+            const benchmarks = args.length > 0 ? args : ['tpch_mem', 'clickbench_partitioned'];
+            
+            return {
+              benchmarks: benchmarks
+            };
+          result-encoding: json
+
+      - name: Dispatch benchmarks for PR branch
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Get PR details
+            const { data: pullRequest } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.issue.number
+            });
+            
+            // Extract branch info
+            const branchName = pullRequest.head.ref;
+            const headSha = pullRequest.head.sha;
+            const baseBranch = pullRequest.base.ref;
+            
+            // Get the base branch HEAD SHA
+            const { data: baseRef } = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `heads/${baseBranch}`
+            });
+            const baseSha = baseRef.object.sha;
+            
+            const benchmarks = ${{ toJSON(steps.parse.outputs.result) }}.benchmarks;
+            const commentId = context.payload.comment.id;
+            
+            // Comment to notify benchmark is starting
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `📊 Running the following benchmarks: ${benchmarks.join(', ')}\n\nComparing PR branch (\`${headSha.substring(0, 8)}\`) with base branch \`${baseBranch}\` (\`${baseSha.substring(0, 8)}\`)\n\nResults will be posted here when complete.`
+            });
+            
+            // Create benchmark workflow file
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'pr_benchmarks.yml',
+              ref: branchName,
+              inputs: {
+                pr_number: context.payload.issue.number.toString(),
+                pr_head_sha: headSha,
+                base_branch: baseBranch,
+                base_sha: baseSha,
+                benchmarks: benchmarks.join(' '),
+                comment_id: commentId.toString()
+              }
+            });
+
+      - name: Add reaction to comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            });
