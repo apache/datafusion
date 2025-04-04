@@ -65,7 +65,7 @@ logical_plan
 07)------------Projection: customer.c_phone, customer.c_acctbal
 08)--------------LeftAnti Join: customer.c_custkey = __correlated_sq_1.o_custkey
 09)----------------Filter: substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])
-10)------------------TableScan: customer projection=[c_custkey, c_phone, c_acctbal], partial_filters=[substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])]
+10)------------------TableScan: customer projection=[c_custkey, c_phone, c_acctbal], partial_filters=[substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")]), Boolean(true)]
 11)----------------SubqueryAlias: __correlated_sq_1
 12)------------------TableScan: orders projection=[o_custkey]
 13)------------SubqueryAlias: __scalar_sq_2

@@ -273,7 +273,6 @@ message DmlNode{
     INSERT_APPEND = 3;
     INSERT_OVERWRITE = 4;
     INSERT_REPLACE = 5;
-    
   }
   Type dml_type = 1;
   LogicalPlanNode input = 2;
@@ -484,6 +483,7 @@ message AliasNode {
   LogicalExprNode expr = 1;
   string alias = 2;
   repeated TableReference relation = 3;
+  map<string, string> metadata = 4;
 }
 
 message BinaryExprNode {
@@ -725,6 +725,7 @@ message PhysicalPlanNode {
     CsvSinkExecNode csv_sink = 28;
     ParquetSinkExecNode parquet_sink = 29;
     UnnestExecNode unnest = 30;
+    JsonScanExecNode json_scan = 31;
   }
 }
 
@@ -996,6 +997,7 @@ message FileScanExecConf {
   reserved 10;
 
   datafusion_common.Constraints constraints = 11;
+  optional uint64 batch_size = 12;
 }
 
 message ParquetScanExecNode {
@@ -1021,6 +1023,10 @@ message CsvScanExecNode {
     string comment = 6;
   }
   bool newlines_in_values = 7;
+}
+
+message JsonScanExecNode {
+  FileScanExecConf base_conf = 1;
 }
 
 message AvroScanExecNode {

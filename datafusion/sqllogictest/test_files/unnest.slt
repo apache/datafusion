@@ -32,14 +32,14 @@ AS VALUES
 
 statement ok
 CREATE TABLE nested_unnest_table
-AS VALUES 
+AS VALUES
     (struct('a', 'b', struct('c')), (struct('a', 'b', [10,20])), [struct('a', 'b')]),
     (struct('d', 'e', struct('f')), (struct('x', 'y', [30,40, 50])), null)
 ;
 
 statement ok
 CREATE TABLE recursive_unnest_table
-AS VALUES 
+AS VALUES
     (struct([1], 'a'), [[[1],[2]],[[1,1]]], [struct([1],[[1,2]])]),
     (struct([2], 'b'), [[[3,4],[5]],[[null,6],null,[7,8]]], [struct([2],[[3],[4]])])
 ;
@@ -264,9 +264,9 @@ NULL NULL 17
 NULL NULL 18
 
 query IIIT
-select 
-    unnest(column1), unnest(column2) + 2, 
-    column3 * 10, unnest(array_remove(column1, '4')) 
+select
+    unnest(column1), unnest(column2) + 2,
+    column3 * 10, unnest(array_remove(column1, '4'))
 from unnest_table;
 ----
 1 9 10 1
@@ -795,7 +795,7 @@ select unnest(unnest(column2)) c2, count(column3) from recursive_unnest_table gr
 [NULL, 6] 1
 NULL 1
 
-query error DataFusion error: Error during planning: Projection references non\-aggregate values
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "nested_unnest_table\.column1" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "UNNEST\(nested_unnest_table\.column1\)\[c0\]" appears in the SELECT clause satisfies this requirement
 select unnest(column1) c1 from nested_unnest_table group by c1.c0;
 
 # TODO: this query should work. see issue: https://github.com/apache/datafusion/issues/12794
@@ -875,7 +875,7 @@ query TT
 explain select * from unnest_table u, unnest(u.column1);
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--SubqueryAlias: u
 03)----TableScan: unnest_table projection=[column1, column2, column3, column4, column5]
 04)--Subquery:

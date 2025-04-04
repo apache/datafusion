@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::config::ConfigOptions;
-use datafusion::optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
-use datafusion::optimizer::AnalyzerRule;
 use std::sync::Arc;
 use substrait::proto::expression_reference::ExprType;
 
@@ -435,14 +432,10 @@ pub fn to_substrait_plan(plan: &LogicalPlan, state: &SessionState) -> Result<Box
     // Generate PlanRel(s)
     // Note: Only 1 relation tree is currently supported
 
-    // We have to expand wildcard expressions first as wildcards can't be represented in substrait
-    let plan = Arc::new(ExpandWildcardRule::new())
-        .analyze(plan.clone(), &ConfigOptions::default())?;
-
     let mut producer: DefaultSubstraitProducer = DefaultSubstraitProducer::new(state);
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
-            input: Some(*producer.handle_plan(&plan)?),
+            input: Some(*producer.handle_plan(plan)?),
             names: to_substrait_named_struct(plan.schema())?.names,
         })),
     }];
@@ -456,6 +449,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, state: &SessionState) -> Result<Box
         relations: plan_rels,
         advanced_extensions: None,
         expected_type_urls: vec![],
+        parameter_bindings: vec![],
     }))
 }
 
@@ -1133,6 +1127,17 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::StringConcat => "str_concat",
         Operator::AtArrow => "at_arrow",
         Operator::ArrowAt => "arrow_at",
+        Operator::Arrow => "arrow",
+        Operator::LongArrow => "long_arrow",
+        Operator::HashArrow => "hash_arrow",
+        Operator::HashLongArrow => "hash_long_arrow",
+        Operator::AtAt => "at_at",
+        Operator::IntegerDivide => "integer_divide",
+        Operator::HashMinus => "hash_minus",
+        Operator::AtQuestion => "at_question",
+        Operator::Question => "question",
+        Operator::QuestionAnd => "question_and",
+        Operator::QuestionPipe => "question_pipe",
         Operator::BitwiseXor => "bitwise_xor",
         Operator::BitwiseShiftRight => "bitwise_shift_right",
         Operator::BitwiseShiftLeft => "bitwise_shift_left",

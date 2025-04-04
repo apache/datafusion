@@ -39,7 +39,7 @@ name = "datafusion_proto"
 
 [features]
 default = ["parquet"]
-json = ["pbjson", "serde", "serde_json"]
+json = ["pbjson", "serde", "serde_json", "datafusion-proto-common/json"]
 parquet = ["datafusion/parquet", "datafusion-common/parquet"]
 avro = ["datafusion/avro", "datafusion-common/avro"]
 

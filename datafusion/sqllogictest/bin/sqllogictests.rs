@@ -581,6 +581,12 @@ struct Options {
         help = "IGNORED (for compatibility with built-in rust test runner)"
     )]
     ignored: bool,
+
+    #[clap(
+        long,
+        help = "IGNORED (for compatibility with built-in rust test runner)"
+    )]
+    nocapture: bool,
 }
 
 impl Options {

@@ -37,6 +37,8 @@ use datafusion_cli::{
 };
 
 use clap::Parser;
+use datafusion::common::config_err;
+use datafusion::config::ConfigOptions;
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -150,11 +152,7 @@ async fn main_inner() -> Result<()> {
         env::set_current_dir(p).unwrap();
     };
 
-    let mut session_config = SessionConfig::from_env()?.with_information_schema(true);
-
-    if let Some(batch_size) = args.batch_size {
-        session_config = session_config.with_batch_size(batch_size);
-    };
+    let session_config = get_session_config(&args)?;
 
     let mut rt_builder = RuntimeEnvBuilder::new();
     // set memory pool size
@@ -224,6 +222,30 @@ async fn main_inner() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Get the session configuration based on the provided arguments
+/// and environment settings.
+fn get_session_config(args: &Args) -> Result<SessionConfig> {
+    // Read options from environment variables and merge with command line options
+    let mut config_options = ConfigOptions::from_env()?;
+
+    if let Some(batch_size) = args.batch_size {
+        if batch_size == 0 {
+            return config_err!("batch_size must be greater than 0");
+        }
+        config_options.execution.batch_size = batch_size;
+    };
+
+    // use easier to understand "tree" mode by default
+    // if the user hasn't specified an explain format in the environment
+    if env::var_os("DATAFUSION_EXPLAIN_FORMAT").is_none() {
+        config_options.explain.format = String::from("tree");
+    }
+
+    let session_config =
+        SessionConfig::from(config_options).with_information_schema(true);
+    Ok(session_config)
 }
 
 fn parse_valid_file(dir: &str) -> Result<String, String> {
@@ -322,7 +344,8 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::assert_batches_eq;
+    use datafusion::common::test_util::batches_to_string;
+    use insta::assert_snapshot;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
         let result = extract_memory_pool_size(input);
@@ -391,21 +414,26 @@ mod tests {
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
-        let excepted = [
-            "+-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
-            "| filename                                                    | row_group_id | row_group_num_rows | row_group_num_columns | row_group_bytes | column_id | file_offset | num_values | path_in_schema | type  | stats_min | stats_max | stats_null_count | stats_distinct_count | stats_min_value | stats_max_value | compression | encodings                    | index_page_offset | dictionary_page_offset | data_page_offset | total_compressed_size | total_uncompressed_size |",
-            "+-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
-            "| ../datafusion/core/tests/data/fixed_size_list_array.parquet | 0            | 2                  | 1                     | 123             | 0         | 125         | 4          | \"f0.list.item\" | INT64 | 1         | 4         | 0                |                      | 1               | 4               | SNAPPY      | [RLE_DICTIONARY, PLAIN, RLE] |                   | 4                      | 46               | 121                   | 123                     |",
-            "+-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
-        ];
-        assert_batches_eq!(excepted, &rbs);
+        assert_snapshot!(batches_to_string(&rbs), @r#"
+        +-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
+        | filename                                                    | row_group_id | row_group_num_rows | row_group_num_columns | row_group_bytes | column_id | file_offset | num_values | path_in_schema | type  | stats_min | stats_max | stats_null_count | stats_distinct_count | stats_min_value | stats_max_value | compression | encodings                    | index_page_offset | dictionary_page_offset | data_page_offset | total_compressed_size | total_uncompressed_size |
+        +-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
+        | ../datafusion/core/tests/data/fixed_size_list_array.parquet | 0            | 2                  | 1                     | 123             | 0         | 125         | 4          | "f0.list.item" | INT64 | 1         | 4         | 0                |                      | 1               | 4               | SNAPPY      | [RLE_DICTIONARY, PLAIN, RLE] |                   | 4                      | 46               | 121                   | 123                     |
+        +-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
+        "#);
 
         // input with double quote
         let sql =
             "SELECT * FROM parquet_metadata(\"../datafusion/core/tests/data/fixed_size_list_array.parquet\")";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
-        assert_batches_eq!(excepted, &rbs);
+        assert_snapshot!(batches_to_string(&rbs), @r#"
+        +-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
+        | filename                                                    | row_group_id | row_group_num_rows | row_group_num_columns | row_group_bytes | column_id | file_offset | num_values | path_in_schema | type  | stats_min | stats_max | stats_null_count | stats_distinct_count | stats_min_value | stats_max_value | compression | encodings                    | index_page_offset | dictionary_page_offset | data_page_offset | total_compressed_size | total_uncompressed_size |
+        +-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
+        | ../datafusion/core/tests/data/fixed_size_list_array.parquet | 0            | 2                  | 1                     | 123             | 0         | 125         | 4          | "f0.list.item" | INT64 | 1         | 4         | 0                |                      | 1               | 4               | SNAPPY      | [RLE_DICTIONARY, PLAIN, RLE] |                   | 4                      | 46               | 121                   | 123                     |
+        +-------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+-------+-----------+-----------+------------------+----------------------+-----------------+-----------------+-------------+------------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
+        "#);
 
         Ok(())
     }
@@ -421,15 +449,13 @@ mod tests {
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
-        let excepted = [
-
-"+-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
-"| filename                                                        | row_group_id | row_group_num_rows | row_group_num_columns | row_group_bytes | column_id | file_offset | num_values | path_in_schema | type       | stats_min | stats_max | stats_null_count | stats_distinct_count | stats_min_value | stats_max_value | compression        | encodings                | index_page_offset | dictionary_page_offset | data_page_offset | total_compressed_size | total_uncompressed_size |",
-"+-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+",
-"| ../parquet-testing/data/data_index_bloom_encoding_stats.parquet | 0            | 14                 | 1                     | 163             | 0         | 4           | 14         | \"String\"       | BYTE_ARRAY | Hello     | today     | 0                |                      | Hello           | today           | GZIP(GzipLevel(6)) | [BIT_PACKED, RLE, PLAIN] |                   |                        | 4                | 152                   | 163                     |",
-"+-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+"
-        ];
-        assert_batches_eq!(excepted, &rbs);
+        assert_snapshot!(batches_to_string(&rbs),@r#"
+        +-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
+        | filename                                                        | row_group_id | row_group_num_rows | row_group_num_columns | row_group_bytes | column_id | file_offset | num_values | path_in_schema | type       | stats_min | stats_max | stats_null_count | stats_distinct_count | stats_min_value | stats_max_value | compression        | encodings                | index_page_offset | dictionary_page_offset | data_page_offset | total_compressed_size | total_uncompressed_size |
+        +-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
+        | ../parquet-testing/data/data_index_bloom_encoding_stats.parquet | 0            | 14                 | 1                     | 163             | 0         | 4           | 14         | "String"       | BYTE_ARRAY | Hello     | today     | 0                |                      | Hello           | today           | GZIP(GzipLevel(6)) | [BIT_PACKED, RLE, PLAIN] |                   |                        | 4                | 152                   | 163                     |
+        +-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
+        "#);
 
         Ok(())
     }

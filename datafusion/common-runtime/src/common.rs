@@ -17,7 +17,8 @@
 
 use std::future::Future;
 
-use tokio::task::{JoinError, JoinSet};
+use crate::JoinSet;
+use tokio::task::JoinError;
 
 /// Helper that  provides a simple API to spawn a single task and join it.
 /// Provides guarantees of aborting on `Drop` to keep it cancel-safe.

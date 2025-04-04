@@ -176,6 +176,25 @@ FROM
 ----
 [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8]
 
+# array agg can use order by with distinct
+query ?
+SELECT array_agg(DISTINCT c13 ORDER BY c13)
+FROM
+  (SELECT *
+  FROM aggregate_test_100
+  ORDER BY c13
+  LIMIT 5) as t1
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8]
+
+query error Execution error: In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
+SELECT array_agg(DISTINCT c13 ORDER BY c12)
+FROM aggregate_test_100
+
+query error Execution error: In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
+SELECT array_agg(DISTINCT c13 ORDER BY c13, c12)
+FROM aggregate_test_100
+
 statement ok
 CREATE EXTERNAL TABLE agg_order (
 c1 INT NOT NULL,
@@ -233,6 +252,30 @@ select column1, nth_value(column3, 2 order by column2, column4 desc) from array_
 ----
 b [4, 5, 6]
 w [9, 5, 2]
+
+query ?
+select array_agg(DISTINCT column2 order by column2) from array_agg_order_list_table;
+----
+[1, 2]
+
+query ?
+select array_agg(DISTINCT column2 order by column2 desc) from array_agg_order_list_table;
+----
+[2, 1]
+
+query ?
+select array_agg(DISTINCT column2 + 1 order by column2 + 1 desc) from array_agg_order_list_table;
+----
+[3, 2]
+
+query ?
+select array_agg(DISTINCT column2 order by column2) from array_agg_order_list_table GROUP BY column1;
+----
+[1, 2]
+[1, 2]
+
+statement error In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
+select array_agg(DISTINCT column2 order by column1) from array_agg_order_list_table;
 
 statement ok
 drop table array_agg_order_list_table;
@@ -3807,6 +3850,52 @@ SELECT MIN(value), MAX(value) FROM timestampmicrosecond
 statement ok
 DROP TABLE timestampmicrosecond;
 
+# min_duration, max_duration
+statement ok
+create table d
+as values
+  (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)'),  arrow_cast(3, 'Duration(Microsecond)'),  arrow_cast(4, 'Duration(Nanosecond)'), 1),
+  (arrow_cast(11, 'Duration(Second)'),arrow_cast(22, 'Duration(Millisecond)'), arrow_cast(33, 'Duration(Microsecond)'), arrow_cast(44, 'Duration(Nanosecond)'), 1);
+
+query ????
+SELECT min(column1), min(column2), min(column3), min(column4) FROM d;
+----
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.002 secs 0 days 0 hours 0 mins 0.000003 secs 0 days 0 hours 0 mins 0.000000004 secs
+
+query ????
+SELECT max(column1), max(column2), max(column3), max(column4) FROM d;
+----
+0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs
+
+# GROUP BY follows a different code path
+query ????I
+SELECT min(column1), min(column2), min(column3), min(column4), column5 FROM d GROUP BY column5;
+----
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.002 secs 0 days 0 hours 0 mins 0.000003 secs 0 days 0 hours 0 mins 0.000000004 secs 1
+
+query ????I
+SELECT max(column1), max(column2), max(column3), max(column4), column5 FROM d GROUP BY column5;
+----
+0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs 1
+
+statement ok
+INSERT INTO d VALUES
+  (arrow_cast(3, 'Duration(Second)'), arrow_cast(1, 'Duration(Millisecond)'), arrow_cast(7, 'Duration(Microsecond)'), arrow_cast(2, 'Duration(Nanosecond)'), 1),
+  (arrow_cast(0, 'Duration(Second)'), arrow_cast(9, 'Duration(Millisecond)'), arrow_cast(5, 'Duration(Microsecond)'), arrow_cast(8, 'Duration(Nanosecond)'), 1);
+
+query ????I
+SELECT max(column1), max(column2), max(column3), max(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
+----
+0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 0.022 secs 0 days 0 hours 0 mins 0.000033 secs 0 days 0 hours 0 mins 0.000000044 secs 1
+
+query ????I
+SELECT min(column1), min(column2), min(column3), min(column4), column5 FROM d GROUP BY column5 ORDER BY column5;
+----
+0 days 0 hours 0 mins 0 secs 0 days 0 hours 0 mins 0.001 secs 0 days 0 hours 0 mins 0.000003 secs 0 days 0 hours 0 mins 0.000000002 secs 1
+
+statement ok
+drop table d;
+
 # max_bool
 statement ok
 CREATE TABLE max_bool (value BOOLEAN);
@@ -6640,3 +6729,26 @@ SELECT a, median(b), arrow_typeof(median(b)) FROM group_median_all_nulls GROUP B
 ----
 group0 NULL Int32
 group1 NULL Int32
+
+query I
+with test AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+select count(*) from test WHERE 1 = 1;
+----
+10
+
+query I
+with test AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+select count(c1) from test WHERE 1 = 1;
+----
+10
+
+query II rowsort
+with test AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 5) t(i))
+select c2, count(*) from test WHERE 1 = 1 group by c2;
+----
+2 1
+3 1
+4 1
+5 1
+6 1
+

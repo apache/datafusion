@@ -20,7 +20,8 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
 pub mod aggregate_statistics;

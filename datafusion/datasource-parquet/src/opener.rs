@@ -19,14 +19,11 @@
 
 use std::sync::Arc;
 
-use crate::file_format::{
-    coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
-};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
-    row_filter, should_enable_page_index, ParquetAccessPlan, ParquetFileMetrics,
-    ParquetFileReaderFactory,
+    apply_file_schema_type_coercions, row_filter, should_enable_page_index,
+    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
@@ -107,6 +104,7 @@ impl FileOpener for ParquetOpener {
 
         let projected_schema =
             SchemaRef::from(self.table_schema.project(&self.projection)?);
+        let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
         let schema_adapter = self
             .schema_adapter_factory
             .create(projected_schema, Arc::clone(&self.table_schema));
@@ -131,14 +129,8 @@ impl FileOpener for ParquetOpener {
                 ArrowReaderMetadata::load_async(&mut reader, options.clone()).await?;
             let mut schema = Arc::clone(metadata.schema());
 
-            if let Some(merged) =
-                coerce_file_schema_to_string_type(&table_schema, &schema)
-            {
-                schema = Arc::new(merged);
-            }
-
             // read with view types
-            if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &schema)
+            if let Some(merged) = apply_file_schema_type_coercions(&table_schema, &schema)
             {
                 schema = Arc::new(merged);
             }
@@ -173,7 +165,7 @@ impl FileOpener for ParquetOpener {
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
-                    Arc::clone(&schema_mapping),
+                    &schema_adapter_factory,
                 );
 
                 match row_filter {
