@@ -259,14 +259,10 @@ unsafe extern "C" fn scan_fn_wrapper(
         };
 
         let projections: Vec<_> = projections.into_iter().collect();
-        let maybe_projections = match projections.is_empty() {
-            true => None,
-            false => Some(&projections),
-        };
 
         let plan = rresult_return!(
             internal_provider
-                .scan(&ctx.state(), maybe_projections, &filters, limit.into())
+                .scan(&ctx.state(), Some(&projections), &filters, limit.into())
                 .await
         );
 
@@ -598,6 +594,47 @@ mod tests {
             .show()
             .await?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregation() -> Result<()> {
+        use arrow::datatypes::Field;
+        use datafusion::arrow::{
+            array::Float32Array, datatypes::DataType, record_batch::RecordBatch,
+        };
+        use datafusion::common::assert_batches_eq;
+        use datafusion::datasource::MemTable;
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+        // define data in two partitions
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Float32Array::from(vec![2.0, 4.0, 8.0]))],
+        )?;
+
+        let ctx = SessionContext::new();
+
+        let provider = Arc::new(MemTable::try_new(schema, vec![vec![batch1]])?);
+
+        let ffi_provider = FFI_TableProvider::new(provider, true, None);
+
+        let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
+
+        ctx.register_table("t", Arc::new(foreign_table_provider))?;
+
+        let df = ctx.sql("SELECT COUNT(*) as cnt FROM t").await?;
+        let plan = df.create_physical_plan().await?;
+
+        let result = ctx
+            .sql("SELECT COUNT(*) as cnt FROM t")
+            .await?
+            .collect()
+            .await?;
+        let expected = ["+-----+", "| cnt |", "+-----+", "| 3   |", "+-----+"];
+        assert_batches_eq!(expected, &result);
         Ok(())
     }
 }
