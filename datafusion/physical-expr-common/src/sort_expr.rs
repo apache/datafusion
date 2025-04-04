@@ -28,7 +28,7 @@ use crate::physical_expr::{fmt_sql, PhysicalExpr};
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 /// Represents Sort operation for a column in a RecordBatch
@@ -357,15 +357,6 @@ impl LexOrdering {
         self.inner
     }
 
-    /// Truncates the `LexOrdering`, keeping only the first `len` elements.
-    pub fn truncate(&mut self, len: usize) -> Result<()> {
-        if len == 0 {
-            return exec_err!("Degenerate LexOrdering instances are not allowed");
-        }
-        self.inner.truncate(len);
-        Ok(())
-    }
-
     /// Constructs a duplicate-free `LexOrdering` by filtering out duplicate
     /// entries that have same physical expression inside.
     ///
@@ -378,7 +369,27 @@ impl LexOrdering {
                 orderings.push(element);
             }
         }
-        Self::new(orderings)
+        Self { inner: orderings }
+    }
+
+    /// Reverses each element in the ordering. For instance, `[a ASC NULLS LAST]`
+    /// turns into `[a DESC NULLS FIRST]`. Such reversals are useful in planning,
+    /// e.g. when constructing equivalent window expressions.
+    pub fn reverse_each(&self) -> Self {
+        let mut result = self.clone();
+        for sort_expr in result.iter_mut() {
+            sort_expr.options = !sort_expr.options;
+        }
+        result
+    }
+
+    /// Truncates the `LexOrdering`, keeping only the first `len` elements.
+    pub fn truncate(&mut self, len: usize) -> Result<()> {
+        if len == 0 {
+            return plan_err!("Degenerate LexOrdering instances are not allowed");
+        }
+        self.inner.truncate(len);
+        Ok(())
     }
 
     /// Transforms each `PhysicalSortExpr` in the `LexOrdering`
@@ -554,7 +565,10 @@ impl<'a> IntoIterator for &'a LexRequirement {
 // Cross-conversion utilities between `LexOrdering` and `LexRequirement`
 impl From<LexOrdering> for LexRequirement {
     fn from(value: LexOrdering) -> Self {
-        Self::new(value.into_iter().map(Into::into).collect())
+        // Can construct directly as `value` is non-degenerate:
+        Self {
+            inner: value.into_iter().map(Into::into).collect(),
+        }
     }
 }
 
@@ -566,7 +580,10 @@ impl From<Vec<PhysicalSortExpr>> for LexRequirement {
 
 impl From<LexRequirement> for LexOrdering {
     fn from(value: LexRequirement) -> Self {
-        value.into_iter().map(Into::into).collect()
+        // Can construct directly as `value` is non-degenerate:
+        Self {
+            inner: value.into_iter().map(Into::into).collect(),
+        }
     }
 }
 

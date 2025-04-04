@@ -24,9 +24,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Result};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion_physical_expr::{
-    reverse_order_bys, EquivalenceProperties, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 use datafusion_physical_plan::aggregates::concat_slices;
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{
@@ -178,7 +176,8 @@ fn try_convert_aggregate_if_better(
                     aggr_expr.with_beneficial_ordering(true)?.map(Arc::new)
                 } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
                     prefix_requirement,
-                    &reverse_order_bys(order_bys)
+                    &order_bys
+                        .reverse_each()
                         .into_iter()
                         .map(Into::into)
                         .collect::<Vec<_>>(),

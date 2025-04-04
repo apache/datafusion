@@ -43,9 +43,10 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::window::{
+    SlidingAggregateWindowExpr, StandardWindowFunctionExpr,
+};
 use datafusion_physical_expr::{
-    reverse_order_bys,
-    window::{SlidingAggregateWindowExpr, StandardWindowFunctionExpr},
     ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
 
@@ -604,7 +605,7 @@ pub fn get_window_mode(
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
-    let reverse_orderby_keys = orderby_keys.map(reverse_order_bys);
+    let reverse_orderby_keys = orderby_keys.map(|o| o.reverse_each());
     for (should_swap, orderbys) in
         [(false, orderby_keys), (true, reverse_orderby_keys.as_ref())]
     {

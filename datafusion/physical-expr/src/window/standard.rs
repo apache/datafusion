@@ -24,7 +24,7 @@ use std::sync::Arc;
 use super::{StandardWindowFunctionExpr, WindowExpr};
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
-use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
+use crate::{EquivalenceProperties, PhysicalExpr};
 
 use arrow::array::{new_empty_array, ArrayRef};
 use arrow::datatypes::Field;
@@ -260,7 +260,7 @@ impl WindowExpr for StandardWindowExpr {
             Arc::new(StandardWindowExpr::new(
                 reverse_expr,
                 &self.partition_by.clone(),
-                self.order_by.as_ref().map(reverse_order_bys),
+                self.order_by.as_ref().map(|o| o.reverse_each()),
                 Arc::new(self.window_frame.reverse()),
             )) as _
         })

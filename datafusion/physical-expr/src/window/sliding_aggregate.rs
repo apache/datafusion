@@ -26,7 +26,7 @@ use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
+use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::Field;
@@ -123,14 +123,14 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                 Arc::new(PlainAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    self.order_by.as_ref().map(reverse_order_bys),
+                    self.order_by.as_ref().map(|o| o.reverse_each()),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             } else {
                 Arc::new(SlidingAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    self.order_by.as_ref().map(reverse_order_bys),
+                    self.order_by.as_ref().map(|o| o.reverse_each()),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             }

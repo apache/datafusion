@@ -53,7 +53,6 @@ use datafusion_functions_aggregate_common::accumulator::{
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_expr_common::utils::reverse_order_bys;
 
 /// Builder for physical [`AggregateFunctionExpr`]
 ///
@@ -587,7 +586,7 @@ impl AggregateFunctionExpr {
                 replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
 
                 AggregateExprBuilder::new(reverse_udf, self.args.to_vec())
-                    .order_by(self.ordering_req.as_ref().map(reverse_order_bys))
+                    .order_by(self.ordering_req.as_ref().map(|o| o.reverse_each()))
                     .schema(Arc::new(self.schema.clone()))
                     .alias(name)
                     .with_ignore_nulls(self.ignore_nulls)
