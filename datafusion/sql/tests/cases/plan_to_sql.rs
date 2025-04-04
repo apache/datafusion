@@ -733,109 +733,267 @@ fn test_aggregation_without_projection() -> Result<()> {
 }
 
 #[test]
-fn test_table_references_in_plan_to_sql() {
-    fn test(table_name: &str, expected_sql: &str, dialect: &impl UnparserDialect) {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, false),
-        ]);
-        let plan = table_scan(Some(table_name), &schema, None)
-            .unwrap()
-            .project(vec![col("id"), col("value")])
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let unparser = Unparser::new(dialect);
-        let sql = unparser.plan_to_sql(&plan).unwrap();
-
-        assert_eq!(sql.to_string(), expected_sql)
-    }
-
-    test(
-        "catalog.schema.table",
-        r#"SELECT "table".id, "table"."value" FROM "catalog"."schema"."table""#,
+fn test_table_references_in_plan_to_sql_1() {
+    let table_name = "catalog.schema.table";
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
+    let sql = table_references_in_plan_helper(
+        table_name,
+        schema,
+        vec![col("id"), col("value")],
         &DefaultDialect {},
     );
-    test(
-        "schema.table",
-        r#"SELECT "table".id, "table"."value" FROM "schema"."table""#,
-        &DefaultDialect {},
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "table".id, "table"."value" FROM "catalog"."schema"."table""#
     );
-    test(
-        "table",
-        r#"SELECT "table".id, "table"."value" FROM "table""#,
-        &DefaultDialect {},
-    );
+}
 
+#[test]
+fn test_table_references_in_plan_to_sql_2() {
+    let table_name = "schema.table";
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
+    let sql = table_references_in_plan_helper(
+        table_name,
+        schema,
+        vec![col("id"), col("value")],
+        &DefaultDialect {},
+    );
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "table".id, "table"."value" FROM "schema"."table""#
+    );
+}
+
+#[test]
+fn test_table_references_in_plan_to_sql_3() {
+    let table_name = "table";
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
+    let sql = table_references_in_plan_helper(
+        table_name,
+        schema,
+        vec![col("id"), col("value")],
+        &DefaultDialect {},
+    );
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "table".id, "table"."value" FROM "table""#
+    );
+}
+
+#[test]
+fn test_table_references_in_plan_to_sql_4() {
+    let table_name = "catalog.schema.table";
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
     let custom_dialect = CustomDialectBuilder::default()
         .with_full_qualified_col(true)
         .with_identifier_quote_style('"')
         .build();
 
-    test(
-        "catalog.schema.table",
-        r#"SELECT "catalog"."schema"."table"."id", "catalog"."schema"."table"."value" FROM "catalog"."schema"."table""#,
+    let sql = table_references_in_plan_helper(
+        table_name,
+        schema,
+        vec![col("id"), col("value")],
         &custom_dialect,
     );
-    test(
-        "schema.table",
-        r#"SELECT "schema"."table"."id", "schema"."table"."value" FROM "schema"."table""#,
-        &custom_dialect,
-    );
-    test(
-        "table",
-        r#"SELECT "table"."id", "table"."value" FROM "table""#,
-        &custom_dialect,
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "catalog"."schema"."table"."id", "catalog"."schema"."table"."value" FROM "catalog"."schema"."table""#
     );
 }
 
 #[test]
-fn test_table_scan_with_none_projection_in_plan_to_sql() {
-    fn test(table_name: &str, expected_sql: &str) {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, false),
-        ]);
+fn test_table_references_in_plan_to_sql_5() {
+    let table_name = "schema.table";
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
+    let custom_dialect = CustomDialectBuilder::default()
+        .with_full_qualified_col(true)
+        .with_identifier_quote_style('"')
+        .build();
 
-        let plan = table_scan(Some(table_name), &schema, None)
-            .unwrap()
-            .build()
-            .unwrap();
-        let sql = plan_to_sql(&plan).unwrap();
-        assert_eq!(sql.to_string(), expected_sql)
-    }
-
-    test(
-        "catalog.schema.table",
-        r#"SELECT * FROM "catalog"."schema"."table""#,
+    let sql = table_references_in_plan_helper(
+        table_name,
+        schema,
+        vec![col("id"), col("value")],
+        &custom_dialect,
     );
-    test("schema.table", r#"SELECT * FROM "schema"."table""#);
-    test("table", r#"SELECT * FROM "table""#);
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "schema"."table"."id", "schema"."table"."value" FROM "schema"."table""#
+    );
 }
 
 #[test]
-fn test_table_scan_with_empty_projection_in_plan_to_sql() {
-    fn test(table_name: &str, expected_sql: &str) {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, false),
-        ]);
+fn test_table_references_in_plan_to_sql_6() {
+    let table_name = "table";
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
+    let custom_dialect = CustomDialectBuilder::default()
+        .with_full_qualified_col(true)
+        .with_identifier_quote_style('"')
+        .build();
 
-        let plan = table_scan(Some(table_name), &schema, Some(vec![]))
-            .unwrap()
-            .build()
-            .unwrap();
-        let sql = plan_to_sql(&plan).unwrap();
-        assert_eq!(sql.to_string(), expected_sql)
-    }
-
-    test(
-        "catalog.schema.table",
-        r#"SELECT 1 FROM "catalog"."schema"."table""#,
+    let sql = table_references_in_plan_helper(
+        table_name,
+        schema,
+        vec![col("id"), col("value")],
+        &custom_dialect,
     );
-    test("schema.table", r#"SELECT 1 FROM "schema"."table""#);
-    test("table", r#"SELECT 1 FROM "table""#);
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "table"."id", "table"."value" FROM "table""#
+    );
+}
+
+fn table_references_in_plan_helper(
+    table_name: &str,
+    table_schema: Schema,
+    expr: impl IntoIterator<Item = impl Into<datafusion_expr::select_expr::SelectExpr>>,
+    dialect: &impl UnparserDialect,
+) -> Statement {
+    let plan = table_scan(Some(table_name), &table_schema, None)
+        .unwrap()
+        .project(expr)
+        .unwrap()
+        .build()
+        .unwrap();
+    let unparser = Unparser::new(dialect);
+    unparser.plan_to_sql(&plan).unwrap()
+}
+
+#[test]
+fn test_table_scan_with_none_projection_in_plan_to_sql_1() {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
+    let table_name = "catalog.schema.table";
+    let plan = table_scan_with_empty_projection_and_none_projection_helper(
+        table_name, schema, None,
+    );
+    let sql = plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT * FROM "catalog"."schema"."table""#
+    );
+}
+
+#[test]
+fn test_table_scan_with_none_projection_in_plan_to_sql_2() {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
+    let table_name = "schema.table";
+    let plan = table_scan_with_empty_projection_and_none_projection_helper(
+        table_name, schema, None,
+    );
+    let sql = plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT * FROM "schema"."table""#
+    );
+}
+
+#[test]
+fn test_table_scan_with_none_projection_in_plan_to_sql_3() {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
+    let table_name = "table";
+    let plan = table_scan_with_empty_projection_and_none_projection_helper(
+        table_name, schema, None,
+    );
+    let sql = plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT * FROM "table""#
+    );
+}
+
+#[test]
+fn test_table_scan_with_empty_projection_in_plan_to_sql_1() {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
+    let table_name = "catalog.schema.table";
+    let plan = table_scan_with_empty_projection_and_none_projection_helper(
+        table_name,
+        schema,
+        Some(vec![]),
+    );
+    let sql = plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT 1 FROM "catalog"."schema"."table""#
+    );
+}
+
+#[test]
+fn test_table_scan_with_empty_projection_in_plan_to_sql_2() {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
+    let table_name = "schema.table";
+    let plan = table_scan_with_empty_projection_and_none_projection_helper(
+        table_name,
+        schema,
+        Some(vec![]),
+    );
+    let sql = plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT 1 FROM "schema"."table""#
+    );
+}
+
+#[test]
+fn test_table_scan_with_empty_projection_in_plan_to_sql_3() {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ]);
+    let table_name = "table";
+    let plan = table_scan_with_empty_projection_and_none_projection_helper(
+        table_name,
+        schema,
+        Some(vec![]),
+    );
+    let sql = plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT 1 FROM "table""#
+    );
+}
+
+fn table_scan_with_empty_projection_and_none_projection_helper(
+    table_name: &str,
+    table_schema: Schema,
+    projection: Option<Vec<usize>>,
+) -> LogicalPlan {
+    table_scan(Some(table_name), &table_schema, projection)
+        .unwrap()
+        .build()
+        .unwrap()
 }
 
 #[test]
