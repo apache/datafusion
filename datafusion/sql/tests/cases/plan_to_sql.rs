@@ -697,14 +697,6 @@ fn test_unnest_logical_plan() -> Result<()> {
     };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
-    //     let expected = r#"
-    // Projection: __unnest_placeholder(unnest_table.struct_col).field1, __unnest_placeholder(unnest_table.struct_col).field2, __unnest_placeholder(unnest_table.array_col,depth=1) AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
-    //   Unnest: lists[__unnest_placeholder(unnest_table.array_col)|depth=1] structs[__unnest_placeholder(unnest_table.struct_col)]
-    //     Projection: unnest_table.struct_col AS __unnest_placeholder(unnest_table.struct_col), unnest_table.array_col AS __unnest_placeholder(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
-    //       TableScan: unnest_table"#.trim_start();
-
-    //     assert_eq!(plan.to_string(), expected);
-
     assert_snapshot!(
         plan,
         @r#"
@@ -923,12 +915,12 @@ fn test_pretty_roundtrip() -> Result<()> {
     Ok(())
 }
 
-fn sql_round_trip<D>(dialect: D, query: &str, expect: &str)
+fn generate_round_trip_statement<D>(dialect: D, sql: &str) -> Statement
 where
     D: Dialect,
 {
     let statement = Parser::new(&dialect)
-        .try_with_sql(query)
+        .try_with_sql(sql)
         .unwrap()
         .parse_statement()
         .unwrap();
@@ -945,8 +937,7 @@ where
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
-    let roundtrip_statement = plan_to_sql(&plan).unwrap();
-    assert_eq!(roundtrip_statement.to_string(), expect);
+    plan_to_sql(&plan).unwrap()
 }
 
 #[test]
@@ -1379,104 +1370,143 @@ fn test_join_with_table_scan_filters() -> Result<()> {
 
 #[test]
 fn test_interval_lhs_eq() {
-    sql_round_trip(
+    let statement = generate_round_trip_statement(
         GenericDialect {},
         "select interval '2 seconds' = interval '2 seconds'",
-        "SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')",
     );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')"#
+    )
 }
 
 #[test]
 fn test_interval_lhs_lt() {
-    sql_round_trip(
+    let statement = generate_round_trip_statement(
         GenericDialect {},
         "select interval '2 seconds' < interval '2 seconds'",
-        "SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')",
     );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')"#
+    )
 }
 
 #[test]
 fn test_without_offset() {
-    sql_round_trip(MySqlDialect {}, "select 1", "SELECT 1");
+    let statement = generate_round_trip_statement(MySqlDialect {}, "select 1");
+    assert_snapshot!(
+        statement,
+        @r#"SELECT 1"#
+    )
 }
 
 #[test]
 fn test_with_offset0() {
-    sql_round_trip(MySqlDialect {}, "select 1 offset 0", "SELECT 1 OFFSET 0");
+    let statement = generate_round_trip_statement(MySqlDialect {}, "select 1 offset 0");
+    assert_snapshot!(
+        statement,
+        @r#"SELECT 1 OFFSET 0"#
+    )
 }
 
 #[test]
 fn test_with_offset95() {
-    sql_round_trip(MySqlDialect {}, "select 1 offset 95", "SELECT 1 OFFSET 95");
+    let statement = generate_round_trip_statement(MySqlDialect {}, "select 1 offset 95");
+    assert_snapshot!(
+        statement,
+        @r#"SELECT 1 OFFSET 95"#
+    )
 }
 
 #[test]
-fn test_order_by_to_sql() {
+fn test_order_by_to_sql_1() {
     // order by aggregation function
-    sql_round_trip(
+    let statement = generate_round_trip_statement(
         GenericDialect {},
         r#"SELECT id, first_name, SUM(id) FROM person GROUP BY id, first_name ORDER BY SUM(id) ASC, first_name DESC, id, first_name LIMIT 10"#,
-        r#"SELECT person.id, person.first_name, sum(person.id) FROM person GROUP BY person.id, person.first_name ORDER BY sum(person.id) ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#,
     );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT person.id, person.first_name, sum(person.id) FROM person GROUP BY person.id, person.first_name ORDER BY sum(person.id) ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#
+    );
+}
 
+#[test]
+fn test_order_by_to_sql_2() {
     // order by aggregation function alias
-    sql_round_trip(
+    let statement = generate_round_trip_statement(
         GenericDialect {},
         r#"SELECT id, first_name, SUM(id) as total_sum FROM person GROUP BY id, first_name ORDER BY total_sum ASC, first_name DESC, id, first_name LIMIT 10"#,
-        r#"SELECT person.id, person.first_name, sum(person.id) AS total_sum FROM person GROUP BY person.id, person.first_name ORDER BY total_sum ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#,
     );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT person.id, person.first_name, sum(person.id) AS total_sum FROM person GROUP BY person.id, person.first_name ORDER BY total_sum ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#
+    );
+}
 
-    // order by scalar function from projection
-    sql_round_trip(
+#[test]
+fn test_order_by_to_sql_3() {
+    let statement = generate_round_trip_statement(
         GenericDialect {},
         r#"SELECT id, first_name, substr(first_name,0,5) FROM person ORDER BY id, substr(first_name,0,5)"#,
-        r#"SELECT person.id, person.first_name, substr(person.first_name, 0, 5) FROM person ORDER BY person.id ASC NULLS LAST, substr(person.first_name, 0, 5) ASC NULLS LAST"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT person.id, person.first_name, substr(person.first_name, 0, 5) FROM person ORDER BY person.id ASC NULLS LAST, substr(person.first_name, 0, 5) ASC NULLS LAST"#
     );
 }
 
 #[test]
 fn test_aggregation_to_sql() {
-    sql_round_trip(
-        GenericDialect {},
-        r#"SELECT id, first_name,
+    let sql = r#"SELECT id, first_name,
         SUM(id) AS total_sum,
         SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
         MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total,
         rank() OVER (PARTITION BY grouping(id) + grouping(age), CASE WHEN grouping(age) = 0 THEN id END ORDER BY sum(id) DESC) AS rank_within_parent_1,
         rank() OVER (PARTITION BY grouping(age) + grouping(id), CASE WHEN (CAST(grouping(age) AS BIGINT) = 0) THEN id END ORDER BY sum(id) DESC) AS rank_within_parent_2
         FROM person
-        GROUP BY id, first_name;"#,
-        r#"SELECT person.id, person.first_name,
-sum(person.id) AS total_sum, sum(person.id) OVER (PARTITION BY person.first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
-max(sum(person.id)) OVER (PARTITION BY person.first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total,
-rank() OVER (PARTITION BY (grouping(person.id) + grouping(person.age)), CASE WHEN (grouping(person.age) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_1,
-rank() OVER (PARTITION BY (grouping(person.age) + grouping(person.id)), CASE WHEN (CAST(grouping(person.age) AS BIGINT) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_2
-FROM person
-GROUP BY person.id, person.first_name"#.replace("\n", " ").as_str(),
+        GROUP BY id, first_name"#;
+    let statement = generate_round_trip_statement(GenericDialect {}, sql);
+    assert_snapshot!(
+        statement,
+        @"SELECT person.id, person.first_name, sum(person.id) AS total_sum, sum(person.id) OVER (PARTITION BY person.first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum, max(sum(person.id)) OVER (PARTITION BY person.first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total, rank() OVER (PARTITION BY (grouping(person.id) + grouping(person.age)), CASE WHEN (grouping(person.age) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_1, rank() OVER (PARTITION BY (grouping(person.age) + grouping(person.id)), CASE WHEN (CAST(grouping(person.age) AS BIGINT) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_2 FROM person GROUP BY person.id, person.first_name",
     );
 }
 
 #[test]
-fn test_unnest_to_sql() {
-    sql_round_trip(
+fn test_unnest_to_sql_1() {
+    let statement = generate_round_trip_statement(
         GenericDialect {},
         r#"SELECT unnest(array_col) as u1, struct_col, array_col FROM unnest_table WHERE array_col != NULL ORDER BY struct_col, array_col"#,
-        r#"SELECT UNNEST(unnest_table.array_col) AS u1, unnest_table.struct_col, unnest_table.array_col FROM unnest_table WHERE (unnest_table.array_col <> NULL) ORDER BY unnest_table.struct_col ASC NULLS LAST, unnest_table.array_col ASC NULLS LAST"#,
     );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT UNNEST(unnest_table.array_col) AS u1, unnest_table.struct_col, unnest_table.array_col FROM unnest_table WHERE (unnest_table.array_col <> NULL) ORDER BY unnest_table.struct_col ASC NULLS LAST, unnest_table.array_col ASC NULLS LAST"#
+    );
+}
 
-    sql_round_trip(
+#[test]
+fn test_unnest_to_sql_2() {
+    let statement = generate_round_trip_statement(
         GenericDialect {},
         r#"SELECT unnest(make_array(1, 2, 2, 5, NULL)) as u1"#,
-        r#"SELECT UNNEST([1, 2, 2, 5, NULL]) AS u1"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT UNNEST([1, 2, 2, 5, NULL]) AS u1"#
     );
 }
 
 #[test]
 fn test_join_with_no_conditions() {
-    sql_round_trip(
+    let statement = generate_round_trip_statement(
         GenericDialect {},
         "SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2",
-        "SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2",
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2"#
     );
 }
 
