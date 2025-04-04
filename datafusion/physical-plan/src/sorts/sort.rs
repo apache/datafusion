@@ -683,7 +683,36 @@ impl ExternalSorter {
             return self.sort_batch_stream(batch, metrics, reservation);
         }
 
-        let streams = std::mem::take(&mut self.in_mem_batches)
+        let mut merged_batches = Vec::new();
+        let mut current_batches = Vec::new();
+        let mut current_size = 0;
+
+        for batch in std::mem::take(&mut self.in_mem_batches) {
+            let batch_size = get_reserved_byte_for_record_batch(&batch);
+            if current_size + batch_size > self.sort_in_place_threshold_bytes
+                && !current_batches.is_empty()
+            {
+                let merged = concat_batches(&self.schema, &current_batches)?;
+                current_batches.clear();
+                self.reservation.try_shrink(current_size)?;
+                let merged_size = get_reserved_byte_for_record_batch(&merged);
+                self.reservation.try_grow(merged_size)?;
+                merged_batches.push(merged);
+                current_size = 0;
+            }
+            current_batches.push(batch);
+            current_size += batch_size;
+        }
+
+        if !current_batches.is_empty() {
+            let merged = concat_batches(&self.schema, &current_batches)?;
+            self.reservation.try_shrink(current_size)?;
+            let merged_size = get_reserved_byte_for_record_batch(&merged);
+            self.reservation.try_grow(merged_size)?;
+            merged_batches.push(merged);
+        }
+
+        let streams = merged_batches
             .into_iter()
             .map(|batch| {
                 let metrics = self.metrics.baseline.intermediate();
