@@ -155,7 +155,7 @@ impl FileOpener for ParquetOpener {
                     // Since we're manually loading the page index the option here should not matter but we pass it in for consistency
                     ArrowReaderOptions::new()
                         .with_page_index(true)
-                        .with_schema(physical_file_schema.clone()),
+                        .with_schema(Arc::clone(&physical_file_schema)),
                 )
                 .await?;
             }
