@@ -195,6 +195,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
         Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
     }
 
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        Ok(vec![self.statistics()?])
+    }
+
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         Some(Arc::new(CoalesceBatchesExec {
             input: Arc::clone(&self.input),

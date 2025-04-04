@@ -190,6 +190,11 @@ impl ExecutionPlan for ArrowExec {
     fn statistics(&self) -> Result<Statistics> {
         self.inner.statistics()
     }
+
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        self.inner.statistics_by_partition()
+    }
+
     fn fetch(&self) -> Option<usize> {
         self.inner.fetch()
     }

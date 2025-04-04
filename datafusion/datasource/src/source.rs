@@ -175,6 +175,23 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.statistics()
     }
 
+    fn statistics_by_partition(&self) -> datafusion_common::Result<Vec<Statistics>> {
+        let mut statistics = vec![
+            Statistics::new_unknown(&self.schema());
+            self.properties().partitioning.partition_count()
+        ];
+        if let Some(file_config) =
+            self.data_source.as_any().downcast_ref::<FileScanConfig>()
+        {
+            for (idx, file_group) in file_config.file_groups.iter().enumerate() {
+                if let Some(stat) = file_group.statistics() {
+                    statistics[idx] = stat.clone();
+                }
+            }
+        }
+        Ok(statistics)
+    }
+
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let data_source = self.data_source.with_fetch(limit)?;
         let cache = self.cache.clone();

@@ -202,6 +202,10 @@ impl ExecutionPlan for GlobalLimitExec {
         )
     }
 
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        Ok(vec![self.statistics()?])
+    }
+
     fn fetch(&self) -> Option<usize> {
         self.fetch
     }
@@ -341,6 +345,16 @@ impl ExecutionPlan for LocalLimitExec {
             0,
             1,
         )
+    }
+
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        self.input
+            .statistics_by_partition()?
+            .into_iter()
+            .map(|input_stat| {
+                Statistics::with_fetch(input_stat, self.schema(), Some(self.fetch), 0, 1)
+            })
+            .collect()
     }
 
     fn fetch(&self) -> Option<usize> {

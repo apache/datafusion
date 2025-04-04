@@ -21,7 +21,6 @@
 //! respect to the required sort order. See [`MinMaxStatistics`]
 
 use futures::{Stream, StreamExt};
-use std::mem;
 use std::sync::Arc;
 
 use crate::file_groups::FileGroup;
@@ -34,10 +33,12 @@ use arrow::{
     row::{Row, Rows},
 };
 use datafusion_common::stats::Precision;
-use datafusion_common::ScalarValue;
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::statistics::{
+    add_row_stats, compute_summary_statistics, set_max_if_greater, set_min_if_lesser,
+};
 use datafusion_physical_plan::{ColumnStatistics, Statistics};
 
 /// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
@@ -409,62 +410,6 @@ pub async fn get_statistics_with_limit(
     Ok((result_files, statistics))
 }
 
-/// Generic function to compute statistics across multiple items that have statistics
-fn compute_summary_statistics<T, I>(
-    items: I,
-    file_schema: &SchemaRef,
-    stats_extractor: impl Fn(&T) -> Option<&Statistics>,
-) -> Statistics
-where
-    I: IntoIterator<Item = T>,
-{
-    let size = file_schema.fields().len();
-    let mut col_stats_set = vec![ColumnStatistics::default(); size];
-    let mut num_rows = Precision::<usize>::Absent;
-    let mut total_byte_size = Precision::<usize>::Absent;
-
-    for (idx, item) in items.into_iter().enumerate() {
-        if let Some(item_stats) = stats_extractor(&item) {
-            if idx == 0 {
-                // First item, set values directly
-                num_rows = item_stats.num_rows;
-                total_byte_size = item_stats.total_byte_size;
-                for (index, column_stats) in
-                    item_stats.column_statistics.iter().enumerate()
-                {
-                    col_stats_set[index].null_count = column_stats.null_count;
-                    col_stats_set[index].max_value = column_stats.max_value.clone();
-                    col_stats_set[index].min_value = column_stats.min_value.clone();
-                    col_stats_set[index].sum_value = column_stats.sum_value.clone();
-                }
-                continue;
-            }
-
-            // Accumulate statistics for subsequent items
-            num_rows = add_row_stats(item_stats.num_rows, num_rows);
-            total_byte_size = add_row_stats(item_stats.total_byte_size, total_byte_size);
-
-            for (item_col_stats, col_stats) in item_stats
-                .column_statistics
-                .iter()
-                .zip(col_stats_set.iter_mut())
-            {
-                col_stats.null_count =
-                    add_row_stats(item_col_stats.null_count, col_stats.null_count);
-                set_max_if_greater(&item_col_stats.max_value, &mut col_stats.max_value);
-                set_min_if_lesser(&item_col_stats.min_value, &mut col_stats.min_value);
-                col_stats.sum_value = item_col_stats.sum_value.add(&col_stats.sum_value);
-            }
-        }
-    }
-
-    Statistics {
-        num_rows,
-        total_byte_size,
-        column_statistics: col_stats_set,
-    }
-}
-
 /// Computes the summary statistics for a group of files(`FileGroup` level's statistics).
 ///
 /// This function combines statistics from all files in the file group to create
@@ -489,10 +434,11 @@ pub fn compute_file_group_statistics(
         return Ok(file_group);
     }
 
-    let statistics =
-        compute_summary_statistics(file_group.iter(), &file_schema, |file| {
-            file.statistics.as_ref().map(|stats| stats.as_ref())
-        });
+    let statistics = compute_summary_statistics(
+        file_group.iter(),
+        file_schema.fields().len(),
+        |file| file.statistics.as_ref().map(|stats| stats.as_ref()),
+    );
 
     Ok(file_group.with_statistics(Arc::new(statistics)))
 }
@@ -532,89 +478,17 @@ pub fn compute_all_files_statistics(
     }
 
     // Then summary statistics across all file groups
-    let mut statistics =
-        compute_summary_statistics(&file_groups_with_stats, &file_schema, |file_group| {
-            file_group.statistics()
-        });
+    let mut statistics = compute_summary_statistics(
+        &file_groups_with_stats,
+        file_schema.fields().len(),
+        |file_group| file_group.statistics(),
+    );
 
     if inexact_stats {
         statistics = statistics.to_inexact()
     }
 
     Ok((file_groups_with_stats, statistics))
-}
-
-pub fn add_row_stats(
-    file_num_rows: Precision<usize>,
-    num_rows: Precision<usize>,
-) -> Precision<usize> {
-    match (file_num_rows, &num_rows) {
-        (Precision::Absent, _) => num_rows.to_inexact(),
-        (lhs, Precision::Absent) => lhs.to_inexact(),
-        (lhs, rhs) => lhs.add(rhs),
-    }
-}
-
-/// If the given value is numerically greater than the original maximum value,
-/// return the new maximum value with appropriate exactness information.
-fn set_max_if_greater(
-    max_nominee: &Precision<ScalarValue>,
-    max_value: &mut Precision<ScalarValue>,
-) {
-    match (&max_value, max_nominee) {
-        (Precision::Exact(val1), Precision::Exact(val2)) if val1 < val2 => {
-            *max_value = max_nominee.clone();
-        }
-        (Precision::Exact(val1), Precision::Inexact(val2))
-        | (Precision::Inexact(val1), Precision::Inexact(val2))
-        | (Precision::Inexact(val1), Precision::Exact(val2))
-            if val1 < val2 =>
-        {
-            *max_value = max_nominee.clone().to_inexact();
-        }
-        (Precision::Exact(_), Precision::Absent) => {
-            let exact_max = mem::take(max_value);
-            *max_value = exact_max.to_inexact();
-        }
-        (Precision::Absent, Precision::Exact(_)) => {
-            *max_value = max_nominee.clone().to_inexact();
-        }
-        (Precision::Absent, Precision::Inexact(_)) => {
-            *max_value = max_nominee.clone();
-        }
-        _ => {}
-    }
-}
-
-/// If the given value is numerically lesser than the original minimum value,
-/// return the new minimum value with appropriate exactness information.
-fn set_min_if_lesser(
-    min_nominee: &Precision<ScalarValue>,
-    min_value: &mut Precision<ScalarValue>,
-) {
-    match (&min_value, min_nominee) {
-        (Precision::Exact(val1), Precision::Exact(val2)) if val1 > val2 => {
-            *min_value = min_nominee.clone();
-        }
-        (Precision::Exact(val1), Precision::Inexact(val2))
-        | (Precision::Inexact(val1), Precision::Inexact(val2))
-        | (Precision::Inexact(val1), Precision::Exact(val2))
-            if val1 > val2 =>
-        {
-            *min_value = min_nominee.clone().to_inexact();
-        }
-        (Precision::Exact(_), Precision::Absent) => {
-            let exact_min = mem::take(min_value);
-            *min_value = exact_min.to_inexact();
-        }
-        (Precision::Absent, Precision::Exact(_)) => {
-            *min_value = min_nominee.clone().to_inexact();
-        }
-        (Precision::Absent, Precision::Inexact(_)) => {
-            *min_value = min_nominee.clone();
-        }
-        _ => {}
-    }
 }
 
 #[cfg(test)]
@@ -679,7 +553,9 @@ mod tests {
 
         // Call compute_summary_statistics
         let summary_stats =
-            compute_summary_statistics(items, &schema, |item| Some(item.as_ref()));
+            compute_summary_statistics(items, schema.fields().len(), |item| {
+                Some(item.as_ref())
+            });
 
         // Verify the results
         assert_eq!(summary_stats.num_rows, Precision::Exact(25)); // 10 + 15
@@ -754,7 +630,9 @@ mod tests {
         let items = vec![Arc::new(stats1), Arc::new(stats2)];
 
         let summary_stats =
-            compute_summary_statistics(items, &schema, |item| Some(item.as_ref()));
+            compute_summary_statistics(items, schema.fields().len(), |item| {
+                Some(item.as_ref())
+            });
 
         assert_eq!(summary_stats.num_rows, Precision::Inexact(25));
         assert_eq!(summary_stats.total_byte_size, Precision::Inexact(250));
@@ -784,7 +662,9 @@ mod tests {
         let items: Vec<Arc<Statistics>> = vec![];
 
         let summary_stats =
-            compute_summary_statistics(items, &schema, |item| Some(item.as_ref()));
+            compute_summary_statistics(items, schema.fields().len(), |item| {
+                Some(item.as_ref())
+            });
 
         // Verify default values for empty collection
         assert_eq!(summary_stats.num_rows, Precision::Absent);

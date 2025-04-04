@@ -90,5 +90,6 @@ pub mod udaf {
 }
 
 pub mod coalesce;
+pub mod statistics;
 #[cfg(test)]
 pub mod test;

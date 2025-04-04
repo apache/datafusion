@@ -47,6 +47,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
+use crate::statistics::compute_summary_statistics;
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
@@ -342,6 +343,26 @@ impl ExecutionPlan for CrossJoinExec {
             self.left.statistics()?,
             self.right.statistics()?,
         ))
+    }
+
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        let left_stats = self.left.statistics_by_partition()?;
+        let right_stats = self.right.statistics_by_partition()?;
+
+        if left_stats.is_empty() || right_stats.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Summarize the `left_stats`
+        let statistics =
+            compute_summary_statistics(left_stats, self.schema.fields().len(), |stats| {
+                Some(stats)
+            });
+
+        Ok(right_stats
+            .into_iter()
+            .map(|right| stats_cartesian_product(statistics.clone(), right))
+            .collect())
     }
 
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,

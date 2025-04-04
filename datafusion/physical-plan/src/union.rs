@@ -270,6 +270,17 @@ impl ExecutionPlan for UnionExec {
             .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
     }
 
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        Ok(self
+            .inputs
+            .iter()
+            .map(|child| child.statistics_by_partition())
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false; self.children().len()]
     }
