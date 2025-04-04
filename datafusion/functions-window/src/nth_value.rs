@@ -170,7 +170,7 @@ static NTH_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
     )
     .with_argument("n", "Integer. Specifies the row number (starting from 1) in the window frame.")
     .with_sql_example(r#"```sql
-    -- Sample employees table:
+-- Sample employees table:
 CREATE TABLE employees (id INT, salary INT);
 INSERT INTO employees (id, salary) VALUES
 (1, 30000),
@@ -180,10 +180,14 @@ INSERT INTO employees (id, salary) VALUES
 (5, 70000);
 
 -- Example usage of nth_value:
-SELECT nth_value(salary, 2) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS nth_value
+SELECT nth_value(salary, 2) OVER (
+  ORDER BY salary
+  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+) AS nth_value
 FROM employees;
+```
 
-output:
+```text
 +-----------+
 | nth_value |
 +-----------+
@@ -193,9 +197,8 @@ output:
 | 40000     |
 | 40000     |
 +-----------+
-```
-"#)
-.build()
+```"#)
+    .build()
 });
 
 fn get_nth_value_doc() -> &'static Documentation {
