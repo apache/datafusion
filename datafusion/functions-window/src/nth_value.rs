@@ -168,8 +168,12 @@ static NTH_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         "expression",
         "The column from which to retrieve the nth value.",
     )
-    .with_argument("n", "Integer. Specifies the row number (starting from 1) in the window frame.")
-    .with_sql_example(r#"```sql
+    .with_argument(
+        "n",
+        "Integer. Specifies the row number (starting from 1) in the window frame.",
+    )
+    .with_sql_example(
+        r#"```sql
 -- Sample employees table:
 CREATE TABLE employees (id INT, salary INT);
 INSERT INTO employees (id, salary) VALUES
@@ -197,7 +201,8 @@ FROM employees;
 | 40000     |
 | 40000     |
 +-----------+
-```"#)
+```"#,
+    )
     .build()
 });
 
