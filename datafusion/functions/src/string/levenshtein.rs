@@ -23,7 +23,7 @@ use arrow::datatypes::DataType;
 
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
-use datafusion_common::types::logical_string;
+use datafusion_common::types::{logical_null, logical_string, NativeType};
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result};
@@ -73,8 +73,16 @@ impl LevenshteinFunc {
         Self {
             signature: Signature::coercible(
                 vec![
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Native(logical_null())],
+                        NativeType::String,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Native(logical_null())],
+                        NativeType::String,
+                    ),
                 ],
                 Volatility::Immutable,
             ),
