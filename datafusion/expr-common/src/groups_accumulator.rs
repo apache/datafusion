@@ -134,17 +134,6 @@ pub trait GroupsAccumulator: Send {
         total_num_groups: usize,
     ) -> Result<()>;
 
-    fn update_batch_with_blocked_groups(
-        &mut self,
-        values: &[ArrayRef],
-        blocked_groups: &[Vec<usize>],
-        opt_filter: Option<&BooleanArray>,
-        total_num_groups: usize,
-    ) -> Result<()> {
-        assert!(blocked_groups.len() == 1);
-        self.update_batch(values, &blocked_groups[0], opt_filter, total_num_groups)
-    }
-
     /// Returns the final aggregate value for each group as a single
     /// `RecordBatch`, resetting the internal state.
     ///
@@ -206,17 +195,6 @@ pub trait GroupsAccumulator: Send {
         total_num_groups: usize,
     ) -> Result<()>;
 
-    fn merge_batch_with_blocked_groups(
-        &mut self,
-        values: &[ArrayRef],
-        blocked_groups: &[Vec<usize>],
-        opt_filter: Option<&BooleanArray>,
-        total_num_groups: usize,
-    ) -> Result<()> {
-        assert!(blocked_groups.len() == 1);
-        self.merge_batch(values, &blocked_groups[0], opt_filter, total_num_groups)
-    }
-
     /// Converts an input batch directly to the intermediate aggregate state.
     ///
     /// This is the equivalent of treating each input row as its own group. It
@@ -264,6 +242,70 @@ pub trait GroupsAccumulator: Send {
     /// intermediate aggregate state conversion.
     fn supports_convert_to_state(&self) -> bool {
         false
+    }
+
+    /// Returns `true` if this group values supports blocked mode.
+    fn support_blocked_group(&self) -> bool {
+        false
+    }
+
+    /// Alter the block size in the accumulator
+    ///
+    /// If the target block size is `None`, it will use a single big
+    /// block(can think it a `Vec`) to manage the state.
+    ///
+    /// If the target block size` is `Some(blk_size)`, it will try to
+    /// set the block size to `blk_size`, and the try will only success
+    /// when the accumulator has supported blocked mode.
+    ///
+    /// NOTICE: After altering block size, all data in previous will be cleared.
+    ///
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        if block_size.is_some() {
+            return Err(DataFusionError::NotImplemented(
+                "this group values doesn't support blocked mode yet".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Similar as [`GroupsAccumulator::update_batch`], but it's used to
+    /// support blocked group state management.
+    ///
+    /// For inputs, the main difference with [`GroupsAccumulator::update_batch`]
+    /// is `blocked_groups`, it's type is `&[Vec<usize>]`, and what in [`GroupsAccumulator::update_batch`]
+    /// is `&[usize]`, `blocked_groups[0]` represents `block ids` for `rows`,
+    /// and `blocked_groups[1]` represents the `offsets in block` in` for `rows`.
+    ///
+    fn update_batch_with_blocked_groups(
+        &mut self,
+        values: &[ArrayRef],
+        blocked_groups: &[Vec<usize>],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert!(blocked_groups.len() == 1);
+        self.update_batch(values, &blocked_groups[0], opt_filter, total_num_groups)
+    }
+
+    /// Similar as [`GroupsAccumulator::merge_batch`], but it's used to
+    /// support blocked group state management.
+    ///
+    /// For inputs, the main difference with [`GroupsAccumulator::merge_batch`]
+    /// is `blocked_groups`, it's type is `&[Vec<usize>]`, and what in [`GroupsAccumulator::merge_batch`]
+    /// is `&[usize]`, `blocked_groups[0]` represents `block ids` for `rows`,
+    /// and `blocked_groups[1]` represents the `offsets in block` in` for `rows`.
+    ///
+    fn merge_batch_with_blocked_groups(
+        &mut self,
+        values: &[ArrayRef],
+        blocked_groups: &[Vec<usize>],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert!(blocked_groups.len() == 1);
+        self.merge_batch(values, &blocked_groups[0], opt_filter, total_num_groups)
     }
 
     /// Amount of memory used to store the state of this accumulator,
