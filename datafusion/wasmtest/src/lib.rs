@@ -98,7 +98,6 @@ mod test {
     };
     use datafusion_physical_plan::collect;
     use datafusion_sql::parser::DFParser;
-    use insta::assert_snapshot;
     use object_store::{memory::InMemory, path::Path, ObjectStore};
     use url::Url;
     use wasm_bindgen_test::wasm_bindgen_test;
@@ -248,14 +247,15 @@ mod test {
 
         let result = df.collect().await.unwrap();
 
-        assert_snapshot!(batches_to_string(&result), @r"
-        +----+-------+
-        | id | value |
-        +----+-------+
-        | 1  | a     |
-        | 2  | b     |
-        | 3  | c     |
-        +----+-------+
-        ");
+        assert_eq!(
+            batches_to_string(&result),
+            "+----+-------+\n\
+             | id | value |\n\
+             +----+-------+\n\
+             | 1  | a     |\n\
+             | 2  | b     |\n\
+             | 3  | c     |\n\
+             +----+-------+"
+        );
     }
 }
