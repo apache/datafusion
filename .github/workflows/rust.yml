@@ -386,6 +386,8 @@ jobs:
   linux-wasm-pack:
     name: build with wasm-pack
     runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
     steps:
       - uses: actions/checkout@v4
       - name: Setup Rust toolchain
