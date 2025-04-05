@@ -398,6 +398,7 @@ jobs:
         run: |
           apt-get update -qq
           apt-get install -y -qq clang
+          apt-get install -y -qq chromium-browser chromium-chromedriver
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Build with wasm-pack
@@ -408,9 +409,9 @@ jobs:
         env:
           WASM_BINDGEN_TEST_TIMEOUT: 300 
         run: |
-          wasm-pack test --headless --chrome
           wasm-pack test --headless --firefox
           wasm-pack test --headless --safari
+          wasm-pack test --headless --chrome
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
