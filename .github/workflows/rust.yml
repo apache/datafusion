@@ -394,12 +394,17 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Setup for wasm32
+        run: |
+          rustup target add wasm32-unknown-unknown
       - name: Install dependencies
         run: |
           apt-get update -qq
           apt-get install -y -qq clang jq
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Setup wasm-pack
+        run: |
+          cargo install wasm-pack
       - name: Install Chrome Environment
         run: |
           mkdir -p /tmp/chrome
@@ -414,8 +419,8 @@ jobs:
         env:
           WASM_BINDGEN_TEST_TIMEOUT: 300 
         run: |
-          export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver-linux64/
-          wasm-pack test --headless --chrome
+          export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver/
+          wasm-pack test --headless --chrome --chrome-driver /tmp/chrome/chromedriver/chromedriver
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
