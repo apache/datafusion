@@ -249,9 +249,9 @@ impl PagePruningAccessPlanFilter {
             }
 
             if let Some(overall_selection) = overall_selection {
-                if overall_selection.selects_any() {
-                    let rows_skipped = rows_skipped(&overall_selection);
-                    let rows_selected = rows_selected(&overall_selection);
+                let rows_selected = overall_selection.row_count();
+                if rows_selected > 0 {
+                    let rows_skipped = overall_selection.skipped_row_count();
                     trace!("Overall selection from predicate skipped {rows_skipped}, selected {rows_selected}: {overall_selection:?}");
                     total_skip += rows_skipped;
                     total_select += rows_selected;
@@ -278,22 +278,6 @@ impl PagePruningAccessPlanFilter {
     pub fn filter_number(&self) -> usize {
         self.predicates.len()
     }
-}
-
-/// returns the number of rows skipped in the selection
-/// TODO should this be upstreamed to RowSelection?
-fn rows_skipped(selection: &RowSelection) -> usize {
-    selection
-        .iter()
-        .fold(0, |acc, x| if x.skip { acc + x.row_count } else { acc })
-}
-
-/// returns the number of rows not skipped in the selection
-/// TODO should this be upstreamed to RowSelection?
-fn rows_selected(selection: &RowSelection) -> usize {
-    selection
-        .iter()
-        .fold(0, |acc, x| if x.skip { acc } else { acc + x.row_count })
 }
 
 fn update_selection(
