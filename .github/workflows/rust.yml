@@ -393,8 +393,8 @@ jobs:
           rustup target add wasm32-unknown-unknown
       - name: Install dependencies
         run: |
-          apt-get update -qq
-          apt-get install -y -qq clang jq
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang jq
 
       - name: Setup wasm-pack
         run: |
