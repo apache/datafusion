@@ -27,7 +27,7 @@ use crate::{
 };
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
-use datafusion_common::Result;
+use datafusion_common::{config::ConfigEntry, Result};
 use object_store::ObjectStore;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -267,5 +267,55 @@ impl RuntimeEnvBuilder {
     /// Convenience method to create a new `Arc<RuntimeEnv>`
     pub fn build_arc(self) -> Result<Arc<RuntimeEnv>> {
         self.build().map(Arc::new)
+    }
+
+    /// Create a new RuntimeEnvBuilder from an existing RuntimeEnv
+    pub fn from_runtime_env(runtime_env: &RuntimeEnv) -> Self {
+        let mut cache_config = CacheManagerConfig::default();
+        cache_config.table_files_statistics_cache =
+            runtime_env.cache_manager.get_file_statistic_cache();
+        cache_config.list_files_cache = runtime_env.cache_manager.get_list_files_cache();
+
+        Self {
+            disk_manager: DiskManagerConfig::Existing(runtime_env.disk_manager.clone()),
+            memory_pool: Some(runtime_env.memory_pool.clone()),
+            cache_manager: cache_config,
+            object_store_registry: runtime_env.object_store_registry.clone(),
+        }
+    }
+
+    /// Returns a list of all available runtime configurations with their current values and descriptions
+    pub fn entries(&self) -> Vec<ConfigEntry> {
+        let mut entries = Vec::new();
+        // Memory pool configuration
+        entries.push(ConfigEntry {
+            key: "datafusion.runtime.memory_limit".to_string(),
+            value: None, // Default is system-dependent
+            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+        });
+        entries
+    }
+
+    /// Generate documentation that can be included in the user guide
+    pub fn generate_config_markdown() -> String {
+        use std::fmt::Write as _;
+
+        let s = Self::default();
+
+        let mut docs = "| key | default | description |\n".to_string();
+        docs += "|-----|---------|-------------|\n";
+        let mut entries = s.entries();
+        entries.sort_unstable_by(|a, b| a.key.cmp(&b.key));
+
+        for entry in &entries {
+            let _ = writeln!(
+                &mut docs,
+                "| {} | {} | {} |",
+                entry.key,
+                entry.value.as_deref().unwrap_or("NULL"),
+                entry.description
+            );
+        }
+        docs
     }
 }
