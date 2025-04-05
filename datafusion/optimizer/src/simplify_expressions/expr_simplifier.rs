@@ -977,23 +977,37 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             //
 
             // A * 1 --> A (with type coercion if needed)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            }) if is_one(&right) => {
+                simplify_right_is_one_case(info, left, &Multiply, &right)?
+            }
             // A * null --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if is_one(&right) || is_null(&right) => {
-                simplify_right_is_one_or_null_case(info, left, &Multiply, &right)?
+            }) if is_null(&right) => {
+                simplify_right_is_null_case(info, &left, &Multiply, right)?
             }
             // 1 * A --> A
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            }) if is_one(&left) => {
+                // 1 * A is equivalent to A * 1
+                simplify_right_is_one_case(info, right, &Multiply, &left)?
+            }
             // null * A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if is_one(&left) || is_null(&left) => {
-                // 1 * A is equivalent to A * 1
-                simplify_right_is_one_or_null_case(info, right, &Multiply, &left)?
+            }) if is_null(&left) => {
+                simplify_right_is_null_case(info, &right, &Multiply, left)?
             }
 
             // A * 0 --> 0 (if A is not null and not floating, since NAN * 0 -> NAN)
@@ -1024,13 +1038,20 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             //
 
             // A / 1 --> A
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Divide,
+                right,
+            }) if is_one(&right) => {
+                simplify_right_is_one_case(info, left, &Divide, &right)?
+            }
             // A / null --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right,
-            }) if is_one(&right) || is_null(&right) => {
-                simplify_right_is_one_or_null_case(info, left, &Divide, &right)?
+            }) if is_null(&right) => {
+                simplify_right_is_null_case(info, &left, &Divide, right)?
             }
             // null / A --> null
             Expr::BinaryExpr(BinaryExpr {
@@ -1991,7 +2012,7 @@ fn is_exactly_true(expr: Expr, info: &impl SimplifyInfo) -> Result<Expr> {
 
 // i.e. A * 1 -> A
 // Move this function body out of the large match branch avoid stack overflow
-fn simplify_right_is_one_or_null_case<S: SimplifyInfo>(
+fn simplify_right_is_one_case<S: SimplifyInfo>(
     info: &S,
     left: Box<Expr>,
     op: &Operator,
@@ -2010,6 +2031,29 @@ fn simplify_right_is_one_or_null_case<S: SimplifyInfo>(
             }
         }
         Err(_) => Ok(Transformed::yes(*left)),
+    }
+}
+
+// A * null -> null
+fn simplify_right_is_null_case<S: SimplifyInfo>(
+    info: &S,
+    left: &Expr,
+    op: &Operator,
+    right: Box<Expr>,
+) -> Result<Transformed<Expr>> {
+    // Check if resulting type would be different due to coercion
+    let left_type = info.get_data_type(left)?;
+    let right_type = info.get_data_type(&right)?;
+    match BinaryTypeCoercer::new(&left_type, op, &right_type).get_result_type() {
+        Ok(result_type) => {
+            // Only cast if the types differ
+            if right_type != result_type {
+                Ok(Transformed::yes(Expr::Cast(Cast::new(right, result_type))))
+            } else {
+                Ok(Transformed::yes(*right))
+            }
+        }
+        Err(_) => Ok(Transformed::yes(*right)),
     }
 }
 
