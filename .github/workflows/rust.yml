@@ -400,16 +400,12 @@ jobs:
           apt-get install -y -qq clang
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - name: Build with wasm-pack
-        working-directory: ./datafusion/wasmtest
-        run: wasm-pack build --dev
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         env:
           WASM_BINDGEN_TEST_TIMEOUT: 300 
         run: |
-          wasm-pack test --headless --firefox
-          wasm-pack test --headless --safari
+          wasm-pack test --headless --firefox --chrome
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
