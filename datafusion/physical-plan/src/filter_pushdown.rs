@@ -49,7 +49,7 @@ pub enum FilterPushdownResult<T> {
 }
 
 impl<T> FilterPushdownResult<T> {
-    /// Craete a new [`FilterPushdownResult`].
+    /// Create a new [`FilterPushdownResult`].
     pub fn new(inner: T, support: Vec<FilterPushdownSupport>) -> Self {
         Self::Pushed { inner, support }
     }
