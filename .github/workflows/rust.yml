@@ -386,8 +386,6 @@ jobs:
   linux-wasm-pack:
     name: build with wasm-pack
     runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
     steps:
       - uses: actions/checkout@v4
       - name: Setup Rust toolchain
@@ -397,17 +395,15 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update -qq
-          apt-get install -y -qq clang
+          apt-get install -y -qq clang chromium-chromedriver chromium-browser
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         env:
           WASM_BINDGEN_TEST_TIMEOUT: 300 
         run: |
-          wasm-pack test --headless --firefox --chrome
+          wasm-pack test --headless --chrome
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
