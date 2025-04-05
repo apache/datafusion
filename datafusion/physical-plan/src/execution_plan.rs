@@ -469,27 +469,32 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 
     /// Returns a set of filters that this operator owns but would like to be pushed down.
-    /// For example, a `TopK` operator may produce dynamic filters that reference it's currrent state,
-    /// while a `FilterExec` will just hand of the filters it has as is.
-    /// The default implementation returns an empty vector.
-    /// These filters are applied row-by row and any that return `false` or `NULL` will be
-    /// filtered out and any that return `true` will be kept.
-    /// The expressions returned **must** always return `true` or `false`;
-    /// other truthy or falsy values are not allowed (e.g. `0`, `1`).
+    ///
+    /// For example, a `TopK` operator may produce dynamic filters that
+    /// reference it's current state, while a `FilterExec` will just hand of the
+    /// filters it has as is.
+    ///
+    /// The default implementation returns an empty vector. These filters are
+    /// applied row-by row:
+    /// 1. any that return `false` or `NULL` will be filtered out
+    /// 2. any that return `true` will be kept.
+    ///
+    /// The expressions returned **must** always be Boolean ( `true`, `false` or
+    /// NULL); other truthy or falsy values are not allowed (e.g. `0`, `1`).
     ///
     /// # Returns
     /// A vector of filters that this operator would like to push down.
     /// These should be treated as the split conjunction of a `WHERE` clause.
     /// That is, a query such as `WHERE a = 1 AND b = 2` would return two
     /// filters: `a = 1` and `b = 2`.
-    /// They can always be assembled into a single filter using
-    /// [`split_conjunction`][datafusion_physical_expr::split_conjunction].
+    /// They can be combined into a single filter using
+    /// [`conjunction`][datafusion_physical_expr::conjunction].
     fn filters_for_pushdown(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
         Ok(Vec::new())
     }
 
     /// Checks which filters this node allows to be pushed down through it from a parent to a child.
-    /// For example, a `ProjectionExec` node can allow filters that only refernece
+    /// For example, a `ProjectionExec` node can allow filters that only reference
     /// columns it did not create through but filters that reference columns it is creating cannot be pushed down any further.
     /// That is, it only allows some filters through because it changes the schema of the data.
     /// Aggregation nodes may not allow any filters to be pushed down as they change the cardinality of the data.
