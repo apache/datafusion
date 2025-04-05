@@ -386,14 +386,8 @@ jobs:
   linux-wasm-pack:
     name: build with wasm-pack
     runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Setup for wasm32
         run: |
           rustup target add wasm32-unknown-unknown
