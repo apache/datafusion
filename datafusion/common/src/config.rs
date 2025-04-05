@@ -268,6 +268,20 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options related to runtime environment
+    ///
+    /// See also: [`SessionConfig`]
+    ///
+    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
+    pub struct RuntimeOptions {
+        /// Sets the maximum memory limit for query execution.
+        /// Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes).
+        /// For example: `1G` for 1 gigabyte, `100M` for 100 megabytes.
+        pub memory_limit: Option<String>, default = None
+    }
+}
+
+config_namespace! {
     /// Options related to query execution
     ///
     /// See also: [`SessionConfig`]
@@ -750,6 +764,8 @@ pub struct ConfigOptions {
     pub sql_parser: SqlParserOptions,
     /// Explain options
     pub explain: ExplainOptions,
+    /// Runtime options
+    pub runtime: RuntimeOptions,
     /// Optional extensions registered using [`Extensions::insert`]
     pub extensions: Extensions,
 }
@@ -764,6 +780,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
+            "runtime" => self.runtime.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -774,6 +791,7 @@ impl ConfigField for ConfigOptions {
         self.optimizer.visit(v, "datafusion.optimizer", "");
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
+        self.runtime.visit(v, "datafusion.runtime", "");
     }
 }
 
