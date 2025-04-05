@@ -50,7 +50,7 @@ use log::{debug, warn};
 
 use crate::{
     display::FileGroupsDisplay,
-    file::FileSource,
+    file::{FileSource, FileSourceFilterPushdownResult},
     file_compression_type::FileCompressionType,
     file_stream::FileStream,
     source::{DataSource, DataSourceExec},
@@ -585,19 +585,25 @@ impl DataSource for FileScanConfig {
         }))
     }
 
-    fn push_down_filters(
+    fn try_pushdown_filters(
         &self,
         filters: &[PhysicalExprRef],
-    ) -> Result<Option<DataSourceFilterPushdownResult>> {
-        if let Some(file_source_result) = self.file_source.push_down_filters(filters)? {
-            let mut new_self = self.clone();
-            new_self.file_source = file_source_result.inner;
-            Ok(Some(DataSourceFilterPushdownResult {
-                inner: Arc::new(new_self) as Arc<dyn DataSource>,
-                support: file_source_result.support,
-            }))
-        } else {
-            Ok(None)
+    ) -> Result<DataSourceFilterPushdownResult> {
+        match self.file_source.try_pushdown_filters(filters)? {
+            FileSourceFilterPushdownResult::NotPushed => {
+                Ok(DataSourceFilterPushdownResult::NotPushed)
+            }
+            FileSourceFilterPushdownResult::Pushed { inner, support } => {
+                let new_self = Arc::new(
+                    FileScanConfigBuilder::from(self.clone())
+                        .with_source(inner)
+                        .build(),
+                );
+                Ok(DataSourceFilterPushdownResult::Pushed {
+                    inner: new_self,
+                    support,
+                })
+            }
         }
     }
 }

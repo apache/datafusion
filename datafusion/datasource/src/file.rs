@@ -26,9 +26,9 @@ use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::Statistics;
+use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalExprRef};
-use datafusion_physical_plan::execution_plan::FilterPushdownResult;
+use datafusion_physical_plan::filter_pushdown::FilterPushdownResult;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
@@ -58,7 +58,7 @@ pub trait FileSource: Send + Sync {
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
     /// Return projected statistics
-    fn statistics(&self) -> datafusion_common::Result<Statistics>;
+    fn statistics(&self) -> Result<Statistics>;
     /// String representation of file source such as "csv", "json", "parquet"
     fn file_type(&self) -> &str;
     /// Format FileType specific information
@@ -76,7 +76,7 @@ pub trait FileSource: Send + Sync {
         repartition_file_min_size: usize,
         output_ordering: Option<LexOrdering>,
         config: &FileScanConfig,
-    ) -> datafusion_common::Result<Option<FileScanConfig>> {
+    ) -> Result<Option<FileScanConfig>> {
         if config.file_compression_type.is_compressed() || config.new_lines_in_values {
             return Ok(None);
         }
@@ -95,17 +95,11 @@ pub trait FileSource: Send + Sync {
         Ok(None)
     }
 
-    /// Push down filters to the file source if supported.
-    ///
-    /// Returns `Ok(None)` by default. See [`ExecutionPlan::with_filter_pushdown_result`]
-    /// for more details.
-    ///
-    /// [`ExecutionPlan::with_filter_pushdown_result`]: datafusion_physical_plan::execution_plan::ExecutionPlan::with_filter_pushdown_result
-    fn push_down_filters(
+    fn try_pushdown_filters(
         &self,
         _filters: &[PhysicalExprRef],
-    ) -> datafusion_common::Result<Option<FileSourceFilterPushdownResult>> {
-        Ok(None)
+    ) -> Result<FileSourceFilterPushdownResult> {
+        Ok(FileSourceFilterPushdownResult::NotPushed)
     }
 }
 

@@ -25,8 +25,8 @@ use datafusion::{
     },
     scalar::ScalarValue,
 };
-use datafusion_common::internal_err;
 use datafusion_common::{config::ConfigOptions, Statistics};
+use datafusion_common::{internal_err, Result};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::{
@@ -40,8 +40,8 @@ use datafusion_physical_optimizer::filter_pushdown::PushdownFilter;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::{
-    displayable, execution_plan::FilterSupport, metrics::ExecutionPlanMetricsSet,
-    DisplayFormatType, ExecutionPlan,
+    displayable, filter_pushdown::FilterPushdownSupport,
+    metrics::ExecutionPlanMetricsSet, DisplayFormatType, ExecutionPlan,
 };
 use object_store::ObjectStore;
 use std::sync::{Arc, OnceLock};
@@ -53,13 +53,13 @@ use std::{
 /// A placeholder data source that accepts filter pushdown
 #[derive(Clone)]
 struct TestSource {
-    support: FilterSupport,
+    support: FilterPushdownSupport,
     predicate: Option<PhysicalExprRef>,
     statistics: Option<Statistics>,
 }
 
 impl TestSource {
-    fn new(support: FilterSupport) -> Self {
+    fn new(support: FilterPushdownSupport) -> Self {
         Self {
             support,
             predicate: None,
@@ -105,7 +105,7 @@ impl FileSource for TestSource {
         todo!("should not be called")
     }
 
-    fn statistics(&self) -> datafusion_common::Result<Statistics> {
+    fn statistics(&self) -> Result<Statistics> {
         Ok(self
             .statistics
             .as_ref()
@@ -137,23 +137,23 @@ impl FileSource for TestSource {
         }
     }
 
-    fn push_down_filters(
+    fn try_pushdown_filters(
         &self,
         filters: &[PhysicalExprRef],
-    ) -> datafusion_common::Result<Option<FileSourceFilterPushdownResult>> {
+    ) -> Result<FileSourceFilterPushdownResult> {
         let new = Arc::new(TestSource {
             support: self.support,
             predicate: Some(conjunction(filters.iter().map(Arc::clone))),
             statistics: self.statistics.clone(),
         });
-        Ok(Some(FileSourceFilterPushdownResult::new(
+        Ok(FileSourceFilterPushdownResult::new(
             new,
             vec![self.support; filters.len()],
-        )))
+        ))
     }
 }
 
-fn test_scan(support: FilterSupport) -> Arc<dyn ExecutionPlan> {
+fn test_scan(support: FilterPushdownSupport) -> Arc<dyn ExecutionPlan> {
     let schema = schema();
     let source = Arc::new(TestSource::new(support));
     let base_config = FileScanConfigBuilder::new(
@@ -167,7 +167,7 @@ fn test_scan(support: FilterSupport) -> Arc<dyn ExecutionPlan> {
 
 #[test]
 fn test_pushdown_into_scan() {
-    let scan = test_scan(FilterSupport::HandledExact);
+    let scan = test_scan(FilterPushdownSupport::Exact);
     let predicate = col_lit_predicate("a", "foo", schema());
     let plan = Arc::new(FilterExec::try_new(predicate, scan).unwrap());
 
@@ -187,9 +187,9 @@ fn test_pushdown_into_scan() {
 }
 
 #[test]
-test_filter_collapse() {
+fn test_filter_collapse() {
     // filter should be pushed down into the parquet scan with two filters
-    let scan = test_scan(FilterSupport::HandledExact);
+    let scan = test_scan(FilterPushdownSupport::Exact);
     let predicate1 = col_lit_predicate("a", "foo", schema());
     let filter1 = Arc::new(FilterExec::try_new(predicate1, scan).unwrap());
     let predicate2 = col_lit_predicate("b", "bar", schema());
@@ -205,7 +205,7 @@ test_filter_collapse() {
         -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
       output:
         Ok:
-          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo AND b@1 = bar
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=b@1 = bar AND a@0 = foo
     "
     );
 }

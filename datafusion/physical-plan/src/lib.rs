@@ -43,8 +43,10 @@ pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDi
 pub use crate::execution_plan::{
     collect, collect_partitioned, displayable, execute_input_stream, execute_stream,
     execute_stream_partitioned, get_plan_string, with_new_children_if_necessary,
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ExecutionPlan, ExecutionPlanFilterPushdownResult, ExecutionPlanProperties,
+    PlanProperties,
 };
+pub use crate::filter_pushdown::FilterPushdownResult;
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
@@ -66,6 +68,7 @@ pub mod empty;
 pub mod execution_plan;
 pub mod explain;
 pub mod filter;
+pub mod filter_pushdown;
 pub mod joins;
 pub mod limit;
 pub mod memory;
