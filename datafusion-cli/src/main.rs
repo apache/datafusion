@@ -184,7 +184,6 @@ async fn main_inner() -> Result<()> {
         quiet: args.quiet,
         maxrows: args.maxrows,
         color: args.color,
-        // TODO only set this if stdout is a tty, otherwise None
         pager: datafusion_cli::pager::main_default_pager(),
     };
 
