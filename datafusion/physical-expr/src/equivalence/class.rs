@@ -69,7 +69,7 @@ use indexmap::{IndexMap, IndexSet};
 // addressed in a separate issue/PR.
 #[derive(Debug, Clone)]
 pub struct ConstExpr {
-    /// The  expression that is known to be constant (e.g. a `Column`)
+    /// The expression that is known to be constant (e.g. a `Column`)
     expr: Arc<dyn PhysicalExpr>,
     /// Does the constant have the same value across all partitions? See
     /// struct docs for more details
@@ -106,7 +106,7 @@ impl ConstExpr {
     /// Create a new constant expression from a physical expression.
     ///
     /// Note you can also use `ConstExpr::from` to create a constant expression
-    /// from a reference as well
+    /// from a reference as well.
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self {
             expr,
@@ -115,17 +115,13 @@ impl ConstExpr {
         }
     }
 
-    /// Set the `across_partitions` flag
-    ///
-    /// See struct docs for more details
+    /// Sets the `across_partitions` flag.
     pub fn with_across_partitions(mut self, across_partitions: AcrossPartitions) -> Self {
         self.across_partitions = across_partitions;
         self
     }
 
-    /// Is the  expression the same across all partitions?
-    ///
-    /// See struct docs for more details
+    /// Indicates whther the expression the same across all partitions.
     pub fn across_partitions(&self) -> AcrossPartitions {
         self.across_partitions.clone()
     }
@@ -147,11 +143,6 @@ impl ConstExpr {
             expr,
             across_partitions: self.across_partitions.clone(),
         })
-    }
-
-    /// Returns true if this constant expression is equal to the given expression
-    pub fn eq_expr(&self, other: impl AsRef<dyn PhysicalExpr>) -> bool {
-        self.expr.as_ref() == other.as_ref()
     }
 
     /// Returns a [`Display`]able list of `ConstExpr`.

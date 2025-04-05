@@ -312,12 +312,6 @@ impl EquivalenceProperties {
         Ok(())
     }
 
-    /// Track/register physical expressions with constant values.
-    #[deprecated(since = "43.0.0", note = "Use [`with_constants`] instead")]
-    pub fn add_constants(self, constants: impl IntoIterator<Item = ConstExpr>) -> Self {
-        self.with_constants(constants)
-    }
-
     /// Remove the specified constant
     pub fn remove_constant(mut self, c: &ConstExpr) -> Self {
         self.constants.retain(|existing| existing != c);
@@ -335,15 +329,10 @@ impl EquivalenceProperties {
                 let across_partitions = c.across_partitions();
                 let expr = c.owned_expr();
                 let normalized_expr = self.eq_group.normalize_expr(expr);
-
-                if const_exprs_contains(&self.constants, &normalized_expr) {
-                    return None;
-                }
-
-                let const_expr = ConstExpr::from(normalized_expr)
-                    .with_across_partitions(across_partitions);
-
-                Some(const_expr)
+                (!const_exprs_contains(&self.constants, &normalized_expr)).then(|| {
+                    let const_expr = ConstExpr::from(normalized_expr);
+                    const_expr.with_across_partitions(across_partitions)
+                })
             })
             .collect::<Vec<_>>();
 
@@ -352,9 +341,7 @@ impl EquivalenceProperties {
 
         // Discover any new orderings based on the constants
         for ordering in self.normalized_oeq_class().iter() {
-            if let Err(e) = self.discover_new_orderings(&ordering[0].expr) {
-                log::debug!("error discovering new orderings: {e}");
-            }
+            self.discover_new_orderings(&ordering[0].expr).unwrap();
         }
 
         self
@@ -371,69 +358,53 @@ impl EquivalenceProperties {
         let eq_class = self
             .eq_group
             .iter()
-            .find_map(|class| {
-                class
-                    .contains(&normalized_expr)
-                    .then(|| class.clone().into_vec())
-            })
+            .find(|class| class.contains(&normalized_expr))
+            .map(|class| class.clone().into_vec())
             .unwrap_or_else(|| vec![Arc::clone(&normalized_expr)]);
 
-        let mut new_orderings: Vec<LexOrdering> = vec![];
-        for ordering in self.normalized_oeq_class().iter() {
+        let mut new_orderings = vec![];
+        for ordering in self.normalized_oeq_class() {
             if !ordering[0].expr.eq(&normalized_expr) {
                 continue;
             }
 
             let leading_ordering_options = ordering[0].options;
 
-            for equivalent_expr in &eq_class {
+            'exprs: for equivalent_expr in &eq_class {
                 let children = equivalent_expr.children();
                 if children.is_empty() {
                     continue;
                 }
-
-                // Check if all children match the next expressions in the ordering
-                let mut all_children_match = true;
+                // Check if all children match the next expressions in the ordering:
                 let mut child_properties = vec![];
-
-                // Build properties for each child based on the next expressions
-                for (i, child) in children.iter().enumerate() {
-                    if let Some(next) = ordering.get(i + 1) {
-                        if !child.as_ref().eq(next.expr.as_ref()) {
-                            all_children_match = false;
-                            break;
-                        }
-                        child_properties.push(ExprProperties {
-                            sort_properties: SortProperties::Ordered(next.options),
-                            range: Interval::make_unbounded(
-                                &child.data_type(&self.schema)?,
-                            )?,
-                            preserves_lex_ordering: true,
-                        });
-                    } else {
-                        all_children_match = false;
-                        break;
+                // Build properties for each child based on the next expression:
+                for (i, child) in children.into_iter().enumerate() {
+                    let Some(next) = ordering.get(i + 1) else {
+                        break 'exprs;
+                    };
+                    if !next.expr.eq(child) {
+                        break 'exprs;
                     }
+                    let data_type = child.data_type(&self.schema)?;
+                    child_properties.push(ExprProperties {
+                        sort_properties: SortProperties::Ordered(next.options),
+                        range: Interval::make_unbounded(&data_type)?,
+                        preserves_lex_ordering: true,
+                    });
                 }
-
-                if all_children_match {
-                    // Check if the expression is monotonic in all arguments
-                    if let Ok(expr_properties) =
-                        equivalent_expr.get_properties(&child_properties)
-                    {
-                        if expr_properties.preserves_lex_ordering
-                            && SortProperties::Ordered(leading_ordering_options)
-                                == expr_properties.sort_properties
-                        {
-                            // Assume existing ordering is [c ASC, a ASC, b ASC]
-                            // When equality c = f(a,b) is given, if we know that given ordering `[a ASC, b ASC]`,
-                            // ordering `[f(a,b) ASC]` is valid, then we can deduce that ordering `[a ASC, b ASC]` is also valid.
-                            // Hence, ordering `[a ASC, b ASC]` can be added to the state as a valid ordering.
-                            // (e.g. existing ordering where leading ordering is removed)
-                            new_orderings.push(LexOrdering::new(ordering[1..].to_vec()));
-                            break;
-                        }
-                    }
+                // Check if the expression is monotonic in all arguments:
+                let expr_properties =
+                    equivalent_expr.get_properties(&child_properties)?;
+                if expr_properties.preserves_lex_ordering
+                    && SortProperties::Ordered(leading_ordering_options)
+                        == expr_properties.sort_properties
+                {
+                    // Assume existing ordering is `[c ASC, a ASC, b ASC]`. When
+                    // equality `c = f(a, b)` is given, the ordering `[a ASC, b ASC]`,
+                    // implies the ordering `[f(a, b) ASC]`. Thus, we can deduce that
+                    // ordering `[a ASC, b ASC]` is also valid.
+                    new_orderings.push(ordering[1..].to_vec());
+                    break;
                 }
             }
         }
