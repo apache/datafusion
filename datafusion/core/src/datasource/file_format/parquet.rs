@@ -67,13 +67,13 @@ pub(crate) mod test_util {
             .into_iter()
             .zip(tmp_files.into_iter())
             .map(|(batch, mut output)| {
-                let builder = parquet::file::properties::WriterProperties::builder();
-                let props = if multi_page {
-                    builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
-                } else {
-                    builder
+                let mut builder = parquet::file::properties::WriterProperties::builder();
+                if multi_page {
+                    builder = builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
                 }
-                .build();
+                builder = builder.set_bloom_filter_enabled(true);
+
+                let props = builder.build();
 
                 let mut writer = parquet::arrow::ArrowWriter::try_new(
                     &mut output,
