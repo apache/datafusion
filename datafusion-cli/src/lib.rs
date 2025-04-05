@@ -34,3 +34,14 @@ pub mod object_storage;
 pub mod pool_type;
 pub mod print_format;
 pub mod print_options;
+pub mod pager;
+
+/// Split s into (first_token_of_s, Some(rest_of_s)), or (s,None)
+// Note: this is equivalent to ("first_token_of_s", "rest_of_s"), or (s,"")
+pub(crate) fn split_on_first_space(s : &str) -> (&str,Option<&str>) {
+    if let Some((a, b)) = s.split_once(' ') {
+        (a, Some(b))
+    } else {
+        (s, None)
+    }
+}

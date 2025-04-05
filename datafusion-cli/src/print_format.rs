@@ -48,6 +48,20 @@ impl FromStr for PrintFormat {
     }
 }
 
+impl std::fmt::Display for PrintFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let vstr = match self {
+            PrintFormat::Csv => "csv",
+            PrintFormat::Tsv => "tsv",
+            PrintFormat::Table => "table",
+            PrintFormat::Json => "json",
+            PrintFormat::NdJson => "ndjson",
+            PrintFormat::Automatic => "automatic",
+        };
+        write!(f,"{vstr}")
+    }
+}
+
 macro_rules! batches_to_json {
     ($WRITER: ident, $writer: expr, $batches: expr) => {{
         {
