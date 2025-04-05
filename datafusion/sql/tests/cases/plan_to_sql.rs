@@ -65,26 +65,26 @@ use sqlparser::parser::Parser;
 #[test]
 fn test_roundtrip_expr_1() {
     let expr = roundtrip_expr(TableReference::bare("person"), "age > 35").unwrap();
-    assert_snapshot!(expr, r#"(age > 35)"#);
+    assert_snapshot!(expr, @r#"(age > 35)"#);
 }
 
 #[test]
 fn test_roundtrip_expr_2() {
     let expr = roundtrip_expr(TableReference::bare("person"), "id = '10'").unwrap();
-    assert_snapshot!(expr, r#"(id = '10')"#);
+    assert_snapshot!(expr, @r#"(id = '10')"#);
 }
 
 #[test]
 fn test_roundtrip_expr_3() {
     let expr =
         roundtrip_expr(TableReference::bare("person"), "CAST(id AS VARCHAR)").unwrap();
-    assert_snapshot!(expr, r#"CAST(id AS VARCHAR)"#);
+    assert_snapshot!(expr, @r#"CAST(id AS VARCHAR)"#);
 }
 
 #[test]
 fn test_roundtrip_expr_4() {
     let expr = roundtrip_expr(TableReference::bare("person"), "sum((age * 2))").unwrap();
-    assert_snapshot!(expr, r#"sum((age * 2))"#);
+    assert_snapshot!(expr, @r#"sum((age * 2))"#);
 }
 
 fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
