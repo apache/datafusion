@@ -27,7 +27,8 @@ use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Statistics;
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{LexOrdering, PhysicalExprRef};
+use datafusion_physical_plan::execution_plan::FilterPushdownResult;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
@@ -93,4 +94,19 @@ pub trait FileSource: Send + Sync {
         }
         Ok(None)
     }
+
+    /// Push down filters to the file source if supported.
+    ///
+    /// Returns `Ok(None)` by default. See [`ExecutionPlan::with_filter_pushdown_result`]
+    /// for more details.
+    ///
+    /// [`ExecutionPlan::with_filter_pushdown_result`]: datafusion_physical_plan::execution_plan::ExecutionPlan::with_filter_pushdown_result
+    fn push_down_filters(
+        &self,
+        _filters: &[PhysicalExprRef],
+    ) -> datafusion_common::Result<Option<FileSourceFilterPushdownResult>> {
+        Ok(None)
+    }
 }
+
+pub type FileSourceFilterPushdownResult = FilterPushdownResult<Arc<dyn FileSource>>;
