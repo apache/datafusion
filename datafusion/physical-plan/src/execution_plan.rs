@@ -490,17 +490,18 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// └──────────────────────┘
     /// ```
     ///
-    /// Our goal is to move the `id = 1` filter from the `FilterExec` node to the `DataSourceExec` node.
+    /// Our goal is to move the `id = 1` filter from the [`FilterExec`] node to the `DataSourceExec` node.
     /// If this filter is selective it can avoid massive amounts of data being read from the source (the projection is `*` so all matching columns are read).
     /// In this simple case we:
     /// 1. Enter the recursion with no filters.
-    /// 2. We find the `FilterExec` node and it tells us that it has a filter (see [`ExecutionPlan::filters_for_pushdown`] and `datafusion::physical_plan::filter::FilterExec`).
-    /// 3. We recurse down into it's children (the `DataSourceExec` node) now carrying the filters `[id = 1]`.
-    /// 4. The `DataSourceExec` node tells us that it can handle the filter and we mark it as handled exact (see [`ExecutionPlan::with_filter_pushdown_result`]).
-    /// 5. Since the `DataSourceExec` node has no children we recurse back up the tree.
-    /// 6. We now tell the `FilterExec` node that it has a child that can handle the filter and we mark it as handled exact (see [`ExecutionPlan::with_filter_pushdown_result`]).
-    ///    The `FilterExec` node can now return a new execution plan, either a copy of itself without that filter or if has no work left to do it can even return the child node directly.
-    /// 7. We recurse back up to `CoalesceBatchesExec` and do nothing there since it had no filters to push down.
+    /// 2. We find the [`FilterExec`] node and call [`ExecutionPlan::try_pushdown_filters`] on it.
+    /// 3. The [`FilterExec`] node tries to push it's filters + the filters from the parent nodes (in this case empty)
+    ///    down into it's input, which is the `DataSourceExec` node.
+    /// 4. The `DataSourceExec` node accepts the filter and returns a [`FilterPushdownResult`] with a new copy of itself
+    ///    and [`FilterPushdownSupport::Exact`] to indicate that the filter was pushed down and the caller no longer
+    ///    needs to handle it.
+    /// 5. The [`FilterExec`] seeing that all filters were pushed down returns a [`FilterPushdownResult`] that directly
+    ///    returns the new `DataSourceExec` node, effectively removing the [`FilterExec`] node from the plan.
     ///
     /// The new plan looks like:
     ///
@@ -517,7 +518,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// └──────────────────────┘
     /// ```
     ///
-    /// Let's consider a more complex example involving a `ProjectionExec` node in betweeen the `FilterExec` and `DataSourceExec` nodes that creates a new column that the filter depends on.
+    /// Let's consider a more complex example involving a [`ProjectionExec`] node in betweeen the [`FilterExec`] and `DataSourceExec` nodes that creates a new column that the filter depends on.
     ///
     /// ```text
     // ┌──────────────────────┐
@@ -544,7 +545,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     // └──────────────────────┘
     /// ```
     ///
-    /// We want to push down the filters [id=1] to the `DataSourceExec` node, but can't push down `cost>50` because it requires the `ProjectionExec` node to be executed first:
+    /// We want to push down the filters [id=1] to the `DataSourceExec` node, but can't push down `cost>50` because it requires the [`ProjectionExec`] node to be executed first.
+    /// A simple thing to do would be to split up the filter into two separate filters and push down the first one:
     ///
     /// ```text
     // ┌──────────────────────┐
@@ -570,6 +572,28 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     // │    projection = *    │
     // │   filters = [ id=1]  │
     // └──────────────────────┘
+    /// ```
+    ///
+    /// We can actually however do better by pushing down `price * 1.2 > 50` instead of `cost > 50`:
+    ///
+    /// ```text
+    /// ┌──────────────────────┐
+    /// │ CoalesceBatchesExec  │
+    /// └──────────────────────┘
+    ///            │
+    ///            ▼
+    /// ┌──────────────────────┐
+    /// │    ProjectionExec    │
+    /// │ cost = price * 1.2   │
+    /// └──────────────────────┘
+    ///            │
+    ///            ▼
+    /// ┌──────────────────────┐
+    /// │    DataSourceExec    │
+    /// │    projection = *    │
+    /// │   filters = [id=1,   │
+    /// │   price * 1.2 > 50]  │
+    /// └──────────────────────┘
     /// ```
     ///
     /// There are also cases where we may be able to push down filters within a subtree but not the entire tree.
@@ -608,7 +632,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// └──────────────────────┘
     /// ```
     ///
-    /// The transformation here is to push down the `[id=1]` filter to the `DataSourceExec` node:
+    /// The transformation here is to push down the `id=1` filter to the `DataSourceExec` node:
     ///
     /// ```text
     /// ┌──────────────────────┐
@@ -642,7 +666,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// 1. We cannot push down `sum > 10` through the `AggregateExec` node into the `DataSourceExec` node.
     ///    Any filters above the `AggregateExec` node are not pushed down.
     ///    This is determined by calling [`ExecutionPlan::filter_pushdown_request`] on the `AggregateExec` node.
-    /// 2. We need to keep recursing into the tree so that we can discover the other `FilterExec` node and push down the [id=1] filter.
+    /// 2. We need to keep recursing into the tree so that we can discover the other [`FilterExec`] node and push down the `id=1` filter.
     ///
     /// It is also possible to push down filters through joins and from joins.
     /// For example, a hash join where we build a hash table of the left side and probe the right side
@@ -698,7 +722,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// _after_ the `departments` table is read and at runtime.
     /// We don't have a concrete `InList` filter or similar to push down at optimization time.
     /// These sorts of dynamic filters are handled by building a specialized
-    /// [`PhysicalExpr`][datafusion_physical_expr::PhysicalExpr] that can be evaluated at runtime
+    /// [`PhysicalExpr`] that can be evaluated at runtime
     /// and internally maintains a reference to the hash table or other state.
     /// To make working with these sorts of dynamic filters more tractable we have the method `PhysicalExpr::snapshot`
     /// (TODO: add reference after <https://github.com/apache/datafusion/pull/15568> is merged)
@@ -744,6 +768,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Now as we fill our `TopK` heap we can push down the state of the heap to the `DataSourceExec` node
     /// to avoid reading files / row groups / pages / rows that could not possibly be in the top 10.
     /// This is implemented in datafusion/physical-plan/src/sorts/sort_filters.rs.
+    ///
+    /// [`FilterExec`]: crate::filter::FilterExec
+    /// [`ProjectionExec`]: crate::projection::ProjectionExec
     fn try_pushdown_filters(
         &self,
         plan: &Arc<dyn ExecutionPlan>,
@@ -869,7 +896,7 @@ pub trait ExecutionPlanProperties {
     /// If this ExecutionPlan makes no changes to the schema of the rows flowing
     /// through it or how columns within each row relate to each other, it
     /// should return the equivalence properties of its input. For
-    /// example, since `FilterExec` may remove rows from its input, but does not
+    /// example, since [`FilterExec`] may remove rows from its input, but does not
     /// otherwise modify them, it preserves its input equivalence properties.
     /// However, since `ProjectionExec` may calculate derived expressions, it
     /// needs special handling.
