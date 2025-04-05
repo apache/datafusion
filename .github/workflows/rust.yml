@@ -400,6 +400,8 @@ jobs:
           apt-get install -y -qq clang
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         env:
