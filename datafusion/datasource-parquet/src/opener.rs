@@ -165,7 +165,7 @@ impl FileOpener for ParquetOpener {
             );
 
             // The page index is not stored inline in the parquet footer so the
-            // code above may not have raed the page index structures yet. If we
+            // code above may not have read the page index structures yet. If we
             // need them for reading and they aren't yet loaded, we need to load them now.
             if should_enable_page_index(enable_page_index, &page_pruning_predicate) {
                 reader_metadata = load_page_index(
