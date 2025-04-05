@@ -43,7 +43,6 @@ use datafusion_expr::{
 };
 use datafusion_expr::{simplify::ExprSimplifyResult, Cast, TryCast};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
-use regex_syntax::ast::print;
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
@@ -978,96 +977,23 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             //
 
             // A * 1 --> A (with type coercion if needed)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Multiply,
-                right,
-            }) if is_one(&right) => {
-                // Check if resulting type would be different due to coercion
-                let left_type = info.get_data_type(&left)?;
-                let right_type = info.get_data_type(&right)?;
-                match BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
-                    .get_result_type()
-                {
-                    Ok(result_type) => {
-                        // Only cast if the types differ
-                        if left_type != result_type {
-                            Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
-                        } else {
-                            Transformed::yes(*left)
-                        }
-                    }
-                    Err(_) => Transformed::yes(*left),
-                }
-            }
-            // 1 * A --> A
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Multiply,
-                right,
-            }) if is_one(&left) => {
-                // Check if resulting type would be different due to coercion
-                let left_type = info.get_data_type(&left)?;
-                let right_type = info.get_data_type(&right)?;
-                match BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
-                    .get_result_type()
-                {
-                    Ok(result_type) => {
-                        // Only cast if the types differ
-                        if left_type != result_type {
-                            Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
-                        } else {
-                            Transformed::yes(*right)
-                        }
-                    }
-                    Err(_) => Transformed::yes(*right),
-                }
-            }
             // A * null --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if is_null(&right) => {
-                // Check if resulting type would be different due to coercion
-                let left_type = info.get_data_type(&left)?;
-                let right_type = info.get_data_type(&right)?;
-                match BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
-                    .get_result_type()
-                {
-                    Ok(result_type) => {
-                        // Only cast if the types differ
-                        if left_type != result_type {
-                            Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
-                        } else {
-                            Transformed::yes(*right)
-                        }
-                    }
-                    Err(_) => Transformed::yes(*right),
-                }
+            }) if is_one(&right) || is_null(&right) => {
+                simplify_right_is_one_or_null_case(info, left, &Multiply, &right)?
             }
+            // 1 * A --> A
             // null * A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if is_null(&left) => {
-                // Check if resulting type would be different due to coercion
-                let left_type = info.get_data_type(&left)?;
-                let right_type = info.get_data_type(&right)?;
-                match BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
-                    .get_result_type()
-                {
-                    Ok(result_type) => {
-                        // Only cast if the types differ
-                        if left_type != result_type {
-                            Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
-                        } else {
-                            Transformed::yes(*left)
-                        }
-                    }
-                    Err(_) => Transformed::yes(*left),
-                }
+            }) if is_one(&left) || is_null(&left) => {
+                // 1 * A is equivalent to A * 1
+                simplify_right_is_one_or_null_case(info, right, &Multiply, &left)?
             }
 
             // A * 0 --> 0 (if A is not null and not floating, since NAN * 0 -> NAN)
@@ -1098,27 +1024,13 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             //
 
             // A / 1 --> A
+            // A / null --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right,
-            }) if is_one(&right) => {
-                // Check if resulting type would be different due to coercion
-                let left_type = info.get_data_type(&left)?;
-                let right_type = info.get_data_type(&right)?;
-                match BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
-                    .get_result_type()
-                {
-                    Ok(result_type) => {
-                        // Only cast if the types differ
-                        if left_type != result_type {
-                            Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
-                        } else {
-                            Transformed::yes(*left)
-                        }
-                    }
-                    Err(_) => Transformed::yes(*left),
-                }
+            }) if is_one(&right) || is_null(&right) => {
+                simplify_right_is_one_or_null_case(info, left, &Divide, &right)?
             }
             // null / A --> null
             Expr::BinaryExpr(BinaryExpr {
@@ -1126,45 +1038,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 op: Divide,
                 right,
             }) if is_null(&left) => {
-                // Check if resulting type would be different due to coercion
-                let left_type = info.get_data_type(&left)?;
-                let right_type = info.get_data_type(&right)?;
-                match BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
-                    .get_result_type()
-                {
-                    Ok(result_type) => {
-                        // Only cast if the types differ
-                        if left_type != result_type {
-                            Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
-                        } else {
-                            Transformed::yes(*left)
-                        }
-                    }
-                    Err(_) => Transformed::yes(*left),
-                }
-            }
-            // A / null --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Divide,
-                right,
-            }) if is_null(&right) => {
-                // Check if resulting type would be different due to coercion
-                let left_type = info.get_data_type(&left)?;
-                let right_type = info.get_data_type(&right)?;
-                match BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
-                    .get_result_type()
-                {
-                    Ok(result_type) => {
-                        // Only cast if the types differ
-                        if right_type != result_type {
-                            Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
-                        } else {
-                            Transformed::yes(*right)
-                        }
-                    }
-                    Err(_) => Transformed::yes(*right),
-                }
+                simplify_left_is_null_case(info, left, &right)?
             }
 
             //
@@ -2114,6 +1988,55 @@ fn is_exactly_true(expr: Expr, info: &impl SimplifyInfo) -> Result<Expr> {
             op: Operator::IsNotDistinctFrom,
             right: Box::new(lit(true)),
         }))
+    }
+}
+
+// i.e. A * 1 -> A
+fn simplify_right_is_one_or_null_case<S: SimplifyInfo>(
+    info: &S,
+    left: Box<Expr>,
+    op: &Operator,
+    right: &Expr,
+) -> Result<Transformed<Expr>> {
+    // Check if resulting type would be different due to coercion
+    let left_type = info.get_data_type(&left)?;
+    let right_type = info.get_data_type(right)?;
+    match BinaryTypeCoercer::new(&left_type, op, &right_type)
+        .get_result_type()
+    {
+        Ok(result_type) => {
+            // Only cast if the types differ
+            if left_type != result_type {
+                Ok(Transformed::yes(Expr::Cast(Cast::new(left, result_type))))
+            } else {
+                Ok(Transformed::yes(*left))
+            }
+        }
+        Err(_) => Ok(Transformed::yes(*left)),
+    }
+}
+
+// null / A --> null
+fn simplify_left_is_null_case<S: SimplifyInfo>(
+    info: &S,
+    left: Box<Expr>,
+    right: &Expr,
+) -> Result<Transformed<Expr>> {
+    // Check if resulting type would be different due to coercion
+    let left_type = info.get_data_type(&left)?;
+    let right_type = info.get_data_type(right)?;
+    match BinaryTypeCoercer::new(&left_type, &Operator::Divide, &right_type)
+        .get_result_type()
+    {
+        Ok(result_type) => {
+            // Only cast if the types differ
+            if left_type != result_type {
+                Ok(Transformed::yes(Expr::Cast(Cast::new(left, result_type))))
+            } else {
+                Ok(Transformed::yes(*left))
+            }
+        }
+        Err(_) => Ok(Transformed::yes(*left)),
     }
 }
 
