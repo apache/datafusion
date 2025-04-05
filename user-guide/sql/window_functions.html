@@ -545,6 +545,13 @@
       </span>
      </code>
     </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#example">
+       Example
+      </a>
+     </li>
+    </ul>
    </li>
    <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#dense-rank">
@@ -681,6 +688,11 @@
      <li class="toc-h4 nav-item toc-entry">
       <a class="reference internal nav-link" href="#id5">
        Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id6">
+       Example
       </a>
      </li>
     </ul>
@@ -859,10 +871,24 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 </ul>
 <section id="cume-dist">
 <h3><code class="docutils literal notranslate"><span class="pre">cume_dist</span></code><a class="headerlink" href="#cume-dist" title="Link to this heading">¶</a></h3>
-<p>Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).</p>
+<p>Relative rank of the current row: (number of rows preceding or peer with the current row) / (total rows).</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">cume_dist</span><span class="p">()</span>
 </pre></div>
 </div>
+<section id="example">
+<h4>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h4>
+<p>– Example usage of the cume_dist window function:
+SELECT salary,
+cume_dist() OVER (ORDER BY salary) AS cume_dist
+FROM employees;
++——–+———–+
+| salary | cume_dist |
++——–+———–+
+| 30000 | 0.33 |
+| 50000 | 0.67 |
+| 70000 | 1.00 |
++——–+———–+</p>
+</section>
 </section>
 <section id="dense-rank">
 <h3><code class="docutils literal notranslate"><span class="pre">dense_rank</span></code><a class="headerlink" href="#dense-rank" title="Link to this heading">¶</a></h3>
@@ -973,16 +999,47 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 </section>
 <section id="nth-value">
 <h3><code class="docutils literal notranslate"><span class="pre">nth_value</span></code><a class="headerlink" href="#nth-value" title="Link to this heading">¶</a></h3>
-<p>Returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row.</p>
+<p>Returns the value evaluated at the nth row of the window frame (counting from 1). Returns NULL if no such row exists.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">nth_value</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id5">
 <h4>Arguments<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>expression</strong>: The name the column of which nth value to retrieve</p></li>
-<li><p><strong>n</strong>: Integer. Specifies the n in nth</p></li>
+<li><p><strong>expression</strong>: The column from which to retrieve the nth value.</p></li>
+<li><p><strong>n</strong>: Integer. Specifies the row number (starting from 1) in the window frame.</p></li>
 </ul>
+</section>
+<section id="id6">
+<h4>Example<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h4>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Sample employees table:</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">employees</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">salary</span><span class="w"> </span><span class="nb">INT</span><span class="p">);</span>
+<span class="k">INSERT</span><span class="w"> </span><span class="k">INTO</span><span class="w"> </span><span class="n">employees</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">salary</span><span class="p">)</span><span class="w"> </span><span class="k">VALUES</span>
+<span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">30000</span><span class="p">),</span>
+<span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">40000</span><span class="p">),</span>
+<span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">50000</span><span class="p">),</span>
+<span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">60000</span><span class="p">),</span>
+<span class="p">(</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">70000</span><span class="p">);</span>
+
+<span class="c1">-- Example usage of nth_value:</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">nth_value</span><span class="p">(</span><span class="n">salary</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">salary</span>
+<span class="w">  </span><span class="k">ROWS</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="n">UNBOUNDED</span><span class="w"> </span><span class="n">PRECEDING</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="k">CURRENT</span><span class="w"> </span><span class="k">ROW</span>
+<span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">nth_value</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">employees</span><span class="p">;</span>
+</pre></div>
+</div>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>+-----------+
+| nth_value |
++-----------+
+| 40000     |
+| 40000     |
+| 40000     |
+| 40000     |
+| 40000     |
++-----------+
+</pre></div>
+</div>
 </section>
 </section>
 </section>
