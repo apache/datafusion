@@ -187,7 +187,7 @@ fn test_pushdown_into_scan() {
 }
 
 #[test]
-fn test_parquet_pushdown() {
+test_filter_collapse() {
     // filter should be pushed down into the parquet scan with two filters
     let scan = test_scan(FilterSupport::HandledExact);
     let predicate1 = col_lit_predicate("a", "foo", schema());
