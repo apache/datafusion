@@ -34,7 +34,7 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{try_pushdown_filters_to_input, CardinalityEffect};
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -211,6 +211,14 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        parent_filters: &[datafusion_physical_expr::PhysicalExprRef],
+    ) -> Result<crate::ExecutionPlanFilterPushdownResult> {
+        try_pushdown_filters_to_input(plan, &self.input, parent_filters)
     }
 }
 
