@@ -24,8 +24,8 @@ use std::sync::{Arc, LazyLock};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
-use datafusion::execution::DiskManager;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::DiskManager;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::ParquetMetadataFunc;
@@ -40,8 +40,8 @@ use datafusion_cli::{
 use clap::Parser;
 use datafusion::common::config_err;
 use datafusion::config::ConfigOptions;
-use mimalloc::MiMalloc;
 use datafusion::execution::disk_manager::DiskManagerConfig;
+use mimalloc::MiMalloc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -323,19 +323,20 @@ impl ByteUnit {
 }
 
 fn parse_size_string(size: &str, label: &str) -> Result<usize, String> {
-    static BYTE_SUFFIXES: LazyLock<HashMap<&'static str, ByteUnit>> = LazyLock::new(|| {
-        let mut m = HashMap::new();
-        m.insert("b", ByteUnit::Byte);
-        m.insert("k", ByteUnit::KiB);
-        m.insert("kb", ByteUnit::KiB);
-        m.insert("m", ByteUnit::MiB);
-        m.insert("mb", ByteUnit::MiB);
-        m.insert("g", ByteUnit::GiB);
-        m.insert("gb", ByteUnit::GiB);
-        m.insert("t", ByteUnit::TiB);
-        m.insert("tb", ByteUnit::TiB);
-        m
-    });
+    static BYTE_SUFFIXES: LazyLock<HashMap<&'static str, ByteUnit>> =
+        LazyLock::new(|| {
+            let mut m = HashMap::new();
+            m.insert("b", ByteUnit::Byte);
+            m.insert("k", ByteUnit::KiB);
+            m.insert("kb", ByteUnit::KiB);
+            m.insert("m", ByteUnit::MiB);
+            m.insert("mb", ByteUnit::MiB);
+            m.insert("g", ByteUnit::GiB);
+            m.insert("gb", ByteUnit::GiB);
+            m.insert("t", ByteUnit::TiB);
+            m.insert("tb", ByteUnit::TiB);
+            m
+        });
 
     static SUFFIX_REGEX: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"^(-?[0-9]+)([a-z]+)?$").unwrap());
@@ -343,9 +344,9 @@ fn parse_size_string(size: &str, label: &str) -> Result<usize, String> {
     let lower = size.to_lowercase();
     if let Some(caps) = SUFFIX_REGEX.captures(&lower) {
         let num_str = caps.get(1).unwrap().as_str();
-        let num = num_str.parse::<usize>().map_err(|_| {
-            format!("Invalid numeric value in {} '{}'", label, size)
-        })?;
+        let num = num_str
+            .parse::<usize>()
+            .map_err(|_| format!("Invalid numeric value in {} '{}'", label, size))?;
 
         let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("b");
         let unit = BYTE_SUFFIXES
