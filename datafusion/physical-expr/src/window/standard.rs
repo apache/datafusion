@@ -33,7 +33,7 @@ use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 /// A window expr that takes the form of a [`StandardWindowFunctionExpr`].
 #[derive(Debug)]
@@ -282,7 +282,7 @@ pub(crate) fn add_new_ordering_expr_with_partition_by(
 ) {
     if partition_by.is_empty() {
         // In the absence of a PARTITION BY, ordering of `self.expr` is global:
-        eqp.add_new_orderings([LexOrdering::new(vec![expr])]);
+        eqp.add_new_ordering([expr]);
     } else {
         // If we have a PARTITION BY, standard functions can not introduce
         // a global ordering unless the existing ordering is compatible
@@ -293,7 +293,7 @@ pub(crate) fn add_new_ordering_expr_with_partition_by(
         let (mut ordering, _) = eqp.find_longest_permutation(partition_by);
         if ordering.len() == partition_by.len() {
             ordering.push(expr);
-            eqp.add_new_orderings([ordering.into()]);
+            eqp.add_new_ordering(ordering);
         }
     }
 }

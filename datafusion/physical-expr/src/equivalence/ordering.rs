@@ -25,6 +25,7 @@ use crate::{LexOrdering, PhysicalExpr};
 
 use arrow::compute::SortOptions;
 use datafusion_common::HashSet;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
@@ -74,16 +75,6 @@ impl OrderingEquivalenceClass {
         self.orderings.contains(ordering)
     }
 
-    /// Adds `ordering` to this equivalence class.
-    #[allow(dead_code)]
-    #[deprecated(
-        since = "45.0.0",
-        note = "use OrderingEquivalenceClass::add_new_ordering instead"
-    )]
-    fn push(&mut self, ordering: LexOrdering) {
-        self.add_new_ordering(ordering)
-    }
-
     /// Checks whether this ordering equivalence class is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -112,15 +103,21 @@ impl OrderingEquivalenceClass {
     /// Adds new orderings into this ordering equivalence class
     pub fn add_new_orderings(
         &mut self,
-        orderings: impl IntoIterator<Item = LexOrdering>,
+        orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) {
-        self.orderings.extend(orderings);
+        self.orderings.extend(orderings.into_iter().filter_map(|o| {
+            let sort_exprs = o.into_iter().collect::<Vec<_>>();
+            (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs))
+        }));
         // Make sure that there are no redundant orderings:
         self.remove_redundant_entries();
     }
 
     /// Adds a single ordering to the existing ordering equivalence class.
-    pub fn add_new_ordering(&mut self, ordering: LexOrdering) {
+    pub fn add_new_ordering(
+        &mut self,
+        ordering: impl IntoIterator<Item = PhysicalSortExpr>,
+    ) {
         self.add_new_orderings([ordering]);
     }
 

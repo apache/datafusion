@@ -94,15 +94,15 @@ mod sp_repartition_fuzz_tests {
             let n_sort_expr = rng.gen_range(1..remaining_exprs.len() + 1);
             remaining_exprs.shuffle(&mut rng);
 
-            let ordering = remaining_exprs
-                .drain(0..n_sort_expr)
-                .map(|expr| PhysicalSortExpr {
-                    expr: expr.clone(),
-                    options: options_asc,
-                })
-                .collect();
+            let ordering =
+                remaining_exprs
+                    .drain(0..n_sort_expr)
+                    .map(|expr| PhysicalSortExpr {
+                        expr: expr.clone(),
+                        options: options_asc,
+                    });
 
-            eq_properties.add_new_orderings([ordering]);
+            eq_properties.add_new_ordering(ordering);
         }
 
         Ok((test_schema, eq_properties))

@@ -156,7 +156,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     ) -> Option<Arc<dyn WindowExpr>> {
         debug_assert_eq!(self.order_by.len(), order_by_exprs.len());
 
-        let new_order_by: Vec<PhysicalSortExpr> = self
+        let new_order_by = self
             .order_by
             .iter()
             .zip(order_by_exprs)

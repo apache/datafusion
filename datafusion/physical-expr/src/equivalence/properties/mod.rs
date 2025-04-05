@@ -127,10 +127,10 @@ use itertools::Itertools;
 /// // with a single constant value of b
 /// let mut eq_properties = EquivalenceProperties::new(schema)
 ///   .with_constants(vec![ConstExpr::from(col_b)]);
-/// eq_properties.add_new_ordering(LexOrdering::new(vec![
+/// eq_properties.add_new_ordering([
 ///   PhysicalSortExpr::new_default(col_a).asc(),
 ///   PhysicalSortExpr::new_default(col_c).desc(),
-/// ]));
+/// ]);
 ///
 /// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC, c@2 DESC]], const: [b@1(heterogeneous)]")
 /// ```
@@ -260,13 +260,16 @@ impl EquivalenceProperties {
     /// Adds new orderings into the existing ordering equivalence class.
     pub fn add_new_orderings(
         &mut self,
-        orderings: impl IntoIterator<Item = LexOrdering>,
+        orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) {
         self.oeq_class.add_new_orderings(orderings);
     }
 
     /// Adds a single ordering to the existing ordering equivalence class.
-    pub fn add_new_ordering(&mut self, ordering: LexOrdering) {
+    pub fn add_new_ordering(
+        &mut self,
+        ordering: impl IntoIterator<Item = PhysicalSortExpr>,
+    ) {
         self.add_new_orderings([ordering]);
     }
 
@@ -1484,7 +1487,7 @@ impl EquivalenceProperties {
                     sort_expr.expr = with_new_schema(sort_expr.expr, &schema)?;
                     Ok(sort_expr)
                 })
-                .collect::<Result<_>>()?;
+                .collect::<Result<Vec<_>>>()?;
             new_orderings.push(new_ordering);
         }
 

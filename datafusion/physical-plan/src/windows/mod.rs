@@ -436,12 +436,10 @@ pub(crate) fn window_equivalence_properties(
                     let window_col = Column::new(expr.name(), i + input_schema_len);
                     if no_partitioning {
                         // Reverse set-monotonic cases with no partitioning:
-                        let new_ordering =
-                            vec![LexOrdering::new(vec![PhysicalSortExpr::new(
-                                Arc::new(window_col),
-                                SortOptions::new(increasing, true),
-                            )])];
-                        window_eq_properties.add_new_orderings(new_ordering);
+                        window_eq_properties.add_new_ordering([PhysicalSortExpr::new(
+                            Arc::new(window_col),
+                            SortOptions::new(increasing, true),
+                        )]);
                     } else {
                         // Reverse set-monotonic cases for all orderings:
                         for mut lex in all_satisfied_lexs.into_iter() {
@@ -478,19 +476,19 @@ pub(crate) fn window_equivalence_properties(
                             set_monotonicity.eq(&SetMonotonicity::Increasing);
                         let window_col = Column::new(expr.name(), i + input_schema_len);
                         if increasing && (asc || no_partitioning) {
-                            let new_ordering =
-                                LexOrdering::new(vec![PhysicalSortExpr::new(
+                            window_eq_properties.add_new_ordering([
+                                PhysicalSortExpr::new(
                                     Arc::new(window_col),
                                     SortOptions::new(false, false),
-                                )]);
-                            window_eq_properties.add_new_ordering(new_ordering);
+                                ),
+                            ]);
                         } else if !increasing && (!asc || no_partitioning) {
-                            let new_ordering =
-                                LexOrdering::new(vec![PhysicalSortExpr::new(
+                            window_eq_properties.add_new_ordering([
+                                PhysicalSortExpr::new(
                                     Arc::new(window_col),
                                     SortOptions::new(true, false),
-                                )]);
-                            window_eq_properties.add_new_ordering(new_ordering);
+                                ),
+                            ]);
                         };
                     }
                 }
