@@ -96,6 +96,15 @@ pub(crate) trait GroupValues: Send {
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
+    fn intern_with_blocked_groups(
+        &mut self,
+        cols: &[ArrayRef],
+        blocked_groups: &mut Vec<Vec<usize>>,
+    ) -> Result<()> {
+        assert!(blocked_groups.len() == 1);
+        self.intern(cols, &mut blocked_groups[0])
+    }
+
     /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;
 

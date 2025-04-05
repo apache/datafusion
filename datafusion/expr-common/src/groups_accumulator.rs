@@ -134,14 +134,15 @@ pub trait GroupsAccumulator: Send {
         total_num_groups: usize,
     ) -> Result<()>;
 
-    fn update_batch_with_indices(
+    fn update_batch_with_blocked_groups(
         &mut self,
         values: &[ArrayRef],
-        indices: &[Vec<usize>],
+        blocked_groups: &[Vec<usize>],
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        self.update_batch(values, &indices[0], opt_filter, total_num_groups)
+        assert!(blocked_groups.len() == 1);
+        self.update_batch(values, &blocked_groups[0], opt_filter, total_num_groups)
     }
 
     /// Returns the final aggregate value for each group as a single
@@ -205,14 +206,15 @@ pub trait GroupsAccumulator: Send {
         total_num_groups: usize,
     ) -> Result<()>;
 
-    fn merge_batch_with_indices(
+    fn merge_batch_with_blocked_groups(
         &mut self,
         values: &[ArrayRef],
-        indices: &[Vec<usize>],
+        blocked_groups: &[Vec<usize>],
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        self.merge_batch(values, &indices[0], opt_filter, total_num_groups)
+        assert!(blocked_groups.len() == 1);
+        self.merge_batch(values, &blocked_groups[0], opt_filter, total_num_groups)
     }
 
     /// Converts an input batch directly to the intermediate aggregate state.

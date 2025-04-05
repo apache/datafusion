@@ -398,7 +398,7 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// scratch space for the current input [`RecordBatch`] being
     /// processed. Reused across batches here to avoid reallocations
-    current_group_block_indices: Vec<Vec<usize>>,
+    current_blocked_group_indices: Vec<Vec<usize>>,
 
     /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
@@ -596,7 +596,7 @@ impl GroupedHashAggregateStream {
             group_by: agg_group_by,
             reservation,
             group_values,
-            current_group_block_indices: vec![Vec::new(); 2],
+            current_blocked_group_indices: vec![Vec::new(); 2],
             exec_state,
             baseline_metrics,
             batch_size,
@@ -835,19 +835,22 @@ impl GroupedHashAggregateStream {
             evaluate_optional(&self.filter_expressions, &batch)?
         };
 
+        let blocked_group_indices = &mut self.current_blocked_group_indices;
+
         for group_values in &group_by_values {
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
             self.group_values
-                .intern(group_values, &mut self.current_group_block_indices[0])?;
-            let group_indices = &self.current_group_block_indices[0];
+                .intern_with_blocked_groups(group_values, blocked_group_indices)?;
 
             // Update ordering information if necessary
             let total_num_groups = self.group_values.len();
             if total_num_groups > starting_num_groups {
+                // In sorted case, we need to ensure `blocked approach` is disabled
+                assert!(blocked_group_indices.len() == 1);
                 self.group_ordering.new_groups(
                     group_values,
-                    group_indices,
+                    &blocked_group_indices[0],
                     total_num_groups,
                 )?;
             }
@@ -870,9 +873,9 @@ impl GroupedHashAggregateStream {
                     | AggregateMode::SinglePartitioned
                         if !self.spill_state.is_stream_merging =>
                     {
-                        acc.update_batch(
+                        acc.update_batch_with_blocked_groups(
                             values,
-                            group_indices,
+                            blocked_group_indices,
                             opt_filter,
                             total_num_groups,
                         )?;
@@ -884,7 +887,12 @@ impl GroupedHashAggregateStream {
 
                         // if aggregation is over intermediate states,
                         // use merge
-                        acc.merge_batch(values, group_indices, None, total_num_groups)?;
+                        acc.merge_batch_with_blocked_groups(
+                            values,
+                            blocked_group_indices,
+                            None,
+                            total_num_groups,
+                        )?;
                     }
                 }
             }
@@ -907,7 +915,7 @@ impl GroupedHashAggregateStream {
         let reservation_result = self.reservation.try_resize(
             acc + self.group_values.size()
                 + self.group_ordering.size()
-                + self.current_group_block_indices.allocated_size(),
+                + self.current_blocked_group_indices.allocated_size(),
         );
 
         if reservation_result.is_ok() {
@@ -1009,8 +1017,9 @@ impl GroupedHashAggregateStream {
     /// Clear memory and shirk capacities to the size of the batch.
     fn clear_shrink(&mut self, batch: &RecordBatch) {
         self.group_values.clear_shrink(batch);
-        self.current_group_block_indices.clear();
-        self.current_group_block_indices.shrink_to(batch.num_rows());
+        self.current_blocked_group_indices.clear();
+        self.current_blocked_group_indices
+            .shrink_to(batch.num_rows());
     }
 
     /// Clear memory and shirk capacities to zero.
