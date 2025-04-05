@@ -31,7 +31,9 @@ use arrow::{
     buffer::Buffer,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
 };
-use datafusion_common::{exec_err, ColumnStatistics, Constraints, Result, Statistics};
+use datafusion_common::{
+    config::ConfigOptions, exec_err, ColumnStatistics, Constraints, Result, Statistics,
+};
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
@@ -588,8 +590,9 @@ impl DataSource for FileScanConfig {
     fn try_pushdown_filters(
         &self,
         filters: &[PhysicalExprRef],
+        config: &ConfigOptions,
     ) -> Result<DataSourceFilterPushdownResult> {
-        match self.file_source.try_pushdown_filters(filters)? {
+        match self.file_source.try_pushdown_filters(filters, config)? {
             FileSourceFilterPushdownResult::NotPushed => {
                 Ok(DataSourceFilterPushdownResult::NotPushed)
             }

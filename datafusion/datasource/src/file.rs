@@ -26,6 +26,7 @@ use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalExprRef};
 use datafusion_physical_plan::filter_pushdown::FilterPushdownResult;
@@ -98,6 +99,7 @@ pub trait FileSource: Send + Sync {
     fn try_pushdown_filters(
         &self,
         _filters: &[PhysicalExprRef],
+        _config: &ConfigOptions,
     ) -> Result<FileSourceFilterPushdownResult> {
         Ok(FileSourceFilterPushdownResult::NotPushed)
     }

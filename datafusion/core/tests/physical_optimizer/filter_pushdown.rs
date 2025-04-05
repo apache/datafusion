@@ -149,6 +149,7 @@ impl FileSource for TestSource {
     fn try_pushdown_filters(
         &self,
         filters: &[PhysicalExprRef],
+        _config: &ConfigOptions,
     ) -> Result<FileSourceFilterPushdownResult> {
         let new = Arc::new(TestSource {
             support: self.support,

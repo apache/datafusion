@@ -84,6 +84,7 @@ pub trait DataSource: Send + Sync + Debug {
     fn try_pushdown_filters(
         &self,
         _filters: &[PhysicalExprRef],
+        _config: &ConfigOptions,
     ) -> Result<DataSourceFilterPushdownResult> {
         Ok(DataSourceFilterPushdownResult::NotPushed)
     }
@@ -207,8 +208,12 @@ impl ExecutionPlan for DataSourceExec {
         &self,
         _plan: &Arc<dyn ExecutionPlan>,
         parent_filters: &[PhysicalExprRef],
+        config: &ConfigOptions,
     ) -> Result<ExecutionPlanFilterPushdownResult> {
-        match self.data_source.try_pushdown_filters(parent_filters)? {
+        match self
+            .data_source
+            .try_pushdown_filters(parent_filters, config)?
+        {
             DataSourceFilterPushdownResult::NotPushed => {
                 Ok(ExecutionPlanFilterPushdownResult::NotPushed)
             }

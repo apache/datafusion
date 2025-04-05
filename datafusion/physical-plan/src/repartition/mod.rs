@@ -43,6 +43,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -728,8 +729,9 @@ impl ExecutionPlan for RepartitionExec {
         &self,
         plan: &Arc<dyn ExecutionPlan>,
         parent_filters: &[datafusion_physical_expr::PhysicalExprRef],
+        config: &ConfigOptions,
     ) -> Result<crate::ExecutionPlanFilterPushdownResult> {
-        try_pushdown_filters_to_input(plan, &self.input, parent_filters)
+        try_pushdown_filters_to_input(plan, &self.input, parent_filters, config)
     }
 }
 

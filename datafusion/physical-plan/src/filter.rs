@@ -41,6 +41,7 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
@@ -440,6 +441,7 @@ impl ExecutionPlan for FilterExec {
         &self,
         _plan: &Arc<dyn ExecutionPlan>,
         parent_filters: &[PhysicalExprRef],
+        config: &ConfigOptions,
     ) -> Result<ExecutionPlanFilterPushdownResult> {
         let mut all_filters = parent_filters.to_vec();
         all_filters.push(Arc::clone(&self.predicate));
@@ -452,40 +454,44 @@ impl ExecutionPlan for FilterExec {
         } else {
             all_filters
         };
-        let (new_predicate, new_input) = match self
-            .input
-            .try_pushdown_filters(&self.input, &all_filters)?
-        {
-            ExecutionPlanFilterPushdownResult::NotPushed => {
-                if parent_filters.is_empty() {
-                    return Ok(ExecutionPlanFilterPushdownResult::NotPushed);
+        let (new_predicate, new_input) =
+            match self
+                .input
+                .try_pushdown_filters(&self.input, &all_filters, config)?
+            {
+                ExecutionPlanFilterPushdownResult::NotPushed => {
+                    if parent_filters.is_empty() {
+                        return Ok(ExecutionPlanFilterPushdownResult::NotPushed);
+                    }
+                    (conjunction(all_filters), Arc::clone(&self.input))
                 }
-                (conjunction(all_filters), Arc::clone(&self.input))
-            }
-            ExecutionPlanFilterPushdownResult::Pushed { inner, support } => {
-                // Split out the filters that the child plan handled and the ones it did not
-                let unhandled_filters = all_filters
-                    .into_iter()
-                    .zip(support)
-                    .filter_map(|(f, s)| {
-                        if matches!(s, FilterPushdownSupport::Exact) {
-                            None
-                        } else {
-                            Some(f)
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                // If there are no unhandled filters and we have no projection, return the inner plan
-                if unhandled_filters.is_empty() && self.projection.is_none() {
-                    return Ok(ExecutionPlanFilterPushdownResult::Pushed {
-                        inner,
-                        support: vec![FilterPushdownSupport::Exact; parent_filters.len()],
-                    });
+                ExecutionPlanFilterPushdownResult::Pushed { inner, support } => {
+                    // Split out the filters that the child plan handled and the ones it did not
+                    let unhandled_filters = all_filters
+                        .into_iter()
+                        .zip(support)
+                        .filter_map(|(f, s)| {
+                            if matches!(s, FilterPushdownSupport::Exact) {
+                                None
+                            } else {
+                                Some(f)
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    // If there are no unhandled filters and we have no projection, return the inner plan
+                    if unhandled_filters.is_empty() && self.projection.is_none() {
+                        return Ok(ExecutionPlanFilterPushdownResult::Pushed {
+                            inner,
+                            support: vec![
+                                FilterPushdownSupport::Exact;
+                                parent_filters.len()
+                            ],
+                        });
+                    }
+                    let new_predicate = conjunction(unhandled_filters);
+                    (new_predicate, inner)
                 }
-                let new_predicate = conjunction(unhandled_filters);
-                (new_predicate, inner)
-            }
-        };
+            };
 
         let cache = Self::compute_properties(
             &self.input,
