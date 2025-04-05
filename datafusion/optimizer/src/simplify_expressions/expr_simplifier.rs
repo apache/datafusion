@@ -33,8 +33,8 @@ use datafusion_common::{
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
-    WindowFunctionDefinition,
+    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
+    Operator, Volatility, WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
@@ -976,30 +976,86 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // Rules for Multiply
             //
 
-            // A * 1 --> A
+            // A * 1 --> A (with type coercion if needed)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if is_one(&right) => Transformed::yes(*left),
+            }) if is_one(&right) => {
+                // Check if resulting type would be different due to coercion
+                let left_type = info.get_data_type(&left)?;
+                let right_type = info.get_data_type(&right)?;
+                let result_type =
+                    BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
+                        .get_result_type()?;
+
+                // Only cast if the types differ
+                if left_type != result_type {
+                    Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
+                } else {
+                    Transformed::yes(*left)
+                }
+            }
             // 1 * A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if is_one(&left) => Transformed::yes(*right),
+            }) if is_one(&left) => {
+                // Check if resulting type would be different due to coercion
+                let left_type = info.get_data_type(&left)?;
+                let right_type = info.get_data_type(&right)?;
+                let result_type =
+                    BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
+                        .get_result_type()?;
+
+                // Only cast if the types differ
+                if right_type != result_type {
+                    Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
+                } else {
+                    Transformed::yes(*right)
+                }
+            }
             // A * null --> null
             Expr::BinaryExpr(BinaryExpr {
-                left: _,
+                left,
                 op: Multiply,
                 right,
-            }) if is_null(&right) => Transformed::yes(*right),
+            }) if is_null(&right) => {
+                // Check if resulting type would be different due to coercion
+                let left_type = info.get_data_type(&left)?;
+                let right_type = info.get_data_type(&right)?;
+                let result_type =
+                    BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
+                        .get_result_type()?;
+
+                // Only cast if the types differ
+                if right_type != result_type {
+                    Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
+                } else {
+                    Transformed::yes(*right)
+                }
+            }
             // null * A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
+                right,
+            }) if is_null(&left) => {
+                // Check if resulting type would be different due to coercion
+                let left_type = info.get_data_type(&left)?;
+                let right_type = info.get_data_type(&right)?;
+                let result_type =
+                    BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
+                        .get_result_type()?;
+
+                // Only cast if the types differ
+                if left_type != result_type {
+                    Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
+                } else {
+                    Transformed::yes(*left)
+                }
+            }
 
             // A * 0 --> 0 (if A is not null and not floating, since NAN * 0 -> NAN)
             Expr::BinaryExpr(BinaryExpr {
@@ -1033,19 +1089,61 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 left,
                 op: Divide,
                 right,
-            }) if is_one(&right) => Transformed::yes(*left),
+            }) if is_one(&right) => {
+                // Check if resulting type would be different due to coercion
+                let left_type = info.get_data_type(&left)?;
+                let right_type = info.get_data_type(&right)?;
+                let result_type =
+                    BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
+                        .get_result_type()?;
+
+                // Only cast if the types differ
+                if left_type != result_type {
+                    Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
+                } else {
+                    Transformed::yes(*left)
+                }
+            }
             // null / A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
+                right,
+            }) if is_null(&left) => {
+                // Check if resulting type would be different due to coercion
+                let left_type = info.get_data_type(&left)?;
+                let right_type = info.get_data_type(&right)?;
+                let result_type =
+                    BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
+                        .get_result_type()?;
+
+                // Only cast if the types differ
+                if left_type != result_type {
+                    Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
+                } else {
+                    Transformed::yes(*left)
+                }
+            }
             // A / null --> null
             Expr::BinaryExpr(BinaryExpr {
-                left: _,
+                left,
                 op: Divide,
                 right,
-            }) if is_null(&right) => Transformed::yes(*right),
+            }) if is_null(&right) => {
+                // Check if resulting type would be different due to coercion
+                let left_type = info.get_data_type(&left)?;
+                let right_type = info.get_data_type(&right)?;
+                let result_type =
+                    BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
+                        .get_result_type()?;
+
+                // Only cast if the types differ
+                if right_type != result_type {
+                    Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
+                } else {
+                    Transformed::yes(*right)
+                }
+            }
 
             //
             // Rules for Modulo
