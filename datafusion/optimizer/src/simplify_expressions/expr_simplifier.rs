@@ -760,6 +760,25 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     None => lit_bool_null(),
                 })
             }
+            // According to SQL's null semantics, NULL = NULL evaluates to NULL
+            // Both sides are the same expression (A = A) and A is non-volatile expression
+            // A = A --> A IS NOT NULL OR NULL
+            // A = A --> true (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Eq,
+                right,
+            }) if (left == right) & !left.is_volatile() => {
+                Transformed::yes(match !info.nullable(&left)? {
+                    true => lit(true),
+                    false => Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(Expr::IsNotNull(left)),
+                        op: Or,
+                        right: Box::new(lit_bool_null()),
+                    }),
+                })
+            }
+
             // Rules for NotEq
             //
 
@@ -2150,6 +2169,21 @@ mod tests {
             let expected = col("c2").lt(col("c1"));
             assert_eq!(simplify(expr), expected);
         }
+    }
+
+    #[test]
+    fn test_simplify_eq_not_self() {
+        // `expr_a`: column `c2` is nullable, so `c2 = c2` simplifies to `c2 IS NOT NULL OR NULL`
+        // This ensures the expression is only true when `c2` is not NULL, accounting for SQL's NULL semantics.
+        let expr_a = col("c2").eq(col("c2"));
+        let expected_a = col("c2").is_not_null().or(lit_bool_null());
+
+        // `expr_b`: column `c2_non_null` is explicitly non-nullable, so `c2_non_null = c2_non_null` is always true
+        let expr_b = col("c2_non_null").eq(col("c2_non_null"));
+        let expected_b = lit(true);
+
+        assert_eq!(simplify(expr_a), expected_a);
+        assert_eq!(simplify(expr_b), expected_b);
     }
 
     #[test]
