@@ -15,8 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// The answer to the question: "Can this operator handle this filter itself?"
-/// Note that this is different from [`FilterPushdownAllowed`] which is the answer to "Can *this* plan handle this filter?"
+/// Result of trying to push down fitlers to a child plan.
+/// This is used by [`FilterPushdownResult`] to indicate whether the filter was
+/// "absorbed" by the child ([`FilterPushdownSupport::Exact`]) or not
+/// ([`FilterPushdownSupport::Unsupported`]).
+/// If the filter was not absorbed, the parent plan must apply the filter
+/// itself, or return to the caller that it was not pushed down.
+/// If the filter was absorbed, the parent plan can drop the filter or
+/// tell the caller that it was pushed down by forwarding on the [`FilterPushdownSupport::Exact`]
+/// information.
 #[derive(Debug, Clone, Copy)]
 pub enum FilterPushdownSupport {
     /// Filter may not have been pushed down to the child plan, or the child plan
