@@ -1037,9 +1037,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 left,
                 op: Divide,
                 right,
-            }) if is_null(&left) => {
-                simplify_left_is_null_case(info, left, &right)?
-            }
+            }) if is_null(&left) => simplify_left_is_null_case(info, left, &right)?,
 
             //
             // Rules for Modulo
@@ -2002,9 +2000,7 @@ fn simplify_right_is_one_or_null_case<S: SimplifyInfo>(
     // Check if resulting type would be different due to coercion
     let left_type = info.get_data_type(&left)?;
     let right_type = info.get_data_type(right)?;
-    match BinaryTypeCoercer::new(&left_type, op, &right_type)
-        .get_result_type()
-    {
+    match BinaryTypeCoercer::new(&left_type, op, &right_type).get_result_type() {
         Ok(result_type) => {
             // Only cast if the types differ
             if left_type != result_type {
