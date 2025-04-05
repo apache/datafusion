@@ -131,7 +131,7 @@ struct Args {
     #[clap(
         short = 'd',
         long,
-        help = "Available disk space for spilling queries (e.g. '10g'), default to None (no limit)",
+        help = "Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')",
         value_parser(extract_disk_limit)
     )]
     disk_limit: Option<usize>,
