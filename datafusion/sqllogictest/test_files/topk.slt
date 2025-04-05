@@ -233,3 +233,104 @@ d 1 -98 y7C453hRWd4E7ImjNDWlpexB8nUqjh y7C453hRWd4E7ImjNDWlpexB8nUqjh
 e 2 52 xipQ93429ksjNcXPX5326VSg1xJZcW xipQ93429ksjNcXPX5326VSg1xJZcW
 d 1 -72 wwXqSGKLyBQyPkonlzBNYUJTCo4LRS wwXqSGKLyBQyPkonlzBNYUJTCo4LRS
 a 1 -5 waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs
+
+#####################################
+## Test TopK with Partially Sorted Inputs
+#####################################
+
+
+# Create an external table where data is pre-sorted by (column1 DESC, column2 ASC) only.
+statement ok
+CREATE EXTERNAL TABLE partial_sorted (
+    column1 VARCHAR,
+    column2 INT,
+    column3 INT
+)
+STORED AS parquet
+LOCATION 'test_files/scratch/topk/partial_sorted/1.parquet'
+WITH ORDER (column1 DESC, column2 ASC);
+
+# Insert test data into the external table.
+query I
+COPY (VALUES
+    ('A', 12, 100),
+    ('A', 8, 50),
+    ('B', 9, 70),
+    ('B', 10, 80),
+    ('C', 7, 60),
+    ('C', 11, 90))
+TO 'test_files/scratch/topk/partial_sorted/1.parquet';
+----
+6
+
+# Run a TopK query that orders by all columns.
+# Although the table is only guaranteed to be sorted by (column1 DESC, column2 ASC),
+# DataFusion should use the common prefix optimization
+# and return the correct top 3 rows when ordering by all columns.
+query TII
+select column1, column2, column3 from partial_sorted order by column1 desc, column2 asc, column3 desc limit 3;
+----
+C 7 60
+C 11 90
+B 9 70
+
+## explain_physical_plan_only
+statement ok
+set datafusion.explain.physical_plan_only = true
+
+# Verify that the physical plan includes the sort prefix.
+# The output should display a "sort_prefix" in the SortExec node.
+query TT
+explain select column1, column2, column3 from partial_sorted order by column1 desc, column2 asc, column3 desc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[column1@0 DESC, column2@1 ASC NULLS LAST, column3@2 DESC], preserve_partitioning=[false], sort_prefix=[column1@0 DESC, column2@1 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 DESC, column2@1 ASC NULLS LAST], file_type=parquet
+
+
+# Explain variations of the above query with different orderings, and different sort prefixes.
+# The "sort_prefix" in the  SortExec node should only be present if the TopK's ordering starts with either (column1 DESC, column2 ASC) or just (column1 DESC).
+query TT
+explain select column1, column2, column3 from partial_sorted order by column3 desc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[column3@2 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 DESC, column2@1 ASC NULLS LAST], file_type=parquet
+
+query TT
+explain select column1, column2, column3 from partial_sorted order by column1 desc, column2 desc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[column1@0 DESC, column2@1 DESC], preserve_partitioning=[false], sort_prefix=[column1@0 DESC]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 DESC, column2@1 ASC NULLS LAST], file_type=parquet
+
+query TT
+explain select column1, column2, column3 from partial_sorted order by column1 asc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 DESC, column2@1 ASC NULLS LAST], file_type=parquet
+
+query TT
+explain select column1, column2, column3 from partial_sorted order by column2 asc, column1 desc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[column2@1 ASC NULLS LAST, column1@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 DESC, column2@1 ASC NULLS LAST], file_type=parquet
+
+
+# Verify that the sort prefix is correctly computed on the normalized ordering (removing redundant aliased columns for example).
+query TT
+explain select column1, column2, column3, column1 as column4, column2 as column5 from partial_sorted order by column1 desc, column4 desc, column2 asc, column5 asc, column3 desc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[column1@0 DESC, column4@3 DESC, column2@1 ASC NULLS LAST, column5@4 ASC NULLS LAST, column3@2 DESC], preserve_partitioning=[false], sort_prefix=[column1@0 DESC, column2@1 ASC NULLS LAST]
+02)--ProjectionExec: expr=[column1@0 as column1, column2@1 as column2, column3@2 as column3, column1@0 as column4, column2@1 as column5]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 DESC, column2@1 ASC NULLS LAST], file_type=parquet
+
+# Cleanup
+statement ok
+DROP TABLE partial_sorted;
+
+statement ok
+set datafusion.explain.physical_plan_only = false
