@@ -1992,6 +1992,7 @@ fn is_exactly_true(expr: Expr, info: &impl SimplifyInfo) -> Result<Expr> {
 }
 
 // i.e. A * 1 -> A
+// Move this function body out of the large match branch avoid stack overflow
 fn simplify_right_is_one_or_null_case<S: SimplifyInfo>(
     info: &S,
     left: Box<Expr>,
@@ -2017,6 +2018,7 @@ fn simplify_right_is_one_or_null_case<S: SimplifyInfo>(
 }
 
 // null / A --> null
+// Move this function body out of the large match branch avoid stack overflow
 fn simplify_left_is_null_case<S: SimplifyInfo>(
     info: &S,
     left: Box<Expr>,
