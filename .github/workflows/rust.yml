@@ -385,7 +385,7 @@ jobs:
 
   linux-wasm-pack:
     name: build with wasm-pack
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Setup for wasm32
@@ -394,27 +394,15 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang jq
-
+          sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
         run: |
           cargo install wasm-pack
-      - name: Install Chrome Environment
-        run: |
-          mkdir -p /tmp/chrome
-          wget $(curl https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json | jq -r '.versions | sort_by(.version) | reverse | .[0] | .downloads.chrome | .[] | select(.platform == "linux64") | .url')
-          wget $(curl https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json | jq -r '.versions | sort_by(.version) | reverse | .[0] | .downloads.chromedriver | .[] | select(.platform == "linux64") | .url')
-          unzip chromedriver-linux64.zip
-          unzip chrome-linux64.zip
-          cp -r chrome-linux64/ /tmp/chrome/
-          cp -r chromedriver-linux64 /tmp/chrome/chromedriver
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
-        env:
-          WASM_BINDGEN_TEST_TIMEOUT: 300 
         run: |
-          export PATH=$PATH:/tmp/chrome/chrome-linux64/:/tmp/chrome/chromedriver/
-          wasm-pack test --headless --chrome --chromedriver /tmp/chrome/chromedriver/chromedriver
+          wasm-pack test --headless --firefox
+          wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
