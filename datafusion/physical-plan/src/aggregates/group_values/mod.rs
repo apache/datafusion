@@ -96,15 +96,6 @@ pub(crate) trait GroupValues: Send {
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
-    fn intern_with_blocked_groups(
-        &mut self,
-        cols: &[ArrayRef],
-        blocked_groups: &mut Vec<Vec<usize>>,
-    ) -> Result<()> {
-        assert!(blocked_groups.len() == 1);
-        self.intern(cols, &mut blocked_groups[0])
-    }
-
     /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;
 
@@ -119,6 +110,41 @@ pub(crate) trait GroupValues: Send {
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, batch: &RecordBatch);
+
+    /// Returns `true` if this group values supports blocked mode.
+    fn support_blocked_groups(&self) -> bool {
+        false
+    }
+
+    /// Alter the block size in the `GroupValues`
+    ///
+    /// If the target block size is `None`, it will use a single big
+    /// block(can think it a `Vec`) to manage the state.
+    ///
+    /// If the target block size` is `Some(blk_size)`, it will try to
+    /// set the block size to `blk_size`, and the try will only success
+    /// when the accumulator has supported blocked mode.
+    ///
+    /// NOTICE: After altering block size, all data in previous will be cleared.
+    ///
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        if block_size.is_some() {
+            return Err(DataFusionError::NotImplemented(
+                "this group values doesn't support blocked groups yet".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn intern_with_blocked_groups(
+        &mut self,
+        cols: &[ArrayRef],
+        blocked_groups: &mut Vec<Vec<usize>>,
+    ) -> Result<()> {
+        assert!(blocked_groups.len() == 1);
+        self.intern(cols, &mut blocked_groups[0])
+    }
 }
 
 /// Return a specialized implementation of [`GroupValues`] for the given schema.
