@@ -80,7 +80,8 @@ pub trait DataSource: Send + Sync + Debug {
         &self,
         _projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
-
+    /// Try to push down filters into this DataSource.
+    /// See [`ExecutionPlan::try_pushdown_filters`] for more details.
     fn try_pushdown_filters(
         &self,
         _filters: &[PhysicalExprRef],

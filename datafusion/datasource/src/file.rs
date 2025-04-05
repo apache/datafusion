@@ -95,7 +95,10 @@ pub trait FileSource: Send + Sync {
         }
         Ok(None)
     }
-
+    /// Try to push down filters into this FileSource.
+    /// See [`ExecutionPlan::try_pushdown_filters`] for more details.
+    ///
+    /// [`ExecutionPlan::try_pushdown_filters`]: datafusion_physical_plan::ExecutionPlan::try_pushdown_filters
     fn try_pushdown_filters(
         &self,
         _filters: &[PhysicalExprRef],
