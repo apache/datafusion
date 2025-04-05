@@ -403,9 +403,14 @@ jobs:
       - name: Build with wasm-pack
         working-directory: ./datafusion/wasmtest
         run: wasm-pack build --dev
-      - run: wasm-pack test --headless --chrome
-      - run: wasm-pack test --headless --firefox
-      - run: wasm-pack test --headless --safari
+      - name: Run tests with headless mode
+        working-directory: ./datafusion/wasmtest
+        env:
+          WASM_BINDGEN_TEST_TIMEOUT: 300 
+        run: |
+          wasm-pack test --headless --chrome
+          wasm-pack test --headless --firefox
+          wasm-pack test --headless --safari
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:

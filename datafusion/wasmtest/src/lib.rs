@@ -82,7 +82,6 @@ pub fn basic_parse() {
 #[cfg(test)]
 mod test {
     use super::*;
-    use datafusion::execution::options::ParquetReadOptions;
     use datafusion::{
         arrow::{
             array::{ArrayRef, Int32Array, RecordBatch, StringArray},
@@ -239,11 +238,12 @@ mod test {
 
         let url = Url::parse("memory://").unwrap();
         session_ctx.register_object_store(&url, Arc::new(store));
-
-        let df = session_ctx
-            .read_parquet("memory:///", ParquetReadOptions::new())
+        session_ctx
+            .register_parquet("a", "memory:///a.parquet", Default::default())
             .await
             .unwrap();
+
+        let df = session_ctx.sql("SELECT * FROM a").await.unwrap();
 
         let result = df.collect().await.unwrap();
 
