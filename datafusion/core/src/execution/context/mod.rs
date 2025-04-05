@@ -35,7 +35,11 @@ use crate::{
     },
     datasource::{provider_as_source, MemTable, ViewTable},
     error::{DataFusionError, Result},
-    execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
+    execution::{
+        options::ArrowReadOptions,
+        runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
+        FunctionRegistry,
+    },
     logical_expr::AggregateUDF,
     logical_expr::ScalarUDF,
     logical_expr::{
@@ -1036,11 +1040,80 @@ impl SessionContext {
             variable, value, ..
         } = stmt;
 
-        let mut state = self.state.write();
-        state.config_mut().options_mut().set(&variable, &value)?;
-        drop(state);
+        // Check if this is a runtime configuration
+        if variable.starts_with("datafusion.runtime.") {
+            self.set_runtime_variable(&variable, &value)?;
+        } else {
+            let mut state = self.state.write();
+            state.config_mut().options_mut().set(&variable, &value)?;
+            drop(state);
+        }
 
         self.return_empty_dataframe()
+    }
+
+    fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
+        let key = variable.strip_prefix("datafusion.runtime.").unwrap();
+
+        match key {
+            "memory_limit" => {
+                let memory_limit = self.parse_memory_limit(value)?;
+
+                let current_runtime = {
+                    let state = self.state.read();
+                    state.runtime_env().clone()
+                };
+
+                let mut builder = RuntimeEnvBuilder::from_runtime_env(&current_runtime);
+                builder = builder.with_memory_limit(memory_limit, 1.0);
+
+                let new_runtime = builder.build()?;
+                self.update_runtime_env(Arc::new(new_runtime))?;
+            }
+            _ => {
+                return Err(DataFusionError::Plan(format!(
+                    "Unknown runtime configuration: {}",
+                    variable
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Parse memory limit from string to number of bytes
+    /// e.g. '1.5G', '100M'
+    fn parse_memory_limit(&self, limit: &str) -> Result<usize> {
+        let (number, unit) = limit.split_at(limit.len() - 1);
+        let number: f64 = number.parse().map_err(|_| {
+            DataFusionError::Plan(format!(
+                "Failed to parse number from memory limit '{}'",
+                limit
+            ))
+        })?;
+
+        match unit {
+            "K" => Ok((number * 1024.0) as usize),
+            "M" => Ok((number * 1024.0 * 1024.0) as usize),
+            "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
+            _ => Err(DataFusionError::Plan(format!(
+                "Unsupported unit '{}' in memory limit '{}'",
+                unit, limit
+            ))),
+        }
+    }
+
+    fn update_runtime_env(&self, runtime_env: Arc<RuntimeEnv>) -> Result<()> {
+        let mut state = self.state.write();
+
+        let new_state = SessionStateBuilder::new()
+            .with_config(state.config().clone())
+            .with_runtime_env(runtime_env)
+            .build();
+
+        *state = new_state;
+
+        Ok(())
     }
 
     async fn create_custom_table(
