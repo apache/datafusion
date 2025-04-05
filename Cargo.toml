@@ -101,7 +101,7 @@ arrow-ipc = { version = "54.3.0", default-features = false, features = [
 arrow-ord = { version = "54.3.0", default-features = false }
 arrow-schema = { version = "54.3.0", default-features = false }
 async-trait = "0.1.88"
-bigdecimal = "0.4.7"
+bigdecimal = "0.4.8"
 bytes = "1.10"
 chrono = { version = "0.4.38", default-features = false }
 criterion = "0.5.1"
