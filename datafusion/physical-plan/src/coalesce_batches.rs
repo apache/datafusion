@@ -30,6 +30,7 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 
@@ -217,8 +218,9 @@ impl ExecutionPlan for CoalesceBatchesExec {
         &self,
         plan: &Arc<dyn ExecutionPlan>,
         parent_filters: &[datafusion_physical_expr::PhysicalExprRef],
+        config: &ConfigOptions,
     ) -> Result<crate::ExecutionPlanFilterPushdownResult> {
-        try_pushdown_filters_to_input(plan, &self.input, parent_filters)
+        try_pushdown_filters_to_input(plan, &self.input, parent_filters, config)
     }
 }
 

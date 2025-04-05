@@ -45,9 +45,9 @@ impl PhysicalOptimizerRule for PushdownFilter {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match plan.try_pushdown_filters(&plan, &Vec::new())? {
+        match plan.try_pushdown_filters(&plan, &Vec::new(), config)? {
             ExecutionPlanFilterPushdownResult::NotPushed => Ok(plan),
             ExecutionPlanFilterPushdownResult::Pushed { inner, support } => {
                 if !support.is_empty() {

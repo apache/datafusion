@@ -748,6 +748,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         &self,
         plan: &Arc<dyn ExecutionPlan>,
         parent_filters: &[PhysicalExprRef],
+        config: &ConfigOptions,
     ) -> Result<ExecutionPlanFilterPushdownResult> {
         // By default assume that:
         // * Parent filters can't be passed onto children.
@@ -757,7 +758,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         let mut new_children = Vec::with_capacity(self.children().len());
         let mut pushed = false;
         for child in self.children() {
-            match child.try_pushdown_filters(child, &Vec::new())? {
+            match child.try_pushdown_filters(child, &Vec::new(), config)? {
                 ExecutionPlanFilterPushdownResult::NotPushed => {
                     // No pushdown possible, keep this child as is
                     new_children.push(Arc::clone(child));
@@ -799,8 +800,9 @@ pub fn try_pushdown_filters_to_input(
     plan: &Arc<dyn ExecutionPlan>,
     input: &Arc<dyn ExecutionPlan>,
     parent_filters: &[PhysicalExprRef],
+    config: &ConfigOptions,
 ) -> Result<ExecutionPlanFilterPushdownResult> {
-    match input.try_pushdown_filters(input, parent_filters)? {
+    match input.try_pushdown_filters(input, parent_filters, config)? {
         ExecutionPlanFilterPushdownResult::NotPushed => {
             // No pushdown possible, keep this child as is
             Ok(ExecutionPlanFilterPushdownResult::NotPushed)
