@@ -34,11 +34,20 @@ use datafusion_datasource::{
     file_scan_config::FileScanConfig,
     file_stream::FileOpener,
 };
-use datafusion_physical_expr::{conjunction, PhysicalExprRef};
+use datafusion_expr::test::function_stub::count_udaf;
+use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::{
+    aggregate::AggregateExprBuilder, conjunction, Partitioning, PhysicalExprRef,
+};
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::filter_pushdown::PushdownFilter;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::{
+    aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
+    coalesce_batches::CoalesceBatchesExec,
+    filter::FilterExec,
+    repartition::RepartitionExec,
+};
 use datafusion_physical_plan::{
     displayable, filter_pushdown::FilterPushdownSupport,
     metrics::ExecutionPlanMetricsSet, DisplayFormatType, ExecutionPlan,
@@ -206,6 +215,118 @@ fn test_filter_collapse() {
       output:
         Ok:
           - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=b@1 = bar AND a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_filter_with_projection() {
+    let scan = test_scan(FilterPushdownSupport::Exact);
+    let projection = vec![1, 0];
+    let projected_schema = Arc::new(schema().project(&projection).unwrap());
+    let predicate = col_lit_predicate("a", "foo", &projected_schema);
+    let plan = Arc::new(
+        FilterExec::try_new(predicate, scan)
+            .unwrap()
+            .with_projection(Some(projection))
+            .unwrap(),
+    );
+    // expect the predicate to be pushed down into the DataSource but the FilterExec to be kept for its projection
+    // the pushed down filters should have their indices adjusted
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownFilter{}),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@1 = foo, projection=[b@1, a@0]
+        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+      output:
+        Ok:
+          - FilterExec: true, projection=[b@1, a@0]
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
+    ",
+    );
+}
+
+#[test]
+fn test_push_down_through_transparent_nodes() {
+    // expect the predicate to be pushed down into the DataSource
+    let scan = test_scan(FilterPushdownSupport::Exact);
+    let coalesce = Arc::new(CoalesceBatchesExec::new(scan, 1));
+    let predicate = col_lit_predicate("a", "foo", schema());
+    let filter = Arc::new(FilterExec::try_new(predicate, coalesce).unwrap());
+    let repartition = Arc::new(
+        RepartitionExec::try_new(filter, Partitioning::RoundRobinBatch(1)).unwrap(),
+    );
+    let predicate = col_lit_predicate("a", "bar", schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, repartition).unwrap());
+
+    // expect the predicate to be pushed down into the DataSource
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownFilter{}),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = bar
+        -   RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=0
+        -     FilterExec: a@0 = foo
+        -       CoalesceBatchesExec: target_batch_size=1
+        -         DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+      output:
+        Ok:
+          - RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=0
+          -   CoalesceBatchesExec: target_batch_size=1
+          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = bar AND a@0 = foo
+    "
+    );
+}
+
+#[test]
+fn test_no_pushdown_through_aggregates() {
+    // expect the predicate to be pushed down into the DataSource
+    let scan = test_scan(FilterPushdownSupport::Exact);
+    let aggregate_expr =
+        vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("a", schema()).unwrap()])
+                .schema(Arc::clone(&schema()))
+                .alias("cnt")
+                .build()
+                .map(Arc::new)
+                .unwrap(),
+        ];
+    let group_by = PhysicalGroupBy::new_single(vec![
+        (col("a", schema()).unwrap(), "a".to_string()),
+        (col("b", schema()).unwrap(), "b".to_string()),
+    ]);
+    let aggregate = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by,
+            aggregate_expr.clone(),
+            vec![None],
+            scan,
+            Arc::clone(schema()),
+        )
+        .unwrap(),
+    );
+    let predicate = col_lit_predicate("a", "foo", schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
+
+    // expect the predicate to be pushed down into the DataSource
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownFilter{}),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
+        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+      output:
+        Ok:
+          - FilterExec: a@0 = foo
+          -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
+          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=true
     "
     );
 }

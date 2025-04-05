@@ -790,6 +790,33 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 
 pub type ExecutionPlanFilterPushdownResult = FilterPushdownResult<Arc<dyn ExecutionPlan>>;
 
+/// A default implementation of [`ExecutionPlan::try_pushdown_filters`] that
+/// pushes down filters transparently to the input of the plan for plans that:
+/// * Have a single input / child node.
+/// * Support transparent filter pushdown (do not modify the cardinality or schema of the data).
+/// * Do not have any filters of their own.
+pub fn try_pushdown_filters_to_input(
+    plan: &Arc<dyn ExecutionPlan>,
+    input: &Arc<dyn ExecutionPlan>,
+    parent_filters: &[PhysicalExprRef],
+) -> Result<ExecutionPlanFilterPushdownResult> {
+    match input.try_pushdown_filters(input, parent_filters)? {
+        ExecutionPlanFilterPushdownResult::NotPushed => {
+            // No pushdown possible, keep this child as is
+            Ok(ExecutionPlanFilterPushdownResult::NotPushed)
+        }
+        ExecutionPlanFilterPushdownResult::Pushed { inner, support } => {
+            // We have a child that has pushed down some filters
+            let new_inner =
+                with_new_children_if_necessary(Arc::clone(plan), vec![inner])?;
+            Ok(ExecutionPlanFilterPushdownResult::Pushed {
+                inner: new_inner,
+                support,
+            })
+        }
+    }
+}
+
 /// [`ExecutionPlan`] Invariant Level
 ///
 /// What set of assertions ([Invariant]s)  holds for a particular `ExecutionPlan`
