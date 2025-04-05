@@ -43,6 +43,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{simplify::ExprSimplifyResult, Cast, TryCast};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+use regex_syntax::ast::print;
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
@@ -985,15 +986,18 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 // Check if resulting type would be different due to coercion
                 let left_type = info.get_data_type(&left)?;
                 let right_type = info.get_data_type(&right)?;
-                let result_type =
-                    BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
-                        .get_result_type()?;
-
-                // Only cast if the types differ
-                if left_type != result_type {
-                    Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
-                } else {
-                    Transformed::yes(*left)
+                match BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
+                    .get_result_type()
+                {
+                    Ok(result_type) => {
+                        // Only cast if the types differ
+                        if left_type != result_type {
+                            Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
+                        } else {
+                            Transformed::yes(*left)
+                        }
+                    }
+                    Err(_) => Transformed::yes(*left),
                 }
             }
             // 1 * A --> A
@@ -1005,15 +1009,18 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 // Check if resulting type would be different due to coercion
                 let left_type = info.get_data_type(&left)?;
                 let right_type = info.get_data_type(&right)?;
-                let result_type =
-                    BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
-                        .get_result_type()?;
-
-                // Only cast if the types differ
-                if right_type != result_type {
-                    Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
-                } else {
-                    Transformed::yes(*right)
+                match BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
+                    .get_result_type()
+                {
+                    Ok(result_type) => {
+                        // Only cast if the types differ
+                        if left_type != result_type {
+                            Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
+                        } else {
+                            Transformed::yes(*right)
+                        }
+                    }
+                    Err(_) => Transformed::yes(*right),
                 }
             }
             // A * null --> null
@@ -1025,15 +1032,18 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 // Check if resulting type would be different due to coercion
                 let left_type = info.get_data_type(&left)?;
                 let right_type = info.get_data_type(&right)?;
-                let result_type =
-                    BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
-                        .get_result_type()?;
-
-                // Only cast if the types differ
-                if right_type != result_type {
-                    Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
-                } else {
-                    Transformed::yes(*right)
+                match BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
+                    .get_result_type()
+                {
+                    Ok(result_type) => {
+                        // Only cast if the types differ
+                        if left_type != result_type {
+                            Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
+                        } else {
+                            Transformed::yes(*right)
+                        }
+                    }
+                    Err(_) => Transformed::yes(*right),
                 }
             }
             // null * A --> null
@@ -1045,15 +1055,18 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 // Check if resulting type would be different due to coercion
                 let left_type = info.get_data_type(&left)?;
                 let right_type = info.get_data_type(&right)?;
-                let result_type =
-                    BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
-                        .get_result_type()?;
-
-                // Only cast if the types differ
-                if left_type != result_type {
-                    Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
-                } else {
-                    Transformed::yes(*left)
+                match BinaryTypeCoercer::new(&left_type, &Multiply, &right_type)
+                    .get_result_type()
+                {
+                    Ok(result_type) => {
+                        // Only cast if the types differ
+                        if left_type != result_type {
+                            Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
+                        } else {
+                            Transformed::yes(*left)
+                        }
+                    }
+                    Err(_) => Transformed::yes(*left),
                 }
             }
 
@@ -1093,15 +1106,18 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 // Check if resulting type would be different due to coercion
                 let left_type = info.get_data_type(&left)?;
                 let right_type = info.get_data_type(&right)?;
-                let result_type =
-                    BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
-                        .get_result_type()?;
-
-                // Only cast if the types differ
-                if left_type != result_type {
-                    Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
-                } else {
-                    Transformed::yes(*left)
+                match BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
+                    .get_result_type()
+                {
+                    Ok(result_type) => {
+                        // Only cast if the types differ
+                        if left_type != result_type {
+                            Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
+                        } else {
+                            Transformed::yes(*left)
+                        }
+                    }
+                    Err(_) => Transformed::yes(*left),
                 }
             }
             // null / A --> null
@@ -1113,15 +1129,18 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 // Check if resulting type would be different due to coercion
                 let left_type = info.get_data_type(&left)?;
                 let right_type = info.get_data_type(&right)?;
-                let result_type =
-                    BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
-                        .get_result_type()?;
-
-                // Only cast if the types differ
-                if left_type != result_type {
-                    Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
-                } else {
-                    Transformed::yes(*left)
+                match BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
+                    .get_result_type()
+                {
+                    Ok(result_type) => {
+                        // Only cast if the types differ
+                        if left_type != result_type {
+                            Transformed::yes(Expr::Cast(Cast::new(left, result_type)))
+                        } else {
+                            Transformed::yes(*left)
+                        }
+                    }
+                    Err(_) => Transformed::yes(*left),
                 }
             }
             // A / null --> null
@@ -1133,15 +1152,18 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 // Check if resulting type would be different due to coercion
                 let left_type = info.get_data_type(&left)?;
                 let right_type = info.get_data_type(&right)?;
-                let result_type =
-                    BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
-                        .get_result_type()?;
-
-                // Only cast if the types differ
-                if right_type != result_type {
-                    Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
-                } else {
-                    Transformed::yes(*right)
+                match BinaryTypeCoercer::new(&left_type, &Divide, &right_type)
+                    .get_result_type()
+                {
+                    Ok(result_type) => {
+                        // Only cast if the types differ
+                        if right_type != result_type {
+                            Transformed::yes(Expr::Cast(Cast::new(right, result_type)))
+                        } else {
+                            Transformed::yes(*right)
+                        }
+                    }
+                    Err(_) => Transformed::yes(*right),
                 }
             }
 
@@ -2414,12 +2436,12 @@ mod tests {
         // A / null --> null
         let null = lit(ScalarValue::Null);
         {
-            let expr = col("c") / null.clone();
+            let expr = col("c1") / null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null / A --> null
         {
-            let expr = null.clone() / col("c");
+            let expr = null.clone() / col("c1");
             assert_eq!(simplify(expr), null);
         }
     }
