@@ -16,6 +16,7 @@
 // under the License.
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+use crate::filter_pushdown::{FilterPushdownResult, FilterPushdownSupport};
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
@@ -45,7 +46,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_common::{exec_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExprRef};
@@ -468,105 +469,322 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(None)
     }
 
-    /// Returns a set of filters that this operator owns but would like to be pushed down.
+    /// A physical optimizer rule that pushes down filters in the execution plan.
+    /// For example, consider the following plan:
     ///
-    /// For example, a `TopK` operator may produce dynamic filters that
-    /// reference it's current state, while a `FilterExec` will just hand of the
-    /// filters it has as is.
+    /// ```text
+    /// ┌──────────────────────┐
+    /// │ CoalesceBatchesExec  │
+    /// └──────────────────────┘
+    ///             │
+    ///             ▼
+    /// ┌──────────────────────┐
+    /// │      FilterExec      │
+    /// │  filters = [ id=1]   │
+    /// └──────────────────────┘
+    ///             │
+    ///             ▼
+    /// ┌──────────────────────┐
+    /// │    DataSourceExec    │
+    /// │    projection = *    │
+    /// └──────────────────────┘
+    /// ```
     ///
-    /// The default implementation returns an empty vector. These filters are
-    /// applied row-by row:
-    /// 1. any that return `false` or `NULL` will be filtered out
-    /// 2. any that return `true` will be kept.
+    /// Our goal is to move the `id = 1` filter from the `FilterExec` node to the `DataSourceExec` node.
+    /// If this filter is selective it can avoid massive amounts of data being read from the source (the projection is `*` so all matching columns are read).
+    /// In this simple case we:
+    /// 1. Enter the recursion with no filters.
+    /// 2. We find the `FilterExec` node and it tells us that it has a filter (see [`ExecutionPlan::filters_for_pushdown`] and `datafusion::physical_plan::filter::FilterExec`).
+    /// 3. We recurse down into it's children (the `DataSourceExec` node) now carrying the filters `[id = 1]`.
+    /// 4. The `DataSourceExec` node tells us that it can handle the filter and we mark it as handled exact (see [`ExecutionPlan::with_filter_pushdown_result`]).
+    /// 5. Since the `DataSourceExec` node has no children we recurse back up the tree.
+    /// 6. We now tell the `FilterExec` node that it has a child that can handle the filter and we mark it as handled exact (see [`ExecutionPlan::with_filter_pushdown_result`]).
+    ///    The `FilterExec` node can now return a new execution plan, either a copy of itself without that filter or if has no work left to do it can even return the child node directly.
+    /// 7. We recurse back up to `CoalesceBatchesExec` and do nothing there since it had no filters to push down.
     ///
-    /// The expressions returned **must** always be Boolean ( `true`, `false` or
-    /// NULL); other truthy or falsy values are not allowed (e.g. `0`, `1`).
+    /// The new plan looks like:
     ///
-    /// # Returns
-    /// A vector of filters that this operator would like to push down.
-    /// These should be treated as the split conjunction of a `WHERE` clause.
-    /// That is, a query such as `WHERE a = 1 AND b = 2` would return two
-    /// filters: `a = 1` and `b = 2`.
-    /// They can be combined into a single filter using
-    /// [`conjunction`][datafusion_physical_expr::conjunction].
-    fn filters_for_pushdown(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
-        Ok(Vec::new())
-    }
-
-    /// Checks which filters this node allows to be pushed down through it from a parent to a child.
-    /// For example, a `ProjectionExec` node can allow filters that only reference
-    /// columns it did not create through but filters that reference columns it is creating cannot be pushed down any further.
-    /// That is, it only allows some filters through because it changes the schema of the data.
-    /// Aggregation nodes may not allow any filters to be pushed down as they change the cardinality of the data.
-    /// RepartitionExec nodes allow all filters to be pushed down as they don't change the schema or cardinality.
-    fn filter_pushdown_request(
+    /// ```text
+    /// ┌──────────────────────┐
+    /// │ CoalesceBatchesExec  │
+    /// └──────────────────────┘
+    ///           │
+    ///           ▼
+    /// ┌──────────────────────┐
+    /// │    DataSourceExec    │
+    //  │    projection = *    │
+    //  │   filters = [ id=1]  │
+    /// └──────────────────────┘
+    /// ```
+    ///
+    /// Let's consider a more complex example involving a `ProjectionExec` node in betweeen the `FilterExec` and `DataSourceExec` nodes that creates a new column that the filter depends on.
+    ///
+    /// ```text
+    // ┌──────────────────────┐
+    // │ CoalesceBatchesExec  │
+    // └──────────────────────┘
+    //             │
+    //             ▼
+    // ┌──────────────────────┐
+    // │      FilterExec      │
+    // │    filters =         │
+    // │     [cost>50,id=1]   │
+    // └──────────────────────┘
+    //             │
+    //             ▼
+    // ┌──────────────────────┐
+    // │    ProjectionExec    │
+    // │ cost = price * 1.2   │
+    // └──────────────────────┘
+    //             │
+    //             ▼
+    // ┌──────────────────────┐
+    // │    DataSourceExec    │
+    // │    projection = *    │
+    // └──────────────────────┘
+    /// ```
+    ///
+    /// We want to push down the filters [id=1] to the `DataSourceExec` node, but can't push down `cost>50` because it requires the `ProjectionExec` node to be executed first:
+    ///
+    /// ```text
+    // ┌──────────────────────┐
+    // │ CoalesceBatchesExec  │
+    // └──────────────────────┘
+    //             │
+    //             ▼
+    // ┌──────────────────────┐
+    // │      FilterExec      │
+    // │    filters =         │
+    // │     [cost>50]        │
+    // └──────────────────────┘
+    //             │
+    //             ▼
+    // ┌──────────────────────┐
+    // │    ProjectionExec    │
+    // │ cost = price * 1.2   │
+    // └──────────────────────┘
+    //             │
+    //             ▼
+    // ┌──────────────────────┐
+    // │    DataSourceExec    │
+    // │    projection = *    │
+    // │   filters = [ id=1]  │
+    // └──────────────────────┘
+    /// ```
+    ///
+    /// There are also cases where we may be able to push down filters within a subtree but not the entire tree.
+    /// A good exmaple of this is aggreagation nodes:
+    ///
+    /// ```text
+    /// ┌──────────────────────┐
+    /// │ ProjectionExec       │
+    /// │ projection = *       │
+    /// └──────────────────────┘
+    ///           │
+    ///           ▼
+    /// ┌──────────────────────┐
+    /// │ FilterExec           │
+    /// │ filters = [sum > 10] │
+    /// └──────────────────────┘
+    ///           │
+    ///           ▼
+    /// ┌───────────────────────┐
+    /// │     AggregateExec     │
+    /// │    group by = [id]    │
+    /// │    aggregate =        │
+    /// │      [sum(price)]     │
+    /// └───────────────────────┘
+    ///           │
+    ///           ▼
+    /// ┌──────────────────────┐
+    /// │ FilterExec           │
+    /// │ filters = [id=1]     │
+    /// └──────────────────────┘
+    ///          │
+    ///          ▼
+    /// ┌──────────────────────┐
+    /// │ DataSourceExec       │
+    /// │ projection = *       │
+    /// └──────────────────────┘
+    /// ```
+    ///
+    /// The transformation here is to push down the `[id=1]` filter to the `DataSourceExec` node:
+    ///
+    /// ```text
+    /// ┌──────────────────────┐
+    /// │ ProjectionExec       │
+    /// │ projection = *       │
+    /// └──────────────────────┘
+    ///           │
+    ///           ▼
+    /// ┌──────────────────────┐
+    /// │ FilterExec           │
+    /// │ filters = [sum > 10] │
+    /// └──────────────────────┘
+    ///           │
+    ///           ▼
+    /// ┌───────────────────────┐
+    /// │     AggregateExec     │
+    /// │    group by = [id]    │
+    /// │    aggregate =        │
+    /// │      [sum(price)]     │
+    /// └───────────────────────┘
+    ///           │
+    ///           ▼
+    /// ┌──────────────────────┐
+    /// │ DataSourceExec       │
+    /// │ projection = *       │
+    /// │ filters = [id=1]     │
+    /// └──────────────────────┘
+    /// ```
+    ///
+    /// The point here is that:
+    /// 1. We cannot push down `sum > 10` through the `AggregateExec` node into the `DataSourceExec` node.
+    ///    Any filters above the `AggregateExec` node are not pushed down.
+    ///    This is determined by calling [`ExecutionPlan::filter_pushdown_request`] on the `AggregateExec` node.
+    /// 2. We need to keep recursing into the tree so that we can discover the other `FilterExec` node and push down the [id=1] filter.
+    ///
+    /// It is also possible to push down filters through joins and from joins.
+    /// For example, a hash join where we build a hash table of the left side and probe the right side
+    /// (ignoring why we would choose this order, typically it depends on the size of each table, etc.).
+    ///
+    /// ```text
+    ///              ┌─────────────────────┐
+    ///              │     FilterExec      │
+    ///              │ filters =           │
+    ///              │  [d.size > 100]     │
+    ///              └─────────────────────┘
+    ///                         │
+    ///                         │
+    ///              ┌──────────▼──────────┐
+    ///              │                     │
+    ///              │    HashJoinExec     │
+    ///              │ [u.dept@hash(d.id)] │
+    ///              │                     │
+    ///              └─────────────────────┘
+    ///                         │
+    ///            ┌────────────┴────────────┐
+    /// ┌──────────▼──────────┐   ┌──────────▼──────────┐
+    /// │   DataSourceExec    │   │   DataSourceExec    │
+    /// │  alias [users as u] │   │  alias [dept as d]  │
+    /// │                     │   │                     │
+    /// └─────────────────────┘   └─────────────────────┘
+    /// ```
+    ///
+    /// There are two pushdowns we can do here:
+    /// 1. Push down the `d.size > 100` filter through the `HashJoinExec` node to the `DataSourceExec` node for the `departments` table.
+    /// 2. Push down the hash table state from the `HashJoinExec` node to the `DataSourceExec` node to avoid reading
+    ///    rows from teh `users` table that will be eliminated by the join.
+    ///    This can be done via a bloom filter or similar.
+    ///
+    /// ```text
+    ///              ┌─────────────────────┐
+    ///              │                     │
+    ///              │    HashJoinExec     │
+    ///              │ [u.dept@hash(d.id)] │
+    ///              │                     │
+    ///              └─────────────────────┘
+    ///                         │
+    ///            ┌────────────┴────────────┐
+    /// ┌──────────▼──────────┐   ┌──────────▼──────────┐
+    /// │   DataSourceExec    │   │   DataSourceExec    │
+    /// │  alias [users as u] │   │  alias [dept as d]  │
+    /// │ filters =           │   │  filters =          │
+    /// │   [depg@hash(d.id)] │   │    [ d.size > 100]  │
+    /// └─────────────────────┘   └─────────────────────┘
+    /// ```
+    ///
+    /// You may notice in this case that the filter is *dynamic*: the hash table is built
+    /// _after_ the `departments` table is read and at runtime.
+    /// We don't have a concrete `InList` filter or similar to push down at optimization time.
+    /// These sorts of dynamic filters are handled by building a specialized
+    /// [`PhysicalExpr`][datafusion_physical_expr::PhysicalExpr] that can be evaluated at runtime
+    /// and internally maintains a reference to the hash table or other state.
+    /// To make working with these sorts of dynamic filters more tractable we have the method `PhysicalExpr::snapshot`
+    /// (TODO: add reference after <https://github.com/apache/datafusion/pull/15568> is merged)
+    /// which attempts to simplify a dynamic filter into a "basic" non-dynamic filter.
+    /// For a join this could mean converting it to an `InList` filter or a min/max filter for example.
+    /// See `datafusion/physical-plan/src/dynamic_filters.rs` for more details.
+    ///
+    /// Another form of dyanmic filter is pushing down the state of a `TopK` operator for queries like
+    /// `SELECT * FROM t ORDER BY id LIMIT 10`:
+    ///
+    /// ```text
+    /// ┌──────────────────────┐
+    /// │       TopK           │
+    /// │     limit = 10       │
+    /// │   order by = [id]    │
+    /// └──────────────────────┘
+    ///            │
+    ///            ▼
+    /// ┌──────────────────────┐
+    /// │    DataSourceExec    │
+    /// │    projection = *    │
+    /// └──────────────────────┘
+    /// ```
+    ///
+    /// We can avoid large amounts of data processing by transforming this into:
+    ///
+    /// ```text
+    /// ┌──────────────────────┐
+    /// │       TopK           │
+    /// │     limit = 10       │
+    /// │   order by = [id]    │
+    /// └──────────────────────┘
+    ///            │
+    ///            ▼
+    /// ┌──────────────────────┐
+    /// │    DataSourceExec    │
+    /// │    projection = *    │
+    /// │ filters =            │
+    /// │    [id < @ TopKHeap] │
+    /// └──────────────────────┘
+    /// ```
+    ///
+    /// Now as we fill our `TopK` heap we can push down the state of the heap to the `DataSourceExec` node
+    /// to avoid reading files / row groups / pages / rows that could not possibly be in the top 10.
+    /// This is implemented in datafusion/physical-plan/src/sorts/sort_filters.rs.
+    fn try_pushdown_filters(
         &self,
-        filters: &[PhysicalExprRef],
-    ) -> Result<Vec<FilterPushdownAllowed>> {
-        Ok(vec![FilterPushdownAllowed::Disallowed; filters.len()])
-    }
-
-    /// After we've attempted to push down filters into this node's children
-    /// this will be called with the result for each filter that this node gave in `filters_for_pushdown`
-    /// **and** any filters that children could not handle.
-    fn with_filter_pushdown_result(
-        self: Arc<Self>,
-        _own_filters_result: &[FilterSupport],
-        _parent_filters_remaining: &[PhysicalExprRef],
-    ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
-        Ok(None)
-    }
-}
-
-/// The answer to the question: "Can this filter be pushed down through this plan?"
-/// Note that this is different from [`FilterSupport`] which is the answer to "Can *this* plan handle this filter?"
-#[derive(Debug, Clone)]
-pub enum FilterPushdownAllowed {
-    /// The operator allows this filter to be pushed down to its children.
-    /// The operator may choose to return a *different* filter expression
-    /// that is equivalent to the original filter, e.g. to deal with column indexes in a projection
-    /// or because the original filter can't be pushed down as is but a less-selective filter can be.
-    Allowed(Arc<dyn PhysicalExpr>),
-    /// The operator does not allow this filter to be pushed down to its children.
-    Disallowed,
-}
-
-/// The answer to the question: "Can this operator handle this filter itself?"
-/// Note that this is different from [`FilterPushdownAllowed`] which is the answer to "Can *this* plan handle this filter?"
-#[derive(Debug, Clone, Copy)]
-pub enum FilterSupport {
-    /// Filter may not have been pushed down to the child plan, or the child plan
-    /// can only partially apply the filter but may have false positives (but not false negatives).
-    /// In this case the parent **must** behave as if the filter was not pushed down
-    /// and must apply the filter itself.
-    Unhandled,
-    /// Filter was pushed down to the child plan and the child plan promises that
-    /// it will apply the filter correctly with no false positives or false negatives.
-    /// The parent can safely drop the filter.
-    HandledExact,
-}
-
-/// The combined result of a filter pushdown operation.
-/// This includes:
-/// * The inner plan that was produced by the pushdown operation.
-/// * The support for each filter that was pushed down.
-pub struct FilterPushdownResult<T> {
-    pub inner: T,
-    pub support: Vec<FilterSupport>,
-}
-
-impl<T> FilterPushdownResult<T> {
-    pub fn new(plan: T, support: Vec<FilterSupport>) -> Self {
-        Self {
-            inner: plan,
-            support,
+        plan: &Arc<dyn ExecutionPlan>,
+        parent_filters: &[PhysicalExprRef],
+    ) -> Result<ExecutionPlanFilterPushdownResult> {
+        // By default assume that:
+        // * Parent filters can't be passed onto children.
+        // * We have no filters to contribute.
+        // But we still want to recurse into our children in case a subtree has pushdowns within
+        // it and thus we need to replace our children with the new plans.
+        let mut new_children = Vec::with_capacity(self.children().len());
+        let mut pushed = false;
+        for child in self.children() {
+            match child.try_pushdown_filters(child, &Vec::new())? {
+                ExecutionPlanFilterPushdownResult::NotPushed => {
+                    // No pushdown possible, keep this child as is
+                    new_children.push(Arc::clone(child));
+                }
+                ExecutionPlanFilterPushdownResult::Pushed { inner, support } => {
+                    // We have a child that has pushed down some filters
+                    new_children.push(inner);
+                    pushed = true;
+                    // Support should be empty, we didn't pass any filters
+                    if !support.is_empty() {
+                        return Err(DataFusionError::Internal(
+                            "Child plan did not have any filters pushed down".to_string(),
+                        ));
+                    }
+                }
+            }
         }
-    }
-
-    pub fn is_exact(&self) -> bool {
-        self.support
-            .iter()
-            .all(|s| matches!(s, FilterSupport::HandledExact))
+        if pushed {
+            let new_inner =
+                with_new_children_if_necessary(Arc::clone(plan), new_children)?;
+            Ok(ExecutionPlanFilterPushdownResult::Pushed {
+                inner: new_inner,
+                support: vec![FilterPushdownSupport::Unsupported; parent_filters.len()],
+            })
+        } else {
+            Ok(ExecutionPlanFilterPushdownResult::NotPushed)
+        }
     }
 }
 

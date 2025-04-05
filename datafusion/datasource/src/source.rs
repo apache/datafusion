@@ -22,14 +22,12 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion_physical_plan::execution_plan::{
-    Boundedness, EmissionType, ExecutionPlanFilterPushdownResult, FilterPushdownResult,
-    FilterSupport,
-};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanFilterPushdownResult,
+    FilterPushdownResult, PlanProperties,
 };
 
 use crate::file_scan_config::FileScanConfig;
@@ -83,24 +81,11 @@ pub trait DataSource: Send + Sync + Debug {
         _projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
 
-    /// Push down filters into this `DataSource`.
-    ///
-    /// Returns `Ok(None)` if the filters cannot be evaluated within the
-    /// `DataSource`.
-    ///
-    /// If the filters can be evaluated by the `DataSource`,
-    /// return a [`FilterPushdownResult`] containing an updated
-    /// `DataSource` and the support level for each filter (exact or inexact).
-    ///
-    /// Default implementation returns `Ok(None)`. See [`ExecutionPlan::with_filter_pushdown_result`]
-    /// for more details.
-    ///
-    /// [`ExecutionPlan::push_down_filters`]: datafusion_physical_plan::execution_plan::ExecutionPlan::with_filter_pushdown_result
-    fn push_down_filters(
+    fn try_pushdown_filters(
         &self,
         _filters: &[PhysicalExprRef],
-    ) -> Result<Option<DataSourceFilterPushdownResult>>> {
-        Ok(None)
+    ) -> Result<DataSourceFilterPushdownResult> {
+        Ok(DataSourceFilterPushdownResult::NotPushed)
     }
 }
 
@@ -218,25 +203,22 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.try_swapping_with_projection(projection)
     }
 
-    fn with_filter_pushdown_result(
-        self: Arc<Self>,
-        own_filters_result: &[FilterSupport],
-        parent_filters_remaining: &[PhysicalExprRef],
-    ) -> Result<Option<ExecutionPlanFilterPushdownResult>> {
-        // We didn't give out any filters, this should be empty!
-        assert!(own_filters_result.is_empty());
-        // Forward filter pushdown to our data source.
-        if let Some(pushdown_result) = self
-            .data_source
-            .push_down_filters(parent_filters_remaining)?
-        {
-            let new_self = Arc::new(DataSourceExec::new(pushdown_result.inner));
-            Ok(Some(ExecutionPlanFilterPushdownResult::new(
-                new_self,
-                pushdown_result.support,
-            )))
-        } else {
-            Ok(None)
+    fn try_pushdown_filters(
+        &self,
+        _plan: &Arc<dyn ExecutionPlan>,
+        parent_filters: &[PhysicalExprRef],
+    ) -> Result<ExecutionPlanFilterPushdownResult> {
+        match self.data_source.try_pushdown_filters(parent_filters)? {
+            DataSourceFilterPushdownResult::NotPushed => {
+                Ok(ExecutionPlanFilterPushdownResult::NotPushed)
+            }
+            DataSourceFilterPushdownResult::Pushed { inner, support } => {
+                let new_self = Arc::new(DataSourceExec::new(inner));
+                Ok(ExecutionPlanFilterPushdownResult::Pushed {
+                    inner: new_self,
+                    support,
+                })
+            }
         }
     }
 }
