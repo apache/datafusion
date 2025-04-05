@@ -503,19 +503,17 @@ impl EquivalenceProperties {
         &self,
         sort_exprs: impl IntoIterator<Item = &'a PhysicalSortExpr>,
     ) -> Option<LexOrdering> {
-        let normalized_sort_exprs = self.eq_group.normalize_sort_exprs(sort_exprs);
-        let mut constant_exprs = vec![];
-        constant_exprs.extend(
-            self.constants
-                .iter()
-                .map(|const_expr| Arc::clone(const_expr.expr())),
-        );
-        let constants_normalized = self.eq_group.normalize_exprs(constant_exprs);
-        // Prune redundant sections in the ordering:
-        let sort_exprs = normalized_sort_exprs
+        let constant_exprs = self
+            .constants
             .iter()
-            .filter(|&order| !physical_exprs_contains(&constants_normalized, &order.expr))
-            .cloned()
+            .map(|const_expr| Arc::clone(const_expr.expr()));
+        let normalized_constants = self.eq_group.normalize_exprs(constant_exprs);
+        // Prune redundant sections in the ordering:
+        let sort_exprs = self
+            .eq_group
+            .normalize_sort_exprs(sort_exprs)
+            .into_iter()
+            .filter(|order| !physical_exprs_contains(&normalized_constants, &order.expr))
             .collect::<Vec<_>>();
         (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs).collapse())
     }
@@ -537,18 +535,17 @@ impl EquivalenceProperties {
         &self,
         sort_reqs: impl IntoIterator<Item = &'a PhysicalSortRequirement>,
     ) -> Option<LexRequirement> {
-        let normalized_reqs = self.eq_group.normalize_sort_requirements(sort_reqs);
-        let mut constant_exprs = vec![];
-        constant_exprs.extend(
-            self.constants
-                .iter()
-                .map(|const_expr| Arc::clone(const_expr.expr())),
-        );
-        let constants_normalized = self.eq_group.normalize_exprs(constant_exprs);
+        let constant_exprs = self
+            .constants
+            .iter()
+            .map(|const_expr| Arc::clone(const_expr.expr()));
+        let normalized_constants = self.eq_group.normalize_exprs(constant_exprs);
         // Prune redundant sections in the requirement:
-        let reqs = normalized_reqs
+        let reqs = self
+            .eq_group
+            .normalize_sort_requirements(sort_reqs)
             .into_iter()
-            .filter(|order| !physical_exprs_contains(&constants_normalized, &order.expr))
+            .filter(|order| !physical_exprs_contains(&normalized_constants, &order.expr))
             .collect::<Vec<_>>();
         (!reqs.is_empty()).then(|| LexRequirement::new(reqs).collapse())
     }
