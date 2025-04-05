@@ -2421,6 +2421,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.5",
  "indexmap 2.8.0",
+ "insta",
  "itertools 0.14.0",
  "log",
  "paste",

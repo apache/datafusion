@@ -22,6 +22,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::physical_plan::FileSink;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
@@ -210,6 +211,7 @@ pub fn serialize_physical_expr(
     value: &Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
+    let value = snapshot_physical_expr(Arc::clone(value))?;
     let expr = value.as_any();
 
     if let Some(expr) = expr.downcast_ref::<Column>() {
@@ -368,7 +370,7 @@ pub fn serialize_physical_expr(
         })
     } else {
         let mut buf: Vec<u8> = vec![];
-        match codec.try_encode_expr(value, &mut buf) {
+        match codec.try_encode_expr(&value, &mut buf) {
             Ok(_) => {
                 let inputs: Vec<protobuf::PhysicalExprNode> = value
                     .children()
