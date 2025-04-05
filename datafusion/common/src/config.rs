@@ -451,6 +451,8 @@ config_namespace! {
         /// BLOB instead.
         pub binary_as_string: bool, default = false
 
+        pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 

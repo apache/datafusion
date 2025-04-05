@@ -38,7 +38,7 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
-        ArrayRef, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
+        ArrayRef, AsArray, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
         StructArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
@@ -1069,6 +1069,7 @@ mod tests {
         let parquet_exec = scan_format(
             &state,
             &ParquetFormat::default(),
+            None,
             &testdata,
             filename,
             Some(vec![0, 1, 2]),
@@ -1097,6 +1098,62 @@ mod tests {
 
         let batch = results.next().await;
         assert!(batch.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_with_int96_from_spark() -> Result<()> {
+        // arrow-rs relies on the chrono library to convert between timestamps and strings, so
+        // instead compare as Int64. The underlying type should be a PrimitiveArray of Int64
+        // anyway, so this should be a zero-copy non-modifying cast at the SchemaAdapter.
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let filename = "int96_from_spark.parquet";
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+        let parquet_exec = scan_format(
+            &state,
+            &ParquetFormat::default().with_coerce_int96(Some("us".to_string())),
+            Some(schema),
+            &testdata,
+            filename,
+            Some(vec![0]),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+
+        let mut results = parquet_exec.execute(0, task_ctx)?;
+        let batch = results.next().await.unwrap()?;
+
+        assert_eq!(6, batch.num_rows());
+        assert_eq!(1, batch.num_columns());
+
+        assert_eq!(batch.num_columns(), 1);
+        let column = batch.column(0);
+
+        let expected = Arc::new(Int64Array::from(vec![
+            Some(1704141296123456),
+            Some(1704070800000000),
+            Some(253402225200000000),
+            Some(1735599600000000),
+            None,
+            Some(9089380393200000000),
+        ]));
+
+        assert_eq!(column.len(), expected.len());
+
+        column
+            .as_primitive::<arrow::datatypes::Int64Type>()
+            .iter()
+            .zip(expected.iter())
+            .for_each(|(lhs, rhs)| {
+                assert_eq!(lhs, rhs);
+            });
 
         Ok(())
     }
