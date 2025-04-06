@@ -355,31 +355,18 @@ impl ExternalSorter {
         self.merge_reservation.free();
 
         if self.spilled_before() {
-            // let mut streams = vec![];
-
             // Sort `in_mem_batches` and spill it first. If there are many
             // `in_mem_batches` and the memory limit is almost reached, merging
             // them with the spilled files at the same time might cause OOM.
             if !self.in_mem_batches.is_empty() {
                 self.sort_and_spill_in_mem_batches().await?;
             }
-            //
-            // for spill in self.finished_spill_files.drain(..) {
-            //     if !spill.path().exists() {
-            //         return internal_err!("Spill file {:?} does not exist", spill.path());
-            //     }
-            //     let stream = self.spill_manager.read_spill_as_stream(spill)?;
-            //     streams.push(stream);
-            // }
 
             let expressions: LexOrdering = self.expr.iter().cloned().collect();
 
             StreamingMergeBuilder::new()
                 .with_spill_manager(self.spill_manager.clone())
-                // .with_max_blocking_threads(8)
-                // .with_max_blocking_threads(self.finished_spill_files.len())
                 .with_sorted_spill_files(self.finished_spill_files.drain(..).collect())
-                // .with_streams(streams)
                 .with_schema(Arc::clone(&self.schema))
                 .with_expressions(expressions.as_ref())
                 .with_metrics(self.metrics.baseline.clone())

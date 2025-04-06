@@ -251,20 +251,4 @@ impl<'a> StreamingMergeBuilder<'a> {
             enable_round_robin_tie_breaker,
         )))
     }
-
-    pub fn create_new(&self) -> Self {
-        Self {
-            streams: vec![],
-            schema: self.schema.clone(),
-            expressions: self.expressions,
-            metrics: self.metrics.clone(),
-            batch_size: self.batch_size,
-            fetch: self.fetch,
-            reservation: None,
-            enable_round_robin_tie_breaker: self.enable_round_robin_tie_breaker,
-            sorted_spill_files: vec![],
-            spill_manager: None,
-            max_blocking_threads: None,
-        }
-    }
 }
