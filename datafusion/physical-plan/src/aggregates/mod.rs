@@ -1105,8 +1105,8 @@ pub fn get_finer_aggregate_exprs_requirement(
         let Some(aggr_req) = get_aggregate_expr_req(aggr_expr, group_by, agg_mode) else {
             continue;
         };
-        let mut finer = if let Some(req) = requirement.take() {
-            eq_properties.get_finer_ordering(req, aggr_req)
+        let mut finer = if let Some(req) = requirement.as_ref() {
+            eq_properties.get_finer_ordering(req.clone(), aggr_req)
         } else {
             eq_properties.normalize_sort_exprs(aggr_req)
         };
@@ -1126,8 +1126,8 @@ pub fn get_finer_aggregate_exprs_requirement(
             else {
                 unreachable!("Reverse aggregate expressions have ordering requirements if forward ones do");
             };
-            finer_rev = if let Some(req) = requirement.take() {
-                eq_properties.get_finer_ordering(req, aggr_req)
+            finer_rev = if let Some(req) = requirement.as_ref() {
+                eq_properties.get_finer_ordering(req.clone(), aggr_req)
             } else {
                 eq_properties.normalize_sort_exprs(aggr_req)
             };
