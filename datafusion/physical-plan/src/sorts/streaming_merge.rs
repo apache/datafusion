@@ -19,14 +19,16 @@
 //! This is an order-preserving merge.
 
 use crate::metrics::BaselineMetrics;
+use crate::sorts::multi_level_sort_preserving_merge_stream::MultiLevelSortPreservingMergeStream;
 use crate::sorts::{
     merge::SortPreservingMergeStream,
     stream::{FieldCursorStream, RowCursorStream},
 };
-use crate::SendableRecordBatchStream;
+use crate::{SendableRecordBatchStream, SpillManager};
 use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{internal_err, Result};
+use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -61,6 +63,10 @@ pub struct StreamingMergeBuilder<'a> {
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     enable_round_robin_tie_breaker: bool,
+
+    spill_manager: Option<SpillManager>,
+    sorted_spill_files: Vec<RefCountedTempFile>,
+    max_blocking_threads: Option<usize>,
 }
 
 impl Default for StreamingMergeBuilder<'_> {
@@ -74,6 +80,9 @@ impl Default for StreamingMergeBuilder<'_> {
             fetch: None,
             reservation: None,
             enable_round_robin_tie_breaker: false,
+            spill_manager: None,
+            sorted_spill_files: vec![],
+            max_blocking_threads: None,
         }
     }
 }
@@ -133,6 +142,24 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    pub fn with_spill_manager(mut self, spill_manager: SpillManager) -> Self {
+        self.spill_manager = Some(spill_manager);
+        self
+    }
+
+    pub fn with_sorted_spill_files(
+        mut self,
+        sorted_spill_files: Vec<RefCountedTempFile>,
+    ) -> Self {
+        self.sorted_spill_files = sorted_spill_files;
+        self
+    }
+
+    pub fn with_max_blocking_threads(mut self, max_blocking_threads: usize) -> Self {
+        self.max_blocking_threads = Some(max_blocking_threads);
+        self
+    }
+
     pub fn build(self) -> Result<SendableRecordBatchStream> {
         let Self {
             streams,
@@ -143,7 +170,26 @@ impl<'a> StreamingMergeBuilder<'a> {
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
+            spill_manager,
+            sorted_spill_files,
+            max_blocking_threads,
         } = self;
+
+        if spill_manager.is_some() && !sorted_spill_files.is_empty() {
+            return Ok(Box::pin(MultiLevelSortPreservingMergeStream::new(
+                spill_manager.unwrap(),
+                schema.clone().unwrap(),
+                sorted_spill_files,
+                streams,
+                expressions.clone(),
+                metrics.clone().unwrap(),
+                batch_size.unwrap(),
+                reservation.unwrap(),
+                max_blocking_threads,
+                fetch,
+                enable_round_robin_tie_breaker,
+            )?));
+        }
 
         // Early return if streams or expressions are empty
         let checks = [
@@ -154,6 +200,10 @@ impl<'a> StreamingMergeBuilder<'a> {
             (
                 expressions.is_empty(),
                 "Sort expressions cannot be empty for streaming merge",
+            ),
+            (
+                !sorted_spill_files.is_empty(),
+                "Sorted spill files cannot be used with streaming merge",
             ),
         ];
 
@@ -200,5 +250,21 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             enable_round_robin_tie_breaker,
         )))
+    }
+
+    pub fn create_new(&self) -> Self {
+        Self {
+            streams: vec![],
+            schema: self.schema.clone(),
+            expressions: self.expressions,
+            metrics: self.metrics.clone(),
+            batch_size: self.batch_size,
+            fetch: self.fetch,
+            reservation: None,
+            enable_round_robin_tie_breaker: self.enable_round_robin_tie_breaker,
+            sorted_spill_files: vec![],
+            spill_manager: None,
+            max_blocking_threads: None,
+        }
     }
 }

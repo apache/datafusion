@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::vec;
+use std::{mem, vec};
 
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
@@ -1066,13 +1066,11 @@ impl GroupedHashAggregateStream {
                 sort_batch(&batch, expr.as_ref(), None)
             })),
         )));
-        for spill in self.spill_state.spills.drain(..) {
-            let stream = self.spill_state.spill_manager.read_spill_as_stream(spill)?;
-            streams.push(stream);
-        }
         self.spill_state.is_stream_merging = true;
         self.input = StreamingMergeBuilder::new()
             .with_streams(streams)
+            .with_sorted_spill_files(mem::take(&mut self.spill_state.spills))
+            .with_spill_manager(self.spill_state.spill_manager.clone())
             .with_schema(schema)
             .with_expressions(self.spill_state.spill_expr.as_ref())
             .with_metrics(self.baseline_metrics.clone())

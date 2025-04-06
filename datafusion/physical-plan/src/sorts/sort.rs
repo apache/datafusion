@@ -20,9 +20,9 @@
 //! but spills to disk if needed.
 
 use std::any::Any;
-use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use std::{fmt, mem};
 
 use crate::common::spawn_buffered;
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
@@ -355,7 +355,7 @@ impl ExternalSorter {
         self.merge_reservation.free();
 
         if self.spilled_before() {
-            let mut streams = vec![];
+            // let mut streams = vec![];
 
             // Sort `in_mem_batches` and spill it first. If there are many
             // `in_mem_batches` and the memory limit is almost reached, merging
@@ -363,19 +363,23 @@ impl ExternalSorter {
             if !self.in_mem_batches.is_empty() {
                 self.sort_and_spill_in_mem_batches().await?;
             }
-
-            for spill in self.finished_spill_files.drain(..) {
-                if !spill.path().exists() {
-                    return internal_err!("Spill file {:?} does not exist", spill.path());
-                }
-                let stream = self.spill_manager.read_spill_as_stream(spill)?;
-                streams.push(stream);
-            }
+            //
+            // for spill in self.finished_spill_files.drain(..) {
+            //     if !spill.path().exists() {
+            //         return internal_err!("Spill file {:?} does not exist", spill.path());
+            //     }
+            //     let stream = self.spill_manager.read_spill_as_stream(spill)?;
+            //     streams.push(stream);
+            // }
 
             let expressions: LexOrdering = self.expr.iter().cloned().collect();
 
             StreamingMergeBuilder::new()
-                .with_streams(streams)
+                .with_spill_manager(self.spill_manager.clone())
+                // .with_max_blocking_threads(8)
+                // .with_max_blocking_threads(self.finished_spill_files.len())
+                .with_sorted_spill_files(self.finished_spill_files.drain(..).collect())
+                // .with_streams(streams)
                 .with_schema(Arc::clone(&self.schema))
                 .with_expressions(expressions.as_ref())
                 .with_metrics(self.metrics.baseline.clone())
@@ -428,7 +432,7 @@ impl ExternalSorter {
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
-        let batches_to_spill = std::mem::take(globally_sorted_batches);
+        let batches_to_spill = mem::take(globally_sorted_batches);
         self.reservation.free();
 
         let in_progress_file = self.in_progress_spill_file.as_mut().ok_or_else(|| {
@@ -683,7 +687,7 @@ impl ExternalSorter {
             return self.sort_batch_stream(batch, metrics, reservation);
         }
 
-        let streams = std::mem::take(&mut self.in_mem_batches)
+        let streams = mem::take(&mut self.in_mem_batches)
             .into_iter()
             .map(|batch| {
                 let metrics = self.metrics.baseline.intermediate();

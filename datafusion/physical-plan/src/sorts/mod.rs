@@ -20,6 +20,7 @@
 mod builder;
 mod cursor;
 mod merge;
+pub mod multi_level_sort_preserving_merge_stream;
 pub mod partial_sort;
 pub mod sort;
 pub mod sort_preserving_merge;
