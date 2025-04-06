@@ -22,7 +22,7 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::Result;
 
 /// Stores the mapping between source expressions and target expressions for a
 /// projection.
@@ -66,9 +66,9 @@ impl ProjectionMapping {
                             let idx = col.index();
                             let matching_input_field = input_schema.field(idx);
                             if col.name() != matching_input_field.name() {
-                                return internal_err!("Input field name {} does not match with the projection expression {}",
-                                    matching_input_field.name(),col.name())
-                                }
+                                let fixed_col = Column::new(col.name(), idx);
+                                return Ok(Transformed::yes(Arc::new(fixed_col)));
+                            }
                             let matching_input_column =
                                 Column::new(matching_input_field.name(), idx);
                             Ok(Transformed::yes(Arc::new(matching_input_column)))

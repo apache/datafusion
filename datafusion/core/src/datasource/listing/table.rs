@@ -875,15 +875,13 @@ impl TableProvider for ListingTable {
             filters.iter().cloned().partition(|filter| {
                 can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
             });
-        // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
-        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
 
         // We should not limit the number of partitioned files to scan if there are filters and limit
         // at the same time. This is because the limit should be applied after the filters are applied.
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
         let (mut partitioned_file_lists, statistics) = self
-            .list_files_for_scan(session_state, &partition_filters, statistic_file_limit)
+            .list_files_for_scan(state, &partition_filters, statistic_file_limit)
             .await?;
 
         // if no files need to be read, return an `EmptyExec`
@@ -899,10 +897,11 @@ impl TableProvider for ListingTable {
             .split_file_groups_by_statistics
             .then(|| {
                 output_ordering.first().map(|output_ordering| {
-                    FileScanConfig::split_groups_by_statistics(
+                    FileScanConfig::split_groups_by_statistics_with_target_partitions(
                         &self.table_schema,
                         &partitioned_file_lists,
                         output_ordering,
+                        self.options.target_partitions,
                     )
                 })
             })
@@ -942,7 +941,7 @@ impl TableProvider for ListingTable {
         self.options
             .format
             .create_physical_plan(
-                session_state,
+                state,
                 FileScanConfigBuilder::new(
                     object_store_url,
                     Arc::clone(&self.file_schema),
@@ -1022,10 +1021,8 @@ impl TableProvider for ListingTable {
         // Get the object store for the table path.
         let store = state.runtime_env().object_store(table_path)?;
 
-        // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
-        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let file_list_stream = pruned_partition_list(
-            session_state,
+            state,
             store.as_ref(),
             table_path,
             &[],
@@ -1073,7 +1070,7 @@ impl TableProvider for ListingTable {
 
         self.options()
             .format
-            .create_writer_physical_plan(input, session_state, config, order_requirements)
+            .create_writer_physical_plan(input, state, config, order_requirements)
             .await
     }
 
@@ -1205,47 +1202,43 @@ async fn get_files_with_limit(
     let mut file_group = FileGroup::default();
     // Fusing the stream allows us to call next safely even once it is finished.
     let mut all_files = Box::pin(files.fuse());
-    let mut num_rows = Precision::<usize>::Absent;
-    while let Some(first_file) = all_files.next().await {
-        let file = first_file?;
-        if let Some(file_statistic) = &file.statistics {
-            num_rows = file_statistic.num_rows;
+    enum ProcessingState {
+        ReadingFiles,
+        ReachedLimit,
+    }
+
+    let mut state = ProcessingState::ReadingFiles;
+    let mut num_rows = Precision::Absent;
+
+    while let Some(file_result) = all_files.next().await {
+        // Early exit if we've already reached our limit
+        if matches!(state, ProcessingState::ReachedLimit) {
+            break;
         }
+
+        let file = file_result?;
+
+        // Update file statistics regardless of state
+        if collect_stats {
+            if let Some(file_stats) = &file.statistics {
+                num_rows = if file_group.is_empty() {
+                    // For the first file, just take its row count
+                    file_stats.num_rows
+                } else {
+                    // For subsequent files, accumulate the counts
+                    add_row_stats(num_rows, file_stats.num_rows)
+                };
+            }
+        }
+
+        // Always add the file to our group
         file_group.push(file);
 
-        // If the number of rows exceeds the limit, we can stop processing
-        // files. This only applies when we know the number of rows. It also
-        // currently ignores tables that have no statistics regarding the
-        // number of rows.
-        let conservative_num_rows = match num_rows {
-            Precision::Exact(nr) => nr,
-            _ => usize::MIN,
-        };
-        if conservative_num_rows <= limit.unwrap_or(usize::MAX) {
-            while let Some(current) = all_files.next().await {
-                let file = current?;
-                if !collect_stats {
-                    file_group.push(file);
-                    continue;
-                }
-
-                // We accumulate the number of rows, total byte size and null
-                // counts across all the files in question. If any file does not
-                // provide any information or provides an inexact value, we demote
-                // the statistic precision to inexact.
-                if let Some(file_stats) = &file.statistics {
-                    num_rows = add_row_stats(num_rows, file_stats.num_rows);
-                }
-                file_group.push(file);
-
-                // If the number of rows exceeds the limit, we can stop processing
-                // files. This only applies when we know the number of rows. It also
-                // currently ignores tables that have no statistics regarding the
-                // number of rows.
-                if num_rows.get_value().unwrap_or(&usize::MIN)
-                    > &limit.unwrap_or(usize::MAX)
-                {
-                    break;
+        // Check if we've hit the limit (if one was specified)
+        if let Some(limit) = limit {
+            if let Precision::Exact(row_count) = num_rows {
+                if row_count > limit {
+                    state = ProcessingState::ReachedLimit;
                 }
             }
         }
