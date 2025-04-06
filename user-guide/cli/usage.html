@@ -684,6 +684,9 @@ OPTIONS:
 <span class="w">        </span>--mem-pool-type<span class="w"> </span>&lt;MEM_POOL_TYPE&gt;
 <span class="w">            </span>Specify<span class="w"> </span>the<span class="w"> </span>memory<span class="w"> </span>pool<span class="w"> </span><span class="nb">type</span><span class="w"> </span><span class="s1">&#39;greedy&#39;</span><span class="w"> </span>or<span class="w"> </span><span class="s1">&#39;fair&#39;</span>,<span class="w"> </span>default<span class="w"> </span>to<span class="w"> </span><span class="s1">&#39;greedy&#39;</span>
 
+<span class="w">    </span>-d,<span class="w"> </span>--disk-limit<span class="w"> </span>&lt;DISK_LIMIT&gt;
+<span class="w">            </span>Available<span class="w"> </span>disk<span class="w"> </span>space<span class="w"> </span><span class="k">for</span><span class="w"> </span>spilling<span class="w"> </span>queries<span class="w"> </span><span class="o">(</span>e.g.<span class="w"> </span><span class="s1">&#39;10g&#39;</span><span class="o">)</span>,<span class="w"> </span>default<span class="w"> </span>to<span class="w"> </span>None<span class="w"> </span><span class="o">(</span>uses<span class="w"> </span>DataFusion<span class="s1">&#39;s default value of &#39;</span>100g<span class="err">&#39;</span><span class="o">)</span>
+
 <span class="w">    </span>-p,<span class="w"> </span>--data-path<span class="w"> </span>&lt;DATA_PATH&gt;
 <span class="w">            </span>Path<span class="w"> </span>to<span class="w"> </span>your<span class="w"> </span>data,<span class="w"> </span>default<span class="w"> </span>to<span class="w"> </span>current<span class="w"> </span>directory
 
