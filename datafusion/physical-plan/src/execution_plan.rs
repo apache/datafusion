@@ -665,7 +665,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// The point here is that:
     /// 1. We cannot push down `sum > 10` through the `AggregateExec` node into the `DataSourceExec` node.
     ///    Any filters above the `AggregateExec` node are not pushed down.
-    ///    This is determined by calling [`ExecutionPlan::filter_pushdown_request`] on the `AggregateExec` node.
+    ///    This is determined by calling [`ExecutionPlan::try_pushdown_filters`] on the [`AggregateExec`] node.
     /// 2. We need to keep recursing into the tree so that we can discover the other [`FilterExec`] node and push down the `id=1` filter.
     ///
     /// It is also possible to push down filters through joins and from joins.
@@ -903,6 +903,8 @@ pub trait ExecutionPlanProperties {
     ///
     /// See also [`ExecutionPlan::maintains_input_order`] and [`Self::output_ordering`]
     /// for related concepts.
+    /// 
+    /// [`FilterExec`]: crate::filter::FilterExec
     fn equivalence_properties(&self) -> &EquivalenceProperties;
 }
 
