@@ -1102,19 +1102,13 @@ pub fn get_finer_aggregate_exprs_requirement(
 ) -> Result<Vec<PhysicalSortRequirement>> {
     let mut requirement = None;
     for aggr_expr in aggr_exprs.iter_mut() {
-        let (mut conflict, mut conflict_rev) = (false, false);
-        let mut finer = if let Some(aggr_req) =
-            get_aggregate_expr_req(aggr_expr, group_by, agg_mode)
-        {
-            if let Some(req) = requirement.as_ref() {
-                let finer = eq_properties.get_finer_ordering(req, &aggr_req);
-                conflict = finer.is_none();
-                finer
-            } else {
-                eq_properties.normalize_sort_exprs(&aggr_req)
-            }
+        let Some(aggr_req) = get_aggregate_expr_req(aggr_expr, group_by, agg_mode) else {
+            continue;
+        };
+        let mut finer = if let Some(req) = requirement.as_ref() {
+            eq_properties.get_finer_ordering(req, &aggr_req)
         } else {
-            requirement.clone()
+            eq_properties.normalize_sort_exprs(&aggr_req)
         };
         if let Some(finer_ordering) =
             finer.take_if(|o| eq_properties.ordering_satisfy(o.as_ref()))
@@ -1126,18 +1120,13 @@ pub fn get_finer_aggregate_exprs_requirement(
         let mut finer_rev = None;
         let mut rev_expr = aggr_expr.reverse_expr();
         if let Some(reverse_aggr_expr) = rev_expr.take() {
-            finer_rev = if let Some(aggr_req) =
-                get_aggregate_expr_req(&reverse_aggr_expr, group_by, agg_mode)
-            {
-                if let Some(req) = requirement.as_ref() {
-                    let finer = eq_properties.get_finer_ordering(req, &aggr_req);
-                    conflict_rev = finer.is_none();
-                    finer
-                } else {
-                    eq_properties.normalize_sort_exprs(&aggr_req)
-                }
+            let Some(aggr_req) = get_aggregate_expr_req(&reverse_aggr_expr, group_by, agg_mode) else {
+                continue;
+            };
+            finer_rev = if let Some(req) = requirement.as_ref() {
+                eq_properties.get_finer_ordering(req, &aggr_req)
             } else {
-                requirement.clone()
+                eq_properties.normalize_sort_exprs(&aggr_req)
             };
             if let Some(finer_ordering) =
                 finer_rev.take_if(|o| eq_properties.ordering_satisfy(o.as_ref()))
@@ -1164,14 +1153,12 @@ pub fn get_finer_aggregate_exprs_requirement(
                 continue;
             }
         }
-        if conflict && conflict_rev {
-            // Neither the existing requirement nor the aggregate requirement
-            // satisfy the other, this means requirements are conflicting.
-            // Currently, we do not support conflicting requirements.
-            return not_impl_err!(
-                "Conflicting ordering requirements in aggregate functions is not supported"
-            );
-        }
+        // Neither the existing requirement nor the aggregate requirement
+        // satisfy the other, this means requirements are conflicting.
+        // Currently, we do not support conflicting requirements.
+        return not_impl_err!(
+            "Conflicting ordering requirements in aggregate functions is not supported"
+        );
     }
 
     Ok(requirement.map_or_else(Vec::new, |o| o.into_iter().map(Into::into).collect()))
@@ -2344,8 +2331,6 @@ mod tests {
     async fn test_get_finest_requirements() -> Result<()> {
         let test_schema = create_test_schema()?;
 
-        // Assume column a and b are aliases
-        // Assume also that a ASC and c DESC describe the same global ordering for the table. (Since they are ordering equivalent).
         let options1 = SortOptions {
             descending: false,
             nulls_first: false,
