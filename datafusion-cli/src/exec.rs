@@ -175,7 +175,7 @@ pub async fn exec_from_repl(
                     // There must be a better way to do this SELECT comparison
                     // Really, the test should be on the size of the statement output, but there's no access to that here.
                     if line.starts_with("select") || line.starts_with("SELECT") || line.starts_with("\\d") {
-                        match crate::pager::build_pager_process(&print_options) {
+                        match crate::pager::build_pager_process(print_options) {
                             Ok(mut child) => {
                                 (Box::new(child.stdin.take().unwrap()) as Box<dyn std::io::Write>, Some(child))
                             },

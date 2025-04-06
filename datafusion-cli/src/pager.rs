@@ -40,7 +40,7 @@ pub(crate) fn build_pager_process(
         use std::process::Stdio;
 
         if let Some(pager_cmd) = &print_options.pager {
-            let (exec_path, args) = pager_parts(&pager_cmd);
+            let (exec_path, args) = pager_parts(pager_cmd);
 
             let pager = std::process::Command::new(exec_path)
                 .args(&args)
