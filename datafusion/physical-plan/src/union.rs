@@ -37,7 +37,7 @@ use crate::execution_plan::{
 };
 use crate::metrics::BaselineMetrics;
 use crate::projection::{make_with_child, ProjectionExec};
-use crate::stream::ObservedStream;
+use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -236,8 +236,15 @@ impl ExecutionPlan for UnionExec {
         for input in self.inputs.iter() {
             // Calculate whether partition belongs to the current partition
             if partition < input.output_partitioning().partition_count() {
-                let stream = input.execute(partition, context)?;
+                let mut stream = input.execute(partition, context)?;
                 debug!("Found a Union partition to execute");
+                if self.schema() != stream.schema() {
+                    stream =
+                        Box::pin(RecordBatchStreamAdapter::new_with_transform_schema(
+                            self.schema(),
+                            stream,
+                        ));
+                }
                 return Ok(Box::pin(ObservedStream::new(
                     stream,
                     baseline_metrics,
