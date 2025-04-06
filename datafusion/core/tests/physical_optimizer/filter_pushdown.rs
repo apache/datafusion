@@ -60,9 +60,9 @@ use std::{
 };
 
 /// A placeholder data source that accepts filter pushdown
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct TestSource {
-    support: FilterPushdownSupport,
+    support: Option<FilterPushdownSupport>,
     predicate: Option<PhysicalExprRef>,
     statistics: Option<Statistics>,
 }
@@ -70,7 +70,7 @@ struct TestSource {
 impl TestSource {
     fn new(support: FilterPushdownSupport) -> Self {
         Self {
-            support,
+            support: Some(support),
             predicate: None,
             statistics: None,
         }
@@ -149,8 +149,18 @@ impl FileSource for TestSource {
     fn try_pushdown_filters(
         &self,
         filters: &[PhysicalExprRef],
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<FileSourceFilterPushdownResult> {
+        let support = match self.support {
+            Some(support) => support,
+            None => {
+                if config.execution.parquet.pushdown_filters {
+                    FilterPushdownSupport::Exact
+                } else {
+                    FilterPushdownSupport::Unsupported
+                }
+            }
+        };
         let new = Arc::new(TestSource {
             support: self.support,
             predicate: Some(conjunction(filters.iter().map(Arc::clone))),
@@ -158,7 +168,7 @@ impl FileSource for TestSource {
         });
         Ok(FileSourceFilterPushdownResult::new(
             new,
-            vec![self.support; filters.len()],
+            vec![support; filters.len()],
         ))
     }
 }
@@ -184,6 +194,51 @@ fn test_pushdown_into_scan() {
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownFilter{}),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+      output:
+        Ok:
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
+    "
+    );
+}
+
+/// Show that we can use config options to determine how to do pushdown.
+#[test]
+fn test_pushdown_into_scan_with_config_options() {
+    let scan = test_scan(FilterPushdownSupport::Exact);
+    let predicate = col_lit_predicate("a", "foo", schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, scan).unwrap()) as _;
+
+    let mut cfg = ConfigOptions::default();
+    cfg.execution.parquet.pushdown_filters = false;
+    insta::assert_snapshot!(
+        OptimizationTest::new_with_config(
+            Arc::clone(&plan),
+            PushdownFilter {},
+            &cfg
+        ),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+      output:
+        Ok:
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
+    "
+    );
+
+    cfg.execution.parquet.pushdown_filters = true;
+    insta::assert_snapshot!(
+        OptimizationTest::new_with_config(
+            plan,
+            PushdownFilter {},
+            &cfg
+        ),
         @r"
     OptimizationTest:
       input:
