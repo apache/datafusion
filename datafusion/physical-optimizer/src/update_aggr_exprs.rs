@@ -163,13 +163,12 @@ fn try_convert_aggregate_if_better(
             // Otherwise, leave it as is.
             if !aggr_expr.order_sensitivity().is_beneficial() {
                 Ok(aggr_expr)
-            } else if let Some(order_bys) = order_bys {
+            } else if !order_bys.is_empty() {
                 if eq_properties.ordering_satisfy_requirement(&concat_slices(
                     prefix_requirement,
                     &order_bys
-                        .clone()
-                        .into_iter()
-                        .map(Into::into)
+                        .iter()
+                        .map(|e| e.clone().into())
                         .collect::<Vec<_>>(),
                 )) {
                     // Existing ordering satisfies the aggregator requirements:
@@ -177,9 +176,8 @@ fn try_convert_aggregate_if_better(
                 } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
                     prefix_requirement,
                     &order_bys
-                        .reverse_each()
-                        .into_iter()
-                        .map(Into::into)
+                        .iter()
+                        .map(|e| e.reverse().into())
                         .collect::<Vec<_>>(),
                 )) {
                     // Converting to reverse enables more efficient execution

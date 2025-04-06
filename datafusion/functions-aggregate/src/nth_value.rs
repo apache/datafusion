@@ -148,11 +148,12 @@ impl AggregateUDFImpl for NthValueAgg {
             }
         };
 
-        let Some(ordering_req) = acc_args.ordering_req else {
+        if acc_args.order_bys.is_empty() {
             return TrivialNthValueAccumulator::try_new(n, acc_args.return_type)
                 .map(|acc| Box::new(acc) as _);
         };
-        let ordering_dtypes = ordering_req
+        let ordering_dtypes = acc_args
+            .order_bys
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
@@ -162,7 +163,7 @@ impl AggregateUDFImpl for NthValueAgg {
             n,
             &data_type,
             &ordering_dtypes,
-            ordering_req.clone(),
+            acc_args.order_bys.iter().cloned().collect(),
         )
         .map(|acc| Box::new(acc) as _)
     }

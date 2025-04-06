@@ -15,14 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
 use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_expr::expressions::col;
-use std::sync::Arc;
+
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn prepare_accumulator() -> Box<dyn GroupsAccumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Int32, true)]));
@@ -30,7 +33,7 @@ fn prepare_accumulator() -> Box<dyn GroupsAccumulator> {
         return_type: &DataType::Int64,
         schema: &schema,
         ignore_nulls: false,
-        ordering_req: None,
+        order_bys: &[],
         is_reversed: false,
         name: "COUNT(f)",
         is_distinct: false,

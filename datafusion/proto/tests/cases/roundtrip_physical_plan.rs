@@ -527,20 +527,20 @@ fn rountrip_aggregate_with_sort() -> Result<()> {
 
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
-    let sort_exprs = LexOrdering::new(vec![PhysicalSortExpr {
+    let sort_exprs = vec![PhysicalSortExpr {
         expr: col("b", &schema)?,
         options: SortOptions {
             descending: false,
             nulls_first: true,
         },
-    }]);
+    }];
 
     let aggregates =
         vec![
             AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
                 .alias("ARRAY_AGG(b)")
-                .order_by(Some(sort_exprs))
+                .order_by(sort_exprs)
                 .build()
                 .map(Arc::new)?,
         ];

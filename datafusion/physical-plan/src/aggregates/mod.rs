@@ -648,7 +648,7 @@ impl AggregateExec {
             return false;
         }
         // ensure there are no order by expressions
-        if self.aggr_expr().iter().any(|e| e.order_bys().is_some()) {
+        if !self.aggr_expr().iter().all(|e| e.order_bys().is_empty()) {
             return false;
         }
         // ensure there is no output ordering; can this rule be relaxed?
@@ -1052,7 +1052,7 @@ fn get_aggregate_expr_req(
     if !aggr_expr.order_sensitivity().hard_requires() || !agg_mode.is_first_stage() {
         return None;
     }
-    let mut req = aggr_expr.order_bys().cloned()?.to_vec();
+    let mut req = aggr_expr.order_bys().to_vec();
 
     // In non-first stage modes, we accumulate data (using `merge_batch`) from
     // different partitions (i.e. merge partial results). During this merge, we
@@ -1197,9 +1197,7 @@ pub fn aggregate_expressions(
                 // Append ordering requirements to expressions' results. This
                 // way order sensitive aggregators can satisfy requirement
                 // themselves.
-                if let Some(ordering_req) = agg.order_bys() {
-                    result.extend(ordering_req.iter().map(|item| Arc::clone(&item.expr)));
-                }
+                result.extend(agg.order_bys().iter().map(|item| Arc::clone(&item.expr)));
                 result
             })
             .collect()),
@@ -2199,14 +2197,14 @@ mod tests {
         schema: &Schema,
         sort_options: SortOptions,
     ) -> Result<Arc<AggregateFunctionExpr>> {
-        let ordering_req = [PhysicalSortExpr {
+        let order_bys = vec![PhysicalSortExpr {
             expr: col("b", schema)?,
             options: sort_options,
         }];
         let args = [col("b", schema)?];
 
         AggregateExprBuilder::new(first_value_udaf(), args.to_vec())
-            .order_by(Some(LexOrdering::from_iter(ordering_req)))
+            .order_by(order_bys)
             .schema(Arc::new(schema.clone()))
             .alias(String::from("first_value(b) ORDER BY [b ASC NULLS LAST]"))
             .build()
@@ -2218,13 +2216,13 @@ mod tests {
         schema: &Schema,
         sort_options: SortOptions,
     ) -> Result<Arc<AggregateFunctionExpr>> {
-        let ordering_req = [PhysicalSortExpr {
+        let order_bys = vec![PhysicalSortExpr {
             expr: col("b", schema)?,
             options: sort_options,
         }];
         let args = [col("b", schema)?];
         AggregateExprBuilder::new(last_value_udaf(), args.to_vec())
-            .order_by(Some(LexOrdering::from_iter(ordering_req)))
+            .order_by(order_bys)
             .schema(Arc::new(schema.clone()))
             .alias(String::from("last_value(b) ORDER BY [b ASC NULLS LAST]"))
             .build()
@@ -2361,12 +2359,12 @@ mod tests {
         // Aggregate requirements are
         // [None], [a ASC], [a ASC, b ASC, c ASC], [a ASC, b ASC] respectively
         let order_by_exprs = vec![
-            None,
-            Some(vec![PhysicalSortExpr {
+            vec![],
+            vec![PhysicalSortExpr {
                 expr: Arc::clone(col_a),
                 options: options1,
-            }]),
-            Some(vec![
+            }],
+            vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_a),
                     options: options1,
@@ -2379,8 +2377,8 @@ mod tests {
                     expr: Arc::clone(col_c),
                     options: options1,
                 },
-            ]),
-            Some(vec![
+            ],
+            vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_a),
                     options: options1,
@@ -2389,7 +2387,7 @@ mod tests {
                     expr: Arc::clone(col_b),
                     options: options1,
                 },
-            ]),
+            ],
         ];
 
         let common_requirement = LexOrdering::new(vec![
@@ -2407,7 +2405,7 @@ mod tests {
             .map(|order_by_expr| {
                 AggregateExprBuilder::new(array_agg_udaf(), vec![Arc::clone(col_a)])
                     .alias("a")
-                    .order_by(order_by_expr.map(LexOrdering::new))
+                    .order_by(order_by_expr)
                     .schema(Arc::clone(&test_schema))
                     .build()
                     .map(Arc::new)

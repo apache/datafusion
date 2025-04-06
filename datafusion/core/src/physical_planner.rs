@@ -82,7 +82,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
-use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
+use datafusion_physical_expr::{create_physical_sort_exprs, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
@@ -1573,8 +1573,8 @@ type AggregateExprWithOptionalArgs = (
     Arc<AggregateFunctionExpr>,
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
-    // Ordering requirements, if any
-    Option<LexOrdering>,
+    // Expressions in the ORDER BY clause
+    Vec<PhysicalSortExpr>,
 );
 
 /// Create an aggregate expression with a name from a logical expression
@@ -1618,22 +1618,19 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
 
-            let (agg_expr, filter, order_by) = {
-                let ordering = match order_by {
-                    Some(exprs) => Some(
-                        create_physical_sort_exprs(
-                            exprs,
-                            logical_input_schema,
-                            execution_props,
-                        )?
-                        .into(),
-                    ),
-                    None => None,
+            let (agg_expr, filter, order_bys) = {
+                let order_bys = match order_by {
+                    Some(exprs) => create_physical_sort_exprs(
+                        exprs,
+                        logical_input_schema,
+                        execution_props,
+                    )?,
+                    None => vec![],
                 };
 
                 let agg_expr =
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
-                        .order_by(ordering.clone())
+                        .order_by(order_bys.clone())
                         .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
                         .human_display(human_displan)
@@ -1642,10 +1639,10 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         .build()
                         .map(Arc::new)?;
 
-                (agg_expr, filter, ordering)
+                (agg_expr, filter, order_bys)
             };
 
-            Ok((agg_expr, filter, order_by))
+            Ok((agg_expr, filter, order_bys))
         }
         other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }

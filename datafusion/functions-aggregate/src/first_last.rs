@@ -134,23 +134,27 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if let Some(ordering_req) = acc_args.ordering_req {
-            let ordering_dtypes = ordering_req
-                .iter()
-                .map(|e| e.expr.data_type(acc_args.schema))
-                .collect::<Result<Vec<_>>>()?;
-            return FirstValueAccumulator::try_new(
+        if acc_args.order_bys.is_empty() {
+            return TrivialFirstValueAccumulator::try_new(
                 acc_args.return_type,
-                &ordering_dtypes,
-                ordering_req.clone(),
                 acc_args.ignore_nulls,
             )
-            .map(|acc| {
-                Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
-            });
+            .map(|acc| Box::new(acc) as _);
         }
-        TrivialFirstValueAccumulator::try_new(acc_args.return_type, acc_args.ignore_nulls)
-            .map(|acc| Box::new(acc) as _)
+        let ordering_dtypes = acc_args
+            .order_bys
+            .iter()
+            .map(|e| e.expr.data_type(acc_args.schema))
+            .collect::<Result<Vec<_>>>()?;
+        FirstValueAccumulator::try_new(
+            acc_args.return_type,
+            &ordering_dtypes,
+            acc_args.order_bys.iter().cloned().collect(),
+            acc_args.ignore_nulls,
+        )
+        .map(|acc| {
+            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+        })
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
@@ -166,7 +170,7 @@ impl AggregateUDFImpl for FirstValue {
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
-        args.ordering_req.is_some()
+        !args.order_bys.is_empty()
             && matches!(
                 args.return_type,
                 Int8 | Int16
@@ -196,17 +200,18 @@ impl AggregateUDFImpl for FirstValue {
         fn create_accumulator<T: ArrowPrimitiveType + Send>(
             args: AccumulatorArgs,
         ) -> Result<Box<dyn GroupsAccumulator>> {
-            let Some(ordering_req) = args.ordering_req else {
+            if args.order_bys.is_empty() {
                 return internal_err!("Groups accumulator must have an ordering.");
             };
 
-            let ordering_dtypes = ordering_req
+            let ordering_dtypes = args
+                .order_bys
                 .iter()
                 .map(|e| e.expr.data_type(args.schema))
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(Box::new(FirstPrimitiveGroupsAccumulator::<T>::try_new(
-                ordering_req.clone(),
+                args.order_bys.iter().cloned().collect(),
                 args.ignore_nulls,
                 args.return_type,
                 &ordering_dtypes,
@@ -1032,23 +1037,27 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if let Some(ordering_req) = acc_args.ordering_req {
-            let ordering_dtypes = ordering_req
-                .iter()
-                .map(|e| e.expr.data_type(acc_args.schema))
-                .collect::<Result<Vec<_>>>()?;
-            return LastValueAccumulator::try_new(
+        if acc_args.order_bys.is_empty() {
+            return TrivialLastValueAccumulator::try_new(
                 acc_args.return_type,
-                &ordering_dtypes,
-                ordering_req.clone(),
                 acc_args.ignore_nulls,
             )
-            .map(|acc| {
-                Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
-            });
+            .map(|acc| Box::new(acc) as _);
         }
-        TrivialLastValueAccumulator::try_new(acc_args.return_type, acc_args.ignore_nulls)
-            .map(|acc| Box::new(acc) as _)
+        let ordering_dtypes = acc_args
+            .order_bys
+            .iter()
+            .map(|e| e.expr.data_type(acc_args.schema))
+            .collect::<Result<Vec<_>>>()?;
+        LastValueAccumulator::try_new(
+            acc_args.return_type,
+            &ordering_dtypes,
+            acc_args.order_bys.iter().cloned().collect(),
+            acc_args.ignore_nulls,
+        )
+        .map(|acc| {
+            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
+        })
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {

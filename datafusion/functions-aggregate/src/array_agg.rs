@@ -153,25 +153,27 @@ impl AggregateUDFImpl for ArrayAgg {
             // ARRAY_AGG(DISTINCT concat(col, '') ORDER BY concat(col, '')) <- Valid
             // ARRAY_AGG(DISTINCT col ORDER BY other_col)                   <- Invalid
             // ARRAY_AGG(DISTINCT col ORDER BY concat(col, ''))             <- Invalid
-            let mut sort_option: Option<SortOptions> = None;
-            if let Some(ordering_req) = acc_args.ordering_req {
-                if ordering_req.len() > 1 || !ordering_req[0].expr.eq(&acc_args.exprs[0])
-                {
-                    return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
+            let sort_option = match acc_args.order_bys {
+                [single] if single.expr.eq(&acc_args.exprs[0]) => Some(single.options),
+                [] => None,
+                _ => {
+                    return exec_err!(
+                        "In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list"
+                    );
                 }
-                sort_option = Some(ordering_req[0].options)
-            }
+            };
             return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
                 &data_type,
                 sort_option,
             )?));
         }
 
-        let Some(ordering_req) = acc_args.ordering_req else {
+        let order_bys = acc_args.order_bys;
+        if order_bys.is_empty() {
             return Ok(Box::new(ArrayAggAccumulator::try_new(&data_type)?));
         };
 
-        let ordering_dtypes = ordering_req
+        let ordering_dtypes = order_bys
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
@@ -179,7 +181,7 @@ impl AggregateUDFImpl for ArrayAgg {
         OrderSensitiveArrayAggAccumulator::try_new(
             &data_type,
             &ordering_dtypes,
-            ordering_req.clone(),
+            LexOrdering::new(order_bys.to_vec()),
             acc_args.is_reversed,
         )
         .map(|acc| Box::new(acc) as _)
@@ -661,7 +663,7 @@ mod tests {
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
     use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use std::sync::Arc;
 
     #[test]
@@ -926,7 +928,7 @@ mod tests {
     struct ArrayAggAccumulatorBuilder {
         data_type: DataType,
         distinct: bool,
-        ordering: Option<LexOrdering>,
+        order_bys: Vec<PhysicalSortExpr>,
         schema: Schema,
     }
 
@@ -939,7 +941,7 @@ mod tests {
             Self {
                 data_type: data_type.clone(),
                 distinct: Default::default(),
-                ordering: None,
+                order_bys: vec![],
                 schema: Schema {
                     fields: Fields::from(vec![Field::new(
                         "col",
@@ -966,11 +968,7 @@ mod tests {
                 ),
                 sort_options,
             );
-            if let Some(existing_ordering) = self.ordering.as_mut() {
-                existing_ordering.extend([new_order]);
-            } else {
-                self.ordering = Some(LexOrdering::from(vec![new_order]));
-            }
+            self.order_bys.push(new_order);
             self
         }
 
@@ -979,7 +977,7 @@ mod tests {
                 return_type: &self.data_type,
                 schema: &self.schema,
                 ignore_nulls: false,
-                ordering_req: self.ordering.as_ref(),
+                order_bys: &self.order_bys,
                 is_reversed: false,
                 name: "",
                 is_distinct: self.distinct,

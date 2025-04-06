@@ -52,11 +52,8 @@ pub fn serialize_physical_aggr_expr(
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
     let expressions = serialize_physical_exprs(&aggr_expr.expressions(), codec)?;
-    let ordering_req = match aggr_expr.order_bys() {
-        Some(order) => order.to_vec(),
-        None => vec![],
-    };
-    let ordering_req = serialize_physical_sort_exprs(ordering_req, codec)?;
+    let order_bys =
+        serialize_physical_sort_exprs(aggr_expr.order_bys().iter().cloned(), codec)?;
 
     let name = aggr_expr.fun().name().to_string();
     let mut buf = Vec::new();
@@ -66,7 +63,7 @@ pub fn serialize_physical_aggr_expr(
             protobuf::PhysicalAggregateExprNode {
                 aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
                 expr: expressions,
-                ordering_req,
+                ordering_req: order_bys,
                 distinct: aggr_expr.is_distinct(),
                 ignore_nulls: aggr_expr.ignore_nulls(),
                 fun_definition: (!buf.is_empty()).then_some(buf),
