@@ -461,24 +461,24 @@ impl EquivalenceProperties {
     }
 
     /// Normalizes the given sort expressions (i.e. `sort_exprs`) using the
-    /// equivalence group and the ordering equivalence class within.
+    /// equivalence group and the ordering equivalence class within. Returns
+    /// a `LexOrdering` instance if the expressions define a proper lexicographical
+    /// ordering. It works by:
+    /// - Removing expressions that have a constant value from the given expressions.
+    /// - Replacing sections that belong to some equivalence class in the equivalence
+    ///   group with the first entry in the matching equivalence class.
     ///
-    /// Assume that `self.eq_group` states column `a` and `b` are aliases.
-    /// Also assume that `self.oeq_class` states orderings `d ASC` and `a ASC, c ASC`
-    /// are equivalent (in the sense that both describe the ordering of the table).
-    /// If the `sort_exprs` argument were `vec![b ASC, c ASC, a ASC]`, then this
-    /// function would return `vec![a ASC, c ASC]`. Internally, it would first
-    /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
-    /// after deduplication.
+    /// Assume that `self.eq_group` states column `a` and `b` are aliases. Also
+    /// assume that `self.oeq_class` contains equivalent orderings `d ASC` and
+    /// `a ASC, c ASC` (in the sense that both describe the ordering of the
+    /// table). If `sort_exprs` were `[b ASC, c ASC, a ASC]`, then this function
+    /// would return `[a ASC, c ASC]`. Internally, it would first normalize to
+    /// `[a ASC, c ASC, a ASC]` and end up with the final result after deduplication.
     pub fn normalize_sort_exprs<'a>(
         &self,
         sort_exprs: impl IntoIterator<Item = &'a PhysicalSortExpr>,
     ) -> Option<LexOrdering> {
-        let normalized_constants = self
-            .constants
-            .iter()
-            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
-            .collect::<Vec<_>>();
+        let normalized_constants = self.normalized_constant_exprs();
         // Prune redundant sections in the ordering:
         let sort_exprs = sort_exprs
             .into_iter()
@@ -489,27 +489,24 @@ impl EquivalenceProperties {
     }
 
     /// Normalizes the given sort requirements (i.e. `sort_reqs`) using the
-    /// equivalence group and the ordering equivalence class within. It works by:
-    /// - Removing expressions that have a constant value from the given requirement.
+    /// equivalence group and the ordering equivalence class within. Returns
+    /// a `LexRequirement` instance if the expressions define a proper lexicographical
+    /// ordering requirement. It works by:
+    /// - Removing expressions that have a constant value from the given requirements.
     /// - Replacing sections that belong to some equivalence class in the equivalence
     ///   group with the first entry in the matching equivalence class.
     ///
-    /// Assume that `self.eq_group` states column `a` and `b` are aliases.
-    /// Also assume that `self.oeq_class` states orderings `d ASC` and `a ASC, c ASC`
-    /// are equivalent (in the sense that both describe the ordering of the table).
-    /// If the `sort_reqs` argument were `vec![b ASC, c ASC, a ASC]`, then this
-    /// function would return `vec![a ASC, c ASC]`. Internally, it would first
-    /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
-    /// after deduplication.
+    /// Assume that `self.eq_group` states column `a` and `b` are aliases. Also
+    /// assume that `self.oeq_class` contains equivalent orderings `d ASC` and
+    /// `a ASC, c ASC` (in the sense that both describe the ordering of the
+    /// table). If `sort_exprs` were `[b ASC, c ASC, a ASC]`, then this function
+    /// would return `[a ASC, c ASC]`. Internally, it would first normalize to
+    /// `[a ASC, c ASC, a ASC]` and end up with the final result after deduplication.
     fn normalize_sort_requirements<'a>(
         &self,
         sort_reqs: impl IntoIterator<Item = &'a PhysicalSortRequirement>,
     ) -> Option<LexRequirement> {
-        let normalized_constants = self
-            .constants
-            .iter()
-            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
-            .collect::<Vec<_>>();
+        let normalized_constants = self.normalized_constant_exprs();
         // Prune redundant sections in the requirement:
         let reqs = sort_reqs
             .into_iter()
@@ -1171,6 +1168,16 @@ impl EquivalenceProperties {
         self.constraints.project(&indices)
     }
 
+    /// Returns normalized versions of the expressions defining constants.
+    /// Normalization removes duplicates and standardizes expressions
+    /// according to the equivalence group within.
+    fn normalized_constant_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.constants
+            .iter()
+            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
+            .collect()
+    }
+
     /// Projects the equivalences within according to `mapping`
     /// and `output_schema`.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
@@ -1284,11 +1291,7 @@ impl EquivalenceProperties {
         // As an example, assume that we know columns `a` and `b` are constant.
         // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
         // return `false`.
-        let normalized_constants = self
-            .constants
-            .iter()
-            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
-            .collect::<Vec<_>>();
+        let normalized_constants = self.normalized_constant_exprs();
         let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
         is_constant_recurse(&normalized_constants, &normalized_expr)
     }
