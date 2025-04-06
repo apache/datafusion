@@ -369,10 +369,9 @@ pub(crate) fn window_equivalence_properties(
         // Collect columns defining partitioning, and construct all `SortOptions`
         // variations for them. Then, we will check each one whether it satisfies
         // the existing ordering provided by the input plan.
-        let partition_by_orders = partitioning_exprs
+        let all_satisfied_lexs = partitioning_exprs
             .iter()
-            .map(|pb_order| sort_options_resolving_constant(Arc::clone(pb_order)));
-        let all_satisfied_lexs = partition_by_orders
+            .map(|pb_order| sort_options_resolving_constant(Arc::clone(pb_order)))
             .multi_cartesian_product()
             .filter(|lex| !lex.is_empty() && window_eq_properties.ordering_satisfy(lex))
             .map(LexOrdering::new)

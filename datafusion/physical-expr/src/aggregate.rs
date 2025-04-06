@@ -176,7 +176,7 @@ impl AggregateExprBuilder {
     ///         Arc::new(first_value),
     ///         args
     ///     )
-    ///     .order_by(Some(order_by.into()))
+    ///     .order_by(order_by)
     ///     .alias("first_a_by_x")
     ///     .ignore_nulls()
     ///     .build()?;
