@@ -71,8 +71,6 @@ wasm-pack test --headless --chrome
 wasm-pack test --headless --safari
 ```
 
-**Note:** In GitHub Actions we test the compilation with `wasm-build`, but we don't currently invoke `wasm-pack test`. This is because the headless mode is not yet working. Document of adding a GitHub Action job: https://rustwasm.github.io/docs/wasm-bindgen/wasm-bindgen-test/continuous-integration.html#github-actions.
-
 To tweak timeout setting, use `WASM_BINDGEN_TEST_TIMEOUT` environment variable. E.g., `WASM_BINDGEN_TEST_TIMEOUT=300 wasm-pack test --firefox --headless`.
 
 ## Compatibility
