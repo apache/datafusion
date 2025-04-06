@@ -138,6 +138,9 @@ pub struct FileScanConfig {
     /// Schema before `projection` is applied. It contains the all columns that may
     /// appear in the files. It does not include table partition columns
     /// that may be added.
+    /// Note that this is **not** the schema of the physical files.
+    /// This is the schema that the physical file schema will be
+    /// mapped onto, and the schema that the [`DataSourceExec`] will return.
     pub file_schema: SchemaRef,
     /// List of files to be processed, grouped into partitions
     ///
@@ -224,6 +227,10 @@ pub struct FileScanConfig {
 #[derive(Clone)]
 pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
+    /// Table schema before any projections or partition columns are applied.
+    /// This schema is used to read the files, but is **not** necessarily the schema of the physical files.
+    /// Rather this is the schema that the physical file schema will be mapped onto, and the schema that the
+    /// [`DataSourceExec`] will return.
     file_schema: SchemaRef,
     file_source: Arc<dyn FileSource>,
 
