@@ -17,7 +17,8 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{
-    assert_contains, Column, DFSchema, DFSchemaRef, Result, TableReference,
+    assert_contains, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
+    TableReference,
 };
 use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
@@ -280,6 +281,49 @@ fn roundtrip_crossjoin() -> Result<()> {
     "
     );
 
+    Ok(())
+}
+
+#[macro_export]
+macro_rules! roundtrip_statement_with_dialect_helper {
+    (
+        query: $sql:expr,
+        parser_dialect: $parser_dialect:expr,
+        unparser_dialect: $unparser_dialect:expr,
+        expected: @ $expected:literal $(,)?
+    ) => {{
+        let statement = Parser::new(&$parser_dialect)
+            .try_with_sql($sql)?
+            .parse_statement()?;
+
+        let state = MockSessionState::default()
+            .with_aggregate_function(max_udaf())
+            .with_aggregate_function(min_udaf())
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_expr_planner(Arc::new(NestedFunctionPlanner));
+
+        let context = MockContextProvider { state };
+        let sql_to_rel = SqlToRel::new(&context);
+        let plan = sql_to_rel
+            .sql_statement_to_plan(statement)
+            .unwrap_or_else(|e| panic!("Failed to parse sql: {}\n{e}", $sql));
+
+        let unparser = Unparser::new(&$unparser_dialect);
+        let roundtrip_statement = unparser.plan_to_sql(&plan)?;
+
+        let actual = &roundtrip_statement.to_string();
+        insta::assert_snapshot!(actual, @ $expected);
+    }};
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_1() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        query: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `j1_min` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, min(`ta`.`j1_id`) FROM `j1` AS `ta` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+    );
     Ok(())
 }
 
@@ -730,13 +774,18 @@ fn test_aggregation_without_projection() -> Result<()> {
     Ok(())
 }
 
+/// return a schema with two string columns: "id" and "value"
+fn test_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Utf8, false),
+    ])
+}
+
 #[test]
 fn test_table_references_in_plan_to_sql_1() {
     let table_name = "catalog.schema.table";
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let sql = table_references_in_plan_helper(
         table_name,
         schema,
@@ -752,10 +801,7 @@ fn test_table_references_in_plan_to_sql_1() {
 #[test]
 fn test_table_references_in_plan_to_sql_2() {
     let table_name = "schema.table";
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let sql = table_references_in_plan_helper(
         table_name,
         schema,
@@ -771,10 +817,7 @@ fn test_table_references_in_plan_to_sql_2() {
 #[test]
 fn test_table_references_in_plan_to_sql_3() {
     let table_name = "table";
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let sql = table_references_in_plan_helper(
         table_name,
         schema,
@@ -790,10 +833,7 @@ fn test_table_references_in_plan_to_sql_3() {
 #[test]
 fn test_table_references_in_plan_to_sql_4() {
     let table_name = "catalog.schema.table";
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let custom_dialect = CustomDialectBuilder::default()
         .with_full_qualified_col(true)
         .with_identifier_quote_style('"')
@@ -814,10 +854,7 @@ fn test_table_references_in_plan_to_sql_4() {
 #[test]
 fn test_table_references_in_plan_to_sql_5() {
     let table_name = "schema.table";
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let custom_dialect = CustomDialectBuilder::default()
         .with_full_qualified_col(true)
         .with_identifier_quote_style('"')
@@ -838,10 +875,7 @@ fn test_table_references_in_plan_to_sql_5() {
 #[test]
 fn test_table_references_in_plan_to_sql_6() {
     let table_name = "table";
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let custom_dialect = CustomDialectBuilder::default()
         .with_full_qualified_col(true)
         .with_identifier_quote_style('"')
@@ -877,10 +911,7 @@ fn table_references_in_plan_helper(
 
 #[test]
 fn test_table_scan_with_none_projection_in_plan_to_sql_1() {
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let table_name = "catalog.schema.table";
     let plan = table_scan_with_empty_projection_and_none_projection_helper(
         table_name, schema, None,
@@ -894,10 +925,7 @@ fn test_table_scan_with_none_projection_in_plan_to_sql_1() {
 
 #[test]
 fn test_table_scan_with_none_projection_in_plan_to_sql_2() {
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let table_name = "schema.table";
     let plan = table_scan_with_empty_projection_and_none_projection_helper(
         table_name, schema, None,
@@ -911,10 +939,7 @@ fn test_table_scan_with_none_projection_in_plan_to_sql_2() {
 
 #[test]
 fn test_table_scan_with_none_projection_in_plan_to_sql_3() {
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let table_name = "table";
     let plan = table_scan_with_empty_projection_and_none_projection_helper(
         table_name, schema, None,
@@ -928,10 +953,7 @@ fn test_table_scan_with_none_projection_in_plan_to_sql_3() {
 
 #[test]
 fn test_table_scan_with_empty_projection_in_plan_to_sql_1() {
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let table_name = "catalog.schema.table";
     let plan = table_scan_with_empty_projection_and_none_projection_helper(
         table_name,
@@ -947,10 +969,7 @@ fn test_table_scan_with_empty_projection_in_plan_to_sql_1() {
 
 #[test]
 fn test_table_scan_with_empty_projection_in_plan_to_sql_2() {
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let table_name = "schema.table";
     let plan = table_scan_with_empty_projection_and_none_projection_helper(
         table_name,
@@ -966,10 +985,7 @@ fn test_table_scan_with_empty_projection_in_plan_to_sql_2() {
 
 #[test]
 fn test_table_scan_with_empty_projection_in_plan_to_sql_3() {
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("value", DataType::Utf8, false),
-    ]);
+    let schema = test_schema();
     let table_name = "table";
     let plan = table_scan_with_empty_projection_and_none_projection_helper(
         table_name,
