@@ -1056,12 +1056,12 @@ fn replace_order_preserving_variants(
 struct RepartitionRequirementStatus {
     /// The distribution requirement for the node.
     requirement: Distribution,
-    /// Designates whether round robin partitioning is theoretically beneficial;
+    /// Designates whether repartitioning is theoretically beneficial;
     /// i.e. the operator can actually utilize parallelism.
-    roundrobin_beneficial: bool,
-    /// Designates whether round robin partitioning is beneficial according to
+    repartition_beneficial: bool,
+    /// Designates whether repartitioning is beneficial according to
     /// the statistical information we have on the number of rows.
-    roundrobin_beneficial_stats: bool,
+    repartition_beneficial_stats: bool,
     /// Designates whether hash partitioning is necessary.
     hash_necessary: bool,
 }
@@ -1104,15 +1104,17 @@ fn get_repartition_requirement_status(
 ) -> Result<Vec<RepartitionRequirementStatus>> {
     let mut needs_alignment = false;
     let children = plan.children();
-    let rr_beneficial = plan.benefits_from_input_partitioning();
+    let is_increased_parallelization_beneficial = plan.benefits_from_input_partitioning();
     let requirements = plan.required_input_distribution();
     let mut repartition_status_flags = vec![];
-    for (child, requirement, roundrobin_beneficial) in
-        izip!(children.into_iter(), requirements, rr_beneficial)
-    {
-        // Decide whether adding a round robin is beneficial depending on
+    for (child, requirement, repartition_beneficial) in izip!(
+        children.into_iter(),
+        requirements,
+        is_increased_parallelization_beneficial
+    ) {
+        // Decide whether adding a repartition is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match child.statistics()?.num_rows {
+        let repartition_beneficial_stats = match child.statistics()?.num_rows {
             Precision::Exact(n_rows) => n_rows > batch_size,
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
             Precision::Absent => true,
@@ -1121,14 +1123,14 @@ fn get_repartition_requirement_status(
         // Hash re-partitioning is necessary when the input has more than one
         // partitions:
         let multi_partitions = child.output_partitioning().partition_count() > 1;
-        let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
-        needs_alignment |= is_hash && (multi_partitions || roundrobin_sensible);
+        let repartition_sensible = repartition_beneficial && repartition_beneficial_stats;
+        needs_alignment |= is_hash && (multi_partitions || repartition_sensible);
         repartition_status_flags.push((
             is_hash,
             RepartitionRequirementStatus {
                 requirement,
-                roundrobin_beneficial,
-                roundrobin_beneficial_stats,
+                repartition_beneficial,
+                repartition_beneficial_stats,
                 hash_necessary: is_hash && multi_partitions,
             },
         ));
@@ -1230,21 +1232,20 @@ pub fn ensure_distribution(
             maintains,
             RepartitionRequirementStatus {
                 requirement,
-                roundrobin_beneficial,
-                roundrobin_beneficial_stats,
+                repartition_beneficial,
+                repartition_beneficial_stats,
                 hash_necessary,
             },
         )| {
-            let add_roundrobin = enable_round_robin
+            let add_repartition = repartition_beneficial
                 // Operator benefits from partitioning (e.g. filter):
-                && roundrobin_beneficial
-                && roundrobin_beneficial_stats
+                && repartition_beneficial_stats
                 // Unless partitioning increases the partition count, it is not beneficial:
                 && child.plan.output_partitioning().partition_count() < target_partitions;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
-            if repartition_file_scans && roundrobin_beneficial_stats {
+            if repartition_file_scans && repartition_beneficial_stats {
                 if let Some(new_child) =
                     child.plan.repartitioned(target_partitions, config)?
                 {
@@ -1258,11 +1259,6 @@ pub fn ensure_distribution(
                     child = add_spm_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
-                    if add_roundrobin {
-                        // Add round-robin repartitioning on top of the operator
-                        // to increase parallelism.
-                        child = add_roundrobin_on_top(child, target_partitions)?;
-                    }
                     // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
                         child =
@@ -1270,7 +1266,7 @@ pub fn ensure_distribution(
                     }
                 }
                 Distribution::UnspecifiedDistribution => {
-                    if add_roundrobin {
+                    if add_repartition && enable_round_robin {
                         // Add round-robin repartitioning on top of the operator
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
