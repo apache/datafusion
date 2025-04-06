@@ -384,7 +384,7 @@ jobs:
         run: ci/scripts/rust_docs.sh
 
   linux-wasm-pack:
-    name: build with wasm-pack
+    name: build and run with wasm-pack
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
