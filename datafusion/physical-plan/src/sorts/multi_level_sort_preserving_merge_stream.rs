@@ -144,21 +144,21 @@ impl MultiLevelSortPreservingMergeStream {
                     )));
                 }
 
-                let mut builder = StreamingMergeBuilder::new()
+                StreamingMergeBuilder::new()
                     .with_schema(Arc::clone(&self.schema))
                     .with_expressions(self.expr.deref())
                     .with_batch_size(self.batch_size)
                     .with_fetch(self.fetch)
+                    .with_metrics(if self.sorted_spill_files.is_empty() {
+                        // Only add the metrics to the last run
+                        self.metrics.clone()
+                    } else {
+                        self.metrics.intermediate()
+                    })
                     .with_round_robin_tie_breaker(self.enable_round_robin_tie_breaker)
                     .with_streams(sorted_streams)
-                    .with_reservation(self.reservation.new_empty());
-
-                // Only add the metrics to the last run
-                if self.sorted_spill_files.is_empty() {
-                    builder = builder.with_metrics(self.metrics.clone())
-                }
-
-                builder.build()
+                    .with_reservation(self.reservation.new_empty())
+                    .build()
             }
         }
     }
