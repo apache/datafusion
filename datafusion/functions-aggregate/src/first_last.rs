@@ -166,6 +166,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        // TODO: extract to function
         use DataType::*;
         matches!(
             args.return_type,
@@ -193,9 +194,9 @@ impl AggregateUDFImpl for FirstValue {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
+        // TODO: extract to function
         fn create_accumulator<T>(
             args: AccumulatorArgs,
-            pick_first_in_group: bool,
         ) -> Result<Box<dyn GroupsAccumulator>>
         where
             T: ArrowPrimitiveType + Send,
@@ -211,74 +212,53 @@ impl AggregateUDFImpl for FirstValue {
                 args.ignore_nulls,
                 args.return_type,
                 &ordering_dtypes,
-                pick_first_in_group,
+                true,
             )?))
         }
 
-        let pick_first_in_group = true;
         match args.return_type {
-            DataType::Int8 => create_accumulator::<Int8Type>(args, pick_first_in_group),
-            DataType::Int16 => create_accumulator::<Int16Type>(args, pick_first_in_group),
-            DataType::Int32 => create_accumulator::<Int32Type>(args, pick_first_in_group),
-            DataType::Int64 => create_accumulator::<Int64Type>(args, pick_first_in_group),
-            DataType::UInt8 => create_accumulator::<UInt8Type>(args, pick_first_in_group),
-            DataType::UInt16 => {
-                create_accumulator::<UInt16Type>(args, pick_first_in_group)
-            }
-            DataType::UInt32 => {
-                create_accumulator::<UInt32Type>(args, pick_first_in_group)
-            }
-            DataType::UInt64 => {
-                create_accumulator::<UInt64Type>(args, pick_first_in_group)
-            }
-            DataType::Float16 => {
-                create_accumulator::<Float16Type>(args, pick_first_in_group)
-            }
-            DataType::Float32 => {
-                create_accumulator::<Float32Type>(args, pick_first_in_group)
-            }
-            DataType::Float64 => {
-                create_accumulator::<Float64Type>(args, pick_first_in_group)
-            }
+            DataType::Int8 => create_accumulator::<Int8Type>(args),
+            DataType::Int16 => create_accumulator::<Int16Type>(args),
+            DataType::Int32 => create_accumulator::<Int32Type>(args),
+            DataType::Int64 => create_accumulator::<Int64Type>(args),
+            DataType::UInt8 => create_accumulator::<UInt8Type>(args),
+            DataType::UInt16 => create_accumulator::<UInt16Type>(args),
+            DataType::UInt32 => create_accumulator::<UInt32Type>(args),
+            DataType::UInt64 => create_accumulator::<UInt64Type>(args),
+            DataType::Float16 => create_accumulator::<Float16Type>(args),
+            DataType::Float32 => create_accumulator::<Float32Type>(args),
+            DataType::Float64 => create_accumulator::<Float64Type>(args),
 
-            DataType::Decimal128(_, _) => {
-                create_accumulator::<Decimal128Type>(args, pick_first_in_group)
-            }
-            DataType::Decimal256(_, _) => {
-                create_accumulator::<Decimal256Type>(args, pick_first_in_group)
-            }
+            DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(args),
+            DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(args),
 
             DataType::Timestamp(TimeUnit::Second, _) => {
-                create_accumulator::<TimestampSecondType>(args, pick_first_in_group)
+                create_accumulator::<TimestampSecondType>(args)
             }
             DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                create_accumulator::<TimestampMillisecondType>(args, pick_first_in_group)
+                create_accumulator::<TimestampMillisecondType>(args)
             }
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                create_accumulator::<TimestampMicrosecondType>(args, pick_first_in_group)
+                create_accumulator::<TimestampMicrosecondType>(args)
             }
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                create_accumulator::<TimestampNanosecondType>(args, pick_first_in_group)
+                create_accumulator::<TimestampNanosecondType>(args)
             }
 
-            DataType::Date32 => {
-                create_accumulator::<Date32Type>(args, pick_first_in_group)
-            }
-            DataType::Date64 => {
-                create_accumulator::<Date64Type>(args, pick_first_in_group)
-            }
+            DataType::Date32 => create_accumulator::<Date32Type>(args),
+            DataType::Date64 => create_accumulator::<Date64Type>(args),
             DataType::Time32(TimeUnit::Second) => {
-                create_accumulator::<Time32SecondType>(args, pick_first_in_group)
+                create_accumulator::<Time32SecondType>(args)
             }
             DataType::Time32(TimeUnit::Millisecond) => {
-                create_accumulator::<Time32MillisecondType>(args, pick_first_in_group)
+                create_accumulator::<Time32MillisecondType>(args)
             }
 
             DataType::Time64(TimeUnit::Microsecond) => {
-                create_accumulator::<Time64MicrosecondType>(args, pick_first_in_group)
+                create_accumulator::<Time64MicrosecondType>(args)
             }
             DataType::Time64(TimeUnit::Nanosecond) => {
-                create_accumulator::<Time64NanosecondType>(args, pick_first_in_group)
+                create_accumulator::<Time64NanosecondType>(args)
             }
 
             _ => {
@@ -1124,7 +1104,6 @@ impl AggregateUDFImpl for LastValue {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         fn create_accumulator<T>(
             args: AccumulatorArgs,
-            pick_first_in_group: bool,
         ) -> Result<Box<dyn GroupsAccumulator>>
         where
             T: ArrowPrimitiveType + Send,
@@ -1140,74 +1119,53 @@ impl AggregateUDFImpl for LastValue {
                 args.ignore_nulls,
                 args.return_type,
                 &ordering_dtypes,
-                pick_first_in_group,
+                false,
             )?))
         }
 
-        let pick_first_in_group = false;
         match args.return_type {
-            DataType::Int8 => create_accumulator::<Int8Type>(args, pick_first_in_group),
-            DataType::Int16 => create_accumulator::<Int16Type>(args, pick_first_in_group),
-            DataType::Int32 => create_accumulator::<Int32Type>(args, pick_first_in_group),
-            DataType::Int64 => create_accumulator::<Int64Type>(args, pick_first_in_group),
-            DataType::UInt8 => create_accumulator::<UInt8Type>(args, pick_first_in_group),
-            DataType::UInt16 => {
-                create_accumulator::<UInt16Type>(args, pick_first_in_group)
-            }
-            DataType::UInt32 => {
-                create_accumulator::<UInt32Type>(args, pick_first_in_group)
-            }
-            DataType::UInt64 => {
-                create_accumulator::<UInt64Type>(args, pick_first_in_group)
-            }
-            DataType::Float16 => {
-                create_accumulator::<Float16Type>(args, pick_first_in_group)
-            }
-            DataType::Float32 => {
-                create_accumulator::<Float32Type>(args, pick_first_in_group)
-            }
-            DataType::Float64 => {
-                create_accumulator::<Float64Type>(args, pick_first_in_group)
-            }
+            DataType::Int8 => create_accumulator::<Int8Type>(args),
+            DataType::Int16 => create_accumulator::<Int16Type>(args),
+            DataType::Int32 => create_accumulator::<Int32Type>(args),
+            DataType::Int64 => create_accumulator::<Int64Type>(args),
+            DataType::UInt8 => create_accumulator::<UInt8Type>(args),
+            DataType::UInt16 => create_accumulator::<UInt16Type>(args),
+            DataType::UInt32 => create_accumulator::<UInt32Type>(args),
+            DataType::UInt64 => create_accumulator::<UInt64Type>(args),
+            DataType::Float16 => create_accumulator::<Float16Type>(args),
+            DataType::Float32 => create_accumulator::<Float32Type>(args),
+            DataType::Float64 => create_accumulator::<Float64Type>(args),
 
-            DataType::Decimal128(_, _) => {
-                create_accumulator::<Decimal128Type>(args, pick_first_in_group)
-            }
-            DataType::Decimal256(_, _) => {
-                create_accumulator::<Decimal256Type>(args, pick_first_in_group)
-            }
+            DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(args),
+            DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(args),
 
             DataType::Timestamp(TimeUnit::Second, _) => {
-                create_accumulator::<TimestampSecondType>(args, pick_first_in_group)
+                create_accumulator::<TimestampSecondType>(args)
             }
             DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                create_accumulator::<TimestampMillisecondType>(args, pick_first_in_group)
+                create_accumulator::<TimestampMillisecondType>(args)
             }
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                create_accumulator::<TimestampMicrosecondType>(args, pick_first_in_group)
+                create_accumulator::<TimestampMicrosecondType>(args)
             }
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                create_accumulator::<TimestampNanosecondType>(args, pick_first_in_group)
+                create_accumulator::<TimestampNanosecondType>(args)
             }
 
-            DataType::Date32 => {
-                create_accumulator::<Date32Type>(args, pick_first_in_group)
-            }
-            DataType::Date64 => {
-                create_accumulator::<Date64Type>(args, pick_first_in_group)
-            }
+            DataType::Date32 => create_accumulator::<Date32Type>(args),
+            DataType::Date64 => create_accumulator::<Date64Type>(args),
             DataType::Time32(TimeUnit::Second) => {
-                create_accumulator::<Time32SecondType>(args, pick_first_in_group)
+                create_accumulator::<Time32SecondType>(args)
             }
             DataType::Time32(TimeUnit::Millisecond) => {
-                create_accumulator::<Time32MillisecondType>(args, pick_first_in_group)
+                create_accumulator::<Time32MillisecondType>(args)
             }
 
             DataType::Time64(TimeUnit::Microsecond) => {
-                create_accumulator::<Time64MicrosecondType>(args, pick_first_in_group)
+                create_accumulator::<Time64MicrosecondType>(args)
             }
             DataType::Time64(TimeUnit::Nanosecond) => {
-                create_accumulator::<Time64NanosecondType>(args, pick_first_in_group)
+                create_accumulator::<Time64NanosecondType>(args)
             }
 
             _ => {
