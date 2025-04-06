@@ -58,7 +58,7 @@ impl std::fmt::Display for PrintFormat {
             PrintFormat::NdJson => "ndjson",
             PrintFormat::Automatic => "automatic",
         };
-        write!(f,"{vstr}")
+        write!(f, "{vstr}")
     }
 }
 

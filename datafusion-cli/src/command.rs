@@ -73,15 +73,31 @@ impl Command {
                 let command_batch = all_commands_info();
                 let schema = command_batch.schema();
                 let num_rows = command_batch.num_rows();
-                let with_table_format = PrintOptions{format: PrintFormat::Table, quiet: true, ..print_options.clone()};
-                with_table_format.print_batches(&mut writer, schema, &[command_batch], now, num_rows)
+                let with_table_format = PrintOptions {
+                    format: PrintFormat::Table,
+                    quiet: true,
+                    ..print_options.clone()
+                };
+                with_table_format.print_batches(
+                    &mut writer,
+                    schema,
+                    &[command_batch],
+                    now,
+                    num_rows,
+                )
             }
             Self::ListTables => {
-                exec_and_print(ctx, &mut writer, print_options, "SHOW TABLES".into()).await
+                exec_and_print(ctx, &mut writer, print_options, "SHOW TABLES".into())
+                    .await
             }
             Self::DescribeTableStmt(name) => {
-                exec_and_print(ctx, &mut writer, print_options, format!("SHOW COLUMNS FROM {}", name))
-                    .await
+                exec_and_print(
+                    ctx,
+                    &mut writer,
+                    print_options,
+                    format!("SHOW COLUMNS FROM {}", name),
+                )
+                .await
             }
             Self::Include(filename) => {
                 if let Some(filename) = filename {
@@ -124,9 +140,7 @@ impl Command {
                     exec_err!("{function} is not a supported function")
                 }
             }
-            Self::Pset(_) => exec_err!(
-                "Unexpected pset, this should be handled outside"
-            ),
+            Self::Pset(_) => exec_err!("Unexpected pset, this should be handled outside"),
         }
     }
 
@@ -136,7 +150,9 @@ impl Command {
             Self::ListTables => ("\\d", "list tables"),
             Self::DescribeTableStmt(_) => ("\\d name", "describe table"),
             Self::Help => ("\\?", "help"),
-            Self::Include(_) => ("\\i filename", "reads input from the specified filename"),
+            Self::Include(_) => {
+                ("\\i filename", "reads input from the specified filename")
+            }
             Self::ListFunctions => ("\\h", "function list"),
             Self::SearchFunctions(_) => ("\\h function", "search function"),
             Self::QuietMode(_) => ("\\quiet (true|false)?", "print or set quiet mode"),

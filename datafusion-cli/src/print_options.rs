@@ -98,9 +98,9 @@ fn get_execution_details_formatted(
 
 impl PrintOptions {
     /// Print the batches to the writer using the specified format
-    pub fn print_batches<W : std::io::Write>(
+    pub fn print_batches<W: std::io::Write>(
         &self,
-        writer : &mut W,
+        writer: &mut W,
         schema: SchemaRef,
         batches: &[RecordBatch],
         query_start_time: Instant,
@@ -177,7 +177,11 @@ impl std::fmt::Display for PrintOptions {
         writeln!(f, "quiet: {}", self.quiet)?;
         writeln!(f, "maxrows: {}", self.maxrows)?;
         writeln!(f, "color: {}", self.color)?;
-        writeln!(f, "pager: {}", self.pager.as_ref().unwrap_or(&"none".into()))?;
+        writeln!(
+            f,
+            "pager: {}",
+            self.pager.as_ref().unwrap_or(&"none".into())
+        )?;
         Ok(())
-   }
+    }
 }

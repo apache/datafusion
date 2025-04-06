@@ -169,7 +169,8 @@ pub async fn exec_from_repl(
             Ok(line) => {
                 let lines = split_from_semicolon(&line);
                 for line in lines {
-                    type DisplayChild = (Box<dyn std::io::Write>, Option<std::process::Child>);
+                    type DisplayChild =
+                        (Box<dyn std::io::Write>, Option<std::process::Child>);
                     let (mut writer, maybe_child) : DisplayChild =
                     // There must be a better way to do this SELECT comparison
                     // Really, the test should be on the size of the statement output, but there's no access to that here.
@@ -233,9 +234,9 @@ pub async fn exec_from_repl(
     rl.save_history(".history")
 }
 
-pub(super) async fn exec_and_print<W : std::io::Write>(
+pub(super) async fn exec_and_print<W: std::io::Write>(
     ctx: &dyn CliSessionContext,
-    writer : &mut W,
+    writer: &mut W,
     print_options: &PrintOptions,
     sql: String,
 ) -> Result<()> {
