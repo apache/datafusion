@@ -1033,7 +1033,9 @@ impl SortExec {
         preserve_partitioning: bool,
     ) -> PlanProperties {
         // Determine execution mode:
-        let sort_satisfied = input.equivalence_properties().ordering_satisfy(&sort_exprs);
+        let sort_satisfied = input
+            .equivalence_properties()
+            .ordering_satisfy(sort_exprs.clone());
 
         // The emission type depends on whether the input is already sorted:
         // - If already sorted, we can emit results in the same way as the input
@@ -1163,7 +1165,7 @@ impl ExecutionPlan for SortExec {
         let sort_satisfied = self
             .input
             .equivalence_properties()
-            .ordering_satisfy(&self.expr);
+            .ordering_satisfy(self.expr.clone());
 
         match (sort_satisfied, self.fetch.as_ref()) {
             (true, Some(fetch)) => Ok(Box::pin(LimitStream::new(

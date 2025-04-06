@@ -1100,42 +1100,46 @@ pub fn get_finer_aggregate_exprs_requirement(
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
 ) -> Result<Vec<PhysicalSortRequirement>> {
-    let mut requirement = None;
+    let mut requirement: Option<LexOrdering> = None;
     for aggr_expr in aggr_exprs.iter_mut() {
         let Some(aggr_req) = get_aggregate_expr_req(aggr_expr, group_by, agg_mode) else {
             continue;
         };
-        let mut finer = if let Some(req) = requirement.as_ref() {
-            eq_properties.get_finer_ordering(req, &aggr_req)
+        let mut finer = if let Some(req) = requirement.take() {
+            eq_properties.get_finer_ordering(req, aggr_req)
         } else {
-            eq_properties.normalize_sort_exprs(&aggr_req)
+            eq_properties.normalize_sort_exprs(aggr_req)
         };
-        if let Some(finer_ordering) =
-            finer.take_if(|o| eq_properties.ordering_satisfy(o.as_ref()))
-        {
+        if let Some(finer_ordering) = finer.take() {
             // Requirement is satisfied by the existing ordering:
-            requirement = Some(finer_ordering);
-            continue;
+            if eq_properties.ordering_satisfy(finer_ordering.clone()) {
+                requirement = Some(finer_ordering);
+                continue;
+            }
+            let _ = finer.insert(finer_ordering);
         }
         let mut finer_rev = None;
         let mut rev_expr = aggr_expr.reverse_expr();
         if let Some(reverse_aggr_expr) = rev_expr.take() {
-            let Some(aggr_req) = get_aggregate_expr_req(&reverse_aggr_expr, group_by, agg_mode) else {
-                continue;
+            let Some(aggr_req) =
+                get_aggregate_expr_req(&reverse_aggr_expr, group_by, agg_mode)
+            else {
+                unreachable!("Reverse aggregate expressions have ordering requirements if forward ones do");
             };
-            finer_rev = if let Some(req) = requirement.as_ref() {
-                eq_properties.get_finer_ordering(req, &aggr_req)
+            finer_rev = if let Some(req) = requirement.take() {
+                eq_properties.get_finer_ordering(req, aggr_req)
             } else {
-                eq_properties.normalize_sort_exprs(&aggr_req)
+                eq_properties.normalize_sort_exprs(aggr_req)
             };
-            if let Some(finer_ordering) =
-                finer_rev.take_if(|o| eq_properties.ordering_satisfy(o.as_ref()))
-            {
+            if let Some(finer_ordering) = finer_rev.take() {
                 // Reverse requirement is satisfied by the existing ordering.
                 // Hence, we need to reverse the aggregate expression:
-                requirement = Some(finer_ordering);
-                *aggr_expr = Arc::new(reverse_aggr_expr);
-                continue;
+                if eq_properties.ordering_satisfy(finer_ordering.clone()) {
+                    requirement = Some(finer_ordering);
+                    *aggr_expr = Arc::new(reverse_aggr_expr);
+                    continue;
+                }
+                let _ = finer_rev.insert(finer_ordering);
             }
             let _ = rev_expr.insert(reverse_aggr_expr);
         }

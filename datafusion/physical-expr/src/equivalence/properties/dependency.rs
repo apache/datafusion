@@ -1198,7 +1198,7 @@ mod tests {
                     .collect::<Result<LexOrdering>>()?;
 
                 assert_eq!(
-                    properties.ordering_satisfy(&sort),
+                    properties.ordering_satisfy(sort),
                     case.should_satisfy_ordering,
                     "failed test '{}'",
                     case.name
@@ -1768,13 +1768,12 @@ mod tests {
                 .collect();
 
             // Test that orderings are not satisfied before adding constraints
-            for ordering in &satisfied_orderings {
-                assert!(
-                    !eq_properties.ordering_satisfy(ordering),
+            for ordering in satisfied_orderings.clone() {
+                let err_msg = format!(
                     "{}: ordering {:?} should not be satisfied before adding constraints",
-                    name,
-                    ordering
+                    name, ordering
                 );
+                assert!(!eq_properties.ordering_satisfy(ordering), "{err_msg}");
             }
 
             // Add base ordering
@@ -1789,23 +1788,21 @@ mod tests {
                 eq_properties.with_constraints(Constraints::new_unverified(constraints));
 
             // Test that expected orderings are now satisfied
-            for ordering in &satisfied_orderings {
-                assert!(
-                    eq_properties.ordering_satisfy(ordering),
+            for ordering in satisfied_orderings {
+                let err_msg = format!(
                     "{}: ordering {:?} should be satisfied after adding constraints",
-                    name,
-                    ordering
+                    name, ordering
                 );
+                assert!(eq_properties.ordering_satisfy(ordering), "{err_msg}");
             }
 
             // Test that unsatisfied orderings remain unsatisfied
-            for ordering in &unsatisfied_orderings {
-                assert!(
-                    !eq_properties.ordering_satisfy(ordering),
+            for ordering in unsatisfied_orderings {
+                let err_msg = format!(
                     "{}: ordering {:?} should not be satisfied after adding constraints",
-                    name,
-                    ordering
+                    name, ordering
                 );
+                assert!(!eq_properties.ordering_satisfy(ordering), "{err_msg}");
             }
         }
 

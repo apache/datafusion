@@ -225,6 +225,7 @@ impl EquivalenceProperties {
         OrderingEquivalenceClass::new(
             self.oeq_class
                 .iter()
+                .cloned()
                 .filter_map(|ordering| self.normalize_sort_exprs(ordering))
                 .collect(),
         )
@@ -474,15 +475,15 @@ impl EquivalenceProperties {
     /// table). If `sort_exprs` were `[b ASC, c ASC, a ASC]`, then this function
     /// would return `[a ASC, c ASC]`. Internally, it would first normalize to
     /// `[a ASC, c ASC, a ASC]` and end up with the final result after deduplication.
-    pub fn normalize_sort_exprs<'a>(
+    pub fn normalize_sort_exprs(
         &self,
-        sort_exprs: impl IntoIterator<Item = &'a PhysicalSortExpr>,
+        sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> Option<LexOrdering> {
         let normalized_constants = self.normalized_constant_exprs();
         // Prune redundant sections in the ordering:
         let sort_exprs = sort_exprs
             .into_iter()
-            .map(|sort_expr| self.eq_group.normalize_sort_expr(sort_expr.clone()))
+            .map(|sort_expr| self.eq_group.normalize_sort_expr(sort_expr))
             .filter(|order| !physical_exprs_contains(&normalized_constants, &order.expr))
             .collect::<Vec<_>>();
         (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs).collapse())
@@ -518,9 +519,9 @@ impl EquivalenceProperties {
 
     /// Checks whether the given ordering is satisfied by any of the existing
     /// orderings.
-    pub fn ordering_satisfy<'a>(
+    pub fn ordering_satisfy(
         &self,
-        given: impl IntoIterator<Item = &'a PhysicalSortExpr>,
+        given: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> bool {
         // First, standardize the given ordering:
         let Some(normalized_ordering) = self.normalize_sort_exprs(given) else {
@@ -768,8 +769,8 @@ impl EquivalenceProperties {
     /// the latter.
     pub fn get_finer_ordering(
         &self,
-        lhs: &LexOrdering,
-        rhs: &LexOrdering,
+        lhs: LexOrdering,
+        rhs: LexOrdering,
     ) -> Option<LexOrdering> {
         let Some(mut rhs) = self.normalize_sort_exprs(rhs) else {
             return self.normalize_sort_exprs(lhs);

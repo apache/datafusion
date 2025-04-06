@@ -188,7 +188,7 @@ impl UnionEquivalentOrderingBuilder {
         constants: &[ConstExpr],
         properties: &EquivalenceProperties,
     ) -> AddedOrdering {
-        if properties.ordering_satisfy(&ordering) {
+        if properties.ordering_satisfy(ordering.clone()) {
             // If the ordering satisfies the target properties, no need to
             // augment it with constants.
             self.orderings.push(ordering);
@@ -221,7 +221,6 @@ impl UnionEquivalentOrderingBuilder {
                     existing_ordering,
                     &properties.constants,
                 ) {
-                    debug_assert!(properties.ordering_satisfy(&augmented_ordering));
                     self.orderings.push(augmented_ordering);
                     result = true;
                 }

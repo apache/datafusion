@@ -373,7 +373,9 @@ pub(crate) fn window_equivalence_properties(
             .iter()
             .map(|pb_order| sort_options_resolving_constant(Arc::clone(pb_order)))
             .multi_cartesian_product()
-            .filter(|lex| !lex.is_empty() && window_eq_properties.ordering_satisfy(lex))
+            .filter(|lex| {
+                !lex.is_empty() && window_eq_properties.ordering_satisfy(lex.clone())
+            })
             .map(LexOrdering::new)
             .collect::<Vec<_>>();
         // If there is a partitioning, and no possible ordering cannot satisfy
@@ -469,7 +471,7 @@ pub(crate) fn window_equivalence_properties(
                         if let Some(f) = order.first() {
                             asc = !f.options.descending;
                         }
-                        window_eq_properties.ordering_satisfy(&order)
+                        window_eq_properties.ordering_satisfy(order)
                     }) {
                         let increasing =
                             set_monotonicity.eq(&SetMonotonicity::Increasing);

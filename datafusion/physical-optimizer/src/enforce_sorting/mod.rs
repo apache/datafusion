@@ -554,7 +554,7 @@ fn analyze_immediate_sort_removal(
         .is_none_or(|ordering| {
             sort_input
                 .equivalence_properties()
-                .ordering_satisfy(ordering)
+                .ordering_satisfy(ordering.clone())
         })
     {
         return Transformed::no(node);

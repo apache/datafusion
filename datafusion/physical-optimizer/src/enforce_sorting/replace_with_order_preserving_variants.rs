@@ -267,7 +267,7 @@ pub fn replace_with_order_preserving_variants(
         alternate_plan
             .plan
             .equivalence_properties()
-            .ordering_satisfy(ordering)
+            .ordering_satisfy(ordering.clone())
     }) {
         for child in alternate_plan.children.iter_mut() {
             child.data = false;
