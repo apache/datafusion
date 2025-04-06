@@ -771,6 +771,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// [`FilterExec`]: crate::filter::FilterExec
     /// [`ProjectionExec`]: crate::projection::ProjectionExec
+    /// [`AggregateExec`]: crate::aggregates::AggregateExec
     fn try_pushdown_filters(
         &self,
         plan: &Arc<dyn ExecutionPlan>,
