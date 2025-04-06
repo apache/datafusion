@@ -32,6 +32,7 @@ use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode, SharedBitmapBuilder,
 };
+use super::{JoinOn, JoinOnRef};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
@@ -50,8 +51,7 @@ use crate::{
         build_batch_from_indices, build_join_schema, check_join_is_valid,
         estimate_join_statistics, need_produce_result_in_final,
         symmetric_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
-        JoinFilter, JoinHashMap, JoinHashMapType, JoinOn, JoinOnRef,
-        StatefulStreamResult,
+        JoinFilter, JoinHashMap, JoinHashMapType, StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
