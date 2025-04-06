@@ -33,7 +33,7 @@ use datafusion_common::ScalarValue::TimestampNanosecond;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_char;
 
-fn random_date_in_range(
+fn pick_date_in_range(
     rng: &mut ThreadRng,
     start_date: NaiveDate,
     end_date: NaiveDate,
@@ -43,7 +43,7 @@ fn random_date_in_range(
     start_date + TimeDelta::try_days(random_days).unwrap()
 }
 
-fn data(rng: &mut ThreadRng) -> Date32Array {
+fn generate_date32_array(rng: &mut ThreadRng) -> Date32Array {
     let mut data: Vec<i32> = vec![];
     let unix_days_from_ce = NaiveDate::from_ymd_opt(1970, 1, 1)
         .unwrap()
@@ -56,7 +56,7 @@ fn data(rng: &mut ThreadRng) -> Date32Array {
         .expect("Date should parse");
     for _ in 0..1000 {
         data.push(
-            random_date_in_range(rng, start_date, end_date).num_days_from_ce()
+            pick_date_in_range(rng, start_date, end_date).num_days_from_ce()
                 - unix_days_from_ce,
         );
     }
@@ -64,68 +64,73 @@ fn data(rng: &mut ThreadRng) -> Date32Array {
     Date32Array::from(data)
 }
 
-fn patterns(rng: &mut ThreadRng) -> StringArray {
-    let samples = [
-        "%Y:%m:%d".to_string(),
-        "%d-%m-%Y".to_string(),
-        "%d%m%Y".to_string(),
-        "%Y%m%d".to_string(),
-        "%Y...%m...%d".to_string(),
-    ];
-    let mut data: Vec<String> = vec![];
+const DATE_PATTERNS: [&str; 5] =
+    ["%Y:%m:%d", "%d-%m-%Y", "%d%m%Y", "%Y%m%d", "%Y...%m...%d"];
+
+const DATETIME_PATTERNS: [&str; 8] = [
+    "%Y:%m:%d %H:%M%S",
+    "%Y:%m:%d %_H:%M%S",
+    "%Y:%m:%d %k:%M%S",
+    "%d-%m-%Y %I%P-%M-%S %f",
+    "%d%m%Y %H",
+    "%Y%m%d %M-%S %.3f",
+    "%Y...%m...%d %T%3f",
+    "%c",
+];
+
+fn pick_date_pattern(rng: &mut ThreadRng) -> String {
+    DATE_PATTERNS
+        .choose(rng)
+        .expect("Empty list of date patterns")
+        .to_string()
+}
+
+fn pick_date_time_pattern(rng: &mut ThreadRng) -> String {
+    DATETIME_PATTERNS
+        .choose(rng)
+        .expect("Empty list of date time patterns")
+        .to_string()
+}
+
+fn pick_date_and_date_time_mixed_pattern(rng: &mut ThreadRng) -> String {
+    match rng.gen_bool(0.5) {
+        true => pick_date_pattern(rng),
+        false => pick_date_time_pattern(rng),
+    }
+}
+
+fn generate_pattern_array(
+    rng: &mut ThreadRng,
+    pick_fn: impl Fn(&mut ThreadRng) -> String,
+) -> StringArray {
+    let mut data = Vec::with_capacity(1000);
+
     for _ in 0..1000 {
-        data.push(samples.choose(rng).unwrap().to_string());
+        data.push(pick_fn(rng));
     }
 
     StringArray::from(data)
 }
 
-fn patterns_with_time_specifiers(rng: &mut ThreadRng) -> StringArray {
-    let samples = [
-        "%Y:%m:%d %H:%M%S".to_string(),
-        "%Y:%m:%d %_H:%M%S".to_string(),
-        "%Y:%m:%d %k:%M%S".to_string(),
-        "%d-%m-%Y %I%P-%M-%S %f".to_string(),
-        "%d%m%Y %H".to_string(),
-        "%Y%m%d %M-%S %.3f".to_string(),
-        "%Y...%m...%d %T%3f".to_string(),
-        "%c".to_string(),
-    ];
-    let mut data: Vec<String> = vec![];
-    for _ in 0..1000 {
-        data.push(samples.choose(rng).unwrap().to_string());
-    }
+fn generate_date_pattern_array(rng: &mut ThreadRng) -> StringArray {
+    generate_pattern_array(rng, pick_date_pattern)
+}
 
-    StringArray::from(data)
+fn generate_datetime_pattern_array(rng: &mut ThreadRng) -> StringArray {
+    generate_pattern_array(rng, pick_date_time_pattern)
+}
+
+fn generate_mixed_pattern_array(rng: &mut ThreadRng) -> StringArray {
+    generate_pattern_array(rng, pick_date_and_date_time_mixed_pattern)
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("to_char_array_array_date_only_patterns_1000", |b| {
+    c.bench_function("to_char_array_date_only_patterns_1000", |b| {
         let mut rng = rand::thread_rng();
-        let data_arr = data(&mut rng);
+        let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
-        let patterns = ColumnarValue::Array(Arc::new(patterns(&mut rng)) as ArrayRef);
-
-        b.iter(|| {
-            black_box(
-                to_char()
-                    .invoke_with_args(ScalarFunctionArgs {
-                        args: vec![data.clone(), patterns.clone()],
-                        number_rows: batch_len,
-                        return_type: &DataType::Utf8,
-                    })
-                    .expect("to_char should work on valid values"),
-            )
-        })
-    });
-
-    c.bench_function("to_char_array_array_datetime_patterns_1000", |b| {
-        let mut rng = rand::thread_rng();
-        let data_arr = data(&mut rng);
-        let batch_len = data_arr.len();
-        let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
-        let patterns = ColumnarValue::Array(Arc::new(patterns_with_time_specifiers(
+        let patterns = ColumnarValue::Array(Arc::new(generate_date_pattern_array(
             &mut rng,
         )) as ArrayRef);
 
@@ -142,13 +147,57 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("to_char_array_scalar_date_only_pattern_1000", |b| {
+    c.bench_function("to_char_array_datetime_patterns_1000", |b| {
         let mut rng = rand::thread_rng();
-        let data_arr = data(&mut rng);
+        let data_arr = generate_date32_array(&mut rng);
+        let batch_len = data_arr.len();
+        let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
+        let patterns = ColumnarValue::Array(Arc::new(generate_datetime_pattern_array(
+            &mut rng,
+        )) as ArrayRef);
+
+        b.iter(|| {
+            black_box(
+                to_char()
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), patterns.clone()],
+                        number_rows: batch_len,
+                        return_type: &DataType::Utf8,
+                    })
+                    .expect("to_char should work on valid values"),
+            )
+        })
+    });
+
+    c.bench_function("to_char_array_mixed_patterns_1000", |b| {
+        let mut rng = rand::thread_rng();
+        let data_arr = generate_date32_array(&mut rng);
+        let batch_len = data_arr.len();
+        let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
+        let patterns = ColumnarValue::Array(Arc::new(generate_mixed_pattern_array(
+            &mut rng,
+        )) as ArrayRef);
+
+        b.iter(|| {
+            black_box(
+                to_char()
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), patterns.clone()],
+                        number_rows: batch_len,
+                        return_type: &DataType::Utf8,
+                    })
+                    .expect("to_char should work on valid values"),
+            )
+        })
+    });
+
+    c.bench_function("to_char_scalar_date_only_pattern_1000", |b| {
+        let mut rng = rand::thread_rng();
+        let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
         let patterns =
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".to_string())));
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(pick_date_pattern(&mut rng))));
 
         b.iter(|| {
             black_box(
@@ -163,12 +212,14 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("to_char_array_scalar_datetime_pattern_1000", |b| {
+    c.bench_function("to_char_scalar_datetime_pattern_1000", |b| {
         let mut rng = rand::thread_rng();
-        let data_arr = data(&mut rng);
+        let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
-        let patterns = ColumnarValue::Scalar(ScalarValue::Utf8(Some("%c".to_string())));
+        let patterns = ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            pick_date_time_pattern(&mut rng),
+        )));
 
         b.iter(|| {
             black_box(
@@ -183,7 +234,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("to_char_scalar_scalar_1000", |b| {
+    c.bench_function("to_char_scalar_1000", |b| {
+        let mut rng = rand::thread_rng();
         let timestamp = "2026-07-08T09:10:11"
             .parse::<NaiveDateTime>()
             .unwrap()
@@ -193,9 +245,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             .timestamp_nanos_opt()
             .unwrap();
         let data = ColumnarValue::Scalar(TimestampNanosecond(Some(timestamp), None));
-        let pattern = ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-            "%d-%m-%Y %H:%M:%S".to_string(),
-        )));
+        let pattern =
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(pick_date_pattern(&mut rng))));
 
         b.iter(|| {
             black_box(
