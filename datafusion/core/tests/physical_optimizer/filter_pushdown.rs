@@ -285,12 +285,20 @@ fn test_push_down_through_transparent_nodes() {
 
 #[test]
 fn test_no_pushdown_through_aggregates() {
-    // expect the predicate to be pushed down into the DataSource
+    // There are 2 important points here:
+    // 1. The outer filter is not pushed down into the aggregate because we haven't
+    //    implemented that yet.
+    // 2. The inner filter **is** pushed down into the DataSource.
     let scan = test_scan(FilterPushdownSupport::Exact);
+    let filter = Arc::new(FilterExec::try_new(
+        col_lit_predicate("a", "foo", schema()),
+        scan.clone(),
+    )
+    .unwrap());
     let aggregate_expr =
         vec![
             AggregateExprBuilder::new(count_udaf(), vec![col("a", schema()).unwrap()])
-                .schema(Arc::clone(&schema()))
+                .schema(Arc::clone(schema()))
                 .alias("cnt")
                 .build()
                 .map(Arc::new)
@@ -306,7 +314,7 @@ fn test_no_pushdown_through_aggregates() {
             group_by,
             aggregate_expr.clone(),
             vec![None],
-            scan,
+            filter,
             Arc::clone(schema()),
         )
         .unwrap(),
@@ -321,13 +329,14 @@ fn test_no_pushdown_through_aggregates() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
-        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
-        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([0])
+        -     FilterExec: a@0 = foo
+        -       DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
       output:
         Ok:
           - FilterExec: a@0 = foo
           -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
-          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=true
+          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
     "
     );
 }
