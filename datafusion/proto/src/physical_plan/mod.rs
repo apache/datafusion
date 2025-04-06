@@ -115,6 +115,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         })
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn try_into_physical_plan(
         &self,
         registry: &dyn FunctionRegistry,
@@ -1192,6 +1193,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         }
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn try_from_physical_plan(
         plan: Arc<dyn ExecutionPlan>,
         extension_codec: &dyn PhysicalExtensionCodec,
