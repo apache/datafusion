@@ -58,7 +58,6 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -1034,10 +1033,7 @@ impl SortExec {
         preserve_partitioning: bool,
     ) -> PlanProperties {
         // Determine execution mode:
-        let requirement = LexRequirement::from(sort_exprs);
-        let sort_satisfied = input
-            .equivalence_properties()
-            .ordering_satisfy_requirement(&requirement);
+        let sort_satisfied = input.equivalence_properties().ordering_satisfy(&sort_exprs);
 
         // The emission type depends on whether the input is already sorted:
         // - If already sorted, we can emit results in the same way as the input
@@ -1066,7 +1062,6 @@ impl SortExec {
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
         // class with the new ordering:
-        let sort_exprs = LexOrdering::from(requirement);
         let eq_properties = input
             .equivalence_properties()
             .clone()
@@ -1168,7 +1163,7 @@ impl ExecutionPlan for SortExec {
         let sort_satisfied = self
             .input
             .equivalence_properties()
-            .ordering_satisfy_requirement(&LexRequirement::from(self.expr.clone()));
+            .ordering_satisfy(&self.expr);
 
         match (sort_satisfied, self.fetch.as_ref()) {
             (true, Some(fetch)) => Ok(Box::pin(LimitStream::new(
