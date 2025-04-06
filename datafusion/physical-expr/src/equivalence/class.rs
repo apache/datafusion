@@ -488,44 +488,6 @@ impl EquivalenceGroup {
         sort_requirement
     }
 
-    /// This function applies the `normalize_expr` function for all expressions
-    /// in `exprs` and returns the corresponding normalized physical expressions.
-    pub fn normalize_exprs(
-        &self,
-        exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
-    ) -> Vec<Arc<dyn PhysicalExpr>> {
-        exprs
-            .into_iter()
-            .map(|expr| self.normalize_expr(expr))
-            .collect()
-    }
-
-    /// This function applies the `normalize_sort_expr` function for all sort
-    /// expressions in `sort_exprs` and returns the corresponding normalized
-    /// sort expressions.
-    pub fn normalize_sort_exprs<'a>(
-        &self,
-        sort_exprs: impl IntoIterator<Item = &'a PhysicalSortExpr>,
-    ) -> Vec<PhysicalSortExpr> {
-        sort_exprs
-            .into_iter()
-            .map(|sort_expr| self.normalize_sort_expr(sort_expr.clone()))
-            .collect()
-    }
-
-    /// This function applies the `normalize_sort_requirement` function for all
-    /// requirements in `sort_reqs` and returns the corresponding normalized
-    /// sort requirements.
-    pub fn normalize_sort_requirements<'a>(
-        &self,
-        sort_reqs: impl IntoIterator<Item = &'a PhysicalSortRequirement>,
-    ) -> Vec<PhysicalSortRequirement> {
-        sort_reqs
-            .into_iter()
-            .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
-            .collect()
-    }
-
     /// Projects `expr` according to the given projection mapping.
     /// If the resulting expression is invalid after projection, returns `None`.
     pub fn project_expr(

@@ -474,16 +474,15 @@ impl EquivalenceProperties {
         &self,
         sort_exprs: impl IntoIterator<Item = &'a PhysicalSortExpr>,
     ) -> Option<LexOrdering> {
-        let constant_exprs = self
+        let normalized_constants = self
             .constants
             .iter()
-            .map(|const_expr| Arc::clone(const_expr.expr()));
-        let normalized_constants = self.eq_group.normalize_exprs(constant_exprs);
+            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
+            .collect::<Vec<_>>();
         // Prune redundant sections in the ordering:
-        let sort_exprs = self
-            .eq_group
-            .normalize_sort_exprs(sort_exprs)
+        let sort_exprs = sort_exprs
             .into_iter()
+            .map(|sort_expr| self.eq_group.normalize_sort_expr(sort_expr.clone()))
             .filter(|order| !physical_exprs_contains(&normalized_constants, &order.expr))
             .collect::<Vec<_>>();
         (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs).collapse())
@@ -506,16 +505,15 @@ impl EquivalenceProperties {
         &self,
         sort_reqs: impl IntoIterator<Item = &'a PhysicalSortRequirement>,
     ) -> Option<LexRequirement> {
-        let constant_exprs = self
+        let normalized_constants = self
             .constants
             .iter()
-            .map(|const_expr| Arc::clone(const_expr.expr()));
-        let normalized_constants = self.eq_group.normalize_exprs(constant_exprs);
+            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
+            .collect::<Vec<_>>();
         // Prune redundant sections in the requirement:
-        let reqs = self
-            .eq_group
-            .normalize_sort_requirements(sort_reqs)
+        let reqs = sort_reqs
             .into_iter()
+            .map(|req| self.eq_group.normalize_sort_requirement(req.clone()))
             .filter(|order| !physical_exprs_contains(&normalized_constants, &order.expr))
             .collect::<Vec<_>>();
         (!reqs.is_empty()).then(|| LexRequirement::new(reqs).collapse())
@@ -1286,36 +1284,13 @@ impl EquivalenceProperties {
         // As an example, assume that we know columns `a` and `b` are constant.
         // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
         // return `false`.
-        let const_exprs = self
+        let normalized_constants = self
             .constants
             .iter()
-            .map(|const_expr| Arc::clone(const_expr.expr()));
-        let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
+            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
+            .collect::<Vec<_>>();
         let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
         is_constant_recurse(&normalized_constants, &normalized_expr)
-    }
-
-    /// This function determines whether the provided expression is constant
-    /// across partitions based on the known constants.
-    ///
-    /// # Parameters
-    ///
-    /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the
-    ///   expression to be checked.
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if the expression is constant across all partitions according
-    /// to equivalence group, `false` otherwise
-    #[deprecated(
-        since = "45.0.0",
-        note = "Use [`is_expr_constant_across_partitions`] instead"
-    )]
-    pub fn is_expr_constant_accross_partitions(
-        &self,
-        expr: &Arc<dyn PhysicalExpr>,
-    ) -> bool {
-        self.is_expr_constant_across_partitions(expr)
     }
 
     /// This function determines whether the provided expression is constant
@@ -1337,21 +1312,17 @@ impl EquivalenceProperties {
         // As an example, assume that we know columns `a` and `b` are constant.
         // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
         // return `false`.
-        let const_exprs = self
+        let normalized_constants = self
             .constants
             .iter()
-            .filter_map(|const_expr| {
-                if matches!(
+            .filter(|const_expr| {
+                matches!(
                     const_expr.across_partitions(),
                     AcrossPartitions::Uniform { .. }
-                ) {
-                    Some(Arc::clone(const_expr.expr()))
-                } else {
-                    None
-                }
+                )
             })
+            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
             .collect::<Vec<_>>();
-        let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
         let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
         is_constant_recurse(&normalized_constants, &normalized_expr)
     }
