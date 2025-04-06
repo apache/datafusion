@@ -290,11 +290,10 @@ fn test_no_pushdown_through_aggregates() {
     //    implemented that yet.
     // 2. The inner filter **is** pushed down into the DataSource.
     let scan = test_scan(FilterPushdownSupport::Exact);
-    let filter = Arc::new(FilterExec::try_new(
-        col_lit_predicate("a", "foo", schema()),
-        scan.clone(),
-    )
-    .unwrap());
+    let filter = Arc::new(
+        FilterExec::try_new(col_lit_predicate("a", "foo", schema()), scan.clone())
+            .unwrap(),
+    );
     let aggregate_expr =
         vec![
             AggregateExprBuilder::new(count_udaf(), vec![col("a", schema()).unwrap()])
