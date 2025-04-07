@@ -17,6 +17,7 @@
 
 //! Logic for managing groups of [`PartitionedFile`]s in DataFusion
 
+use crate::statistics::compute_file_group_statistics;
 use crate::{FileRange, PartitionedFile};
 use datafusion_common::Statistics;
 use itertools::Itertools;
@@ -199,11 +200,23 @@ impl FileGroupPartitioner {
         }
 
         //  special case when order must be preserved
-        if self.preserve_order_within_groups {
+        let repartitioned_groups = if self.preserve_order_within_groups {
             self.repartition_preserving_order(file_groups)
         } else {
             self.repartition_evenly_by_size(file_groups)
+        };
+
+        if repartitioned_groups.is_none() {
+            return None;
         }
+
+        let repartitioned_groups = repartitioned_groups.unwrap();
+        // Recompute statistics for each file group
+        let mut groups = Vec::with_capacity(repartitioned_groups.len());
+        for file_group in repartitioned_groups {
+            groups.push(compute_file_group_statistics(file_group, true));
+        }
+        Some(groups)
     }
 
     /// Evenly repartition files across partitions by size, ignoring any
@@ -264,21 +277,7 @@ impl FileGroupPartitioner {
             .flatten()
             .chunk_by(|(partition_idx, _)| *partition_idx)
             .into_iter()
-            .map(|(_, group)| {
-                FileGroup::new(
-                    group
-                        .map(|(_, vals)| {
-                            if let Some(stat) = vals.statistics.clone() {
-                                vals.with_statistics(Arc::new(
-                                    stat.as_ref().clone().to_inexact(),
-                                ))
-                            } else {
-                                vals
-                            }
-                        })
-                        .collect_vec(),
-                )
-            })
+            .map(|(_, group)| FileGroup::new(group.map(|(_, vals)| vals).collect_vec()))
             .collect_vec();
 
         Some(repartitioned_files)
@@ -375,10 +374,6 @@ impl FileGroupPartitioner {
                     );
                 } else {
                     target_group.push(updated_file);
-                }
-                if let Some(statistics) = target_group.statistics.as_mut() {
-                    // Todo: maybe we can evaluate the statistics by range in the future
-                    *statistics = statistics.clone().to_inexact()
                 }
                 range_start = range_end;
                 range_end += range_size;
@@ -972,8 +967,7 @@ mod test {
     }
 
     #[test]
-    fn repartition_with_statistics_and_with_preserve_order_within_groups(
-    ) -> datafusion_common::Result<()> {
+    fn repartition_file_groups_with_statistics() -> datafusion_common::Result<()> {
         // Create test files
         let mut file1 = pfile("a", 100);
         let mut file2 = pfile("b", 50);
@@ -1040,21 +1034,18 @@ mod test {
             assert!(!stats.column_statistics[0].max_value.is_exact().unwrap());
         }
 
-        for (idx, group) in repartitioned.into_iter().enumerate() {
+        for group in repartitioned.into_iter() {
             // Check all files have inexact statistics regardless of group
             for file in group.files.iter() {
                 let stats = file.statistics.as_ref().unwrap();
                 assert_stats_are_inexact(stats);
             }
 
-            // Check group statistics based on index
-            if idx == 0 || idx == 1 {
-                let stats = group.statistics.unwrap();
-                assert_stats_are_inexact(&stats);
-            } else if idx == 2 {
-                assert!(group.statistics.is_none());
-            }
+            let stats = group.statistics.unwrap();
+            assert_stats_are_inexact(&stats);
         }
+
+        // Check the specific statistics for each partitioned file and each group
         Ok(())
     }
 

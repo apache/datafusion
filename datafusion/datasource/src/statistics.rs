@@ -410,23 +410,24 @@ pub async fn get_statistics_with_limit(
 }
 
 /// Generic function to compute statistics across multiple items that have statistics
-fn compute_summary_statistics<T, I>(
+/// If `items` is empty or all items don't have statistics, it returns `None`.
+pub fn compute_summary_statistics<T, I>(
     items: I,
-    file_schema: &SchemaRef,
     stats_extractor: impl Fn(&T) -> Option<&Statistics>,
-) -> Statistics
+) -> Option<Statistics>
 where
     I: IntoIterator<Item = T>,
 {
-    let size = file_schema.fields().len();
-    let mut col_stats_set = vec![ColumnStatistics::default(); size];
+    let mut col_stats_set = Vec::new();
     let mut num_rows = Precision::<usize>::Absent;
     let mut total_byte_size = Precision::<usize>::Absent;
 
-    for (idx, item) in items.into_iter().enumerate() {
+    for item in items.into_iter() {
         if let Some(item_stats) = stats_extractor(&item) {
-            if idx == 0 {
+            if col_stats_set.is_empty() {
                 // First item, set values directly
+                col_stats_set =
+                    vec![ColumnStatistics::default(); item_stats.column_statistics.len()];
                 num_rows = item_stats.num_rows;
                 total_byte_size = item_stats.total_byte_size;
                 for (index, column_stats) in
@@ -458,11 +459,15 @@ where
         }
     }
 
-    Statistics {
+    if col_stats_set.is_empty() {
+        // No statistics available
+        return None;
+    }
+    Some(Statistics {
         num_rows,
         total_byte_size,
         column_statistics: col_stats_set,
-    }
+    })
 }
 
 /// Computes the summary statistics for a group of files(`FileGroup` level's statistics).
@@ -479,22 +484,24 @@ where
 /// * `collect_stats` - Whether to collect statistics (if false, returns original file group)
 ///
 /// # Returns
-/// A new file group with summary statistics attached
+/// A new file group with summary statistics attached if there is statistics
 pub fn compute_file_group_statistics(
-    file_group: FileGroup,
-    file_schema: SchemaRef,
+    mut file_group: FileGroup,
     collect_stats: bool,
-) -> Result<FileGroup> {
+) -> FileGroup {
     if !collect_stats {
-        return Ok(file_group);
+        return file_group;
     }
 
-    let statistics =
-        compute_summary_statistics(file_group.iter(), &file_schema, |file| {
-            file.statistics.as_ref().map(|stats| stats.as_ref())
-        });
+    let statistics = compute_summary_statistics(file_group.iter(), |file| {
+        file.statistics.as_ref().map(|stats| stats.as_ref())
+    });
 
-    Ok(file_group.with_statistics(Arc::new(statistics)))
+    if let Some(stats) = statistics {
+        file_group = file_group.with_statistics(stats);
+    }
+
+    file_group
 }
 
 /// Computes statistics for all files across multiple file groups.
@@ -519,29 +526,30 @@ pub fn compute_all_files_statistics(
     file_schema: SchemaRef,
     collect_stats: bool,
     inexact_stats: bool,
-) -> Result<(Vec<FileGroup>, Statistics)> {
+) -> (Vec<FileGroup>, Statistics) {
+    if !collect_stats {
+        return (file_groups, Statistics::new_unknown(&file_schema));
+    }
     let mut file_groups_with_stats = Vec::with_capacity(file_groups.len());
 
     // First compute statistics for each file group
     for file_group in file_groups {
-        file_groups_with_stats.push(compute_file_group_statistics(
-            file_group,
-            Arc::clone(&file_schema),
-            collect_stats,
-        )?);
+        file_groups_with_stats
+            .push(compute_file_group_statistics(file_group, collect_stats));
     }
 
     // Then summary statistics across all file groups
     let mut statistics =
-        compute_summary_statistics(&file_groups_with_stats, &file_schema, |file_group| {
+        compute_summary_statistics(&file_groups_with_stats, |file_group| {
             file_group.statistics()
-        });
+        })
+        .unwrap_or(Statistics::new_unknown(&file_schema));
 
     if inexact_stats {
         statistics = statistics.to_inexact()
     }
 
-    Ok((file_groups_with_stats, statistics))
+    (file_groups_with_stats, statistics)
 }
 
 pub fn add_row_stats(
@@ -620,18 +628,11 @@ fn set_min_if_lesser(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use std::sync::Arc;
 
     #[test]
     fn test_compute_summary_statistics_basic() {
-        // Create a schema with two columns
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("col1", DataType::Int32, false),
-            Field::new("col2", DataType::Int32, false),
-        ]));
-
         // Create items with statistics
         let stats1 = Statistics {
             num_rows: Precision::Exact(10),
@@ -679,7 +680,7 @@ mod tests {
 
         // Call compute_summary_statistics
         let summary_stats =
-            compute_summary_statistics(items, &schema, |item| Some(item.as_ref()));
+            compute_summary_statistics(items, |item| Some(item.as_ref())).unwrap();
 
         // Verify the results
         assert_eq!(summary_stats.num_rows, Precision::Exact(25)); // 10 + 15
@@ -719,13 +720,6 @@ mod tests {
 
     #[test]
     fn test_compute_summary_statistics_mixed_precision() {
-        // Create a schema with one column
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col1",
-            DataType::Int32,
-            false,
-        )]));
-
         // Create items with different precision levels
         let stats1 = Statistics {
             num_rows: Precision::Exact(10),
@@ -754,7 +748,7 @@ mod tests {
         let items = vec![Arc::new(stats1), Arc::new(stats2)];
 
         let summary_stats =
-            compute_summary_statistics(items, &schema, |item| Some(item.as_ref()));
+            compute_summary_statistics(items, |item| Some(item.as_ref())).unwrap();
 
         assert_eq!(summary_stats.num_rows, Precision::Inexact(25));
         assert_eq!(summary_stats.total_byte_size, Precision::Inexact(250));
@@ -774,25 +768,11 @@ mod tests {
 
     #[test]
     fn test_compute_summary_statistics_empty() {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col1",
-            DataType::Int32,
-            false,
-        )]));
-
         // Empty collection
         let items: Vec<Arc<Statistics>> = vec![];
 
-        let summary_stats =
-            compute_summary_statistics(items, &schema, |item| Some(item.as_ref()));
+        let summary_stats = compute_summary_statistics(items, |item| Some(item.as_ref()));
 
-        // Verify default values for empty collection
-        assert_eq!(summary_stats.num_rows, Precision::Absent);
-        assert_eq!(summary_stats.total_byte_size, Precision::Absent);
-        assert_eq!(summary_stats.column_statistics.len(), 1);
-        assert_eq!(
-            summary_stats.column_statistics[0].null_count,
-            Precision::Absent
-        );
+        assert!(summary_stats.is_none());
     }
 }
