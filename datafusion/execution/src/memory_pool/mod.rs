@@ -19,7 +19,7 @@
 //! help with allocation accounting.
 
 use datafusion_common::{internal_err, Result};
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, sync, sync::Arc};
 
 mod pool;
 pub mod proxy {
@@ -153,15 +153,27 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 pub struct MemoryConsumer {
     name: String,
     can_spill: bool,
+    id: usize,
 }
 
 impl MemoryConsumer {
+    fn new_unique_id() -> usize {
+        static ID: sync::atomic::AtomicUsize = sync::atomic::AtomicUsize::new(0);
+        ID.fetch_add(1, sync::atomic::Ordering::Relaxed)
+    }
+
     /// Create a new empty [`MemoryConsumer`] that can be grown using [`MemoryReservation`]
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             can_spill: false,
+            id: Self::new_unique_id(),
         }
+    }
+
+    /// Return the unique id of this [`MemoryConsumer`]
+    pub fn id(&self) -> usize {
+        self.id
     }
 
     /// Set whether this allocation can be spilled to disk
