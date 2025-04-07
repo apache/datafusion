@@ -91,7 +91,7 @@ pub struct TopK {
     /// stores the top k values and their sort key values, in order
     heap: TopKHeap,
     /// row converter, for common keys between the sort keys and the input ordering
-    common_prefix_converter: Option<RowConverter>,
+    common_sort_prefix_converter: Option<RowConverter>,
     /// Common sort prefix between the input and the sort expressions to allow early exit optimization
     common_sort_prefix: Arc<[PhysicalSortExpr]>,
     /// If true, indicates that all rows of subsequent batches are guaranteed to be worse than the top K
@@ -159,7 +159,7 @@ impl TopK {
             row_converter,
             scratch_rows,
             heap: TopKHeap::new(k, batch_size, schema),
-            common_prefix_converter: prefix_row_converter,
+            common_sort_prefix_converter: prefix_row_converter,
             common_sort_prefix: Arc::from(common_sort_prefix),
             finished: false,
         })
@@ -230,7 +230,7 @@ impl TopK {
 
         // prefix_row_converter is only `Some` if the input ordering has a common prefix with the TopK,
         // so early exit if it is `None`.
-        let Some(prefix_converter) = &self.common_prefix_converter else {
+        let Some(prefix_converter) = &self.common_sort_prefix_converter else {
             return Ok(());
         };
 
@@ -244,7 +244,7 @@ impl TopK {
         let mut batch_prefix_scratch =
             prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW); // 1 row with capacity ESTIMATED_BYTES_PER_ROW
 
-        self.compute_common_prefix(batch, last_row_idx, &mut batch_prefix_scratch)?;
+        self.compute_common_sort_prefix(batch, last_row_idx, &mut batch_prefix_scratch)?;
 
         // Retrieve the "worst" row from the heap.
         let store_entry = self
@@ -255,7 +255,7 @@ impl TopK {
         let worst_batch = &store_entry.batch;
         let mut heap_prefix_scratch =
             prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW); // 1 row with capacity ESTIMATED_BYTES_PER_ROW
-        self.compute_common_prefix(
+        self.compute_common_sort_prefix(
             worst_batch,
             worst_topk_row.index,
             &mut heap_prefix_scratch,
@@ -270,7 +270,7 @@ impl TopK {
     }
 
     // Helper function to compute the prefix for a given batch and row index, storing the result in scratch.
-    fn compute_common_prefix(
+    fn compute_common_sort_prefix(
         &self,
         batch: &RecordBatch,
         last_row_idx: usize,
@@ -286,7 +286,7 @@ impl TopK {
             })
             .collect::<Result<_>>()?;
 
-        self.common_prefix_converter
+        self.common_sort_prefix_converter
             .as_ref()
             .unwrap()
             .append(scratch, &last_row)?;
@@ -304,7 +304,7 @@ impl TopK {
             row_converter: _,
             scratch_rows: _,
             mut heap,
-            common_prefix_converter: _,
+            common_sort_prefix_converter: _,
             common_sort_prefix: _,
             finished: _,
         } = self;

@@ -548,7 +548,10 @@ impl EquivalenceProperties {
 
     /// Returns the number of consecutive requirements (starting from the left)
     /// that are satisfied by the plan ordering.
-    fn compute_matching_prefix_length(&self, normalized_reqs: &LexRequirement) -> usize {
+    fn compute_common_sort_prefix_length(
+        &self,
+        normalized_reqs: &LexRequirement,
+    ) -> usize {
         // Check whether given ordering is satisfied by constraints first
         if self.satisfied_by_constraints(normalized_reqs) {
             // If the constraints satisfy all requirements, return the full normalized requirements length
@@ -587,14 +590,14 @@ impl EquivalenceProperties {
 
     /// Determines the longest prefix of `reqs` that is satisfied by the existing ordering.
     /// Returns that prefix as a new `LexRequirement`, and a boolean indicating if all the requirements are satisfied.
-    pub fn extract_matching_prefix(
+    pub fn extract_common_sort_prefix(
         &self,
         reqs: &LexRequirement,
     ) -> (LexRequirement, bool) {
         // First, standardize the given requirement:
         let normalized_reqs = self.normalize_sort_requirements(reqs);
 
-        let prefix_len = self.compute_matching_prefix_length(&normalized_reqs);
+        let prefix_len = self.compute_common_sort_prefix_length(&normalized_reqs);
         (
             LexRequirement::new(normalized_reqs[..prefix_len].to_vec()),
             prefix_len == normalized_reqs.len(),
@@ -604,7 +607,7 @@ impl EquivalenceProperties {
     /// Checks whether the given sort requirements are satisfied by any of the
     /// existing orderings.
     pub fn ordering_satisfy_requirement(&self, reqs: &LexRequirement) -> bool {
-        self.extract_matching_prefix(reqs).1
+        self.extract_common_sort_prefix(reqs).1
     }
 
     /// Checks if the sort requirements are satisfied by any of the table constraints (primary key or unique).

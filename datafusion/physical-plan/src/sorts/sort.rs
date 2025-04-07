@@ -1082,7 +1082,7 @@ impl SortExec {
 
         let (sort_prefix, sort_satisfied) = input
             .equivalence_properties()
-            .extract_matching_prefix(&requirement);
+            .extract_common_sort_prefix(&requirement);
 
         let sort_partially_satisfied = sort_satisfied || !sort_prefix.is_empty();
 
