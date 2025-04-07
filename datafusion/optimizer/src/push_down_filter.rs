@@ -2845,7 +2845,7 @@ mod tests {
             filters: &[&Expr],
         ) -> Result<Vec<TableProviderFilterPushDown>> {
             Ok((0..filters.len())
-                .map(|_| self.filter_support.clone())
+                .map(|_| self.filter_support)
                 .collect())
         }
 

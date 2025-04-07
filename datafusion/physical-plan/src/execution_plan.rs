@@ -530,7 +530,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// 3. The [`FilterExec`] node tries to push it's filters + the filters from the parent nodes (in this case empty)
     ///    down into it's input, which is the `DataSourceExec` node.
     /// 4. The `DataSourceExec` node accepts the filter and returns a [`FilterPushdownResult`] with a new copy of itself
-    ///    and [`FilterPushdownSupport::Exact`] to indicate that the filter was pushed down and the caller no longer
+    ///    and [`FilterPushdown::Exact`] to indicate that the filter was pushed down and the caller no longer
     ///    needs to handle it.
     /// 5. The [`FilterExec`] seeing that all filters were pushed down returns a [`FilterPushdownResult`] that directly
     ///    returns the new `DataSourceExec` node, effectively removing the [`FilterExec`] node from the plan.
