@@ -318,6 +318,21 @@ physical_plan
 01)SortExec: TopK(fetch=3), expr=[column2@1 ASC NULLS LAST, column1@0 DESC], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 DESC, column2@1 ASC NULLS LAST], file_type=parquet
 
+# Explicit NULLS ordering cases (reversing the order of the NULLS on the column1 and column2 orderings)
+query TT
+explain select column1, column2, column3 from partial_sorted order by column1 desc, column2 asc NULLS FIRST limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[column1@0 DESC, column2@1 ASC], preserve_partitioning=[false], sort_prefix=[column1@0 DESC]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 DESC, column2@1 ASC NULLS LAST], file_type=parquet
+
+query TT
+explain select column1, column2, column3 from partial_sorted order by column1 desc NULLS LAST, column2 asc limit 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[column1@0 DESC NULLS LAST, column2@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 DESC, column2@1 ASC NULLS LAST], file_type=parquet
+
 
 # Verify that the sort prefix is correctly computed on the normalized ordering (removing redundant aliased columns)
 query TT
