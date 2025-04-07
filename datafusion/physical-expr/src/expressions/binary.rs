@@ -811,10 +811,23 @@ impl BinaryExpr {
     }
 }
 
-/// Check if it meets the short-circuit condition
-/// 1. For the `AND` operator, if the `lhs` result all are `false`
-/// 2. For the `OR` operator, if the `lhs` result all are `true`
-/// 3. Otherwise, it does not meet the short-circuit condition
+/// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
+///
+/// Short-circuiting occurs when evaluating the right-hand side (rhs) becomes unnecessary:
+/// - For `AND`: if ALL values in `lhs` are `false`, the expression must be `false` regardless of rhs.
+/// - For `OR`: if ALL values in `lhs` are `true`, the expression must be `true` regardless of rhs.
+///
+/// Returns `true` if short-circuiting is possible, `false` otherwise.
+///
+/// # Arguments
+/// * `arg` - The left-hand side (lhs) columnar value (array or scalar)
+/// * `op` - The logical operator (`AND` or `OR`)
+///
+/// # Implementation Notes
+/// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
+/// 2. Handles both scalar values and array values
+/// 3. For arrays, uses optimized `true_count()`/`false_count()` methods from arrow-rs.
+///    `bool_or`/`bool_and` maybe a better choice too，for detailed discussion,see: https://github.com/apache/datafusion/pull/15462#discussion_r2020558418)
 fn check_short_circuit(arg: &ColumnarValue, op: &Operator) -> bool {
     let data_type = arg.data_type();
     match (data_type, op) {
