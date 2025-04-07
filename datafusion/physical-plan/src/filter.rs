@@ -443,6 +443,7 @@ impl ExecutionPlan for FilterExec {
         parent_filters: &[PhysicalExprRef],
         config: &ConfigOptions,
     ) -> Result<ExecutionPlanFilterPushdownResult> {
+        // filters are in terms of the output columns of this plan
         let mut all_filters = parent_filters.to_vec();
         all_filters.push(Arc::clone(&self.predicate));
         let all_filters = if self.projection.is_some() {
