@@ -2695,6 +2695,30 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_maybe_fix_colon_in_physical_name() {
+        // The physical schema has a field name with a colon
+        let schema = Schema::new(vec![Field::new("metric:avg", DataType::Int32, false)]);
+        let schema_ref: SchemaRef = Arc::new(schema);
+
+        // What might happen after deduplication
+        let logical_col_name = "metric:avg:1";
+        let expr_with_suffix =
+            Arc::new(Column::new(logical_col_name, 0)) as Arc<dyn PhysicalExpr>;
+        let expr_result = Ok(expr_with_suffix);
+
+        // Call function under test
+        let fixed_expr =
+            maybe_fix_physical_column_name(expr_result, &schema_ref).unwrap();
+
+        // Downcast back to Column so we can check the name
+        let col = fixed_expr
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("Column");
+
+        assert_eq!(col.name(), "metric:avg");
+    }
     struct ErrorExtensionPlanner {}
 
     #[async_trait]
