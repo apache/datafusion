@@ -42,6 +42,7 @@ use datafusion_physical_plan::{
 };
 
 use datafusion_datasource::file_groups::FileGroup;
+use datafusion_physical_plan::statistics::PartitionedStatistics;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};

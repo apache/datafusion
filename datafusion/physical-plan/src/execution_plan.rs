@@ -54,8 +54,8 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use futures::stream::{StreamExt, TryStreamExt};
 use crate::statistics::PartitionedStatistics;
+use futures::stream::{StreamExt, TryStreamExt};
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -436,8 +436,12 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`Statistics::new_unknown`] for each partition.
     fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
         Ok(PartitionedStatistics::new(vec![
-            Arc::new(Statistics::new_unknown(&self.schema()));
-            self.properties().partitioning.partition_count()
+            Arc::new(
+                Statistics::new_unknown(&self.schema())
+            );
+            self.properties()
+                .partitioning
+                .partition_count()
         ]))
     }
 

@@ -48,6 +48,10 @@ impl PartitionedStatistics {
     pub fn iter(&self) -> impl Iterator<Item = &Statistics> {
         self.inner.iter().map(|arc| arc.as_ref())
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
 }
 
 /// Generic function to compute statistics across multiple items that have statistics

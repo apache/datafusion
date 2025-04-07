@@ -40,6 +40,7 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 
+use datafusion_physical_plan::statistics::PartitionedStatistics;
 use object_store::ObjectStore;
 
 /// Execution plan for scanning Avro data source

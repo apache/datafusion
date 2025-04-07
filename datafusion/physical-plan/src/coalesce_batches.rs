@@ -200,11 +200,23 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
-        self.input
-            .statistics_by_partition()?
-            .into_iter()
-            .map(|stat| Statistics::with_fetch(stat, self.schema(), self.fetch, 0, 1))
-            .collect()
+        let input_stats = self.input.statistics_by_partition()?;
+
+        let stats: Result<Vec<Arc<Statistics>>> = input_stats
+            .iter()
+            .map(|stat| {
+                let fetched_stat = Statistics::with_fetch(
+                    stat.clone(),
+                    self.schema(),
+                    self.fetch,
+                    0,
+                    1,
+                )?;
+                Ok(Arc::new(fetched_stat))
+            })
+            .collect();
+
+        Ok(PartitionedStatistics::new(stats?))
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

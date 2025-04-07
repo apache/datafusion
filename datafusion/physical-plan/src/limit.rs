@@ -35,6 +35,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
+use crate::statistics::PartitionedStatistics;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -203,7 +204,9 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
-        Ok(vec![self.statistics()?])
+        Ok(PartitionedStatistics::new(vec![Arc::new(
+            self.statistics()?,
+        )]))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -348,13 +351,23 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
-        self.input
-            .statistics_by_partition()?
-            .into_iter()
-            .map(|input_stat| {
-                Statistics::with_fetch(input_stat, self.schema(), Some(self.fetch), 0, 1)
+        let input_stats = self.input.statistics_by_partition()?;
+
+        let stats: Result<Vec<Arc<Statistics>>> = input_stats
+            .iter()
+            .map(|stat| {
+                let fetched_stat = Statistics::with_fetch(
+                    stat.clone(),
+                    self.schema(),
+                    Some(self.fetch),
+                    0,
+                    1,
+                )?;
+                Ok(Arc::new(fetched_stat))
             })
-            .collect()
+            .collect();
+
+        Ok(PartitionedStatistics::new(stats?))
     }
 
     fn fetch(&self) -> Option<usize> {
