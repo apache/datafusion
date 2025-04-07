@@ -1083,7 +1083,7 @@ impl EquivalenceProperties {
     /// # Arguments
     ///
     /// * `mapping` - A reference to `ProjectionMapping` that defines how expressions are mapped
-    ///               in the projection operation
+    ///   in the projection operation
     ///
     /// # Returns
     ///
