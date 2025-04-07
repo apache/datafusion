@@ -425,24 +425,19 @@ impl EquivalenceProperties {
             .filter(|expr| !self.is_expr_constant(&expr.expr))
             .collect::<Vec<_>>();
 
-        if filtered_exprs.is_empty() {
-            return self;
+        if !filtered_exprs.is_empty() {
+            let filtered_exprs = LexOrdering::new(filtered_exprs);
+            // Preserve valid suffixes from existing orderings:
+            let oeq_class = mem::take(&mut self.oeq_class);
+            let mut new_orderings = oeq_class
+                .into_iter()
+                .filter(|existing| self.is_prefix_of(&filtered_exprs, existing))
+                .collect::<Vec<_>>();
+            new_orderings.push(filtered_exprs);
+
+            self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
         }
 
-        let filtered_exprs = LexOrdering::new(filtered_exprs);
-        let mut new_orderings = vec![filtered_exprs.clone()];
-
-        // Preserve valid suffixes from existing orderings
-        let oeq_class = mem::take(&mut self.oeq_class);
-        for existing in oeq_class {
-            if self.is_prefix_of(&filtered_exprs, &existing) {
-                let mut extended = filtered_exprs.clone();
-                extended.extend(existing.into_iter().skip(filtered_exprs.len()));
-                new_orderings.push(extended);
-            }
-        }
-
-        self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
         self
     }
 

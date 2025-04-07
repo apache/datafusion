@@ -77,7 +77,7 @@ impl OrderingEquivalenceClass {
 
     /// Checks whether this ordering equivalence class is empty.
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.orderings.is_empty()
     }
 
     /// Returns an iterator over the equivalent orderings in this class.
@@ -201,9 +201,9 @@ impl OrderingEquivalenceClass {
             .collect();
         // Suffix orderings of other to the current orderings.
         for (outer_idx, ordering) in other.iter().enumerate() {
-            for idx in 0..n_ordering {
-                // Calculate cross product index
-                let idx = outer_idx * n_ordering + idx;
+            let base = outer_idx * n_ordering;
+            // Use the cross product index:
+            for idx in base..(base + n_ordering) {
                 self.orderings[idx].extend(ordering.iter().cloned());
             }
         }
