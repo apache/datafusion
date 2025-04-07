@@ -877,17 +877,21 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 </div>
 <section id="example">
 <h4>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h4>
-<p>– Example usage of the cume_dist window function:
-SELECT salary,
-cume_dist() OVER (ORDER BY salary) AS cume_dist
-FROM employees;
-+——–+———–+
-| salary | cume_dist |
-+——–+———–+
-| 30000 | 0.33 |
-| 50000 | 0.67 |
-| 70000 | 1.00 |
-+——–+———–+</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="w">    </span><span class="c1">--Example usage of the cume_dist window function:</span>
+<span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="n">salary</span><span class="p">,</span>
+<span class="w">       </span><span class="n">cume_dist</span><span class="p">()</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">salary</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">cume_dist</span>
+<span class="w">    </span><span class="k">FROM</span><span class="w"> </span><span class="n">employees</span><span class="p">;</span>
+</pre></div>
+</div>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">+</span><span class="c1">--------+-----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">salary</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">cume_dist</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------+-----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">30000</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">33</span><span class="w">      </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">50000</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">67</span><span class="w">      </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">70000</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="p">.</span><span class="mi">00</span><span class="w">      </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------+-----------+</span>
+</pre></div>
+</div>
 </section>
 </section>
 <section id="dense-rank">
