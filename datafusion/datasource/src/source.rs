@@ -204,16 +204,19 @@ impl ExecutionPlan for DataSourceExec {
     fn statistics_by_partition(
         &self,
     ) -> datafusion_common::Result<PartitionedStatistics> {
-        let mut statistics = vec![
-            Arc::new(Statistics::new_unknown(&self.schema()));
-            self.properties().partitioning.partition_count()
-        ];
+        let mut statistics = {
+            let mut v =
+                Vec::with_capacity(self.properties().partitioning.partition_count());
+            (0..self.properties().partitioning.partition_count())
+                .for_each(|_| v.push(Arc::new(Statistics::new_unknown(&self.schema()))));
+            v
+        };
         if let Some(file_config) =
             self.data_source.as_any().downcast_ref::<FileScanConfig>()
         {
             for (idx, file_group) in file_config.file_groups.iter().enumerate() {
                 if let Some(stat) = file_group.statistics() {
-                    statistics[idx] = stat.clone();
+                    statistics[idx] = Arc::clone(stat);
                 }
             }
         }

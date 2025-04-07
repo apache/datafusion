@@ -435,14 +435,13 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// If statistics are not available, returns an array of
     /// [`Statistics::new_unknown`] for each partition.
     fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
-        Ok(PartitionedStatistics::new(vec![
-            Arc::new(
-                Statistics::new_unknown(&self.schema())
-            );
-            self.properties()
-                .partitioning
-                .partition_count()
-        ]))
+        Ok(PartitionedStatistics::new({
+            let mut v =
+                Vec::with_capacity(self.properties().partitioning.partition_count());
+            (0..self.properties().partitioning.partition_count())
+                .for_each(|_| v.push(Arc::new(Statistics::new_unknown(&self.schema()))));
+            v
+        }))
     }
 
     /// Returns `true` if a limit can be safely pushed down through this
