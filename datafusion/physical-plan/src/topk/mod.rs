@@ -94,7 +94,9 @@ pub struct TopK {
     common_sort_prefix_converter: Option<RowConverter>,
     /// Common sort prefix between the input and the sort expressions to allow early exit optimization
     common_sort_prefix: Arc<[PhysicalSortExpr]>,
-    /// If true, indicates that all rows of subsequent batches are guaranteed to be worse than the top K
+    /// If true, indicates that all rows of subsequent batches are guaranteed
+    /// to be greater (by byte order, after row conversion) than the top K,
+    /// which means the top K won't change and the computation can be finished early.
     pub(crate) finished: bool,
 }
 
@@ -211,8 +213,8 @@ impl TopK {
         self.reservation.try_resize(self.size())?;
 
         // flag the topK as finished if we know that all
-        // subsequent batches are guaranteed to be worse than the
-        // current topK
+        // subsequent batches are guaranteed to be greater (by byte order, after row conversion) than the top K,
+        // which means the top K won't change and the computation can be finished early.
         self.attempt_early_completion(&batch)?;
 
         Ok(())
@@ -220,7 +222,7 @@ impl TopK {
 
     /// If input ordering shares a common sort prefix with the TopK, and if the TopK's heap is full,
     /// check if the computation can be finished early.
-    /// This is the case if the last row of the current batch is strictly worse than the worst row in the heap,
+    /// This is the case if the last row of the current batch is strictly greater than the max row in the heap,
     /// comparing only on the shared prefix columns.
     fn attempt_early_completion(&mut self, batch: &RecordBatch) -> Result<()> {
         // Early exit if the batch is empty as there is no last row to extract from it.
@@ -235,7 +237,7 @@ impl TopK {
         };
 
         // Early exit if the heap is not full (`heap.max()` only returns `Some` if the heap is full).
-        let Some(worst_topk_row) = self.heap.max() else {
+        let Some(max_topk_row) = self.heap.max() else {
             return Ok(());
         };
 
@@ -246,22 +248,22 @@ impl TopK {
 
         self.compute_common_sort_prefix(batch, last_row_idx, &mut batch_prefix_scratch)?;
 
-        // Retrieve the "worst" row from the heap.
+        // Retrieve the max row from the heap.
         let store_entry = self
             .heap
             .store
-            .get(worst_topk_row.batch_id)
+            .get(max_topk_row.batch_id)
             .ok_or(internal_datafusion_err!("Invalid batch id in topK heap"))?;
-        let worst_batch = &store_entry.batch;
+        let max_batch = &store_entry.batch;
         let mut heap_prefix_scratch =
             prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW); // 1 row with capacity ESTIMATED_BYTES_PER_ROW
         self.compute_common_sort_prefix(
-            worst_batch,
-            worst_topk_row.index,
+            max_batch,
+            max_topk_row.index,
             &mut heap_prefix_scratch,
         )?;
 
-        // If the last row's prefix is strictly greater than the worst prefix, mark as finished.
+        // If the last row's prefix is strictly greater than the max prefix, mark as finished.
         if batch_prefix_scratch.row(0).as_ref() > heap_prefix_scratch.row(0).as_ref() {
             self.finished = true;
         }
@@ -798,7 +800,7 @@ mod tests {
 
     /// This test validates that the `try_finish` method marks the TopK operator as finished
     /// when the prefix (on column "a") of the last row in the current batch is strictly greater
-    /// than the worst top‑k row.
+    /// than the max top‑k row.
     /// The full sort expression is defined on both columns ("a", "b"), but the input ordering is only on "a".
     #[tokio::test]
     async fn test_try_finish_marks_finished_with_prefix() -> Result<()> {
@@ -848,7 +850,7 @@ mod tests {
 
         // Insert the first batch.
         // At this point the heap is not yet “finished” because the prefix of the last row of the batch
-        // is not strictly greater than the prefix of the worst top‑k row (both being `2`).
+        // is not strictly greater than the prefix of the max top‑k row (both being `2`).
         topk.insert_batch(batch1)?;
         assert!(
             !topk.finished,
@@ -863,7 +865,7 @@ mod tests {
 
         // Insert the second batch.
         // The last row in this batch has a prefix value of `3`,
-        // which is strictly greater than the worst top‑k row (with value `2`),
+        // which is strictly greater than the max top‑k row (with value `2`),
         // so try_finish should mark the TopK as finished.
         topk.insert_batch(batch2)?;
         assert!(
