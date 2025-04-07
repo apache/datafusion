@@ -571,7 +571,9 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             .to_string();
 
         let object_store = Arc::clone(&self.object_store);
-        let mut inner = ParquetObjectReader::new(object_store, file_meta.object_meta);
+        let mut inner =
+            ParquetObjectReader::new(object_store, file_meta.object_meta.location)
+                .with_file_size(file_meta.object_meta.size as usize);
 
         if let Some(hint) = metadata_size_hint {
             inner = inner.with_footer_size_hint(hint)
@@ -618,6 +620,7 @@ impl AsyncFileReader for ParquetReaderWithCache {
 
     fn get_metadata(
         &mut self,
+        _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
         println!("get_metadata: {} returning cached metadata", self.filename);
 

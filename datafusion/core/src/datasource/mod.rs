@@ -106,7 +106,7 @@ mod tests {
         let meta = ObjectMeta {
             location,
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-            size: metadata.len() as usize,
+            size: metadata.len(),
             e_tag: None,
             version: None,
         };
