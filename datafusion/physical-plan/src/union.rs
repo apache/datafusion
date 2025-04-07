@@ -270,7 +270,7 @@ impl ExecutionPlan for UnionExec {
             .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
     }
 
-    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
         Ok(self
             .inputs
             .iter()

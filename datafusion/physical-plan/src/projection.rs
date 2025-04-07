@@ -251,7 +251,7 @@ impl ExecutionPlan for ProjectionExec {
         ))
     }
 
-    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
         Ok(self
             .input
             .statistics_by_partition()?

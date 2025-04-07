@@ -39,7 +39,7 @@ mod test {
     ///
     /// This function:
     /// - Creates an external table from './tests/data/test_statistics_per_partition'
-    /// - If we set the `target_partition` to `2, the data contains 2 partitions, each with 2 rows
+    /// - If we set the `target_partition` to 2, the data contains 2 partitions, each with 2 rows
     /// - Each partition has an "id" column (INT) with the following values:
     ///   - First partition: [3, 4]
     ///   - Second partition: [1, 2]
@@ -47,7 +47,7 @@ mod test {
     ///
     /// @param target_partition Optional parameter to set the target partitions
     /// @return ExecutionPlan representing the scan of the table with statistics
-    async fn generate_listing_table_with_statistics(
+    async fn create_scan_exec_with_statistics(
         target_partition: Option<usize>,
     ) -> Arc<dyn ExecutionPlan> {
         let mut session_config = SessionConfig::new().with_collect_statistics(true);
@@ -111,7 +111,7 @@ mod test {
     #[tokio::test]
     async fn test_statistics_by_partition_of_data_source() -> datafusion_common::Result<()>
     {
-        let scan = generate_listing_table_with_statistics(Some(2)).await;
+        let scan = create_scan_exec_with_statistics(Some(2)).await;
         let statistics = scan.statistics_by_partition()?;
         let expected_statistic_partition_1 =
             create_partition_statistics(2, 110, 3, 4, true);
@@ -127,7 +127,7 @@ mod test {
     #[tokio::test]
     async fn test_statistics_by_partition_of_projection() -> datafusion_common::Result<()>
     {
-        let scan = generate_listing_table_with_statistics(Some(2)).await;
+        let scan = create_scan_exec_with_statistics(Some(2)).await;
         // Add projection execution plan
         let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(Arc::new(Column::new("id", 0)), "id".to_string())];
@@ -146,7 +146,7 @@ mod test {
 
     #[tokio::test]
     async fn test_statistics_by_partition_of_sort() -> datafusion_common::Result<()> {
-        let scan = generate_listing_table_with_statistics(Some(2)).await;
+        let scan = create_scan_exec_with_statistics(Some(2)).await;
         // Add sort execution plan
         let sort = SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
@@ -179,7 +179,7 @@ mod test {
 
     #[tokio::test]
     async fn test_statistics_by_partition_of_filter() -> datafusion_common::Result<()> {
-        let scan = generate_listing_table_with_statistics(Some(2)).await;
+        let scan = create_scan_exec_with_statistics(Some(2)).await;
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
         let predicate = binary(
             Arc::new(Column::new("id", 0)),
@@ -221,7 +221,7 @@ mod test {
 
     #[tokio::test]
     async fn test_statistic_by_partition_of_union() -> datafusion_common::Result<()> {
-        let scan = generate_listing_table_with_statistics(Some(2)).await;
+        let scan = create_scan_exec_with_statistics(Some(2)).await;
         let union_exec = Arc::new(UnionExec::new(vec![scan.clone(), scan]));
         let statistics = union_exec.statistics_by_partition()?;
         // Check that we have 4 partitions (2 from each scan)

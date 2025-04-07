@@ -199,8 +199,12 @@ impl ExecutionPlan for CoalesceBatchesExec {
         Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
     }
 
-    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
-        Ok(vec![self.statistics()?])
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
+        self.input
+            .statistics_by_partition()?
+            .into_iter()
+            .map(|stat| Statistics::with_fetch(stat, self.schema(), self.fetch, 0, 1))
+            .collect()
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

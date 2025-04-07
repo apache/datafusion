@@ -202,7 +202,7 @@ impl ExecutionPlan for GlobalLimitExec {
         )
     }
 
-    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
         Ok(vec![self.statistics()?])
     }
 
@@ -347,7 +347,7 @@ impl ExecutionPlan for LocalLimitExec {
         )
     }
 
-    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
         self.input
             .statistics_by_partition()?
             .into_iter()

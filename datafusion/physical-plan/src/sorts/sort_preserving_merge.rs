@@ -346,7 +346,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self.input.statistics()
     }
 
-    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
         Ok(vec![self.statistics()?])
     }
 
