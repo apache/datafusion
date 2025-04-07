@@ -70,6 +70,25 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 /// The same answer can be produced by simply keeping track of the top
 /// K=3 elements, reducing the total amount of required buffer memory.
 ///
+/// # Partial Sort Optimization
+///
+/// This implementation additionally optimizes queries where the input is already
+/// partially sorted by a common prefix of the requested ordering. Once the top K
+/// heap is full, if subsequent rows are guaranteed to be strictly greater (in sort
+/// order) on this prefix than the largest row currently stored, the operator
+/// safely terminates early.
+///
+/// ## Example
+///
+/// For input sorted by `(day DESC)`, but not by `timestamp`, a query such as:
+///
+/// ```sql
+/// SELECT day, timestamp FROM sensor ORDER BY day DESC, timestamp DESC LIMIT 10;
+/// ```
+///
+/// can terminate scanning early once sufficient rows from the latest days have been
+/// collected, skipping older data.
+///
 /// # Structure
 ///
 /// This operator tracks the top K items using a `TopKHeap`.
