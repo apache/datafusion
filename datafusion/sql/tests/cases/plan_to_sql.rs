@@ -287,7 +287,7 @@ fn roundtrip_crossjoin() -> Result<()> {
 #[macro_export]
 macro_rules! roundtrip_statement_with_dialect_helper {
     (
-        query: $sql:expr,
+        sql: $sql:expr,
         parser_dialect: $parser_dialect:expr,
         unparser_dialect: $unparser_dialect:expr,
         expected: @ $expected:literal $(,)?
@@ -319,106 +319,137 @@ macro_rules! roundtrip_statement_with_dialect_helper {
 #[test]
 fn roundtrip_statement_with_dialect_1() -> Result<(), DataFusionError> {
     roundtrip_statement_with_dialect_helper!(
-        query: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
+        sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
+        // top projection sort gets derived into a subquery
+        // for MySQL, this subquery needs an alias
         expected: @"SELECT `j1_min` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, min(`ta`.`j1_id`) FROM `j1` AS `ta` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
     );
     Ok(())
 }
 
 #[test]
-fn roundtrip_statement_with_dialect() -> Result<()> {
-    struct TestStatementWithDialect {
-        sql: &'static str,
-        expected: &'static str,
-        parser_dialect: Box<dyn Dialect>,
-        unparser_dialect: Box<dyn UnparserDialect>,
-    }
-    let tests: Vec<TestStatementWithDialect> = vec![
-        TestStatementWithDialect {
-            sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
-            expected:
-                // top projection sort gets derived into a subquery
-                // for MySQL, this subquery needs an alias
-                "SELECT `j1_min` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, min(`ta`.`j1_id`) FROM `j1` AS `ta` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
-            parser_dialect: Box::new(MySqlDialect {}),
-            unparser_dialect: Box::new(UnparserMySqlDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
-            expected:
-                // top projection sort still gets derived into a subquery in default dialect
-                // except for the default dialect, the subquery is left non-aliased
-                "SELECT j1_min FROM (SELECT min(ta.j1_id) AS j1_min, min(ta.j1_id) FROM j1 AS ta ORDER BY min(ta.j1_id) ASC NULLS LAST) LIMIT 10",
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "select min(ta.j1_id) as j1_min, max(tb.j1_max) from j1 ta, (select distinct max(ta.j1_id) as j1_max from j1 ta order by max(ta.j1_id)) tb order by min(ta.j1_id) limit 10;",
-            expected:
-                "SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` CROSS JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
-            parser_dialect: Box::new(MySqlDialect {}),
-            unparser_dialect: Box::new(UnparserMySqlDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "select j1_id from (select 1 as j1_id);",
-            expected:
-                "SELECT `j1_id` FROM (SELECT 1 AS `j1_id`) AS `derived_projection`",
-            parser_dialect: Box::new(MySqlDialect {}),
-            unparser_dialect: Box::new(UnparserMySqlDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "select j1_id from (select j1_id from j1 limit 10);",
-            expected:
-                "SELECT `j1`.`j1_id` FROM (SELECT `j1`.`j1_id` FROM `j1` LIMIT 10) AS `derived_limit`",
-            parser_dialect: Box::new(MySqlDialect {}),
-            unparser_dialect: Box::new(UnparserMySqlDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
-            expected:
-                "SELECT `ta`.`j1_id` FROM `j1` AS `ta` ORDER BY `ta`.`j1_id` ASC LIMIT 10",
-            parser_dialect: Box::new(MySqlDialect {}),
-            unparser_dialect: Box::new(UnparserMySqlDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
-            expected: r#"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST LIMIT 10"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT j1_id FROM j1
+fn roundtrip_statement_with_dialect_2() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        // top projection sort still gets derived into a subquery in default dialect
+        // except for the default dialect, the subquery is left non-aliased
+        expected: @"SELECT j1_min FROM (SELECT min(ta.j1_id) AS j1_min, min(ta.j1_id) FROM j1 AS ta ORDER BY min(ta.j1_id) ASC NULLS LAST) LIMIT 10",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_3() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select min(ta.j1_id) as j1_min, max(tb.j1_max) from j1 ta, (select distinct max(ta.j1_id) as j1_max from j1 ta order by max(ta.j1_id)) tb order by min(ta.j1_id) limit 10;",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` CROSS JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_4() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select 1 as j1_id);",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `j1_id` FROM (SELECT 1 AS `j1_id`) AS `derived_projection`",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_5() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select j1_id from j1 limit 10);",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `j1`.`j1_id` FROM (SELECT `j1`.`j1_id` FROM `j1` LIMIT 10) AS `derived_limit`",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_6() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `ta`.`j1_id` FROM `j1` AS `ta` ORDER BY `ta`.`j1_id` ASC LIMIT 10",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_7() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST LIMIT 10"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_8() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT j1_id FROM j1
                   UNION ALL
                   SELECT tb.j2_id as j1_id FROM j2 tb
                   ORDER BY j1_id
                   LIMIT 10;",
-            expected: r#"SELECT j1.j1_id FROM j1 UNION ALL SELECT tb.j2_id AS j1_id FROM j2 AS tb ORDER BY j1_id ASC NULLS LAST LIMIT 10"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        // Test query with derived tables that put distinct,sort,limit on the wrong level
-        TestStatementWithDialect {
-            sql: "SELECT j1_string from j1 order by j1_id",
-            expected: r#"SELECT j1.j1_string FROM j1 ORDER BY j1.j1_id ASC NULLS LAST"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT j1_string AS a from j1 order by j1_id",
-            expected: r#"SELECT j1.j1_string AS a FROM j1 ORDER BY j1.j1_id ASC NULLS LAST"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT j1_string from j1 join j2 on j1.j1_id = j2.j2_id order by j1_id",
-            expected: r#"SELECT j1.j1_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id ASC NULLS LAST"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT j1.j1_id FROM j1 UNION ALL SELECT tb.j2_id AS j1_id FROM j2 AS tb ORDER BY j1_id ASC NULLS LAST LIMIT 10"#,
+    );
+    Ok(())
+}
+
+// Test query with derived tables that put distinct,sort,limit on the wrong level
+#[test]
+fn roundtrip_statement_with_dialect_9() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT j1_string from j1 order by j1_id",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT j1.j1_string FROM j1 ORDER BY j1.j1_id ASC NULLS LAST"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_10() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT j1_string AS a from j1 order by j1_id",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT j1.j1_string AS a FROM j1 ORDER BY j1.j1_id ASC NULLS LAST"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_11() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT j1_string from j1 join j2 on j1.j1_id = j2.j2_id order by j1_id",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT j1.j1_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id ASC NULLS LAST"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_12() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "
                 SELECT
                   j1_string,
                   j2_string
@@ -438,13 +469,18 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
                   ) abc
                 ORDER BY
                   abc.j2_string",
-            expected: r#"SELECT abc.j1_string, abc.j2_string FROM (SELECT DISTINCT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        // more tests around subquery/derived table roundtrip
-        TestStatementWithDialect {
-            sql: "SELECT string_count FROM (
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT abc.j1_string, abc.j2_string FROM (SELECT DISTINCT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
+    );
+    Ok(())
+}
+
+// more tests around subquery/derived table roundtrip
+#[test]
+fn roundtrip_statement_with_dialect_13() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT string_count FROM (
                     SELECT
                         j1_id,
                         min(j2_string)
@@ -455,12 +491,17 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
                         j1_id
                 ) AS agg (id, string_count)
             ",
-            expected: r#"SELECT agg.string_count FROM (SELECT j1.j1_id, min(j2.j2_string) FROM j1 LEFT OUTER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id) AS agg (id, string_count)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT agg.string_count FROM (SELECT j1.j1_id, min(j2.j2_string) FROM j1 LEFT OUTER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id) AS agg (id, string_count)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_14() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "
                 SELECT
                   j1_string,
                   j2_string
@@ -484,13 +525,18 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
                   ) abc
                 ORDER BY
                   abc.j2_string",
-            expected: r#"SELECT abc.j1_string, abc.j2_string FROM (SELECT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id, j1.j1_string, j2.j2_string ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        // Test query that order by columns are not in select columns
-        TestStatementWithDialect {
-            sql: "
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT abc.j1_string, abc.j2_string FROM (SELECT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id, j1.j1_string, j2.j2_string ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
+    );
+    Ok(())
+}
+
+// Test query that order by columns are not in select columns
+#[test]
+fn roundtrip_statement_with_dialect_15() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "
                 SELECT
                   j1_string
                 FROM
@@ -509,219 +555,378 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
                   ) abc
                 ORDER BY
                   j2_string",
-            expected: r#"SELECT abc.j1_string FROM (SELECT j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT id FROM (SELECT j1_id from j1) AS c (id)",
-            expected: r#"SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT id FROM (SELECT j1_id as id from j1) AS c",
-            expected: r#"SELECT c.id FROM (SELECT j1.j1_id AS id FROM j1) AS c"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        // Test query that has calculation in derived table with columns
-        TestStatementWithDialect {
-            sql: "SELECT id FROM (SELECT j1_id + 1 * 3 from j1) AS c (id)",
-            expected: r#"SELECT c.id FROM (SELECT (j1.j1_id + (1 * 3)) FROM j1) AS c (id)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        // Test query that has limit/distinct/order in derived table with columns
-        TestStatementWithDialect {
-            sql: "SELECT id FROM (SELECT distinct (j1_id + 1 * 3) FROM j1 LIMIT 1) AS c (id)",
-            expected: r#"SELECT c.id FROM (SELECT DISTINCT (j1.j1_id + (1 * 3)) FROM j1 LIMIT 1) AS c (id)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT id FROM (SELECT j1_id + 1 FROM j1 ORDER BY j1_id DESC LIMIT 1) AS c (id)",
-            expected: r#"SELECT c.id FROM (SELECT (j1.j1_id + 1) FROM j1 ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 1) AS c (id)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT id FROM (SELECT CAST((CAST(j1_id as BIGINT) + 1) as int) * 10 FROM j1 LIMIT 1) AS c (id)",
-            expected: r#"SELECT c.id FROM (SELECT (CAST((CAST(j1.j1_id AS BIGINT) + 1) AS INTEGER) * 10) FROM j1 LIMIT 1) AS c (id)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT id FROM (SELECT CAST(j1_id as BIGINT) + 1 FROM j1 ORDER BY j1_id LIMIT 1) AS c (id)",
-            expected: r#"SELECT c.id FROM (SELECT (CAST(j1.j1_id AS BIGINT) + 1) FROM j1 ORDER BY j1.j1_id ASC NULLS LAST LIMIT 1) AS c (id)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT temp_j.id2 FROM (SELECT j1_id, j1_string FROM j1) AS temp_j(id2, string2)",
-            expected: r#"SELECT temp_j.id2 FROM (SELECT j1.j1_id, j1.j1_string FROM j1) AS temp_j (id2, string2)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT temp_j.id2 FROM (SELECT j1_id, j1_string FROM j1) AS temp_j(id2, string2)",
-            expected: r#"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2`, `j1`.`j1_string` AS `string2` FROM `j1`) AS `temp_j`"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(SqliteDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM (SELECT j1_id + 1 FROM j1) AS temp_j(id2)",
-            expected: r#"SELECT `temp_j`.`id2` FROM (SELECT (`j1`.`j1_id` + 1) AS `id2` FROM `j1`) AS `temp_j`"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(SqliteDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM (SELECT j1_id FROM j1 LIMIT 1) AS temp_j(id2)",
-            expected: r#"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2` FROM `j1` LIMIT 1) AS `temp_j`"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(SqliteDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3])",
-            expected: r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))" FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
-            expected: r#"SELECT t1.c1 FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS t1 (c1)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3]), j1",
-            expected: r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))", j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
-            expected: r#"SELECT u.c1, j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
-            expected: r#"SELECT u.c1 FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) UNION ALL SELECT u.c1 FROM (SELECT UNNEST([4, 5, 6]) AS "UNNEST(make_array(Int64(4),Int64(5),Int64(6)))") AS u (c1)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3])",
-            expected: r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))) FROM UNNEST([1, 2, 3])"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
-            expected: r#"SELECT t1.c1 FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
-            expected: r#"SELECT t1.c1 FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3]), j1",
-            expected: r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))), j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) CROSS JOIN j1"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
-            expected: r#"SELECT u.c1, j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
-            expected: r#"SELECT u.c1 FROM UNNEST([1, 2, 3]) AS u (c1) UNION ALL SELECT u.c1 FROM UNNEST([4, 5, 6]) AS u (c1)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT UNNEST([1,2,3])",
-            expected: r#"SELECT * FROM UNNEST([1, 2, 3])"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT UNNEST([1,2,3]) as c1",
-            expected: r#"SELECT UNNEST([1, 2, 3]) AS c1"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT UNNEST([1,2,3]), 1",
-            expected: r#"SELECT UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3))), Int64(1)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
-            expected: r#"SELECT u.array_col, u.struct_col, UNNEST(outer_ref(u.array_col)) FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
-            expected: r#"SELECT u.array_col, u.struct_col, t1.c1 FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col) AS t1 (c1)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT unnest([1, 2, 3, 4]) from unnest([1, 2, 3]);",
-            expected: r#"SELECT UNNEST([1, 2, 3, 4]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3),Int64(4))) FROM UNNEST([1, 2, 3])"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
-            expected: r#"SELECT u.array_col, u.struct_col, "UNNEST(outer_ref(u.array_col))" FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))")"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
-            expected: r#"SELECT u.array_col, u.struct_col, t1.c1 FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))") AS t1 (c1)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-    ];
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT abc.j1_string FROM (SELECT j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
+    );
+    Ok(())
+}
 
-    for query in tests {
-        let statement = Parser::new(&*query.parser_dialect)
-            .try_with_sql(query.sql)?
-            .parse_statement()?;
+#[test]
+fn roundtrip_statement_with_dialect_16() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT id FROM (SELECT j1_id from j1) AS c (id)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)"#,
+    );
+    Ok(())
+}
 
-        let state = MockSessionState::default()
-            .with_aggregate_function(max_udaf())
-            .with_aggregate_function(min_udaf())
-            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
-            .with_expr_planner(Arc::new(NestedFunctionPlanner));
+#[test]
+fn roundtrip_statement_with_dialect_17() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT id FROM (SELECT j1_id as id from j1) AS c",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT c.id FROM (SELECT j1.j1_id AS id FROM j1) AS c"#,
+    );
+    Ok(())
+}
 
-        let context = MockContextProvider { state };
-        let sql_to_rel = SqlToRel::new(&context);
-        let plan = sql_to_rel
-            .sql_statement_to_plan(statement)
-            .unwrap_or_else(|e| panic!("Failed to parse sql: {}\n{e}", query.sql));
+// Test query that has calculation in derived table with columns
+#[test]
+fn roundtrip_statement_with_dialect_18() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT id FROM (SELECT j1_id + 1 * 3 from j1) AS c (id)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT c.id FROM (SELECT (j1.j1_id + (1 * 3)) FROM j1) AS c (id)"#,
+    );
+    Ok(())
+}
 
-        let unparser = Unparser::new(&*query.unparser_dialect);
-        let roundtrip_statement = unparser.plan_to_sql(&plan)?;
+// Test query that has limit/distinct/order in derived table with columns
+#[test]
+fn roundtrip_statement_with_dialect_19() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT id FROM (SELECT distinct (j1_id + 1 * 3) FROM j1 LIMIT 1) AS c (id)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT c.id FROM (SELECT DISTINCT (j1.j1_id + (1 * 3)) FROM j1 LIMIT 1) AS c (id)"#,
+    );
+    Ok(())
+}
 
-        let actual = &roundtrip_statement.to_string();
+#[test]
+fn roundtrip_statement_with_dialect_20() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT id FROM (SELECT j1_id + 1 FROM j1 ORDER BY j1_id DESC LIMIT 1) AS c (id)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT c.id FROM (SELECT (j1.j1_id + 1) FROM j1 ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 1) AS c (id)"#,
+    );
+    Ok(())
+}
 
-        assert_eq!(query.expected, actual);
-    }
+#[test]
+fn roundtrip_statement_with_dialect_21() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT id FROM (SELECT CAST((CAST(j1_id as BIGINT) + 1) as int) * 10 FROM j1 LIMIT 1) AS c (id)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT c.id FROM (SELECT (CAST((CAST(j1.j1_id AS BIGINT) + 1) AS INTEGER) * 10) FROM j1 LIMIT 1) AS c (id)"#,
+    );
+    Ok(())
+}
 
+#[test]
+fn roundtrip_statement_with_dialect_22() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT id FROM (SELECT CAST(j1_id as BIGINT) + 1 FROM j1 ORDER BY j1_id LIMIT 1) AS c (id)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT c.id FROM (SELECT (CAST(j1.j1_id AS BIGINT) + 1) FROM j1 ORDER BY j1.j1_id ASC NULLS LAST LIMIT 1) AS c (id)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_23() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT temp_j.id2 FROM (SELECT j1_id, j1_string FROM j1) AS temp_j(id2, string2)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT temp_j.id2 FROM (SELECT j1.j1_id, j1.j1_string FROM j1) AS temp_j (id2, string2)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_24() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT temp_j.id2 FROM (SELECT j1_id, j1_string FROM j1) AS temp_j(id2, string2)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: SqliteDialect {},
+        expected: @r#"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2`, `j1`.`j1_string` AS `string2` FROM `j1`) AS `temp_j`"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_25() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM (SELECT j1_id + 1 FROM j1) AS temp_j(id2)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: SqliteDialect {},
+        expected: @r#"SELECT `temp_j`.`id2` FROM (SELECT (`j1`.`j1_id` + 1) AS `id2` FROM `j1`) AS `temp_j`"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_26() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM (SELECT j1_id FROM j1 LIMIT 1) AS temp_j(id2)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: SqliteDialect {},
+        expected: @r#"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2` FROM `j1` LIMIT 1) AS `temp_j`"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_27() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))" FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_28() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT t1.c1 FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS t1 (c1)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_29() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]), j1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))", j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_30() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT u.c1, j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_31() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT u.c1 FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) UNION ALL SELECT u.c1 FROM (SELECT UNNEST([4, 5, 6]) AS "UNNEST(make_array(Int64(4),Int64(5),Int64(6)))") AS u (c1)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_32() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))) FROM UNNEST([1, 2, 3])"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_33() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT t1.c1 FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_34() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT t1.c1 FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_35() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]), j1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))), j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) CROSS JOIN j1"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_36() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT u.c1, j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_37() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT u.c1 FROM UNNEST([1, 2, 3]) AS u (c1) UNION ALL SELECT u.c1 FROM UNNEST([4, 5, 6]) AS u (c1)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_38() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT UNNEST([1,2,3])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT * FROM UNNEST([1, 2, 3])"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_39() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT UNNEST([1,2,3]) as c1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT UNNEST([1, 2, 3]) AS c1"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_40() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT UNNEST([1,2,3]), 1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3))), Int64(1)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_41() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT u.array_col, u.struct_col, UNNEST(outer_ref(u.array_col)) FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_42() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT u.array_col, u.struct_col, t1.c1 FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col) AS t1 (c1)"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_43() -> Result<(), DataFusionError> {
+    let unparser = CustomDialectBuilder::default()
+        .with_unnest_as_table_factor(true)
+        .build();
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT unnest([1, 2, 3, 4]) from unnest([1, 2, 3]);",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: unparser,
+        expected: @r#"SELECT UNNEST([1, 2, 3, 4]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3),Int64(4))) FROM UNNEST([1, 2, 3])"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_44() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT u.array_col, u.struct_col, "UNNEST(outer_ref(u.array_col))" FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))")"#,
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_with_dialect_45() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT u.array_col, u.struct_col, t1.c1 FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))") AS t1 (c1)"#,
+    );
     Ok(())
 }
 
