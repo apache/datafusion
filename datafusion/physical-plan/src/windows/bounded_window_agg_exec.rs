@@ -364,7 +364,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.statistics_helper(input_stat)
     }
 
-    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
         self.input
             .statistics_by_partition()?
             .into_iter()

@@ -344,7 +344,7 @@ impl ExecutionPlan for CrossJoinExec {
         ))
     }
 
-    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
         let left_stats = self.left.statistics_by_partition()?;
         let right_stats = self.right.statistics_by_partition()?;
 
