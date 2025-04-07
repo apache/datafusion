@@ -2082,7 +2082,12 @@ fn maybe_fix_physical_column_name(
             let physical_name = physical_field.name();
 
             if physical_name != expr_col_name {
-                if let Some(idx) = expr_col_name.find(':') {
+                // handle edge cases where the physical_name contains ':'.
+                let colon_count = physical_name.matches(':').count();
+                let mut splits = expr_col_name.match_indices(':');
+                let split_pos = splits.nth(colon_count);
+
+                if let Some((idx, _)) = split_pos {
                     let base_name = &expr_col_name[..idx];
                     if base_name == physical_name {
                         let updated_column = Column::new(physical_name, column.index());
