@@ -36,6 +36,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
+use crate::statistics::PartitionedStatistics;
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -347,7 +348,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
-        Ok(vec![self.statistics()?])
+        Ok(PartitionedStatistics::new(vec![Arc::new(
+            self.statistics()?,
+        )]))
     }
 
     fn supports_limit_pushdown(&self) -> bool {

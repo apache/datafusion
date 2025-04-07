@@ -188,9 +188,11 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.statistics()
     }
 
-    fn statistics_by_partition(&self) -> datafusion_common::Result<Vec<Statistics>> {
+    fn statistics_by_partition(
+        &self,
+    ) -> datafusion_common::Result<PartitionedStatistics> {
         let mut statistics = vec![
-            Statistics::new_unknown(&self.schema());
+            Arc::new(Statistics::new_unknown(&self.schema()));
             self.properties().partitioning.partition_count()
         ];
         if let Some(file_config) =
@@ -202,7 +204,7 @@ impl ExecutionPlan for DataSourceExec {
                 }
             }
         }
-        Ok(statistics)
+        Ok(PartitionedStatistics::new(statistics))
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

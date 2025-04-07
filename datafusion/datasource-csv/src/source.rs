@@ -51,6 +51,7 @@ use datafusion_physical_plan::{
 
 use crate::file_format::CsvDecoder;
 use datafusion_datasource::file_groups::FileGroup;
+use datafusion_physical_plan::statistics::PartitionedStatistics;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};

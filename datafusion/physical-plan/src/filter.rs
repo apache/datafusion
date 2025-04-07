@@ -58,6 +58,7 @@ use datafusion_physical_expr::{
     ExprBoundaries, PhysicalExpr,
 };
 
+use crate::statistics::PartitionedStatistics;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -414,19 +415,23 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
-        self.input
-            .statistics_by_partition()?
-            .into_iter()
-            .map(|input_stat| {
-                Self::statistics_helper(
+        let input_stats = self.input.statistics_by_partition()?;
+
+        let stats: Result<Vec<Arc<Statistics>>> = input_stats
+            .iter()
+            .map(|stat| {
+                let stat = Self::statistics_helper(
                     self.schema(),
-                    input_stat,
+                    stat.clone(),
                     self.predicate(),
                     self.default_selectivity,
                 )
-                .map(|stat| stat.project(self.projection.as_ref()))
+                .map(|stat| stat.project(self.projection.as_ref()))?;
+                Ok(Arc::new(stat))
             })
-            .collect()
+            .collect();
+
+        Ok(PartitionedStatistics::new(stats?))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
