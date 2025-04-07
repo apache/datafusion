@@ -36,7 +36,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::statistics::{
+pub(crate) use datafusion_physical_plan::statistics::{
     add_row_stats, compute_summary_statistics, set_max_if_greater, set_min_if_lesser,
 };
 use datafusion_physical_plan::{ColumnStatistics, Statistics};
