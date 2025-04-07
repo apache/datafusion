@@ -44,7 +44,7 @@ datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
-object_store = { workspace = true }
+object_store = { workspace = true, features = ["fs"] }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true }

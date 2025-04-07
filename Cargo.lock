@@ -4287,6 +4287,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "walkdir",
 ]
 
 [[package]]
