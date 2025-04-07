@@ -1061,7 +1061,7 @@ impl SessionContext {
 
                 let current_runtime = {
                     let state = self.state.read();
-                    state.runtime_env().clone()
+                    Arc::<RuntimeEnv>::clone(state.runtime_env())
                 };
 
                 let mut builder = RuntimeEnvBuilder::from_runtime_env(&current_runtime);

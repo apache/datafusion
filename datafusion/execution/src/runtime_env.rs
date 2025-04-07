@@ -271,29 +271,30 @@ impl RuntimeEnvBuilder {
 
     /// Create a new RuntimeEnvBuilder from an existing RuntimeEnv
     pub fn from_runtime_env(runtime_env: &RuntimeEnv) -> Self {
-        let mut cache_config = CacheManagerConfig::default();
-        cache_config.table_files_statistics_cache =
-            runtime_env.cache_manager.get_file_statistic_cache();
-        cache_config.list_files_cache = runtime_env.cache_manager.get_list_files_cache();
+        let cache_config = CacheManagerConfig {
+            table_files_statistics_cache: runtime_env
+                .cache_manager
+                .get_file_statistic_cache(),
+            list_files_cache: runtime_env.cache_manager.get_list_files_cache(),
+        };
 
         Self {
-            disk_manager: DiskManagerConfig::Existing(runtime_env.disk_manager.clone()),
-            memory_pool: Some(runtime_env.memory_pool.clone()),
+            disk_manager: DiskManagerConfig::Existing(Arc::clone(
+                &runtime_env.disk_manager,
+            )),
+            memory_pool: Some(Arc::clone(&runtime_env.memory_pool)),
             cache_manager: cache_config,
-            object_store_registry: runtime_env.object_store_registry.clone(),
+            object_store_registry: Arc::clone(&runtime_env.object_store_registry),
         }
     }
-
     /// Returns a list of all available runtime configurations with their current values and descriptions
     pub fn entries(&self) -> Vec<ConfigEntry> {
-        let mut entries = Vec::new();
         // Memory pool configuration
-        entries.push(ConfigEntry {
+        vec![ConfigEntry {
             key: "datafusion.runtime.memory_limit".to_string(),
             value: None, // Default is system-dependent
             description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
-        });
-        entries
+        }]
     }
 
     /// Generate documentation that can be included in the user guide
