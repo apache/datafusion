@@ -1008,8 +1008,8 @@ mod test {
         file2 = file2.with_statistics(Arc::new(stats2.clone()));
 
         let file_groups = vec![
-            FileGroup::new(vec![file1]).with_statistics(stats1),
-            FileGroup::new(vec![file2]).with_statistics(stats2),
+            FileGroup::new(vec![file1]).with_statistics(Arc::new(stats1)),
+            FileGroup::new(vec![file2]).with_statistics(Arc::new(stats2)),
         ];
 
         // Verify initial state
@@ -1034,18 +1034,67 @@ mod test {
             assert!(!stats.column_statistics[0].max_value.is_exact().unwrap());
         }
 
-        for group in repartitioned.into_iter() {
+        for group in repartitioned.iter() {
             // Check all files have inexact statistics regardless of group
             for file in group.files.iter() {
                 let stats = file.statistics.as_ref().unwrap();
                 assert_stats_are_inexact(stats);
             }
 
-            let stats = group.statistics.unwrap();
-            assert_stats_are_inexact(&stats);
+            let stats = group.statistics.as_ref().unwrap();
+            assert_stats_are_inexact(stats);
         }
 
-        // Check the specific statistics for each partitioned file and each group
+        // Check the specific statistics for each group (after repartition, each group only has one file, so we don't need to check the partitioned file statistics)
+        let expected_group_1_statistics = Statistics {
+            num_rows: Precision::Inexact(1000),
+            total_byte_size: Precision::Inexact(100),
+            column_statistics: vec![datafusion_common::ColumnStatistics {
+                null_count: Precision::Inexact(10),
+                max_value: Precision::Inexact(ScalarValue::UInt32(Some(100))),
+                min_value: Precision::Inexact(ScalarValue::UInt32(Some(1))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+            }],
+        };
+
+        let expected_group_2_statistics = Statistics {
+            num_rows: Precision::Inexact(500),
+            total_byte_size: Precision::Inexact(50),
+            column_statistics: vec![datafusion_common::ColumnStatistics {
+                null_count: Precision::Inexact(5),
+                max_value: Precision::Inexact(ScalarValue::UInt32(Some(200))),
+                min_value: Precision::Inexact(ScalarValue::UInt32(Some(101))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+            }],
+        };
+
+        let expected_group_3_statistics = Statistics {
+            num_rows: Precision::Inexact(1000),
+            total_byte_size: Precision::Inexact(100),
+            column_statistics: vec![datafusion_common::ColumnStatistics {
+                null_count: Precision::Inexact(10),
+                max_value: Precision::Inexact(ScalarValue::UInt32(Some(100))),
+                min_value: Precision::Inexact(ScalarValue::UInt32(Some(1))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+            }],
+        };
+
+        assert_eq!(
+            repartitioned[0].statistics.as_ref().unwrap(),
+            &Arc::new(expected_group_1_statistics)
+        );
+        assert_eq!(
+            repartitioned[1].statistics.as_ref().unwrap(),
+            &Arc::new(expected_group_2_statistics)
+        );
+        assert_eq!(
+            repartitioned[2].statistics.as_ref().unwrap(),
+            &Arc::new(expected_group_3_statistics)
+        );
+
         Ok(())
     }
 
