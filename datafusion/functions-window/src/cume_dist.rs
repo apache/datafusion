@@ -51,7 +51,7 @@ define_udwf_and_expr!(
        cume_dist() OVER (ORDER BY salary) AS cume_dist
     FROM employees;
 ```
-```text
+```sql
 +--------+-----------+
 | salary | cume_dist |
 +--------+-----------+
