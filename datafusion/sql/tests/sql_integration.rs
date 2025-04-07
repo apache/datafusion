@@ -56,108 +56,233 @@ mod cases;
 mod common;
 
 #[test]
-fn parse_decimals() {
-    let test_data = [
-        ("1", "Int64(1)"),
-        ("001", "Int64(1)"),
-        ("0.1", "Decimal128(Some(1),1,1)"),
-        ("0.01", "Decimal128(Some(1),2,2)"),
-        ("1.0", "Decimal128(Some(10),2,1)"),
-        ("10.01", "Decimal128(Some(1001),4,2)"),
-        (
-            "10000000000000000000.00",
-            "Decimal128(Some(1000000000000000000000),22,2)",
-        ),
-        ("18446744073709551615", "UInt64(18446744073709551615)"),
-        (
-            "18446744073709551616",
-            "Decimal128(Some(18446744073709551616),20,0)",
-        ),
-    ];
-    for (a, b) in test_data {
-        let sql = format!("SELECT {a}");
-        let expected = format!("Projection: {b}\n  EmptyRelation");
-        quick_test_with_options(
-            &sql,
-            &expected,
-            ParserOptions {
-                parse_float_as_decimal: true,
-                enable_ident_normalization: false,
-                support_varchar_with_length: false,
-                map_varchar_to_utf8view: false,
-                enable_options_value_normalization: false,
-                collect_spans: false,
-            },
-        );
-    }
+fn parse_decimals_1() {
+    let sql = "SELECT 1";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Int64(1)
+          EmptyRelation
+        "#
+    );
 }
 
 #[test]
-fn parse_ident_normalization() {
-    let test_data = [
-        (
-            "SELECT CHARACTER_LENGTH('str')",
-            "Ok(Projection: character_length(Utf8(\"str\"))\n  EmptyRelation)",
-            false,
-        ),
-        (
-            "SELECT CONCAT('Hello', 'World')",
-            "Ok(Projection: concat(Utf8(\"Hello\"), Utf8(\"World\"))\n  EmptyRelation)",
-            false,
-        ),
-        (
-            "SELECT age FROM person",
-            "Ok(Projection: person.age\n  TableScan: person)",
-            true,
-        ),
-        (
-            "SELECT AGE FROM PERSON",
-            "Ok(Projection: person.age\n  TableScan: person)",
-            true,
-        ),
-        (
-            "SELECT AGE FROM PERSON",
-            "Error during planning: No table named: PERSON found",
-            false,
-        ),
-        (
-            "SELECT Id FROM UPPERCASE_test",
-            "Ok(Projection: UPPERCASE_test.Id\
-                \n  TableScan: UPPERCASE_test)",
-            false,
-        ),
-        (
-            "SELECT \"Id\", lower FROM \"UPPERCASE_test\"",
-            "Ok(Projection: UPPERCASE_test.Id, UPPERCASE_test.lower\
-                \n  TableScan: UPPERCASE_test)",
-            true,
-        ),
-    ];
+fn parse_decimals_2() {
+    let sql = "SELECT 001";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Int64(1)
+          EmptyRelation
+        "#
+    );
+}
 
-    for (sql, expected, enable_ident_normalization) in test_data {
-        let plan = logical_plan_with_options(
-            sql,
-            ParserOptions {
-                parse_float_as_decimal: false,
-                enable_ident_normalization,
-                support_varchar_with_length: false,
-                map_varchar_to_utf8view: false,
-                enable_options_value_normalization: false,
-                collect_spans: false,
-            },
-        );
-        if plan.is_ok() {
-            let plan = plan.unwrap();
-            assert_eq!(expected, format!("Ok({plan})"));
-        } else {
-            assert_eq!(expected, plan.unwrap_err().strip_backtrace());
-        }
-    }
+#[test]
+fn parse_decimals_3() {
+    let sql = "SELECT 0.1";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(1),1,1)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_4() {
+    let sql = "SELECT 0.01";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(1),2,2)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_5() {
+    let sql = "SELECT 1.0";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(10),2,1)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_6() {
+    let sql = "SELECT 10.01";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(1001),4,2)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_7() {
+    let sql = "SELECT 10000000000000000000.00";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(1000000000000000000000),22,2)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_8() {
+    let sql = "SELECT 18446744073709551615";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: UInt64(18446744073709551615)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_decimals_9() {
+    let sql = "SELECT 18446744073709551616";
+    let options = parse_decimals_parser_options();
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: Decimal128(Some(18446744073709551616),20,0)
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_1() {
+    let sql = "SELECT CHARACTER_LENGTH('str')";
+    let parser_option = ident_normalization_parser_options_no_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: character_length(Utf8("str"))
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_2() {
+    let sql = "SELECT CONCAT('Hello', 'World')";
+    let parser_option = ident_normalization_parser_options_no_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: concat(Utf8("Hello"), Utf8("World"))
+          EmptyRelation
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_3() {
+    let sql = "SELECT age FROM person";
+    let parser_option = ident_normalization_parser_options_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: person.age
+          TableScan: person
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_4() {
+    let sql = "SELECT AGE FROM PERSON";
+    let parser_option = ident_normalization_parser_options_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: person.age
+          TableScan: person
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_5() {
+    let sql = "SELECT AGE FROM PERSON";
+    let parser_option = ident_normalization_parser_options_no_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option)
+        .unwrap_err()
+        .strip_backtrace();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Error during planning: No table named: PERSON found
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_6() {
+    let sql = "SELECT Id FROM UPPERCASE_test";
+    let parser_option = ident_normalization_parser_options_no_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: UPPERCASE_test.Id
+          TableScan: UPPERCASE_test
+        "#
+    );
+}
+
+#[test]
+fn parse_ident_normalization_7() {
+    let sql = r#"SELECT "Id", lower FROM "UPPERCASE_test""#;
+    let parser_option = ident_normalization_parser_options_ident_normalization();
+    let plan = logical_plan_with_options(sql, parser_option).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: UPPERCASE_test.Id, UPPERCASE_test.lower
+          TableScan: UPPERCASE_test
+        "#
+    );
 }
 
 #[test]
 fn select_no_relation() {
-    let plan = generate_logical_plan("SELECT 1");
+    let plan = logical_plan("SELECT 1").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -169,7 +294,7 @@ fn select_no_relation() {
 
 #[test]
 fn test_real_f32() {
-    let plan = generate_logical_plan("SELECT CAST(1.1 AS REAL)");
+    let plan = logical_plan("SELECT CAST(1.1 AS REAL)").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -181,7 +306,7 @@ fn test_real_f32() {
 
 #[test]
 fn test_int_decimal_default() {
-    let plan = generate_logical_plan("SELECT CAST(10 AS DECIMAL)");
+    let plan = logical_plan("SELECT CAST(10 AS DECIMAL)").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -193,7 +318,7 @@ fn test_int_decimal_default() {
 
 #[test]
 fn test_int_decimal_no_scale() {
-    let plan = generate_logical_plan("SELECT CAST(10 AS DECIMAL(5))");
+    let plan = logical_plan("SELECT CAST(10 AS DECIMAL(5))").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -205,7 +330,7 @@ fn test_int_decimal_no_scale() {
 
 #[test]
 fn test_tinyint() {
-    let plan = generate_logical_plan("SELECT CAST(6 AS TINYINT)");
+    let plan = logical_plan("SELECT CAST(6 AS TINYINT)").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -217,7 +342,7 @@ fn test_tinyint() {
 
 #[test]
 fn cast_from_subquery() {
-    let plan = generate_logical_plan("SELECT CAST (a AS FLOAT) FROM (SELECT 1 AS a)");
+    let plan = logical_plan("SELECT CAST (a AS FLOAT) FROM (SELECT 1 AS a)").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -230,7 +355,7 @@ fn cast_from_subquery() {
 
 #[test]
 fn try_cast_from_aggregation() {
-    let plan = generate_logical_plan("SELECT TRY_CAST(sum(age) AS FLOAT) FROM person");
+    let plan = logical_plan("SELECT TRY_CAST(sum(age) AS FLOAT) FROM person").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -257,7 +382,7 @@ fn cast_to_invalid_decimal_type_precision_0() {
 fn cast_to_invalid_decimal_type_precision_gt_38() {
     // precision > 38
     let sql = "SELECT CAST(10 AS DECIMAL(39))";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -294,7 +419,7 @@ fn cast_to_invalid_decimal_type_precision_lt_scale() {
 #[test]
 fn plan_create_table_with_pk() {
     let sql = "create table person (id int, name string, primary key(id))";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -304,7 +429,7 @@ fn plan_create_table_with_pk() {
     );
 
     let sql = "create table person (id int primary key, name string)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -315,7 +440,7 @@ fn plan_create_table_with_pk() {
 
     let sql =
         "create table person (id int, name string unique not null, primary key(id))";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -325,7 +450,7 @@ fn plan_create_table_with_pk() {
     );
 
     let sql = "create table person (id int, name varchar,  primary key(name,  id));";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -338,7 +463,7 @@ fn plan_create_table_with_pk() {
 #[test]
 fn plan_create_table_with_multi_pk() {
     let sql = "create table person (id int, name string primary key, primary key(id))";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -351,7 +476,7 @@ fn plan_create_table_with_multi_pk() {
 #[test]
 fn plan_create_table_with_unique() {
     let sql = "create table person (id int unique, name string)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -364,7 +489,7 @@ fn plan_create_table_with_unique() {
 #[test]
 fn plan_create_table_no_pk() {
     let sql = "create table person (id int, name string)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -377,7 +502,7 @@ fn plan_create_table_no_pk() {
 #[test]
 fn plan_create_table_check_constraint() {
     let sql = "create table person (id int, name string, unique(id))";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -390,7 +515,7 @@ fn plan_create_table_check_constraint() {
 #[test]
 fn plan_start_transaction() {
     let sql = "start transaction";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -402,7 +527,7 @@ fn plan_start_transaction() {
 #[test]
 fn plan_start_transaction_isolation() {
     let sql = "start transaction isolation level read committed";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -414,7 +539,7 @@ fn plan_start_transaction_isolation() {
 #[test]
 fn plan_start_transaction_read_only() {
     let sql = "start transaction read only";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -426,7 +551,7 @@ fn plan_start_transaction_read_only() {
 #[test]
 fn plan_start_transaction_fully_qualified() {
     let sql = "start transaction isolation level read committed read only";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -442,7 +567,7 @@ isolation level read committed
 read only
 isolation level repeatable read
 "#;
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -454,7 +579,7 @@ isolation level repeatable read
 #[test]
 fn plan_commit_transaction() {
     let sql = "commit transaction";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -466,7 +591,7 @@ fn plan_commit_transaction() {
 #[test]
 fn plan_commit_transaction_chained() {
     let sql = "commit transaction and chain";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -478,7 +603,7 @@ fn plan_commit_transaction_chained() {
 #[test]
 fn plan_rollback_transaction() {
     let sql = "rollback transaction";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -490,7 +615,7 @@ fn plan_rollback_transaction() {
 #[test]
 fn plan_rollback_transaction_chained() {
     let sql = "rollback transaction and chain";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -502,7 +627,7 @@ fn plan_rollback_transaction_chained() {
 #[test]
 fn plan_copy_to() {
     let sql = "COPY test_decimal to 'output.csv' STORED AS CSV";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -515,7 +640,7 @@ fn plan_copy_to() {
 #[test]
 fn plan_explain_copy_to() {
     let sql = "EXPLAIN COPY test_decimal to 'output.csv'";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -529,7 +654,7 @@ fn plan_explain_copy_to() {
 #[test]
 fn plan_explain_copy_to_format() {
     let sql = "EXPLAIN COPY test_decimal to 'output.tbl' STORED AS CSV";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -544,7 +669,7 @@ fn plan_explain_copy_to_format() {
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -558,7 +683,7 @@ fn plan_insert() {
 #[test]
 fn plan_insert_no_target_columns() {
     let sql = "INSERT INTO test_decimal VALUES (1, 2), (3, 4)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -604,7 +729,7 @@ fn test_insert_schema_errors(#[case] sql: &str, #[case] error: &str) {
 #[test]
 fn plan_update() {
     let sql = "update person set last_name='Kay' where id=1";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -631,7 +756,7 @@ fn update_column_does_not_exist(#[case] sql: &str) {
 #[test]
 fn plan_delete() {
     let sql = "delete from person where id=1";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -646,7 +771,7 @@ fn plan_delete() {
 fn plan_delete_quoted_identifier_case_sensitive() {
     let sql =
         "DELETE FROM \"SomeCatalog\".\"SomeSchema\".\"UPPERCASE_test\" WHERE \"Id\" = 1";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -679,7 +804,7 @@ fn select_repeated_column() {
 
 #[test]
 fn select_scalar_func_with_literal_no_relation() {
-    let plan = generate_logical_plan("SELECT sqrt(9)");
+    let plan = logical_plan("SELECT sqrt(9)").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -693,7 +818,7 @@ fn select_scalar_func_with_literal_no_relation() {
 fn select_simple_filter() {
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE state = 'CO'";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -722,7 +847,7 @@ fn select_filter_cannot_use_alias() {
 fn select_neg_filter() {
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE NOT state";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -737,7 +862,7 @@ fn select_neg_filter() {
 fn select_compound_filter() {
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE state = 'CO' AND age >= 21 AND age <= 65";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -751,7 +876,7 @@ fn select_compound_filter() {
 #[test]
 fn test_timestamp_filter() {
     let sql = "SELECT state FROM person WHERE birth_date < CAST (158412331400600000 as timestamp)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -765,7 +890,7 @@ fn test_timestamp_filter() {
 #[test]
 fn test_date_filter() {
     let sql = "SELECT state FROM person WHERE birth_date < CAST ('2020-01-01' as date)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -786,7 +911,7 @@ fn select_all_boolean_operators() {
                    AND age >= 21 \
                    AND age < 65 \
                    AND age <= 65";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -800,7 +925,7 @@ fn select_all_boolean_operators() {
 #[test]
 fn select_between() {
     let sql = "SELECT state FROM person WHERE age BETWEEN 21 AND 65";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -814,7 +939,7 @@ fn select_between() {
 #[test]
 fn select_between_negated() {
     let sql = "SELECT state FROM person WHERE age NOT BETWEEN 21 AND 65";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -835,7 +960,7 @@ fn select_nested() {
                        FROM person
                      ) AS a
                    ) AS b";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -858,7 +983,7 @@ fn select_nested_with_filters() {
                      WHERE age > 20
                    ) AS a
                    WHERE fn1 = 'X' AND age < 30";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -876,7 +1001,7 @@ fn select_nested_with_filters() {
 fn table_with_column_alias() {
     let sql = "SELECT a, b, c
                    FROM lineitem l (a, b, c)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -915,7 +1040,7 @@ fn select_with_ambiguous_column() {
 fn join_with_ambiguous_column() {
     // This is legal.
     let sql = "SELECT id FROM person a join person b using(id)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -932,7 +1057,7 @@ fn join_with_ambiguous_column() {
 #[test]
 fn natural_left_join() {
     let sql = "SELECT l_item_id FROM lineitem a NATURAL LEFT JOIN lineitem b";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -949,7 +1074,7 @@ fn natural_left_join() {
 #[test]
 fn natural_right_join() {
     let sql = "SELECT l_item_id FROM lineitem a NATURAL RIGHT JOIN lineitem b";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1040,7 +1165,7 @@ fn select_aggregate_with_having_that_reuses_aggregate() {
     let sql = "SELECT MAX(age)
                    FROM person
                    HAVING MAX(age) < 30";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1057,7 +1182,7 @@ fn select_aggregate_with_having_with_aggregate_not_in_select() {
     let sql = "SELECT max(age)
                    FROM person
                    HAVING max(first_name) > 'M'";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1090,7 +1215,7 @@ fn select_aggregate_aliased_with_having_referencing_aggregate_by_its_alias() {
                    FROM person
                    HAVING max_age < 30";
     // FIXME: add test for having in execution
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1107,7 +1232,7 @@ fn select_aggregate_aliased_with_having_that_reuses_aggregate_but_not_by_its_ali
     let sql = "SELECT max(age) as max_age
                    FROM person
                    HAVING max(age) < 30";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1125,7 +1250,7 @@ fn select_aggregate_with_group_by_with_having() {
                    FROM person
                    GROUP BY first_name
                    HAVING first_name = 'M'";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1144,7 +1269,7 @@ fn select_aggregate_with_group_by_with_having_and_where() {
                    WHERE id > 5
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1164,7 +1289,7 @@ fn select_aggregate_with_group_by_with_having_and_where_filtering_on_aggregate_c
                    WHERE id > 5 AND age > 18
                    GROUP BY first_name
                    HAVING MAX(age) < 100";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1183,7 +1308,7 @@ fn select_aggregate_with_group_by_with_having_using_column_by_alias() {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 2 AND fn = 'M'";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1202,7 +1327,7 @@ fn select_aggregate_with_group_by_with_having_using_columns_with_and_without_the
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 2 AND max_age < 5 AND first_name = 'M' AND fn = 'N'";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1220,7 +1345,7 @@ fn select_aggregate_with_group_by_with_having_that_reuses_aggregate() {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1254,7 +1379,7 @@ fn select_aggregate_with_group_by_with_having_that_reuses_aggregate_multiple_tim
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND MAX(age) < 200";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1272,7 +1397,7 @@ fn select_aggregate_with_group_by_with_having_using_aggregate_not_in_select() {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND MIN(id) < 50";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1291,7 +1416,7 @@ fn select_aggregate_aliased_with_group_by_with_having_referencing_aggregate_by_i
                    FROM person
                    GROUP BY first_name
                    HAVING max_age > 100";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1310,7 +1435,7 @@ fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compo
                    FROM person
                    GROUP BY first_name
                    HAVING max_age_plus_one > 100";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1329,7 +1454,7 @@ fn select_aggregate_with_group_by_with_having_using_derived_column_aggregate_not
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND MIN(id - 2) < 50";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1347,7 +1472,7 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
                    FROM person
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND count(*) < 50";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1362,7 +1487,7 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
 #[test]
 fn select_binary_expr() {
     let sql = "SELECT age + salary from person";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1375,7 +1500,7 @@ fn select_binary_expr() {
 #[test]
 fn select_binary_expr_nested() {
     let sql = "SELECT (age + salary)/2 from person";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1387,7 +1512,7 @@ fn select_binary_expr_nested() {
 
 #[test]
 fn select_simple_aggregate() {
-    let plan = generate_logical_plan("SELECT MIN(age) FROM person");
+    let plan = logical_plan("SELECT MIN(age) FROM person").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1400,7 +1525,7 @@ fn select_simple_aggregate() {
 
 #[test]
 fn test_sum_aggregate() {
-    let plan = generate_logical_plan("SELECT sum(age) from person");
+    let plan = logical_plan("SELECT sum(age) from person").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1433,7 +1558,7 @@ fn select_simple_aggregate_repeated_aggregate() {
 
 #[test]
 fn select_simple_aggregate_repeated_aggregate_with_single_alias() {
-    let plan = generate_logical_plan("SELECT MIN(age), MIN(age) AS a FROM person");
+    let plan = logical_plan("SELECT MIN(age), MIN(age) AS a FROM person").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1446,7 +1571,7 @@ fn select_simple_aggregate_repeated_aggregate_with_single_alias() {
 
 #[test]
 fn select_simple_aggregate_repeated_aggregate_with_unique_aliases() {
-    let plan = generate_logical_plan("SELECT MIN(age) AS a, MIN(age) AS b FROM person");
+    let plan = logical_plan("SELECT MIN(age) AS a, MIN(age) AS b FROM person").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1459,9 +1584,9 @@ fn select_simple_aggregate_repeated_aggregate_with_unique_aliases() {
 
 #[test]
 fn select_from_typed_string_values() {
-    let plan = generate_logical_plan(
+    let plan = logical_plan(
         "SELECT col1, col2 FROM (VALUES (TIMESTAMP '2021-06-10 17:01:00Z', DATE '2004-04-09')) as t (col1, col2)",
-    );
+    ).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1488,9 +1613,9 @@ fn select_simple_aggregate_repeated_aggregate_with_repeated_aliases() {
 
 #[test]
 fn select_simple_aggregate_with_groupby() {
-    let plan = generate_logical_plan(
-        "SELECT state, MIN(age), MAX(age) FROM person GROUP BY state",
-    );
+    let plan =
+        logical_plan("SELECT state, MIN(age), MAX(age) FROM person GROUP BY state")
+            .unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1503,9 +1628,9 @@ fn select_simple_aggregate_with_groupby() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_with_aliases() {
-    let plan = generate_logical_plan(
-        "SELECT state AS a, MIN(age) AS b FROM person GROUP BY state",
-    );
+    let plan =
+        logical_plan("SELECT state AS a, MIN(age) AS b FROM person GROUP BY state")
+            .unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1532,7 +1657,7 @@ fn select_simple_aggregate_with_groupby_with_aliases_repeated() {
 #[test]
 fn select_simple_aggregate_with_groupby_column_unselected() {
     let plan =
-        generate_logical_plan("SELECT MIN(age), MAX(age) FROM person GROUP BY state");
+        logical_plan("SELECT MIN(age), MAX(age) FROM person GROUP BY state").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1579,7 +1704,7 @@ fn select_interval_out_of_range() {
 #[test]
 fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby() {
     let plan =
-        generate_logical_plan("SELECT MAX(first_name) FROM person GROUP BY first_name");
+        logical_plan("SELECT MAX(first_name) FROM person GROUP BY first_name").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1592,9 +1717,8 @@ fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby()
 
 #[test]
 fn select_simple_aggregate_with_groupby_can_use_positions() {
-    let plan = generate_logical_plan(
-        "SELECT state, age AS b, count(1) FROM person GROUP BY 1, 2",
-    );
+    let plan = logical_plan("SELECT state, age AS b, count(1) FROM person GROUP BY 1, 2")
+        .unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1603,9 +1727,8 @@ fn select_simple_aggregate_with_groupby_can_use_positions() {
             TableScan: person
         "#
     );
-    let plan = generate_logical_plan(
-        "SELECT state, age AS b, count(1) FROM person GROUP BY 2, 1",
-    );
+    let plan = logical_plan("SELECT state, age AS b, count(1) FROM person GROUP BY 2, 1")
+        .unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1642,7 +1765,7 @@ fn select_simple_aggregate_with_groupby_position_out_of_range() {
 #[test]
 fn select_simple_aggregate_with_groupby_can_use_alias() {
     let plan =
-        generate_logical_plan("SELECT state AS a, MIN(age) AS b FROM person GROUP BY a");
+        logical_plan("SELECT state AS a, MIN(age) AS b FROM person GROUP BY a").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1668,9 +1791,9 @@ fn select_simple_aggregate_with_groupby_aggregate_repeated() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_aggregate_repeated_and_one_has_alias() {
-    let plan = generate_logical_plan(
-        "SELECT state, MIN(age), MIN(age) AS ma FROM person GROUP BY state",
-    );
+    let plan =
+        logical_plan("SELECT state, MIN(age), MIN(age) AS ma FROM person GROUP BY state")
+            .unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1684,7 +1807,7 @@ fn select_simple_aggregate_with_groupby_aggregate_repeated_and_one_has_alias() {
 #[test]
 fn select_simple_aggregate_with_groupby_non_column_expression_unselected() {
     let plan =
-        generate_logical_plan("SELECT MIN(first_name) FROM person GROUP BY age + 1");
+        logical_plan("SELECT MIN(first_name) FROM person GROUP BY age + 1").unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1697,9 +1820,9 @@ fn select_simple_aggregate_with_groupby_non_column_expression_unselected() {
 
 #[test]
 fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resolvable() {
-    let plan = generate_logical_plan(
-        "SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1",
-    );
+    let plan =
+        logical_plan("SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1")
+            .unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1708,9 +1831,9 @@ fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resol
             TableScan: person
         "#
     );
-    let plan = generate_logical_plan(
-        "SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1",
-    );
+    let plan =
+        logical_plan("SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1")
+            .unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1723,9 +1846,9 @@ fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resol
 
 #[test]
 fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_resolvable() {
-    let plan = generate_logical_plan(
+    let plan = logical_plan(
         "SELECT ((age + 1) / 2) * (age + 1), MIN(first_name) FROM person GROUP BY age + 1"
-    );
+    ).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1766,48 +1889,63 @@ fn select_simple_aggregate_with_groupby_non_column_expression_and_its_column_sel
 
 #[test]
 fn select_simple_aggregate_nested_in_binary_expr_with_groupby() {
-    quick_test(
-        "SELECT state, MIN(age) < 10 FROM person GROUP BY state",
-        "Projection: person.state, min(person.age) < Int64(10)\
-             \n  Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]\
-             \n    TableScan: person",
+    let plan =
+        logical_plan("SELECT state, MIN(age) < 10 FROM person GROUP BY state").unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: person.state, min(person.age) < Int64(10)
+          Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
+            TableScan: person
+        "#
     );
 }
 
 #[test]
 fn select_simple_aggregate_and_nested_groupby_column() {
-    quick_test(
-        "SELECT age + 1, MAX(first_name) FROM person GROUP BY age",
-        "Projection: person.age + Int64(1), max(person.first_name)\
-             \n  Aggregate: groupBy=[[person.age]], aggr=[[max(person.first_name)]]\
-             \n    TableScan: person",
+    let plan =
+        logical_plan("SELECT MAX(first_name), age + 1 FROM person GROUP BY age").unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: max(person.first_name), person.age + Int64(1)
+          Aggregate: groupBy=[[person.age]], aggr=[[max(person.first_name)]]
+            TableScan: person
+        "#
     );
 }
 
 #[test]
 fn select_aggregate_compounded_with_groupby_column() {
-    quick_test(
-        "SELECT age + MIN(salary) FROM person GROUP BY age",
-        "Projection: person.age + min(person.salary)\
-             \n  Aggregate: groupBy=[[person.age]], aggr=[[min(person.salary)]]\
-             \n    TableScan: person",
+    let plan = logical_plan("SELECT age + MIN(salary) FROM person GROUP BY age").unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: person.age + min(person.salary)
+          Aggregate: groupBy=[[person.age]], aggr=[[min(person.salary)]]
+            TableScan: person
+        "#
     );
 }
 
 #[test]
 fn select_aggregate_with_non_column_inner_expression_with_groupby() {
-    quick_test(
-        "SELECT state, MIN(age + 1) FROM person GROUP BY state",
-        "Projection: person.state, min(person.age + Int64(1))\
-            \n  Aggregate: groupBy=[[person.state]], aggr=[[min(person.age + Int64(1))]]\
-            \n    TableScan: person",
+    let plan =
+        logical_plan("SELECT state, MIN(age + 1) FROM person GROUP BY state").unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+        Projection: person.state, min(person.age + Int64(1))
+          Aggregate: groupBy=[[person.state]], aggr=[[min(person.age + Int64(1))]]
+            TableScan: person
+        "#
     );
 }
 
 #[test]
 fn select_count_one() {
     let sql = "SELECT count(1) FROM person";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1821,7 +1959,7 @@ Projection: count(Int64(1))
 #[test]
 fn select_count_column() {
     let sql = "SELECT count(id) FROM person";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1835,7 +1973,7 @@ Projection: count(person.id)
 #[test]
 fn select_approx_median() {
     let sql = "SELECT approx_median(age) FROM person";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1849,7 +1987,7 @@ Projection: approx_median(person.age)
 #[test]
 fn select_scalar_func() {
     let sql = "SELECT sqrt(age) FROM person";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1862,7 +2000,7 @@ Projection: sqrt(person.age)
 #[test]
 fn select_aliased_scalar_func() {
     let sql = "SELECT sqrt(person.age) AS square_people FROM person";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1876,7 +2014,7 @@ Projection: sqrt(person.age) AS square_people
 fn select_where_nullif_division() {
     let sql = "SELECT c3/(c4+c5) \
                    FROM aggregate_test_100 WHERE c3/nullif(c4+c5, 0) > 0.1";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1890,7 +2028,7 @@ Projection: aggregate_test_100.c3 / (aggregate_test_100.c4 + aggregate_test_100.
 #[test]
 fn select_where_with_negative_operator() {
     let sql = "SELECT c3 FROM aggregate_test_100 WHERE c3 > -0.1 AND -c4 > 0";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1904,7 +2042,7 @@ Projection: aggregate_test_100.c3
 #[test]
 fn select_where_with_positive_operator() {
     let sql = "SELECT c3 FROM aggregate_test_100 WHERE c3 > +0.1 AND +c4 > 0";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1920,7 +2058,7 @@ fn select_where_compound_identifiers() {
     let sql = "SELECT aggregate_test_100.c3 \
     FROM public.aggregate_test_100 \
     WHERE aggregate_test_100.c3 > 0.1";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1934,7 +2072,7 @@ Projection: public.aggregate_test_100.c3
 #[test]
 fn select_order_by_index() {
     let sql = "SELECT id FROM person ORDER BY 1";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1948,7 +2086,7 @@ Sort: person.id ASC NULLS LAST
 #[test]
 fn select_order_by_multiple_index() {
     let sql = "SELECT id, state, age FROM person ORDER BY 1, 3";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -1990,74 +2128,102 @@ fn select_order_by_index_oob() {
 }
 
 #[test]
-fn select_order_by() {
+fn select_with_order_by() {
     let sql = "SELECT id FROM person ORDER BY id";
-    let expected = "Sort: person.id ASC NULLS LAST\
-                        \n  Projection: person.id\
-                        \n    TableScan: person";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Sort: person.id ASC NULLS LAST
+  Projection: person.id
+    TableScan: person
+"#
+    );
 }
 
 #[test]
 fn select_order_by_desc() {
     let sql = "SELECT id FROM person ORDER BY id DESC";
-    let expected = "Sort: person.id DESC NULLS FIRST\
-                        \n  Projection: person.id\
-                        \n    TableScan: person";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Sort: person.id DESC NULLS FIRST
+  Projection: person.id
+    TableScan: person
+"#
+    );
 }
 
 #[test]
 fn select_order_by_nulls_last() {
-    quick_test(
-        "SELECT id FROM person ORDER BY id DESC NULLS LAST",
-        "Sort: person.id DESC NULLS LAST\
-            \n  Projection: person.id\
-            \n    TableScan: person",
+    let plan = logical_plan("SELECT id FROM person ORDER BY id DESC NULLS LAST").unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Sort: person.id DESC NULLS LAST
+  Projection: person.id
+    TableScan: person
+"#
     );
 
-    quick_test(
-        "SELECT id FROM person ORDER BY id NULLS LAST",
-        "Sort: person.id ASC NULLS LAST\
-            \n  Projection: person.id\
-            \n    TableScan: person",
+    let plan = logical_plan("SELECT id FROM person ORDER BY id NULLS LAST").unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Sort: person.id ASC NULLS LAST
+  Projection: person.id
+    TableScan: person
+"#
     );
 }
 
 #[test]
 fn select_group_by() {
     let sql = "SELECT state FROM person GROUP BY state";
-    let expected = "Projection: person.state\
-                        \n  Aggregate: groupBy=[[person.state]], aggr=[[]]\
-                        \n    TableScan: person";
-
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.state
+  Aggregate: groupBy=[[person.state]], aggr=[[]]
+    TableScan: person
+"#
+    );
 }
 
 #[test]
 fn select_group_by_columns_not_in_select() {
     let sql = "SELECT MAX(age) FROM person GROUP BY state";
-    let expected = "Projection: max(person.age)\
-                        \n  Aggregate: groupBy=[[person.state]], aggr=[[max(person.age)]]\
-                        \n    TableScan: person";
-
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: max(person.age)
+  Aggregate: groupBy=[[person.state]], aggr=[[max(person.age)]]
+    TableScan: person
+"#
+    );
 }
 
 #[test]
 fn select_group_by_count_star() {
     let sql = "SELECT state, count(*) FROM person GROUP BY state";
-    let expected = "Projection: person.state, count(*)\
-                        \n  Aggregate: groupBy=[[person.state]], aggr=[[count(*)]]\
-                        \n    TableScan: person";
-
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.state, count(*)
+  Aggregate: groupBy=[[person.state]], aggr=[[count(*)]]
+    TableScan: person
+"#
+    );
 }
 
 #[test]
 fn select_group_by_needs_projection() {
     let sql = "SELECT count(state), state FROM person GROUP BY state";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2071,10 +2237,15 @@ fn select_group_by_needs_projection() {
 #[test]
 fn select_7480_1() {
     let sql = "SELECT c1, MIN(c12) FROM aggregate_test_100 GROUP BY c1, c13";
-    let expected = "Projection: aggregate_test_100.c1, min(aggregate_test_100.c12)\
-                       \n  Aggregate: groupBy=[[aggregate_test_100.c1, aggregate_test_100.c13]], aggr=[[min(aggregate_test_100.c12)]]\
-                       \n    TableScan: aggregate_test_100";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: aggregate_test_100.c1, min(aggregate_test_100.c12)
+  Aggregate: groupBy=[[aggregate_test_100.c1, aggregate_test_100.c13]], aggr=[[min(aggregate_test_100.c12)]]
+    TableScan: aggregate_test_100
+"#
+    );
 }
 
 #[test]
@@ -2093,14 +2264,19 @@ fn select_7480_2() {
 #[test]
 fn create_external_table_csv() {
     let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
-    let expected = "CreateExternalTable: Bare { table: \"t\" }";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+CreateExternalTable: Bare { table: "t" }
+"#
+    );
 }
 
 #[test]
 fn create_external_table_with_pk() {
     let sql = "CREATE EXTERNAL TABLE t(c1 int, primary key(c1)) STORED AS CSV LOCATION 'foo.csv'";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2112,7 +2288,7 @@ CreateExternalTable: Bare { table: "t" } constraints=[PrimaryKey([0])]
 #[test]
 fn create_external_table_wih_schema() {
     let sql = "CREATE EXTERNAL TABLE staging.foo STORED AS CSV LOCATION 'foo.csv'";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2124,7 +2300,7 @@ CreateExternalTable: Partial { schema: "staging", table: "foo" }
 #[test]
 fn create_schema_with_quoted_name() {
     let sql = "CREATE SCHEMA \"quoted_schema_name\"";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2136,7 +2312,7 @@ CreateCatalogSchema: "quoted_schema_name"
 #[test]
 fn create_schema_with_quoted_unnormalized_name() {
     let sql = "CREATE SCHEMA \"Foo\"";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2148,7 +2324,7 @@ CreateCatalogSchema: "Foo"
 #[test]
 fn create_schema_with_unquoted_normalized_name() {
     let sql = "CREATE SCHEMA Foo";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2160,14 +2336,19 @@ CreateCatalogSchema: "foo"
 #[test]
 fn create_external_table_custom() {
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
-    let expected = r#"CreateExternalTable: Bare { table: "dt" }"#;
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+CreateExternalTable: Bare { table: "dt" }
+"#
+    );
 }
 
 #[test]
 fn create_external_table_csv_no_schema() {
     let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv'";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2186,9 +2367,18 @@ fn create_external_table_with_compression_type() {
         "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON LOCATION 'foo.json.bz2' OPTIONS ('format.compression' 'bzip2')",
         "CREATE EXTERNAL TABLE t(c1 int) STORED AS NONSTANDARD LOCATION 'foo.unk' OPTIONS ('format.compression' 'gzip')",
          ];
-    for sql in sqls {
-        let expected = "CreateExternalTable: Bare { table: \"t\" }";
-        quick_test(sql, expected);
+
+    allow_duplicates! {
+        for sql in sqls {
+            let plan = logical_plan(sql).unwrap();
+            assert_snapshot!(
+                plan,
+                @r#"
+                CreateExternalTable: Bare { table: "t" }
+                "#
+            );
+        }
+
     }
 
     // negative case
@@ -2219,29 +2409,47 @@ fn create_external_table_with_compression_type() {
 #[test]
 fn create_external_table_parquet() {
     let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS PARQUET LOCATION 'foo.parquet'";
-    let expected = "CreateExternalTable: Bare { table: \"t\" }";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+CreateExternalTable: Bare { table: "t" }
+"#
+    );
 }
 
 #[test]
 fn create_external_table_parquet_sort_order() {
     let sql = "create external table foo(a varchar, b varchar, c timestamp) stored as parquet location '/tmp/foo' with order (c)";
-    let expected = "CreateExternalTable: Bare { table: \"foo\" }";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+CreateExternalTable: Bare { table: "foo" }
+"#
+    );
 }
 
 #[test]
 fn create_external_table_parquet_no_schema() {
     let sql = "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet'";
-    let expected = "CreateExternalTable: Bare { table: \"t\" }";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"CreateExternalTable: Bare { table: "t" }"#
+    );
 }
 
 #[test]
 fn create_external_table_parquet_no_schema_sort_order() {
     let sql = "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet' WITH ORDER (id)";
-    let expected = "CreateExternalTable: Bare { table: \"t\" }";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+CreateExternalTable: Bare { table: "t" }
+"#
+    );
 }
 
 #[test]
@@ -2250,11 +2458,16 @@ fn equijoin_explicit_syntax() {
             FROM person \
             JOIN orders \
             ON id = customer_id";
-    let expected = "Projection: person.id, orders.order_id\
-            \n  Inner Join:  Filter: person.id = orders.customer_id\
-            \n    TableScan: person\
-            \n    TableScan: orders";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.id, orders.order_id
+  Inner Join:  Filter: person.id = orders.customer_id
+    TableScan: person
+    TableScan: orders
+"#
+    );
 }
 
 #[test]
@@ -2263,12 +2476,16 @@ fn equijoin_with_condition() {
             FROM person \
             JOIN orders \
             ON id = customer_id AND order_id > 1 ";
-    let expected = "Projection: person.id, orders.order_id\
-            \n  Inner Join:  Filter: person.id = orders.customer_id AND orders.order_id > Int64(1)\
-            \n    TableScan: person\
-            \n    TableScan: orders";
-
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.id, orders.order_id
+  Inner Join:  Filter: person.id = orders.customer_id AND orders.order_id > Int64(1)
+    TableScan: person
+    TableScan: orders
+"#
+    );
 }
 
 #[test]
@@ -2277,11 +2494,16 @@ fn left_equijoin_with_conditions() {
             FROM person \
             LEFT JOIN orders \
             ON id = customer_id AND order_id > 1 AND age < 30";
-    let expected = "Projection: person.id, orders.order_id\
-            \n  Left Join:  Filter: person.id = orders.customer_id AND orders.order_id > Int64(1) AND person.age < Int64(30)\
-            \n    TableScan: person\
-            \n    TableScan: orders";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.id, orders.order_id
+  Left Join:  Filter: person.id = orders.customer_id AND orders.order_id > Int64(1) AND person.age < Int64(30)
+    TableScan: person
+    TableScan: orders
+"#
+    );
 }
 
 #[test]
@@ -2290,7 +2512,7 @@ fn right_equijoin_with_conditions() {
             FROM person \
             RIGHT JOIN orders \
             ON id = customer_id AND id > 1 AND order_id < 100";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2308,7 +2530,7 @@ fn full_equijoin_with_conditions() {
             FROM person \
             FULL JOIN orders \
             ON id = customer_id AND id > 1 AND order_id < 100";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2326,7 +2548,7 @@ fn join_with_table_name() {
             FROM person \
             JOIN orders \
             ON person.id = orders.customer_id";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2344,7 +2566,7 @@ fn join_with_using() {
             FROM person \
             JOIN person as person2 \
             USING (id)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2363,7 +2585,7 @@ fn equijoin_explicit_syntax_3_tables() {
             FROM person \
             JOIN orders ON id = customer_id \
             JOIN lineitem ON o_item_id = l_item_id";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2382,7 +2604,7 @@ fn boolean_literal_in_condition_expression() {
     let sql = "SELECT order_id \
         FROM orders \
         WHERE delivered = false OR delivered = true";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2396,7 +2618,7 @@ Projection: orders.order_id
 #[test]
 fn union() {
     let sql = "SELECT order_id from orders UNION SELECT order_id FROM orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2413,7 +2635,7 @@ Distinct:
 #[test]
 fn union_by_name_different_columns() {
     let sql = "SELECT order_id from orders UNION BY NAME SELECT order_id, 1 FROM orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2432,7 +2654,7 @@ Distinct:
 #[test]
 fn union_by_name_same_column_names() {
     let sql = "SELECT order_id from orders UNION SELECT order_id FROM orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2449,7 +2671,7 @@ Distinct:
 #[test]
 fn union_all() {
     let sql = "SELECT order_id from orders UNION ALL SELECT order_id FROM orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2466,7 +2688,7 @@ Union
 fn union_all_by_name_different_columns() {
     let sql =
         "SELECT order_id from orders UNION ALL BY NAME SELECT order_id, 1 FROM orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2484,7 +2706,7 @@ Union
 #[test]
 fn union_all_by_name_same_column_names() {
     let sql = "SELECT order_id from orders UNION ALL BY NAME SELECT order_id FROM orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2502,7 +2724,7 @@ Union
 #[test]
 fn empty_over() {
     let sql = "SELECT order_id, MAX(order_id) OVER () from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2516,7 +2738,7 @@ Projection: orders.order_id, max(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDI
 #[test]
 fn empty_over_with_alias() {
     let sql = "SELECT order_id oid, MAX(order_id) OVER () max_oid from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2530,7 +2752,7 @@ Projection: orders.order_id AS oid, max(orders.order_id) ROWS BETWEEN UNBOUNDED 
 #[test]
 fn empty_over_dup_with_alias() {
     let sql = "SELECT order_id oid, MAX(order_id) OVER () max_oid, MAX(order_id) OVER () max_oid_dup from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2544,7 +2766,7 @@ Projection: orders.order_id AS oid, max(orders.order_id) ROWS BETWEEN UNBOUNDED 
 #[test]
 fn empty_over_dup_with_different_sort() {
     let sql = "SELECT order_id oid, MAX(order_id) OVER (), MAX(order_id) OVER (ORDER BY order_id) from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2559,7 +2781,7 @@ Projection: orders.order_id AS oid, max(orders.order_id) ROWS BETWEEN UNBOUNDED 
 #[test]
 fn empty_over_plus() {
     let sql = "SELECT order_id, MAX(qty * 1.1) OVER () from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2573,7 +2795,7 @@ Projection: orders.order_id, max(orders.qty * Float64(1.1)) ROWS BETWEEN UNBOUND
 #[test]
 fn empty_over_multiple() {
     let sql = "SELECT order_id, MAX(qty) OVER (), min(qty) over (), avg(qty) OVER () from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2596,7 +2818,7 @@ Projection: orders.order_id, max(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AN
 #[test]
 fn over_partition_by() {
     let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id) from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2622,7 +2844,7 @@ Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ROWS
 #[test]
 fn over_order_by() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2637,7 +2859,7 @@ Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS
 #[test]
 fn over_order_by_with_window_frame_double_end() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS BETWEEN 3 PRECEDING and 3 FOLLOWING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2652,7 +2874,7 @@ Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS
 #[test]
 fn over_order_by_with_window_frame_single_end() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2667,7 +2889,7 @@ Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS
 #[test]
 fn over_order_by_with_window_frame_single_end_groups() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id GROUPS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2694,12 +2916,16 @@ Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS
 #[test]
 fn over_order_by_two_sort_keys() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY (order_id + 1)) from orders";
-    let expected = "\
-        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(orders.qty) ORDER BY [orders.order_id + Int64(1) ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
-        \n  WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n    WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id + Int64(1) ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n      TableScan: orders";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(orders.qty) ORDER BY [orders.order_id + Int64(1) ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+    WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id + Int64(1) ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+      TableScan: orders
+"#
+    );
 }
 
 /// psql result
@@ -2718,13 +2944,17 @@ fn over_order_by_two_sort_keys() {
 #[test]
 fn over_order_by_sort_keys_sorting() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), sum(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
-    let expected = "\
-        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
-        \n  WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
-        \n    WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n      WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n        TableScan: orders";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: orders.order_id, max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+    WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+      WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        TableScan: orders
+"#
+    );
 }
 
 /// psql result
@@ -2741,13 +2971,17 @@ fn over_order_by_sort_keys_sorting() {
 #[test]
 fn over_order_by_sort_keys_sorting_prefix_compacting() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), sum(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
-    let expected = "\
-        Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
-        \n  WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
-        \n    WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n      WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n        TableScan: orders";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: orders.order_id, max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+    WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+      WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        TableScan: orders
+"#
+    );
 }
 
 /// psql result
@@ -2769,14 +3003,18 @@ fn over_order_by_sort_keys_sorting_prefix_compacting() {
 #[test]
 fn over_order_by_sort_keys_sorting_global_order_compacting() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), sum(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders ORDER BY order_id";
-    let expected = "\
-        Sort: orders.order_id ASC NULLS LAST\
-        \n  Projection: orders.order_id, max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
-        \n    WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
-        \n      WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n        WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n          TableScan: orders";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Sort: orders.order_id ASC NULLS LAST
+  Projection: orders.order_id, max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    WindowAggr: windowExpr=[[sum(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+      WindowAggr: windowExpr=[[max(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        WindowAggr: windowExpr=[[min(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: orders
+"#
+    );
 }
 
 /// psql result
@@ -2792,11 +3030,15 @@ fn over_order_by_sort_keys_sorting_global_order_compacting() {
 fn over_partition_by_order_by() {
     let sql =
         "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty) from orders";
-    let expected = "\
-        Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
-        \n  WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n    TableScan: orders";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+    TableScan: orders
+"#
+    );
 }
 
 /// psql result
@@ -2812,11 +3054,15 @@ fn over_partition_by_order_by() {
 fn over_partition_by_order_by_no_dup() {
     let sql =
         "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty) from orders";
-    let expected = "\
-        Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
-        \n  WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n    TableScan: orders";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+    TableScan: orders
+"#
+    );
 }
 
 /// psql result
@@ -2835,12 +3081,16 @@ fn over_partition_by_order_by_no_dup() {
 fn over_partition_by_order_by_mix_up() {
     let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty), MIN(qty) OVER (PARTITION BY qty ORDER BY order_id) from orders";
-    let expected = "\
-        Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(orders.qty) PARTITION BY [orders.qty] ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
-        \n  WindowAggr: windowExpr=[[min(orders.qty) PARTITION BY [orders.qty] ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n    WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n      TableScan: orders";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(orders.qty) PARTITION BY [orders.qty] ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  WindowAggr: windowExpr=[[min(orders.qty) PARTITION BY [orders.qty] ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+    WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+      TableScan: orders
+"#
+    );
 }
 
 /// psql result
@@ -2858,7 +3108,7 @@ fn over_partition_by_order_by_mix_up() {
 fn over_partition_by_order_by_mix_up_prefix() {
     let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty), MIN(qty) OVER (PARTITION BY order_id, qty ORDER BY price) from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2874,7 +3124,7 @@ Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ORDE
 fn approx_median_window() {
     let sql =
         "SELECT order_id, APPROX_MEDIAN(qty) OVER(PARTITION BY order_id) from orders";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2888,7 +3138,7 @@ Projection: orders.order_id, approx_median(orders.qty) PARTITION BY [orders.orde
 #[test]
 fn select_typed_date_string() {
     let sql = "SELECT date '2020-12-10' AS date";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2901,7 +3151,7 @@ Projection: CAST(Utf8("2020-12-10") AS Date32) AS date
 #[test]
 fn select_typed_time_string() {
     let sql = "SELECT TIME '08:09:10.123' AS time";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -2914,51 +3164,65 @@ Projection: CAST(Utf8("08:09:10.123") AS Time64(Nanosecond)) AS time
 #[test]
 fn select_multibyte_column() {
     let sql = r#"SELECT "😀" FROM person"#;
-    let expected = "Projection: person.😀\
-            \n  TableScan: person";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.😀
+  TableScan: person
+"#
+    );
 }
 
 #[test]
 fn select_groupby_orderby() {
     // ensure that references are correctly resolved in the order by clause
     // see https://github.com/apache/datafusion/issues/4854
-    let sql = r#"SELECT
-  avg(age) AS "value",
-  date_trunc('month', birth_date) AS "birth_date"
-  FROM person GROUP BY birth_date ORDER BY birth_date;
-"#;
-    // expect that this is not an ambiguous reference
-    let expected =
-        "Sort: birth_date ASC NULLS LAST\
-         \n  Projection: avg(person.age) AS value, date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date\
-         \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]\
-         \n      TableScan: person";
-    quick_test(sql, expected);
 
-    // Use fully qualified `person.birth_date` as argument to date_trunc, plan should be the same
-    let sql = r#"SELECT
-  avg(age) AS "value",
-  date_trunc('month', person.birth_date) AS "birth_date"
-  FROM person GROUP BY birth_date ORDER BY birth_date;
-"#;
-    quick_test(sql, expected);
-
-    // Use fully qualified `person.birth_date` as group by, plan should be the same
-    let sql = r#"SELECT
-  avg(age) AS "value",
-  date_trunc('month', birth_date) AS "birth_date"
-  FROM person GROUP BY person.birth_date ORDER BY birth_date;
-"#;
-    quick_test(sql, expected);
-
-    // Use fully qualified `person.birth_date` in both group and date_trunc, plan should be the same
-    let sql = r#"SELECT
-  avg(age) AS "value",
-  date_trunc('month', person.birth_date) AS "birth_date"
-  FROM person GROUP BY person.birth_date ORDER BY birth_date;
-"#;
-    quick_test(sql, expected);
+    let sqls = vec![
+        r#"
+        SELECT
+            avg(age) AS "value",
+            date_trunc('month', birth_date) AS "birth_date"
+            FROM person GROUP BY birth_date ORDER BY birth_date;
+        "#,
+        // Use fully qualified `person.birth_date` as argument to date_trunc, plan should be the same
+        r#"
+        SELECT
+            avg(age) AS "value",
+            date_trunc('month', person.birth_date) AS "birth_date"
+            FROM person GROUP BY birth_date ORDER BY birth_date;
+        "#,
+        // Use fully qualified `person.birth_date` as group by, plan should be the same
+        r#"
+        SELECT
+            avg(age) AS "value",
+            date_trunc('month', birth_date) AS "birth_date"
+            FROM person GROUP BY person.birth_date ORDER BY birth_date;
+        "#,
+        // Use fully qualified `person.birth_date` in both group and date_trunc, plan should be the same
+        r#"
+        SELECT
+            avg(age) AS "value",
+            date_trunc('month', person.birth_date) AS "birth_date"
+            FROM person GROUP BY person.birth_date ORDER BY birth_date;
+        "#,
+    ];
+    for sql in sqls {
+        let plan = logical_plan(sql).unwrap();
+        allow_duplicates! {
+            assert_snapshot!(
+                plan,
+                // expect that this is not an ambiguous reference
+                @r#"
+        Sort: birth_date ASC NULLS LAST
+          Projection: avg(person.age) AS value, date_trunc(Utf8("month"), person.birth_date) AS birth_date
+            Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
+              TableScan: person
+        "#
+            );
+        }
+    }
 
     // Use columnized `avg(age)` in the order by
     let sql = r#"SELECT
@@ -2967,13 +3231,16 @@ fn select_groupby_orderby() {
   FROM person GROUP BY person.birth_date ORDER BY avg(age) + avg(age);
 "#;
 
-    let expected =
-        "Sort: avg(person.age) + avg(person.age) ASC NULLS LAST\
-        \n  Projection: avg(person.age) + avg(person.age), date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date\
-        \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]\
-        \n      TableScan: person";
-
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Sort: avg(person.age) + avg(person.age) ASC NULLS LAST
+  Projection: avg(person.age) + avg(person.age), date_trunc(Utf8("month"), person.birth_date) AS birth_date
+    Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
+      TableScan: person
+"#
+    );
 }
 
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
@@ -3088,55 +3355,68 @@ impl ScalarUDFImpl for DummyUDF {
     }
 }
 
-/// Create logical plan, write with formatter, compare to expected output
-fn quick_test(sql: &str, expected: &str) {
-    quick_test_with_options(sql, expected, ParserOptions::default())
-}
-
-fn generate_logical_plan(sql: &str) -> LogicalPlan {
-    logical_plan_with_options(sql, ParserOptions::default()).unwrap()
-}
-
-fn quick_test_with_options(sql: &str, expected: &str, options: ParserOptions) {
-    let plan = logical_plan_with_options(sql, options).unwrap();
-    assert_eq!(format!("{plan}"), expected);
-}
-
-fn prepare_stmt_quick_test(
-    sql: &str,
-    expected_plan: &str,
-    expected_data_types: &str,
-) -> LogicalPlan {
-    let plan = logical_plan(sql).unwrap();
-
-    let assert_plan = plan.clone();
-    // verify plan
-    assert_eq!(format!("{assert_plan}"), expected_plan);
-
-    // verify data types
-    if let LogicalPlan::Statement(Statement::Prepare(Prepare { data_types, .. })) =
-        assert_plan
-    {
-        let dt = format!("{data_types:?}");
-        assert_eq!(dt, expected_data_types);
+fn parse_decimals_parser_options() -> ParserOptions {
+    ParserOptions {
+        parse_float_as_decimal: true,
+        enable_ident_normalization: false,
+        support_varchar_with_length: false,
+        map_varchar_to_utf8view: false,
+        enable_options_value_normalization: false,
+        collect_spans: false,
     }
+}
 
-    plan
+fn ident_normalization_parser_options_no_ident_normalization() -> ParserOptions {
+    ParserOptions {
+        parse_float_as_decimal: true,
+        enable_ident_normalization: false,
+        support_varchar_with_length: false,
+        map_varchar_to_utf8view: false,
+        enable_options_value_normalization: false,
+        collect_spans: false,
+    }
+}
+
+fn ident_normalization_parser_options_ident_normalization() -> ParserOptions {
+    ParserOptions {
+        parse_float_as_decimal: true,
+        enable_ident_normalization: true,
+        support_varchar_with_length: false,
+        map_varchar_to_utf8view: false,
+        enable_options_value_normalization: false,
+        collect_spans: false,
+    }
+}
+
+fn generate_prepare_stmt_and_data_types(sql: &str) -> (LogicalPlan, String) {
+    let plan = logical_plan(sql).unwrap();
+    let data_types = match &plan {
+        LogicalPlan::Statement(Statement::Prepare(Prepare { data_types, .. })) => {
+            format!("{data_types:?}")
+        }
+        _ => panic!("Expected a Prepare statement"),
+    };
+    (plan, data_types)
 }
 
 #[test]
 fn select_partially_qualified_column() {
-    let sql = r#"SELECT person.first_name FROM public.person"#;
-    let expected = "Projection: public.person.first_name\
-            \n  TableScan: public.person";
-    quick_test(sql, expected);
+    let sql = "SELECT person.first_name FROM public.person";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: public.person.first_name
+  TableScan: public.person
+"#
+    );
 }
 
 #[test]
 fn cross_join_not_to_inner_join() {
     let sql =
         "select person.id from person, orders, lineitem where person.id = person.age;";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3154,7 +3434,7 @@ Projection: person.id
 #[test]
 fn join_with_aliases() {
     let sql = "select peeps.id, folks.first_name from person as peeps join person as folks on peeps.id = folks.id";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3171,7 +3451,7 @@ Projection: peeps.id, folks.first_name
 #[test]
 fn negative_interval_plus_interval_in_projection() {
     let sql = "select -interval '2 days' + interval '5 days';";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3184,7 +3464,7 @@ Projection: IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: -2, na
 #[test]
 fn complex_interval_expression_in_projection() {
     let sql = "select -interval '2 days' + interval '5 days'+ (-interval '3 days' + interval '5 days');";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3197,7 +3477,7 @@ Projection: IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: -2, na
 #[test]
 fn negative_sum_intervals_in_projection() {
     let sql = "select -((interval '2 days' + interval '5 days') + -(interval '4 days' + interval '7 days'));";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3210,7 +3490,7 @@ Projection: (- IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 2, 
 #[test]
 fn date_plus_interval_in_projection() {
     let sql = "select t_date32 + interval '5 days' FROM test";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3226,7 +3506,7 @@ fn date_plus_interval_in_filter() {
                     WHERE t_date64 \
                     BETWEEN cast('1999-12-31' as date) \
                         AND cast('1999-12-31' as date) + interval '30 days'";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3243,7 +3523,7 @@ fn exists_subquery() {
             (SELECT first_name FROM person \
             WHERE last_name = p.last_name \
             AND state = p.state)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3268,7 +3548,7 @@ fn exists_subquery_schema_outer_schema_overlap() {
             WHERE person.id = p2.id \
             AND person.last_name = p.last_name \
             AND person.state = p.state)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3293,7 +3573,7 @@ Projection: person.id
 fn in_subquery_uncorrelated() {
     let sql = "SELECT id FROM person p WHERE id IN \
             (SELECT id FROM person)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3312,7 +3592,7 @@ Projection: p.id
 fn not_in_subquery_correlated() {
     let sql = "SELECT id FROM person p WHERE id NOT IN \
             (SELECT id FROM person WHERE last_name = p.last_name AND state = 'CO')";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3332,7 +3612,7 @@ Projection: p.id
 fn scalar_subquery() {
     let sql =
         "SELECT p.id, (SELECT MAX(id) FROM person WHERE last_name = p.last_name) FROM person p";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3357,7 +3637,7 @@ fn scalar_subquery_reference_outer_field() {
             FROM j1, j3 \
             WHERE j2_id = j1_id \
             AND j1_id = j3_id)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3381,7 +3661,7 @@ Projection: j1.j1_string, j2.j2_string
 fn aggregate_with_rollup() {
     let sql =
         "SELECT id, state, age, count(*) FROM person GROUP BY id, ROLLUP (state, age)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3396,7 +3676,7 @@ Projection: person.id, person.state, person.age, count(*)
 fn aggregate_with_rollup_with_grouping() {
     let sql = "SELECT id, state, age, grouping(state), grouping(age), grouping(state) + grouping(age), count(*) \
         FROM person GROUP BY id, ROLLUP (state, age)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3422,7 +3702,7 @@ fn rank_partition_grouping() {
             from
                 person
             group by rollup(state, last_name)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3438,7 +3718,7 @@ Projection: sum(person.age) AS total_sum, person.state, person.last_name, groupi
 fn aggregate_with_cube() {
     let sql =
         "SELECT id, state, age, count(*) FROM person GROUP BY id, CUBE (state, age)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3452,7 +3732,7 @@ Projection: person.id, person.state, person.age, count(*)
 #[test]
 fn round_decimal() {
     let sql = "SELECT round(price/3, 2) FROM test_decimal";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3465,7 +3745,7 @@ Projection: round(test_decimal.price / Int64(3), Int64(2))
 #[test]
 fn aggregate_with_grouping_sets() {
     let sql = "SELECT id, state, age, count(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3481,7 +3761,7 @@ fn join_on_disjunction_condition() {
     let sql = "SELECT id, order_id \
             FROM person \
             JOIN orders ON id = customer_id OR person.age > 30";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3498,7 +3778,7 @@ fn join_on_complex_condition() {
     let sql = "SELECT id, order_id \
             FROM person \
             JOIN orders ON id = customer_id AND (person.age > 30 OR person.last_name = 'X')";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3535,7 +3815,7 @@ fn order_by_unaliased_name() {
     // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: ["z", "q"] })
     let sql =
         "select p.state z, sum(age) q from person p group by p.state order by p.state";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3578,7 +3858,7 @@ fn group_by_ambiguous_name() {
 #[test]
 fn test_zero_offset_with_limit() {
     let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 0;";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3590,7 +3870,7 @@ Limit: skip=0, fetch=5
     );
     // Flip the order of LIMIT and OFFSET in the query. Plan should remain the same.
     let sql = "SELECT id FROM person WHERE person.id > 100 OFFSET 0 LIMIT 5;";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3605,7 +3885,7 @@ Limit: skip=0, fetch=5
 #[test]
 fn test_offset_no_limit() {
     let sql = "SELECT id FROM person WHERE person.id > 100 OFFSET 5;";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3620,7 +3900,7 @@ Limit: skip=5, fetch=None
 #[test]
 fn test_offset_after_limit() {
     let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 3;";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3635,7 +3915,7 @@ Limit: skip=3, fetch=5
 #[test]
 fn test_offset_before_limit() {
     let sql = "select id from person where person.id > 100 OFFSET 3 LIMIT 5;";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3650,7 +3930,7 @@ Limit: skip=3, fetch=5
 #[test]
 fn test_distribute_by() {
     let sql = "select id from person distribute by state";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3686,7 +3966,7 @@ fn test_constant_expr_eq_join() {
             FROM person \
             INNER JOIN orders \
             ON person.id = 10";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3704,7 +3984,7 @@ fn test_right_left_expr_eq_join() {
             FROM person \
             INNER JOIN orders \
             ON orders.customer_id * 2 = person.id + 10";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3722,7 +4002,7 @@ fn test_single_column_expr_eq_join() {
             FROM person \
             INNER JOIN orders \
             ON person.id + 10 = orders.customer_id * 2";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3740,7 +4020,7 @@ fn test_multiple_column_expr_eq_join() {
             FROM person \
             INNER JOIN orders \
             ON person.id + person.age + 10 = orders.customer_id * 2 - orders.price";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3758,7 +4038,7 @@ fn test_left_expr_eq_join() {
             FROM person \
             INNER JOIN orders \
             ON person.id + person.age + 10 = orders.customer_id";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3776,7 +4056,7 @@ fn test_right_expr_eq_join() {
             FROM person \
             INNER JOIN orders \
             ON person.id = orders.customer_id * 2 - orders.price";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3794,7 +4074,7 @@ fn test_noneq_with_filter_join() {
     let sql = "SELECT person.id, person.first_name \
         FROM person INNER JOIN orders \
         ON person.age > 10";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3808,7 +4088,7 @@ Projection: person.id, person.first_name
     let sql = "SELECT person.id, person.first_name \
         FROM person LEFT JOIN orders \
         ON person.age > 10";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3822,7 +4102,7 @@ Projection: person.id, person.first_name
     let sql = "SELECT person.id, person.first_name \
         FROM person RIGHT JOIN orders \
         ON person.age > 10";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3836,7 +4116,7 @@ Projection: person.id, person.first_name
     let sql = "SELECT person.id, person.first_name \
         FROM person FULL JOIN orders \
         ON person.age > 10";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3856,7 +4136,7 @@ fn test_one_side_constant_full_join() {
             FROM person \
             FULL OUTER JOIN orders \
             ON person.id = 10";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3874,7 +4154,7 @@ fn test_select_join_key_inner_join() {
             FROM person
             INNER JOIN orders
             ON orders.customer_id * 2 = person.id + 10";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3889,7 +4169,7 @@ Projection: orders.customer_id * Int64(2), person.id + Int64(10)
 #[test]
 fn test_select_order_by() {
     let sql = "SELECT '1' from person order by id";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -3949,11 +4229,16 @@ fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str)
 fn select_order_by_with_cast() {
     let sql =
         "SELECT first_name AS first_name FROM (SELECT first_name AS first_name FROM person) ORDER BY CAST(first_name as INT)";
-    let expected = "Sort: CAST(person.first_name AS Int32) ASC NULLS LAST\
-                        \n  Projection: person.first_name\
-                        \n    Projection: person.first_name\
-                        \n      TableScan: person";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Sort: CAST(person.first_name AS Int32) ASC NULLS LAST
+  Projection: person.first_name
+    Projection: person.first_name
+      TableScan: person
+"#
+    );
 }
 
 #[test]
@@ -3974,12 +4259,16 @@ fn test_duplicated_left_join_key_inner_join() {
             FROM person
             INNER JOIN orders
             ON person.id * 2 = orders.customer_id + 10 and person.id * 2 = orders.order_id";
-
-    let expected = "Projection: person.id, person.age\
-            \n  Inner Join:  Filter: person.id * Int64(2) = orders.customer_id + Int64(10) AND person.id * Int64(2) = orders.order_id\
-            \n    TableScan: person\
-            \n    TableScan: orders";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.id, person.age
+  Inner Join:  Filter: person.id * Int64(2) = orders.customer_id + Int64(10) AND person.id * Int64(2) = orders.order_id
+    TableScan: person
+    TableScan: orders
+"#
+    );
 }
 
 #[test]
@@ -3989,12 +4278,16 @@ fn test_duplicated_right_join_key_inner_join() {
             FROM person
             INNER JOIN orders
             ON person.id * 2 = orders.customer_id + 10 and person.id =  orders.customer_id + 10";
-
-    let expected = "Projection: person.id, person.age\
-            \n  Inner Join:  Filter: person.id * Int64(2) = orders.customer_id + Int64(10) AND person.id = orders.customer_id + Int64(10)\
-            \n    TableScan: person\
-            \n    TableScan: orders";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.id, person.age
+  Inner Join:  Filter: person.id * Int64(2) = orders.customer_id + Int64(10) AND person.id = orders.customer_id + Int64(10)
+    TableScan: person
+    TableScan: orders
+"#
+    );
 }
 
 #[test]
@@ -4023,14 +4316,18 @@ fn test_ambiguous_column_references_with_in_using_join() {
             from person as p1
             INNER JOIN person as p2
             using(id)";
-
-    let expected = "Projection: p1.id, p1.age, p2.id\
-            \n  Inner Join: Using p1.id = p2.id\
-            \n    SubqueryAlias: p1\
-            \n      TableScan: person\
-            \n    SubqueryAlias: p2\
-            \n      TableScan: person";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: p1.id, p1.age, p2.id
+  Inner Join: Using p1.id = p2.id
+    SubqueryAlias: p1
+      TableScan: person
+    SubqueryAlias: p2
+      TableScan: person
+"#
+    );
 }
 
 #[test]
@@ -4075,8 +4372,12 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
 #[test]
 fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
-    let expected = "Schema error: No field named id.";
-    assert_eq!(logical_plan(sql).unwrap_err().strip_backtrace(), expected);
+
+    let plan = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_snapshot!(
+        plan,
+        @r"Schema error: No field named id."
+    );
 }
 
 #[test]
@@ -4118,15 +4419,17 @@ fn test_prepare_statement_to_plan_panic_is_param() {
 fn test_prepare_statement_to_plan_no_param() {
     // no embedded parameter but still declare it
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
-
-    let expected_plan = "Prepare: \"my_plan\" [Int32] \
-        \n  Projection: person.id, person.age\
-        \n    Filter: person.age = Int64(10)\
-        \n      TableScan: person";
-
-    let expected_dt = "[Int32]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [Int32] 
+      Projection: person.id, person.age
+        Filter: person.age = Int64(10)
+          TableScan: person
+    "#
+    );
+    assert_snapshot!(dt, @r#"[Int32]"#);
 
     ///////////////////
     // replace params with values
@@ -4144,15 +4447,17 @@ fn test_prepare_statement_to_plan_no_param() {
     //////////////////////////////////////////
     // no embedded parameter and no declare it
     let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";
-
-    let expected_plan = "Prepare: \"my_plan\" [] \
-        \n  Projection: person.id, person.age\
-        \n    Filter: person.age = Int64(10)\
-        \n      TableScan: person";
-
-    let expected_dt = "[]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [] 
+      Projection: person.id, person.age
+        Filter: person.age = Int64(10)
+          TableScan: person
+    "#
+    );
+    assert_snapshot!(dt, @r#"[]"#);
 
     ///////////////////
     // replace params with values
@@ -4224,12 +4529,16 @@ fn test_prepare_statement_to_plan_no_param_on_value_panic() {
 #[test]
 fn test_prepare_statement_to_plan_params_as_constants() {
     let sql = "PREPARE my_plan(INT) AS SELECT $1";
-
-    let expected_plan = "Prepare: \"my_plan\" [Int32] \
-        \n  Projection: $1\n    EmptyRelation";
-    let expected_dt = "[Int32]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [Int32] 
+      Projection: $1
+        EmptyRelation
+    "#
+    );
+    assert_snapshot!(dt, @r#"[Int32]"#);
 
     ///////////////////
     // replace params with values
@@ -4245,12 +4554,16 @@ fn test_prepare_statement_to_plan_params_as_constants() {
 
     ///////////////////////////////////////
     let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1";
-
-    let expected_plan = "Prepare: \"my_plan\" [Int32] \
-        \n  Projection: Int64(1) + $1\n    EmptyRelation";
-    let expected_dt = "[Int32]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [Int32] 
+      Projection: Int64(1) + $1
+        EmptyRelation
+    "#
+    );
+    assert_snapshot!(dt, @r#"[Int32]"#);
 
     ///////////////////
     // replace params with values
@@ -4266,12 +4579,16 @@ fn test_prepare_statement_to_plan_params_as_constants() {
 
     ///////////////////////////////////////
     let sql = "PREPARE my_plan(INT, DOUBLE) AS SELECT 1 + $1 + $2";
-
-    let expected_plan = "Prepare: \"my_plan\" [Int32, Float64] \
-        \n  Projection: Int64(1) + $1 + $2\n    EmptyRelation";
-    let expected_dt = "[Int32, Float64]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [Int32, Float64] 
+      Projection: Int64(1) + $1 + $2
+        EmptyRelation
+    "#
+    );
+    assert_snapshot!(dt, @r#"[Int32, Float64]"#);
 
     ///////////////////
     // replace params with values
@@ -4290,20 +4607,20 @@ fn test_prepare_statement_to_plan_params_as_constants() {
 }
 
 #[test]
-fn test_prepare_statement_infer_types_from_join() {
+fn test_infer_types_from_join() {
     let sql =
         "SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1";
 
-    let expected_plan = r#"
-Projection: person.id, orders.order_id
-  Inner Join:  Filter: person.id = orders.customer_id AND person.age = $1
-    TableScan: person
-    TableScan: orders
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: person.id, orders.order_id
+      Inner Join:  Filter: person.id = orders.customer_id AND person.age = $1
+        TableScan: person
+        TableScan: orders
     "#
-    .trim();
-
-    let expected_dt = "[Int32]";
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    );
 
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
@@ -4325,18 +4642,17 @@ Projection: person.id, orders.order_id
 }
 
 #[test]
-fn test_prepare_statement_infer_types_from_predicate() {
+fn test_infer_types_from_predicate() {
     let sql = "SELECT id, age FROM person WHERE age = $1";
-
-    let expected_plan = r#"
-Projection: person.id, person.age
-  Filter: person.age = $1
-    TableScan: person
-        "#
-    .trim();
-
-    let expected_dt = "[Int32]";
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: person.id, person.age
+      Filter: person.age = $1
+        TableScan: person
+    "#
+    );
 
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
@@ -4357,18 +4673,18 @@ Projection: person.id, person.age
 }
 
 #[test]
-fn test_prepare_statement_infer_types_from_between_predicate() {
+fn test_infer_types_from_between_predicate() {
     let sql = "SELECT id, age FROM person WHERE age BETWEEN $1 AND $2";
 
-    let expected_plan = r#"
-Projection: person.id, person.age
-  Filter: person.age BETWEEN $1 AND $2
-    TableScan: person
-        "#
-    .trim();
-
-    let expected_dt = "[Int32]";
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: person.id, person.age
+      Filter: person.age BETWEEN $1 AND $2
+        TableScan: person
+    "#
+    );
 
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([
@@ -4392,23 +4708,23 @@ Projection: person.id, person.age
 }
 
 #[test]
-fn test_prepare_statement_infer_types_subquery() {
+fn test_infer_types_subquery() {
     let sql = "SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)";
 
-    let expected_plan = r#"
-Projection: person.id, person.age
-  Filter: person.age = (<subquery>)
-    Subquery:
-      Projection: max(person.age)
-        Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
-          Filter: person.id = $1
-            TableScan: person
-    TableScan: person
-        "#
-    .trim();
-
-    let expected_dt = "[Int32]";
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: person.id, person.age
+      Filter: person.age = (<subquery>)
+        Subquery:
+          Projection: max(person.age)
+            Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
+              Filter: person.id = $1
+                TableScan: person
+        TableScan: person
+    "#
+    );
 
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([("$1".to_string(), Some(DataType::UInt32))]);
@@ -4434,19 +4750,19 @@ Projection: person.id, person.age
 }
 
 #[test]
-fn test_prepare_statement_update_infer() {
+fn test_update_infer() {
     let sql = "update person set age=$1 where id=$2";
 
-    let expected_plan = r#"
-Dml: op=[Update] table=[person]
-  Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: person.id = $2
-      TableScan: person
-        "#
-        .trim();
-
-    let expected_dt = "[Int32]";
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Update] table=[person]
+      Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+        Filter: person.id = $2
+          TableScan: person
+    "#
+    );
 
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([
@@ -4471,17 +4787,17 @@ Dml: op=[Update] table=[person]
 }
 
 #[test]
-fn test_prepare_statement_insert_infer() {
+fn test_insert_infer() {
     let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3)";
-
-    let expected_plan = "Dml: op=[Insert Into] table=[person]\
-                        \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
-                                    CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
-                                    CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
-                        \n    Values: ($1, $2, $3)";
-
-    let expected_dt = "[Int32]";
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Insert Into] table=[person]
+      Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
+        Values: ($1, $2, $3)
+    "#
+    );
 
     let actual_types = plan.get_parameter_types().unwrap();
     let expected_types = HashMap::from([
@@ -4511,15 +4827,17 @@ fn test_prepare_statement_insert_infer() {
 #[test]
 fn test_prepare_statement_to_plan_one_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $1";
-
-    let expected_plan = "Prepare: \"my_plan\" [Int32] \
-        \n  Projection: person.id, person.age\
-        \n    Filter: person.age = $1\
-        \n      TableScan: person";
-
-    let expected_dt = "[Int32]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [Int32] 
+      Projection: person.id, person.age
+        Filter: person.age = $1
+          TableScan: person
+    "#
+    );
+    assert_snapshot!(dt, @r#"[Int32]"#);
 
     ///////////////////
     // replace params with values
@@ -4540,16 +4858,19 @@ fn test_prepare_statement_to_plan_one_param() {
 fn test_prepare_statement_to_plan_data_type() {
     let sql = "PREPARE my_plan(DOUBLE) AS SELECT id, age  FROM person WHERE age = $1";
 
-    // age is defined as Int32 but prepare statement declares it as DOUBLE/Float64
-    // Prepare statement and its logical plan should be created successfully
-    let expected_plan = "Prepare: \"my_plan\" [Float64] \
-        \n  Projection: person.id, person.age\
-        \n    Filter: person.age = $1\
-        \n      TableScan: person";
-
-    let expected_dt = "[Float64]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
+    assert_snapshot!(
+        plan,
+        // age is defined as Int32 but prepare statement declares it as DOUBLE/Float64
+        // Prepare statement and its logical plan should be created successfully
+        @r#"
+    Prepare: "my_plan" [Float64] 
+      Projection: person.id, person.age
+        Filter: person.age = $1
+          TableScan: person
+    "#
+    );
+    assert_snapshot!(dt, @r#"[Float64]"#);
 
     ///////////////////
     // replace params with values still succeed and use Float64
@@ -4572,15 +4893,17 @@ fn test_prepare_statement_to_plan_multi_params() {
         SELECT id, age, $6
         FROM person
         WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2";
-
-    let expected_plan = "Prepare: \"my_plan\" [Int32, Utf8, Float64, Int32, Float64, Utf8] \
-        \n  Projection: person.id, person.age, $6\
-        \n    Filter: person.age IN ([$1, $4]) AND person.salary > $3 AND person.salary < $5 OR person.first_name < $2\
-        \n      TableScan: person";
-
-    let expected_dt = "[Int32, Utf8, Float64, Int32, Float64, Utf8]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [Int32, Utf8, Float64, Int32, Float64, Utf8] 
+      Projection: person.id, person.age, $6
+        Filter: person.age IN ([$1, $4]) AND person.salary > $3 AND person.salary < $5 OR person.first_name < $2
+          TableScan: person
+    "#
+    );
+    assert_snapshot!(dt, @r#"[Int32, Utf8, Float64, Int32, Float64, Utf8]"#);
 
     ///////////////////
     // replace params with values
@@ -4613,17 +4936,19 @@ fn test_prepare_statement_to_plan_having() {
         GROUP BY id
         HAVING sum(age) < $1 AND sum(age) > 10 OR sum(age) in ($3, $4)\
         ";
-
-    let expected_plan = "Prepare: \"my_plan\" [Int32, Float64, Float64, Float64] \
-        \n  Projection: person.id, sum(person.age)\
-        \n    Filter: sum(person.age) < $1 AND sum(person.age) > Int64(10) OR sum(person.age) IN ([$3, $4])\
-        \n      Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]\
-        \n        Filter: person.salary > $2\
-        \n          TableScan: person";
-
-    let expected_dt = "[Int32, Float64, Float64, Float64]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [Int32, Float64, Float64, Float64] 
+      Projection: person.id, sum(person.age)
+        Filter: sum(person.age) < $1 AND sum(person.age) > Int64(10) OR sum(person.age) IN ([$3, $4])
+          Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
+            Filter: person.salary > $2
+              TableScan: person
+    "#
+    );
+    assert_snapshot!(dt, @r#"[Int32, Float64, Float64, Float64]"#);
 
     ///////////////////
     // replace params with values
@@ -4652,15 +4977,17 @@ fn test_prepare_statement_to_plan_limit() {
     let sql = "PREPARE my_plan(BIGINT, BIGINT) AS
         SELECT id FROM person \
         OFFSET $1 LIMIT $2";
-
-    let expected_plan = "Prepare: \"my_plan\" [Int64, Int64] \
-        \n  Limit: skip=$1, fetch=$2\
-        \n    Projection: person.id\
-        \n      TableScan: person";
-
-    let expected_dt = "[Int64, Int64]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    let (plan, dt) = generate_prepare_stmt_and_data_types(sql);
+    assert_snapshot!(
+        plan,
+        @r#"
+    Prepare: "my_plan" [Int64, Int64] 
+      Limit: skip=$1, fetch=$2
+        Projection: person.id
+          TableScan: person
+    "#
+    );
+    assert_snapshot!(dt, @r#"[Int64, Int64]"#);
 
     // replace params with values
     let param_values = vec![ScalarValue::Int64(Some(10)), ScalarValue::Int64(Some(200))];
@@ -4715,7 +5042,7 @@ fn test_inner_join_with_cast_key() {
             FROM person
             INNER JOIN orders
             ON cast(person.id as Int) = cast(orders.customer_id as Int)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -4734,7 +5061,7 @@ fn test_multi_grouping_sets() {
             GROUP BY
                 person.id,
                 GROUPING SETS ((person.age,person.salary),(person.age))";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -4749,7 +5076,7 @@ Projection: person.id, person.age
                 person.id,
                 GROUPING SETS ((person.age, person.salary),(person.age)),
                 ROLLUP(person.state, person.birth_date)";
-    let plan = generate_logical_plan(sql);
+    let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r#"
@@ -4786,30 +5113,46 @@ fn test_field_not_found_window_function() {
         "###
     );
 
-    let qualified_sql =
-        "SELECT order_id, MAX(qty) OVER (PARTITION BY orders.order_id) from orders";
-    let expected = "Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\n  WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\n    TableScan: orders";
-    quick_test(qualified_sql, expected);
+    let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY orders.order_id) from orders";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+  WindowAggr: windowExpr=[[max(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+    TableScan: orders
+"#
+    );
 }
 
 #[test]
 fn test_parse_escaped_string_literal_value() {
     let sql = r"SELECT character_length('\r\n') AS len";
-    let expected = "Projection: character_length(Utf8(\"\\r\\n\")) AS len\
-    \n  EmptyRelation";
-    quick_test(sql, expected);
-
-    let sql = r"SELECT character_length(E'\r\n') AS len";
-    let expected = "Projection: character_length(Utf8(\"\r\n\")) AS len\
-    \n  EmptyRelation";
-    quick_test(sql, expected);
-
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: character_length(Utf8("\r\n")) AS len
+      EmptyRelation
+    "#
+    );
+    let sql = "SELECT character_length(E'\r\n') AS len";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: character_length(Utf8("
+")) AS len
+  EmptyRelation
+"#
+    );
     let sql =
         r"SELECT character_length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
-    let expected =
-        "Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"\u{004b}\") AS hex, Utf8(\"\u{0001}\") AS unicode\
-    \n  EmptyRelation";
-    quick_test(sql, expected);
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @"Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"K\") AS hex, Utf8(\"\u{1}\") AS unicode\n  EmptyRelation"
+    );
 
     let sql = r"SELECT character_length(E'\000') AS len";
 

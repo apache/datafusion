@@ -44,24 +44,25 @@ pub mod source;
 mod statistics;
 
 #[cfg(test)]
-mod test_util;
+pub mod test_util;
 
 pub mod url;
 pub mod write;
+pub use self::url::ListingTableUrl;
+use crate::file_groups::FileGroup;
 use chrono::TimeZone;
-use datafusion_common::Result;
+use datafusion_common::stats::Precision;
+use datafusion_common::{ColumnStatistics, Result};
 use datafusion_common::{ScalarValue, Statistics};
 use file_meta::FileMeta;
 use futures::{Stream, StreamExt};
 use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
+pub use statistics::add_row_stats;
+pub use statistics::compute_all_files_statistics;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
-
-pub use self::url::ListingTableUrl;
-pub use statistics::add_row_stats;
-pub use statistics::compute_all_files_statistics;
 
 /// Stream of files get listed from object store
 pub type PartitionedFileStream =
@@ -311,6 +312,115 @@ async fn find_first_newline(
     }
 
     Ok(index)
+}
+
+/// Generates test files with min-max statistics in different overlap patterns.
+///
+/// Used by tests and benchmarks.
+///
+/// # Overlap Factors
+///
+/// The `overlap_factor` parameter controls how much the value ranges in generated test files overlap:
+/// - `0.0`: No overlap between files (completely disjoint ranges)
+/// - `0.2`: Low overlap (20% of the range size overlaps with adjacent files)
+/// - `0.5`: Medium overlap (50% of ranges overlap)
+/// - `0.8`: High overlap (80% of ranges overlap between files)
+///
+/// # Examples
+///
+/// With 5 files and different overlap factors showing `[min, max]` ranges:
+///
+/// overlap_factor = 0.0 (no overlap):
+///
+/// File 0: [0, 20]
+/// File 1: [20, 40]
+/// File 2: [40, 60]
+/// File 3: [60, 80]
+/// File 4: [80, 100]
+///
+/// overlap_factor = 0.5 (50% overlap):
+///
+/// File 0: [0, 40]
+/// File 1: [20, 60]
+/// File 2: [40, 80]
+/// File 3: [60, 100]
+/// File 4: [80, 120]
+///
+/// overlap_factor = 0.8 (80% overlap):
+///
+/// File 0: [0, 100]
+/// File 1: [20, 120]
+/// File 2: [40, 140]
+/// File 3: [60, 160]
+/// File 4: [80, 180]
+pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGroup> {
+    let mut files = Vec::with_capacity(num_files);
+    if num_files == 0 {
+        return vec![];
+    }
+    let range_size = if overlap_factor == 0.0 {
+        100 / num_files as i64
+    } else {
+        (100.0 / (overlap_factor * num_files as f64)).max(1.0) as i64
+    };
+
+    for i in 0..num_files {
+        let base = (i as f64 * range_size as f64 * (1.0 - overlap_factor)) as i64;
+        let min = base as f64;
+        let max = (base + range_size) as f64;
+
+        let file = PartitionedFile {
+            object_meta: ObjectMeta {
+                location: Path::from(format!("file_{}.parquet", i)),
+                last_modified: chrono::Utc::now(),
+                size: 1000,
+                e_tag: None,
+                version: None,
+            },
+            partition_values: vec![],
+            range: None,
+            statistics: Some(Arc::new(Statistics {
+                num_rows: Precision::Exact(100),
+                total_byte_size: Precision::Exact(1000),
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Float64(Some(max))),
+                    min_value: Precision::Exact(ScalarValue::Float64(Some(min))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                }],
+            })),
+            extensions: None,
+            metadata_size_hint: None,
+        };
+        files.push(file);
+    }
+
+    vec![FileGroup::new(files)]
+}
+
+// Helper function to verify that files within each group maintain sort order
+/// Used by tests and benchmarks
+pub fn verify_sort_integrity(file_groups: &[FileGroup]) -> bool {
+    for group in file_groups {
+        let files = group.iter().collect::<Vec<_>>();
+        for i in 1..files.len() {
+            let prev_file = files[i - 1];
+            let curr_file = files[i];
+
+            // Check if the min value of current file is greater than max value of previous file
+            if let (Some(prev_stats), Some(curr_stats)) =
+                (&prev_file.statistics, &curr_file.statistics)
+            {
+                let prev_max = &prev_stats.column_statistics[0].max_value;
+                let curr_min = &curr_stats.column_statistics[0].min_value;
+                if curr_min.get_value().unwrap() <= prev_max.get_value().unwrap() {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 #[cfg(test)]

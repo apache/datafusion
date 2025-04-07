@@ -20,6 +20,23 @@ use datafusion::prelude::*;
 use tempfile::TempDir;
 
 #[tokio::test]
+async fn test_window_function() {
+    let ctx = SessionContext::new();
+    let df = ctx
+        .sql(
+            r#"SELECT
+        t1.v1,
+        SUM(t1.v1) OVER w + 1
+        FROM
+        generate_series(1, 10000) AS t1(v1)
+        WINDOW
+        w AS (ORDER BY t1.v1 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW);"#,
+        )
+        .await;
+    assert!(df.is_ok());
+}
+
+#[tokio::test]
 async fn unsupported_ddl_returns_error() {
     // Verify SessionContext::with_sql_options errors appropriately
     let ctx = SessionContext::new();

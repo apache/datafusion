@@ -73,7 +73,10 @@ impl SpillManager {
     /// intended to incrementally write in-memory batches into the same spill file,
     /// use [`Self::create_in_progress_file`] instead.
     /// None is returned if no batches are spilled.
-    #[allow(dead_code)] // TODO: remove after change SMJ to use SpillManager
+    ///
+    /// # Errors
+    /// - Returns an error if spilling would exceed the disk usage limit configured
+    ///   by `max_temp_directory_size` in `DiskManager`
     pub fn spill_record_batch_and_finish(
         &self,
         batches: &[RecordBatch],
@@ -90,7 +93,10 @@ impl SpillManager {
 
     /// Refer to the documentation for [`Self::spill_record_batch_and_finish`]. This method
     /// additionally spills the `RecordBatch` into smaller batches, divided by `row_limit`.
-    #[allow(dead_code)] // TODO: remove after change aggregate to use SpillManager
+    ///
+    /// # Errors
+    /// - Returns an error if spilling would exceed the disk usage limit configured
+    ///   by `max_temp_directory_size` in `DiskManager`
     pub fn spill_record_batch_by_size(
         &self,
         batch: &RecordBatch,
