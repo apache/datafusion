@@ -756,14 +756,11 @@ fn roundtrip_statement_with_dialect_32() -> Result<(), DataFusionError> {
 
 #[test]
 fn roundtrip_statement_with_dialect_33() -> Result<(), DataFusionError> {
-    let unparser = CustomDialectBuilder::default()
-        .with_unnest_as_table_factor(true)
-        .build();
     roundtrip_statement_with_dialect_helper!(
-        sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+        sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
         parser_dialect: GenericDialect {},
-        unparser_dialect: unparser,
-        expected: @r#"SELECT t1.c1 FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT u.array_col, u.struct_col, "UNNEST(outer_ref(u.array_col))" FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))")"#,
     );
     Ok(())
 }
@@ -904,17 +901,6 @@ fn roundtrip_statement_with_dialect_43() -> Result<(), DataFusionError> {
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
         expected: @r#"SELECT UNNEST([1, 2, 3, 4]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3),Int64(4))) FROM UNNEST([1, 2, 3])"#,
-    );
-    Ok(())
-}
-
-#[test]
-fn roundtrip_statement_with_dialect_44() -> Result<(), DataFusionError> {
-    roundtrip_statement_with_dialect_helper!(
-        sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
-        parser_dialect: GenericDialect {},
-        unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT u.array_col, u.struct_col, "UNNEST(outer_ref(u.array_col))" FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))")"#,
     );
     Ok(())
 }
