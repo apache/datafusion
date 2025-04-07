@@ -192,7 +192,6 @@ async fn load_left_input(
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
-    // merge all left parts into a single stream
     let left_schema = stream.schema();
 
     // Load all batches and count the rows
