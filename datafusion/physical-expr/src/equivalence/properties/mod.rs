@@ -313,12 +313,6 @@ impl EquivalenceProperties {
         Ok(())
     }
 
-    /// Remove the specified constant
-    pub fn remove_constant(mut self, c: &ConstExpr) -> Self {
-        self.constants.retain(|existing| existing != c);
-        self
-    }
-
     /// Track/register physical expressions with constant values.
     pub fn with_constants(
         mut self,
@@ -436,7 +430,6 @@ impl EquivalenceProperties {
             if new_orderings.is_empty() {
                 new_orderings.push(filtered_exprs);
             }
-
             self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
         }
         self
@@ -475,12 +468,11 @@ impl EquivalenceProperties {
         &self,
         sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> Option<LexOrdering> {
-        let normalized_constants = self.normalized_constant_exprs();
         // Prune redundant sections in the ordering:
         let sort_exprs = sort_exprs
             .into_iter()
             .map(|sort_expr| self.eq_group.normalize_sort_expr(sort_expr))
-            .filter(|order| !physical_exprs_contains(&normalized_constants, &order.expr))
+            .filter(|order| !self.is_normalized_expr_constant(&order.expr))
             .collect::<Vec<_>>();
         (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs).collapse())
     }
@@ -503,12 +495,11 @@ impl EquivalenceProperties {
         &self,
         sort_reqs: impl IntoIterator<Item = &'a PhysicalSortRequirement>,
     ) -> Option<LexRequirement> {
-        let normalized_constants = self.normalized_constant_exprs();
         // Prune redundant sections in the requirement:
         let reqs = sort_reqs
             .into_iter()
             .map(|req| self.eq_group.normalize_sort_requirement(req.clone()))
-            .filter(|order| !physical_exprs_contains(&normalized_constants, &order.expr))
+            .filter(|order| !self.is_normalized_expr_constant(&order.expr))
             .collect::<Vec<_>>();
         (!reqs.is_empty()).then(|| LexRequirement::new(reqs).collapse())
     }
@@ -1140,16 +1131,6 @@ impl EquivalenceProperties {
         self.constraints.project(&indices)
     }
 
-    /// Returns normalized versions of the expressions defining constants.
-    /// Normalization removes duplicates and standardizes expressions
-    /// according to the equivalence group within.
-    fn normalized_constant_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.constants
-            .iter()
-            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
-            .collect()
-    }
-
     /// Projects the equivalences within according to `mapping`
     /// and `output_schema`.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
@@ -1248,7 +1229,9 @@ impl EquivalenceProperties {
     }
 
     /// This function determines whether the provided expression is constant
-    /// based on the known constants.
+    /// based on the known constants. For example, if columns `a` and `b` are
+    /// constant, then expressions `a`, `b` and `a + b` will all return `true`
+    /// whereas expression `c` will return `false`.
     ///
     /// # Parameters
     ///
@@ -1260,12 +1243,22 @@ impl EquivalenceProperties {
     /// Returns `true` if the expression is constant according to equivalence
     /// group, `false` otherwise.
     pub fn is_expr_constant(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        // As an example, assume that we know columns `a` and `b` are constant.
-        // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
-        // return `false`.
-        let normalized_constants = self.normalized_constant_exprs();
         let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
-        is_constant_recurse(&normalized_constants, &normalized_expr)
+        self.is_normalized_expr_constant(&normalized_expr)
+    }
+
+    /// Helper of the [`Self::is_expr_constant`] function, assumes that the
+    /// given expression is normalized.
+    fn is_normalized_expr_constant(
+        &self,
+        normalized_expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        let normalized_constants = self
+            .constants
+            .iter()
+            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
+            .collect::<Vec<_>>();
+        is_constant_recurse(&normalized_constants, normalized_expr)
     }
 
     /// This function determines whether the provided expression is constant
@@ -1495,7 +1488,7 @@ fn update_properties(
         .eq_group
         .normalize_expr(Arc::clone(&node.expr));
     let oeq_class = eq_properties.normalized_oeq_class();
-    if eq_properties.is_expr_constant(&normalized_expr)
+    if eq_properties.is_normalized_expr_constant(&normalized_expr)
         || oeq_class.is_expr_partial_const(&normalized_expr)
     {
         node.data.sort_properties = SortProperties::Singleton;
