@@ -498,7 +498,7 @@ pub fn compute_file_group_statistics(
     });
 
     if let Some(stats) = statistics {
-        file_group = file_group.with_statistics(stats);
+        file_group = file_group.with_statistics(Arc::new(stats));
     }
 
     file_group
