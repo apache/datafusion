@@ -355,7 +355,7 @@ impl ExecutionPlan for CrossJoinExec {
         // Summarize the `left_stats`
         let statistics = compute_summary_statistics(
             left_stats.iter(),
-            self.schema.fields().len(),
+            self.left.schema().fields().len(),
             |stats| Some(stats),
         );
 
