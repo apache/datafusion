@@ -206,11 +206,8 @@ impl FileGroupPartitioner {
             self.repartition_evenly_by_size(file_groups)
         };
 
-        if repartitioned_groups.is_none() {
-            return None;
-        }
+        let repartitioned_groups = repartitioned_groups?;
 
-        let repartitioned_groups = repartitioned_groups.unwrap();
         // Recompute statistics for each file group
         let mut groups = Vec::with_capacity(repartitioned_groups.len());
         for file_group in repartitioned_groups {
