@@ -482,6 +482,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if self.left.output_partitioning().partition_count() != 1 {
+            return internal_err!(
+                "Invalid NestedLoopJoinExec, the output partition count of the left child must be 1,\
+                 consider using CoalescePartitionsExec or the EnforceDistribution rule"
+            );
+        }
+
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         // Initialization reservation for load of inner table

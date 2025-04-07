@@ -282,6 +282,13 @@ impl ExecutionPlan for CrossJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if self.left.output_partitioning().partition_count() != 1 {
+            return internal_err!(
+                "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
+                 consider using CoalescePartitionsExec or the EnforceDistribution rule"
+            );
+        }
+
         let stream = self.right.execute(partition, Arc::clone(&context))?;
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
