@@ -350,8 +350,6 @@ impl ExternalSorter {
         self.merge_reservation.free();
 
         if self.spilled_before() {
-            // let mut streams = vec![];
-
             // Sort `in_mem_batches` and spill it first. If there are many
             // `in_mem_batches` and the memory limit is almost reached, merging
             // them with the spilled files at the same time might cause OOM.
@@ -585,7 +583,7 @@ impl ExternalSorter {
     /// - For each combining step, up to the maximum merge degree of spill files are merged.
     ///
     /// # Example
-    /// ```
+    /// ```text
     /// Notation: batch(n) means a batch with n rows
     ///
     /// Max merge degree: 2
