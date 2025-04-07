@@ -249,6 +249,13 @@ fn insufficient_capacity_err(
     resources_datafusion_err!("Failed to allocate additional {} bytes for {} with {} bytes already allocated for this reservation - {} bytes remain available for the total pool", additional, reservation.registration.consumer.name, reservation.size, available)
 }
 
+#[derive(Debug)]
+struct TrackedConsumer {
+    name: String,
+    can_spill: bool,
+    reserved: AtomicU64,
+}
+
 /// A [`MemoryPool`] that tracks the consumers that have
 /// reserved memory within the inner memory pool.
 ///
@@ -261,7 +268,7 @@ fn insufficient_capacity_err(
 pub struct TrackConsumersPool<I> {
     inner: I,
     top: NonZeroUsize,
-    tracked_consumers: Mutex<HashMap<MemoryConsumer, AtomicU64>>,
+    tracked_consumers: Mutex<HashMap<usize, TrackedConsumer>>,
 }
 
 impl<I: MemoryPool> TrackConsumersPool<I> {
@@ -277,27 +284,20 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
         }
     }
 
-    /// Determine if there are multiple [`MemoryConsumer`]s registered
-    /// which have the same name.
-    ///
-    /// This is very tied to the implementation of the memory consumer.
-    fn has_multiple_consumers(&self, name: &String) -> bool {
-        let consumer = MemoryConsumer::new(name);
-        let consumer_with_spill = consumer.clone().with_can_spill(true);
-        let guard = self.tracked_consumers.lock();
-        guard.contains_key(&consumer) && guard.contains_key(&consumer_with_spill)
-    }
-
     /// The top consumers in a report string.
     pub fn report_top(&self, top: usize) -> String {
         let mut consumers = self
             .tracked_consumers
             .lock()
             .iter()
-            .map(|(consumer, reserved)| {
+            .map(|(consumer_id, tracked_consumer)| {
                 (
-                    (consumer.name().to_owned(), consumer.can_spill()),
-                    reserved.load(Ordering::Acquire),
+                    (
+                        *consumer_id,
+                        tracked_consumer.name.to_owned(),
+                        tracked_consumer.can_spill,
+                    ),
+                    tracked_consumer.reserved.load(Ordering::Acquire),
                 )
             })
             .collect::<Vec<_>>();
@@ -305,12 +305,8 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
 
         consumers[0..std::cmp::min(top, consumers.len())]
             .iter()
-            .map(|((name, can_spill), size)| {
-                if self.has_multiple_consumers(name) {
-                    format!("{name}(can_spill={}) consumed {:?} bytes", can_spill, size)
-                } else {
-                    format!("{name} consumed {:?} bytes", size)
-                }
+            .map(|((id, name, can_spill), size)| {
+                format!("{name}#{id}(can spill: {can_spill}) consumed {size} bytes")
             })
             .collect::<Vec<_>>()
             .join(", ")
@@ -322,29 +318,35 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
         self.inner.register(consumer);
 
         let mut guard = self.tracked_consumers.lock();
-        if let Some(already_reserved) = guard.insert(consumer.clone(), Default::default())
-        {
-            guard.entry_ref(consumer).and_modify(|bytes| {
-                bytes.fetch_add(
-                    already_reserved.load(Ordering::Acquire),
-                    Ordering::AcqRel,
-                );
-            });
-        }
+        let existing = guard.insert(
+            consumer.id(),
+            TrackedConsumer {
+                name: consumer.name().to_string(),
+                can_spill: consumer.can_spill(),
+                reserved: Default::default(),
+            },
+        );
+
+        debug_assert!(
+            existing.is_none(),
+            "Registered was called twice on the same consumer"
+        );
     }
 
     fn unregister(&self, consumer: &MemoryConsumer) {
         self.inner.unregister(consumer);
-        self.tracked_consumers.lock().remove(consumer);
+        self.tracked_consumers.lock().remove(&consumer.id());
     }
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         self.inner.grow(reservation, additional);
         self.tracked_consumers
             .lock()
-            .entry_ref(reservation.consumer())
-            .and_modify(|bytes| {
-                bytes.fetch_add(additional as u64, Ordering::AcqRel);
+            .entry(reservation.consumer().id())
+            .and_modify(|tracked_consumer| {
+                tracked_consumer
+                    .reserved
+                    .fetch_add(additional as u64, Ordering::AcqRel);
             });
     }
 
@@ -352,9 +354,11 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
         self.inner.shrink(reservation, shrink);
         self.tracked_consumers
             .lock()
-            .entry_ref(reservation.consumer())
-            .and_modify(|bytes| {
-                bytes.fetch_sub(shrink as u64, Ordering::AcqRel);
+            .entry(reservation.consumer().id())
+            .and_modify(|tracked_consumer| {
+                tracked_consumer
+                    .reserved
+                    .fetch_sub(shrink as u64, Ordering::AcqRel);
             });
     }
 
@@ -376,9 +380,11 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 
         self.tracked_consumers
             .lock()
-            .entry_ref(reservation.consumer())
-            .and_modify(|bytes| {
-                bytes.fetch_add(additional as u64, Ordering::AcqRel);
+            .entry(reservation.consumer().id())
+            .and_modify(|tracked_consumer| {
+                tracked_consumer
+                    .reserved
+                    .fetch_add(additional as u64, Ordering::AcqRel);
             });
         Ok(())
     }
@@ -501,12 +507,12 @@ mod tests {
         // Test: reports if new reservation causes error
         // using the previously set sizes for other consumers
         let mut r5 = MemoryConsumer::new("r5").register(&pool);
-        let expected = "Additional allocation failed with top memory consumers (across reservations) as: r1 consumed 50 bytes, r3 consumed 20 bytes, r2 consumed 15 bytes. Error: Failed to allocate additional 150 bytes for r5 with 0 bytes already allocated for this reservation - 5 bytes remain available for the total pool";
+        let expected = format!("Additional allocation failed with top memory consumers (across reservations) as: r1#{}(can spill: false) consumed 50 bytes, r3#{}(can spill: false) consumed 20 bytes, r2#{}(can spill: false) consumed 15 bytes. Error: Failed to allocate additional 150 bytes for r5 with 0 bytes already allocated for this reservation - 5 bytes remain available for the total pool", r1.consumer().id(), r3.consumer().id(), r2.consumer().id());
         let res = r5.try_grow(150);
         assert!(
             matches!(
                 &res,
-                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
+                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
             ),
             "should provide list of top memory consumers, instead found {:?}",
             res
@@ -524,45 +530,45 @@ mod tests {
 
         // Test: see error message when no consumers recorded yet
         let mut r0 = MemoryConsumer::new(same_name).register(&pool);
-        let expected = "Additional allocation failed with top memory consumers (across reservations) as: foo consumed 0 bytes. Error: Failed to allocate additional 150 bytes for foo with 0 bytes already allocated for this reservation - 100 bytes remain available for the total pool";
+        let expected = format!("Additional allocation failed with top memory consumers (across reservations) as: foo#{}(can spill: false) consumed 0 bytes. Error: Failed to allocate additional 150 bytes for foo with 0 bytes already allocated for this reservation - 100 bytes remain available for the total pool", r0.consumer().id());
         let res = r0.try_grow(150);
         assert!(
             matches!(
                 &res,
-                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
+                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
             ),
             "should provide proper error when no reservations have been made yet, instead found {:?}", res
         );
 
         // API: multiple registrations using the same hashed consumer,
-        // will be recognized as the same in the TrackConsumersPool.
+        // will be recognized *differently* in the TrackConsumersPool.
 
-        // Test: will be the same per Top Consumers reported.
         r0.grow(10); // make r0=10, pool available=90
         let new_consumer_same_name = MemoryConsumer::new(same_name);
         let mut r1 = new_consumer_same_name.register(&pool);
         // TODO: the insufficient_capacity_err() message is per reservation, not per consumer.
         // a followup PR will clarify this message "0 bytes already allocated for this reservation"
-        let expected = "Additional allocation failed with top memory consumers (across reservations) as: foo consumed 10 bytes. Error: Failed to allocate additional 150 bytes for foo with 0 bytes already allocated for this reservation - 90 bytes remain available for the total pool";
+        let expected = format!("Additional allocation failed with top memory consumers (across reservations) as: foo#{}(can spill: false) consumed 10 bytes, foo#{}(can spill: false) consumed 0 bytes. Error: Failed to allocate additional 150 bytes for foo with 0 bytes already allocated for this reservation - 90 bytes remain available for the total pool", r0.consumer().id(), r1.consumer().id());
         let res = r1.try_grow(150);
         assert!(
             matches!(
                 &res,
-                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
+                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
             ),
-            "should provide proper error with same hashed consumer (a single foo=10 bytes, available=90), instead found {:?}", res
+            "should provide proper error for 2 consumers, instead found {:?}",
+            res
         );
 
         // Test: will accumulate size changes per consumer, not per reservation
         r1.grow(20);
-        let expected = "Additional allocation failed with top memory consumers (across reservations) as: foo consumed 30 bytes. Error: Failed to allocate additional 150 bytes for foo with 20 bytes already allocated for this reservation - 70 bytes remain available for the total pool";
+        let expected = format!("Additional allocation failed with top memory consumers (across reservations) as: foo#{}(can spill: false) consumed 20 bytes, foo#{}(can spill: false) consumed 10 bytes. Error: Failed to allocate additional 150 bytes for foo with 20 bytes already allocated for this reservation - 70 bytes remain available for the total pool", r1.consumer().id(), r0.consumer().id());
         let res = r1.try_grow(150);
         assert!(
             matches!(
                 &res,
-                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
+                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
             ),
-            "should provide proper error with same hashed consumer (a single foo=30 bytes, available=70), instead found {:?}", res
+            "should provide proper error for 2 consumers(one foo=20 bytes, another foo=10 bytes, available=70), instead found {:?}", res
         );
 
         // Test: different hashed consumer, (even with the same name),
@@ -570,14 +576,14 @@ mod tests {
         let consumer_with_same_name_but_different_hash =
             MemoryConsumer::new(same_name).with_can_spill(true);
         let mut r2 = consumer_with_same_name_but_different_hash.register(&pool);
-        let expected = "Additional allocation failed with top memory consumers (across reservations) as: foo(can_spill=false) consumed 30 bytes, foo(can_spill=true) consumed 0 bytes. Error: Failed to allocate additional 150 bytes for foo with 0 bytes already allocated for this reservation - 70 bytes remain available for the total pool";
+        let expected = format!("Additional allocation failed with top memory consumers (across reservations) as: foo#{}(can spill: false) consumed 20 bytes, foo#{}(can spill: false) consumed 10 bytes, foo#{}(can spill: true) consumed 0 bytes. Error: Failed to allocate additional 150 bytes for foo with 0 bytes already allocated for this reservation - 70 bytes remain available for the total pool", r1.consumer().id(), r0.consumer().id(), r2.consumer().id());
         let res = r2.try_grow(150);
         assert!(
             matches!(
                 &res,
-                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
+                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
             ),
-            "should provide proper error with different hashed consumer (foo(can_spill=false)=30 bytes and foo(can_spill=true)=0 bytes, available=70), instead found {:?}", res
+            "should provide proper error with 3 separate consumers(1 = 20 bytes, 2 = 10 bytes, 3 = 0 bytes), instead found {:?}", res
         );
     }
 
@@ -588,14 +594,15 @@ mod tests {
             let mut r0 = MemoryConsumer::new("r0").register(&pool);
             r0.grow(10);
             let r1_consumer = MemoryConsumer::new("r1");
-            let mut r1 = r1_consumer.clone().register(&pool);
+            let mut r1 = r1_consumer.register(&pool);
             r1.grow(20);
-            let expected = "Additional allocation failed with top memory consumers (across reservations) as: r1 consumed 20 bytes, r0 consumed 10 bytes. Error: Failed to allocate additional 150 bytes for r0 with 10 bytes already allocated for this reservation - 70 bytes remain available for the total pool";
+
+            let expected = format!("Additional allocation failed with top memory consumers (across reservations) as: r1#{}(can spill: false) consumed 20 bytes, r0#{}(can spill: false) consumed 10 bytes. Error: Failed to allocate additional 150 bytes for r0 with 10 bytes already allocated for this reservation - 70 bytes remain available for the total pool", r1.consumer().id(), r0.consumer().id());
             let res = r0.try_grow(150);
             assert!(
                 matches!(
                     &res,
-                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected)
+                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
                 ),
                 "should provide proper error with both consumers, instead found {:?}",
                 res
@@ -603,32 +610,31 @@ mod tests {
 
             // Test: unregister one
             // only the remaining one should be listed
-            pool.unregister(&r1_consumer);
-            let expected_consumers = "Additional allocation failed with top memory consumers (across reservations) as: r0 consumed 10 bytes";
+            drop(r1);
+            let expected_consumers = format!("Additional allocation failed with top memory consumers (across reservations) as: r0#{}(can spill: false) consumed 10 bytes", r0.consumer().id());
             let res = r0.try_grow(150);
             assert!(
                 matches!(
                     &res,
-                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected_consumers)
+                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected_consumers)
                 ),
                 "should provide proper error with only 1 consumer left registered, instead found {:?}", res
             );
 
             // Test: actual message we see is the `available is 70`. When it should be `available is 90`.
             // This is because the pool.shrink() does not automatically occur within the inner_pool.deregister().
-            let expected_70_available = "Failed to allocate additional 150 bytes for r0 with 10 bytes already allocated for this reservation - 70 bytes remain available for the total pool";
+            let expected_90_available = "Failed to allocate additional 150 bytes for r0 with 10 bytes already allocated for this reservation - 90 bytes remain available for the total pool";
             let res = r0.try_grow(150);
             assert!(
                 matches!(
                     &res,
-                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected_70_available)
+                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected_90_available)
                 ),
                 "should find that the inner pool will still count all bytes for the deregistered consumer until the reservation is dropped, instead found {:?}", res
             );
 
             // Test: the registration needs to free itself (or be dropped),
             // for the proper error message
-            r1.free();
             let expected_90_available = "Failed to allocate additional 150 bytes for r0 with 10 bytes already allocated for this reservation - 90 bytes remain available for the total pool";
             let res = r0.try_grow(150);
             assert!(
@@ -678,7 +684,7 @@ mod tests {
             .unwrap();
 
         // Test: can get runtime metrics, even without an error thrown
-        let expected = "r3 consumed 45 bytes, r1 consumed 20 bytes";
+        let expected = format!("r3#{}(can spill: false) consumed 45 bytes, r1#{}(can spill: false) consumed 20 bytes", r3.consumer().id(), r1.consumer().id());
         let res = downcasted.report_top(2);
         assert_eq!(
             res, expected,
