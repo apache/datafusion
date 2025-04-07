@@ -246,8 +246,8 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "arrow"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -269,8 +269,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-arith"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -282,8 +282,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "ahash 0.8.11",
  "arrow-buffer",
@@ -298,8 +298,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-buffer"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "bytes",
  "half",
@@ -308,8 +308,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-cast"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -328,8 +328,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-csv"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -343,8 +343,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -354,8 +354,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-flight"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -380,8 +380,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-ipc"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -393,8 +393,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-json"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -414,8 +414,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-ord"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -426,8 +426,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-row"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -438,8 +438,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "bitflags 2.8.0",
  "serde",
@@ -447,8 +447,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-select"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "ahash 0.8.11",
  "arrow-array",
@@ -460,8 +460,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-string"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1841,7 +1841,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "nix",
- "object_store",
+ "object_store 0.11.2",
  "parking_lot",
  "parquet",
  "paste",
@@ -1874,7 +1874,7 @@ dependencies = [
  "futures",
  "log",
  "mimalloc",
- "object_store",
+ "object_store 0.11.2",
  "parquet",
  "rand 0.8.5",
  "serde",
@@ -1905,7 +1905,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.11.2",
  "parking_lot",
  "tokio",
 ]
@@ -1927,7 +1927,7 @@ dependencies = [
  "datafusion-session",
  "futures",
  "log",
- "object_store",
+ "object_store 0.11.2",
  "tempfile",
  "tokio",
 ]
@@ -1950,7 +1950,7 @@ dependencies = [
  "insta",
  "insta-cmd",
  "mimalloc",
- "object_store",
+ "object_store 0.11.2",
  "parking_lot",
  "parquet",
  "predicates",
@@ -1977,7 +1977,7 @@ dependencies = [
  "insta",
  "libc",
  "log",
- "object_store",
+ "object_store 0.11.2",
  "parquet",
  "paste",
  "pyo3",
@@ -2020,7 +2020,7 @@ dependencies = [
  "glob",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.11.2",
  "parquet",
  "rand 0.8.5",
  "tempfile",
@@ -2050,7 +2050,7 @@ dependencies = [
  "datafusion-session",
  "futures",
  "num-traits",
- "object_store",
+ "object_store 0.11.2",
  "rstest",
  "serde_json",
  "tokio",
@@ -2074,7 +2074,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "object_store",
+ "object_store 0.11.2",
  "regex",
  "tokio",
 ]
@@ -2097,7 +2097,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "object_store",
+ "object_store 0.11.2",
  "serde_json",
  "tokio",
 ]
@@ -2125,7 +2125,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.11.2",
  "parking_lot",
  "parquet",
  "rand 0.8.5",
@@ -2153,7 +2153,7 @@ dependencies = [
  "log",
  "mimalloc",
  "nix",
- "object_store",
+ "object_store 0.11.2",
  "prost",
  "tempfile",
  "test-utils",
@@ -2176,7 +2176,7 @@ dependencies = [
  "datafusion-expr",
  "futures",
  "log",
- "object_store",
+ "object_store 0.11.2",
  "parking_lot",
  "rand 0.8.5",
  "tempfile",
@@ -2493,7 +2493,7 @@ dependencies = [
  "datafusion-functions-window-common",
  "datafusion-proto-common",
  "doc-comment",
- "object_store",
+ "object_store 0.11.2",
  "pbjson",
  "prost",
  "serde",
@@ -2532,7 +2532,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.11.2",
  "parking_lot",
  "tokio",
 ]
@@ -2578,7 +2578,7 @@ dependencies = [
  "indicatif",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.11.2",
  "postgres-protocol",
  "postgres-types",
  "rust_decimal",
@@ -2603,7 +2603,7 @@ dependencies = [
  "datafusion-functions-aggregate",
  "insta",
  "itertools 0.14.0",
- "object_store",
+ "object_store 0.11.2",
  "pbjson-types",
  "prost",
  "serde_json",
@@ -2627,7 +2627,7 @@ dependencies = [
  "datafusion-sql",
  "getrandom 0.2.15",
  "insta",
- "object_store",
+ "object_store 0.11.2",
  "tokio",
  "url",
  "wasm-bindgen",
@@ -2922,6 +2922,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11faaf5a5236997af9848be0bef4db95824b1d534ebc64d0f0c6cf3e67bd38dc"
 dependencies = [
  "crc32fast",
+ "libz-rs-sys",
  "miniz_oxide",
 ]
 
@@ -3944,6 +3945,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libz-rs-sys"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "902bc563b5d65ad9bba616b490842ef0651066a1a1dc3ce1087113ffcb873c8d"
+dependencies = [
+ "zlib-rs",
+]
+
+[[package]]
 name = "linked-hash-map"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4275,6 +4285,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "object_store"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9ce831b09395f933addbc56d894d889e4b226eba304d4e7adbab591e26daf1e"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "http 1.2.0",
+ "humantime",
+ "itertools 0.14.0",
+ "parking_lot",
+ "percent-encoding",
+ "thiserror 2.0.12",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4350,8 +4381,8 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "54.3.1"
-source = "git+https://github.com/apache/arrow-rs.git?rev=b30336da8c1318f3f45e22f0a377ca21830fddac#b30336da8c1318f3f45e22f0a377ca21830fddac"
+version = "55.0.0"
+source = "git+https://github.com/alamb/arrow-rs.git?branch=alamb/prepare_for_55.0.0#8c911537c385c60bd6870206f5267735d6223007"
 dependencies = [
  "ahash 0.8.11",
  "arrow-array",
@@ -4372,7 +4403,7 @@ dependencies = [
  "lz4_flex",
  "num",
  "num-bigint",
- "object_store",
+ "object_store 0.12.0",
  "paste",
  "seq-macro",
  "simdutf8",
@@ -4752,7 +4783,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "once_cell",
@@ -4772,7 +4803,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.100",
@@ -4827,9 +4858,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.24.0"
+version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f1c6c3591120564d64db2261bec5f910ae454f01def849b9c22835a84695e86"
+checksum = "17da310086b068fbdcefbba30aeb3721d5bb9af8db4987d6735b2183ca567229"
 dependencies = [
  "cfg-if",
  "indoc",
@@ -4845,9 +4876,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.24.0"
+version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9b6c2b34cf71427ea37c7001aefbaeb85886a074795e35f161f5aecc7620a7a"
+checksum = "e27165889bd793000a098bb966adc4300c312497ea25cf7a690a9f0ac5aa5fc1"
 dependencies = [
  "once_cell",
  "target-lexicon",
@@ -4855,9 +4886,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.24.0"
+version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5507651906a46432cdda02cd02dd0319f6064f1374c9147c45b978621d2c3a9c"
+checksum = "05280526e1dbf6b420062f3ef228b78c0c54ba94e157f5cb724a609d0f2faabc"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -4865,9 +4896,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros"
-version = "0.24.0"
+version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0d394b5b4fd8d97d48336bb0dd2aebabad39f1d294edd6bcd2cccf2eefe6f42"
+checksum = "5c3ce5686aa4d3f63359a5100c62a127c9f15e8398e5fdeb5deef1fed5cd5f44"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
@@ -4877,9 +4908,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.24.0"
+version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd72da09cfa943b1080f621f024d2ef7e2773df7badd51aa30a2be1f8caa7c8e"
+checksum = "f4cf6faa0cbfb0ed08e89beb8103ae9724eb4750e3a78084ba4017cbe94f3855"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -7054,7 +7085,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7487,6 +7518,12 @@ dependencies = [
  "quote",
  "syn 2.0.100",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b20717f0917c908dc63de2e44e97f1e6b126ca58d0e391cee86d504eb8fbd05"
 
 [[package]]
 name = "zstd"
