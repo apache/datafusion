@@ -415,12 +415,12 @@ impl EquivalenceProperties {
     }
 
     /// Updates the ordering equivalence group within assuming that the table
-    /// is re-sorted according to the argument `sort_exprs`. Note that constants
+    /// is re-sorted according to the argument `ordering`. Note that constants
     /// and equivalence classes are unchanged as they are unaffected by a re-sort.
     /// If the given ordering is already satisfied, the function does nothing.
-    pub fn with_reorder(mut self, sort_exprs: LexOrdering) -> Self {
+    pub fn with_reorder(mut self, ordering: LexOrdering) -> Self {
         // Filter out constant expressions as they don't affect ordering
-        let filtered_exprs = sort_exprs
+        let filtered_exprs = ordering
             .into_iter()
             .filter(|expr| !self.is_expr_constant(&expr.expr))
             .collect::<Vec<_>>();
@@ -432,12 +432,18 @@ impl EquivalenceProperties {
             let mut new_orderings = oeq_class
                 .into_iter()
                 .filter(|existing| self.is_prefix_of(&filtered_exprs, existing))
+                .map(|existing| {
+                    filtered_exprs
+                        .clone()
+                        .into_iter()
+                        .chain(existing.into_iter().skip(filtered_exprs.len()))
+                        .collect()
+                })
                 .collect::<Vec<_>>();
             new_orderings.push(filtered_exprs);
 
             self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
         }
-
         self
     }
 
