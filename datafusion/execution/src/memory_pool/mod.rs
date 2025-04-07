@@ -19,7 +19,7 @@
 //! help with allocation accounting.
 
 use datafusion_common::{internal_err, Result};
-use std::{cmp::Ordering, sync, sync::Arc};
+use std::{cmp::Ordering, sync::atomic, sync::Arc};
 
 mod pool;
 pub mod proxy {
@@ -158,8 +158,8 @@ pub struct MemoryConsumer {
 
 impl MemoryConsumer {
     fn new_unique_id() -> usize {
-        static ID: sync::atomic::AtomicUsize = sync::atomic::AtomicUsize::new(0);
-        ID.fetch_add(1, sync::atomic::Ordering::Relaxed)
+        static ID: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
+        ID.fetch_add(1, atomic::Ordering::Relaxed)
     }
 
     /// Create a new empty [`MemoryConsumer`] that can be grown using [`MemoryReservation`]
