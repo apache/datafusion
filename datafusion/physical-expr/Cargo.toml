@@ -74,4 +74,4 @@ name = "is_null"
 
 [[bench]]
 harness = false
-name = "boolean_op"
+name = "binary_op"

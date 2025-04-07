@@ -18,8 +18,16 @@
 use arrow::{
     array::BooleanArray,
     compute::{bool_and, bool_or},
+    datatypes::{DataType, Field, Schema},
 };
+use arrow::{array::StringArray, record_batch::RecordBatch};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_expr::{and, binary_expr, col, lit, or, Operator};
+use datafusion_physical_expr::{
+    expressions::{BinaryExpr, Column},
+    planner::logical2physical,
+    PhysicalExpr,
+};
 use std::sync::{Arc, LazyLock};
 
 /// Generates BooleanArrays with different true/false distributions for benchmarking.
@@ -183,5 +191,158 @@ fn benchmark_boolean_ops(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, benchmark_boolean_ops);
+/// Benchmarks the performance of binary logical operators (AND/OR) with short-circuit behavior.
+///
+/// This function evaluates the execution time of complex logical expressions when:
+/// 1. AND operator short-circuits (all left values are false)
+/// 2. OR operator short-circuits (all left values are true)
+fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
+    // Create schema with three columns
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Boolean, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Utf8, false),
+    ]));
+
+    // Generate test data with extended content
+    let (b_values, c_values) = generate_test_strings(8192);
+
+    // Create two RecordBatches with different boolean values
+    let batch_false =
+        create_record_batch(schema.clone(), false, &b_values, &c_values).unwrap();
+    let batch_true =
+        create_record_batch(schema.clone(), true, &b_values, &c_values).unwrap();
+
+    // Build complex string matching conditions
+    let right_condition_and = and(
+        // Check for API endpoint pattern in URLs
+        binary_expr(
+            col("b"),
+            Operator::RegexMatch,
+            lit(r#"^https://(\w+\.)?example\.(com|org)/"#),
+        ),
+        // Check for markdown code blocks and summary section
+        binary_expr(
+            col("c"),
+            Operator::RegexMatch,
+            lit("```(rust|python|go)\nfn? main$$"),
+        ),
+    );
+
+    let right_condition_or = or(
+        // Check for secure HTTPS protocol
+        binary_expr(
+            col("b"),
+            Operator::RegexMatch,
+            lit(r#"^https://(\w+\.)?example\.(com|org)/"#),
+        ),
+        // Check for Rust code examples
+        binary_expr(
+            col("c"),
+            Operator::RegexMatch,
+            lit("```(rust|python|go)\nfn? main$$"),
+        ),
+    );
+
+    // Create physical binary expressions
+    let expr_and = BinaryExpr::new(
+        Arc::new(Column::new("a", 0)),
+        Operator::And,
+        logical2physical(&right_condition_and, &schema),
+    );
+
+    let expr_or = BinaryExpr::new(
+        Arc::new(Column::new("a", 0)),
+        Operator::Or,
+        logical2physical(&right_condition_or, &schema),
+    );
+
+    // Benchmark all false and op is and
+    {
+        c.bench_function("bench_all_false_and", |b| {
+            b.iter(|| expr_and.evaluate(black_box(&batch_false)).unwrap())
+        });
+    }
+    // Benchmark all true and op is or
+    {
+        c.bench_function("bench_all_true_or", |b| {
+            b.iter(|| expr_or.evaluate(black_box(&batch_true)).unwrap())
+        });
+    }
+}
+
+/// Generate test data with computationally expensive patterns
+fn generate_test_strings(num_rows: usize) -> (Vec<String>, Vec<String>) {
+    // Extended URL patterns with query parameters and paths
+    let base_urls = [
+        "https://api.example.com/v2/users/12345/posts?category=tech&sort=date&lang=en-US",
+        "https://cdn.example.net/assets/images/2023/08/15/sample-image-highres.jpg?width=1920&quality=85",
+        "http://service.demo.org:8080/api/data/transactions/20230815123456.csv",
+        "ftp://legacy.archive.example/backups/2023/Q3/database-dump.sql.gz",
+        "https://docs.example.co.uk/reference/advanced-topics/concurrency/parallel-processing.md#implementation-details",
+    ];
+
+    // Extended markdown content with code blocks and structure
+    let base_markdowns = [
+        concat!(
+            "# Advanced Topics in Computer Science\n\n",
+            "## Summary\nThis article explores complex system design patterns and...\n\n",
+            "```rust\nfn process_data(data: &mut [i32]) {\n    // Parallel processing example\n    data.par_iter_mut().for_each(|x| *x *= 2);\n}\n```\n\n",
+            "## Performance Considerations\nWhen implementing concurrent systems...\n"
+        ),
+        concat!(
+            "## API Documentation\n\n",
+            "```json\n{\n  \"endpoint\": \"/api/v2/users\",\n  \"methods\": [\"GET\", \"POST\"],\n  \"parameters\": {\n    \"page\": \"number\"\n  }\n}\n```\n\n",
+            "# Authentication Guide\nSecure your API access using OAuth 2.0...\n"
+        ),
+        concat!(
+            "# Data Processing Pipeline\n\n",
+            "```python\nfrom multiprocessing import Pool\n\ndef main():\n    with Pool(8) as p:\n        results = p.map(process_item, data)\n```\n\n",
+            "## Summary of Optimizations\n1. Batch processing\n2. Memory pooling\n3. Concurrent I/O operations\n"
+        ),
+        concat!(
+            "# System Architecture Overview\n\n",
+            "## Components\n- Load Balancer\n- Database Cluster\n- Cache Service\n\n",
+            "```go\nfunc main() {\n    router := gin.Default()\n    router.GET(\"/api/health\", healthCheck)\n    router.Run(\":8080\")\n}\n```\n"
+        ),
+        concat!(
+            "## Configuration Reference\n\n",
+            "```yaml\nserver:\n  port: 8080\n  max_threads: 32\n\ndatabase:\n  url: postgres://user@prod-db:5432/main\n```\n\n",
+            "# Deployment Strategies\nBlue-green deployment patterns with...\n"
+        ),
+    ];
+
+    let mut urls = Vec::with_capacity(num_rows);
+    let mut markdowns = Vec::with_capacity(num_rows);
+
+    for i in 0..num_rows {
+        urls.push(base_urls[i % 5].to_string());
+        markdowns.push(base_markdowns[i % 5].to_string());
+    }
+
+    (urls, markdowns)
+}
+
+/// Create RecordBatch with specified boolean values
+fn create_record_batch(
+    schema: Arc<Schema>,
+    a_value: bool,
+    b_values: &[String],
+    c_values: &[String],
+) -> arrow::error::Result<RecordBatch> {
+    let a_array = BooleanArray::from(vec![a_value; b_values.len()]);
+    let b_array = StringArray::from(b_values.to_vec());
+    let c_array = StringArray::from(c_values.to_vec());
+
+    RecordBatch::try_new(
+        schema,
+        vec![Arc::new(a_array), Arc::new(b_array), Arc::new(c_array)],
+    )
+}
+
+criterion_group!(
+    benches,
+    benchmark_boolean_ops,
+    benchmark_binary_op_in_short_circuit
+);
 criterion_main!(benches);
