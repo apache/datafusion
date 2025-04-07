@@ -21,6 +21,7 @@
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
 use std::mem;
+use std::ops::Index;
 use std::sync::Arc;
 
 /// Represents statistics data grouped by partition.
@@ -51,6 +52,18 @@ impl PartitionedStatistics {
 
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl Index<usize> for PartitionedStatistics {
+    type Output = Statistics;
+
+    fn index(&self, partition_idx: usize) -> &Self::Output {
+        self.statistics(partition_idx)
     }
 }
 
