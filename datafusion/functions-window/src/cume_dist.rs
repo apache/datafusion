@@ -45,10 +45,13 @@ define_udwf_and_expr!(
     doc_section(label = "Ranking Functions"),
     description = "Relative rank of the current row: (number of rows preceding or peer with the current row) / (total rows).",
     syntax_example = "cume_dist()",
-    sql_example = r#"-- Example usage of the cume_dist window function:
-SELECT salary,
+    sql_example = r#"```sql
+    --Example usage of the cume_dist window function:
+    SELECT salary,
        cume_dist() OVER (ORDER BY salary) AS cume_dist
-FROM employees;
+    FROM employees;
+```
+```text
 +--------+-----------+
 | salary | cume_dist |
 +--------+-----------+
@@ -56,7 +59,7 @@ FROM employees;
 | 50000  | 0.67      |
 | 70000  | 1.00      |
 +--------+-----------+
-"#
+```"#
 )]
 #[derive(Debug)]
 pub struct CumeDist {
