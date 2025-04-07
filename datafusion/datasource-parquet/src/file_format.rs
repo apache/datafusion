@@ -739,6 +739,7 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
         &mut self,
         range: Range<usize>,
     ) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+        let range = range.start as u64..range.end as u64;
         async {
             self.store
                 .get_range(&self.meta.location, range)
@@ -765,7 +766,7 @@ pub async fn fetch_parquet_metadata(
 
     ParquetMetaDataReader::new()
         .with_prefetch_hint(size_hint)
-        .load_and_finish(fetch, file_size)
+        .load_and_finish(fetch, file_size as usize)
         .await
         .map_err(DataFusionError::from)
 }
