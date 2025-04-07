@@ -966,7 +966,7 @@ pub struct SortExec {
     preserve_partitioning: bool,
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
-    /// Common sort prefix between the input and the sort expressions (only used with fetch)
+    /// Normalized common sort prefix between the input and the sort expressions (only used with fetch)
     common_sort_prefix: LexOrdering,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
