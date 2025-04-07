@@ -19,6 +19,7 @@
 //! help with allocation accounting.
 
 use datafusion_common::{internal_err, Result};
+use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, sync::atomic, sync::Arc};
 
 mod pool;
@@ -171,6 +172,14 @@ impl PartialEq for MemoryConsumer {
 
 impl Eq for MemoryConsumer {}
 
+impl Hash for MemoryConsumer {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.name.hash(state);
+        self.can_spill.hash(state);
+    }
+}
+
 impl MemoryConsumer {
     fn new_unique_id() -> usize {
         static ID: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
@@ -182,6 +191,14 @@ impl MemoryConsumer {
         Self {
             name: name.into(),
             can_spill: false,
+            id: Self::new_unique_id(),
+        }
+    }
+
+    pub fn clone_with_new_id(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            can_spill: self.can_spill,
             id: Self::new_unique_id(),
         }
     }
