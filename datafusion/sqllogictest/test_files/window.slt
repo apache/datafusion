@@ -5537,6 +5537,21 @@ physical_plan
 02)--WindowAggExec: wdw=[max(aggregate_test_100_ordered.c5) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "max(aggregate_test_100_ordered.c5) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5], file_type=csv, has_header=true
 
+query II rowsort
+SELECT
+  t1.v1,
+  SUM(t1.v1) OVER w + 1
+FROM
+  generate_series(1, 5) AS t1(v1)
+WINDOW
+  w AS (ORDER BY t1.v1);
+----
+1 2
+2 4
+3 7
+4 11
+5 16
+
 # Testing Utf8View with window
 statement ok
 CREATE TABLE aggregate_test_100_utf8view AS SELECT
