@@ -827,7 +827,7 @@ impl BinaryExpr {
 /// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
 /// 2. Handles both scalar values and array values
 /// 3. For arrays, uses optimized `true_count()`/`false_count()` methods from arrow-rs.
-///    `bool_or`/`bool_and` maybe a better choice too，for detailed discussion,see: https://github.com/apache/datafusion/pull/15462#discussion_r2020558418)
+///    `bool_or`/`bool_and` maybe a better choice too，for detailed discussion,see:[link](https://github.com/apache/datafusion/pull/15462#discussion_r2020558418)
 fn check_short_circuit(arg: &ColumnarValue, op: &Operator) -> bool {
     let data_type = arg.data_type();
     match (data_type, op) {
