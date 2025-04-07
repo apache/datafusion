@@ -21,16 +21,17 @@ use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
 use super::{
-    ColumnStatistics, DisplayAs, ExecutionPlanProperties, FilterPushdownResult,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
-use crate::filter_pushdown::FilterPushdownSupport;
+use crate::filter_pushdown::FilterPushdown;
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
     ProjectionExec,
 };
+use crate::FilterPushdownResult;
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
@@ -470,22 +471,13 @@ impl ExecutionPlan for FilterExec {
                     let unhandled_filters = all_filters
                         .into_iter()
                         .zip(support)
-                        .filter_map(|(f, s)| {
-                            if matches!(s, FilterPushdownSupport::Exact) {
-                                None
-                            } else {
-                                Some(f)
-                            }
-                        })
+                        .filter_map(|(f, s)| if s.is_exact() { None } else { Some(f) })
                         .collect::<Vec<_>>();
                     // If there are no unhandled filters and we have no projection, return the inner plan
                     if unhandled_filters.is_empty() && self.projection.is_none() {
                         return Ok(FilterPushdownResult::Pushed {
                             inner,
-                            support: vec![
-                                FilterPushdownSupport::Exact;
-                                parent_filters.len()
-                            ],
+                            support: vec![FilterPushdown::Exact; parent_filters.len()],
                         });
                     }
                     let new_predicate = conjunction(unhandled_filters);
@@ -509,7 +501,7 @@ impl ExecutionPlan for FilterExec {
         };
         Ok(FilterPushdownResult::Pushed {
             inner: Arc::new(new_self),
-            support: vec![FilterPushdownSupport::Exact; parent_filters.len()],
+            support: vec![FilterPushdown::Exact; parent_filters.len()],
         })
     }
 }

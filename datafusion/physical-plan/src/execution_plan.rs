@@ -16,7 +16,6 @@
 // under the License.
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-use crate::filter_pushdown::{FilterPushdownResult, FilterPushdownSupport};
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
@@ -37,6 +36,7 @@ use std::sync::Arc;
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
+use crate::filter_pushdown::{FilterPushdown, FilterPushdownResult};
 use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
 use crate::repartition::RepartitionExec;
@@ -865,7 +865,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
                 with_new_children_if_necessary(Arc::clone(plan), new_children)?;
             Ok(FilterPushdownResult::Pushed {
                 inner: new_inner,
-                support: vec![FilterPushdownSupport::Unsupported; parent_filters.len()],
+                support: vec![FilterPushdown::Unsupported; parent_filters.len()],
             })
         } else {
             Ok(FilterPushdownResult::NotPushed)

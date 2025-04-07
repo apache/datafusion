@@ -40,16 +40,15 @@ use datafusion_physical_expr::{
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::filter_pushdown::PushdownFilter;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::filter_pushdown::{FilterPushdown, FilterPushdownResult};
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_batches::CoalesceBatchesExec,
     filter::FilterExec,
     repartition::RepartitionExec,
-    FilterPushdownResult,
 };
 use datafusion_physical_plan::{
-    displayable, filter_pushdown::FilterPushdownSupport,
-    metrics::ExecutionPlanMetricsSet, DisplayFormatType, ExecutionPlan,
+    displayable, metrics::ExecutionPlanMetricsSet, DisplayFormatType, ExecutionPlan,
 };
 use object_store::ObjectStore;
 use std::sync::{Arc, OnceLock};
@@ -61,13 +60,13 @@ use std::{
 /// A placeholder data source that accepts filter pushdown
 #[derive(Clone, Default)]
 struct TestSource {
-    support: Option<FilterPushdownSupport>,
+    support: Option<FilterPushdown>,
     predicate: Option<PhysicalExprRef>,
     statistics: Option<Statistics>,
 }
 
 impl TestSource {
-    fn new(support: Option<FilterPushdownSupport>) -> Self {
+    fn new(support: Option<FilterPushdown>) -> Self {
         Self {
             support,
             predicate: None,
@@ -154,9 +153,9 @@ impl FileSource for TestSource {
             Some(support) => support,
             None => {
                 if config.execution.parquet.pushdown_filters {
-                    FilterPushdownSupport::Exact
+                    FilterPushdown::Exact
                 } else {
-                    FilterPushdownSupport::Unsupported
+                    FilterPushdown::Inexact
                 }
             }
         };
@@ -165,11 +164,14 @@ impl FileSource for TestSource {
             predicate: Some(conjunction(filters.iter().map(Arc::clone))),
             statistics: self.statistics.clone(),
         });
-        Ok(FilterPushdownResult::new(new, vec![support; filters.len()]))
+        Ok(FilterPushdownResult::Pushed {
+            inner: new,
+            support: vec![support; filters.len()],
+        })
     }
 }
 
-fn test_scan(support: Option<FilterPushdownSupport>) -> Arc<dyn ExecutionPlan> {
+fn test_scan(support: Option<FilterPushdown>) -> Arc<dyn ExecutionPlan> {
     let schema = schema();
     let source = Arc::new(TestSource::new(support));
     let base_config = FileScanConfigBuilder::new(
@@ -183,7 +185,7 @@ fn test_scan(support: Option<FilterPushdownSupport>) -> Arc<dyn ExecutionPlan> {
 
 #[test]
 fn test_pushdown_into_scan() {
-    let scan = test_scan(Some(FilterPushdownSupport::Exact));
+    let scan = test_scan(Some(FilterPushdown::Exact));
     let predicate = col_lit_predicate("a", "foo", schema());
     let plan = Arc::new(FilterExec::try_new(predicate, scan).unwrap());
 
@@ -251,7 +253,7 @@ fn test_pushdown_into_scan_with_config_options() {
 #[test]
 fn test_filter_collapse() {
     // filter should be pushed down into the parquet scan with two filters
-    let scan = test_scan(Some(FilterPushdownSupport::Exact));
+    let scan = test_scan(Some(FilterPushdown::Exact));
     let predicate1 = col_lit_predicate("a", "foo", schema());
     let filter1 = Arc::new(FilterExec::try_new(predicate1, scan).unwrap());
     let predicate2 = col_lit_predicate("b", "bar", schema());
@@ -274,7 +276,7 @@ fn test_filter_collapse() {
 
 #[test]
 fn test_filter_with_projection() {
-    let scan = test_scan(Some(FilterPushdownSupport::Exact));
+    let scan = test_scan(Some(FilterPushdown::Exact));
     let projection = vec![1, 0];
     let projected_schema = Arc::new(schema().project(&projection).unwrap());
     let predicate = col_lit_predicate("a", "foo", &projected_schema);
@@ -303,7 +305,7 @@ fn test_filter_with_projection() {
 
     // add a test where the filter is on a column that isn't included in the output
     let projection = vec![1];
-    let predicate = col_lit_predicate("a", "foo", &schema());
+    let predicate = col_lit_predicate("a", "foo", schema());
     let plan = Arc::new(
         FilterExec::try_new(predicate, scan)
             .unwrap()
@@ -328,7 +330,7 @@ fn test_filter_with_projection() {
 #[test]
 fn test_push_down_through_transparent_nodes() {
     // expect the predicate to be pushed down into the DataSource
-    let scan = test_scan(Some(FilterPushdownSupport::Exact));
+    let scan = test_scan(Some(FilterPushdown::Exact));
     let coalesce = Arc::new(CoalesceBatchesExec::new(scan, 1));
     let predicate = col_lit_predicate("a", "foo", schema());
     let filter = Arc::new(FilterExec::try_new(predicate, coalesce).unwrap());
@@ -364,7 +366,7 @@ fn test_no_pushdown_through_aggregates() {
     // 1. The outer filter is not pushed down into the aggregate because we haven't
     //    implemented that yet.
     // 2. The inner filter **is** pushed down into the DataSource.
-    let scan = test_scan(Some(FilterPushdownSupport::Exact));
+    let scan = test_scan(Some(FilterPushdown::Exact));
     let filter = Arc::new(
         FilterExec::try_new(col_lit_predicate("a", "foo", schema()), scan.clone())
             .unwrap(),
