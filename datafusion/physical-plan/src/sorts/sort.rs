@@ -34,7 +34,6 @@ use crate::metrics::{
 use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::get_record_batch_memory_size;
-use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
@@ -221,9 +220,6 @@ struct ExternalSorter {
     /// Unsorted input batches stored in the memory buffer
     in_mem_batches: Vec<RecordBatch>,
 
-    /// During external sorting, in-memory intermediate data will be appended to
-    /// this file incrementally. Once finished, this file will be moved to [`Self::finished_spill_files`].
-    in_progress_spill_file: Option<InProgressSpillFile>,
     /// If data has previously been spilled, the locations of the spill files (in
     /// Arrow IPC format)
     /// Within the same spill file, the data might be chunked into multiple batches,
@@ -299,7 +295,6 @@ impl ExternalSorter {
         Ok(Self {
             schema,
             in_mem_batches: vec![],
-            in_progress_spill_file: None,
             finished_spill_files: vec![],
             expr: expr.into(),
             sort_keys_row_converter: Arc::new(converter),
@@ -355,7 +350,7 @@ impl ExternalSorter {
         self.merge_reservation.free();
 
         if self.spilled_before() {
-            let mut streams = vec![];
+            // let mut streams = vec![];
 
             // Sort `in_mem_batches` and spill it first. If there are many
             // `in_mem_batches` and the memory limit is almost reached, merging
@@ -364,25 +359,7 @@ impl ExternalSorter {
                 self.sort_and_spill_in_mem_batches().await?;
             }
 
-            for spill in self.finished_spill_files.drain(..) {
-                if !spill.path().exists() {
-                    return internal_err!("Spill file {:?} does not exist", spill.path());
-                }
-                let stream = self.spill_manager.read_spill_as_stream(spill)?;
-                streams.push(stream);
-            }
-
-            let expressions: LexOrdering = self.expr.iter().cloned().collect();
-
-            StreamingMergeBuilder::new()
-                .with_streams(streams)
-                .with_schema(Arc::clone(&self.schema))
-                .with_expressions(expressions.as_ref())
-                .with_metrics(self.metrics.baseline.clone())
-                .with_batch_size(self.batch_size)
-                .with_fetch(None)
-                .with_reservation(self.merge_reservation.new_empty())
-                .build()
+            return self.merge_spilled_files_multi_pass().await;
         } else {
             self.in_mem_sort_stream(self.metrics.baseline.clone())
         }
@@ -406,59 +383,6 @@ impl ExternalSorter {
     /// How many spill files have been created?
     fn spill_count(&self) -> usize {
         self.metrics.spill_metrics.spill_file_count.value()
-    }
-
-    /// Appending globally sorted batches to the in-progress spill file, and clears
-    /// the `globally_sorted_batches` (also its memory reservation) afterwards.
-    async fn consume_and_spill_append(
-        &mut self,
-        globally_sorted_batches: &mut Vec<RecordBatch>,
-    ) -> Result<()> {
-        if globally_sorted_batches.is_empty() {
-            return Ok(());
-        }
-
-        // Lazily initialize the in-progress spill file
-        if self.in_progress_spill_file.is_none() {
-            self.in_progress_spill_file =
-                Some(self.spill_manager.create_in_progress_file("Sorting")?);
-        }
-
-        Self::organize_stringview_arrays(globally_sorted_batches)?;
-
-        debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
-
-        let batches_to_spill = std::mem::take(globally_sorted_batches);
-        self.reservation.free();
-
-        let in_progress_file = self.in_progress_spill_file.as_mut().ok_or_else(|| {
-            internal_datafusion_err!("In-progress spill file should be initialized")
-        })?;
-
-        for batch in batches_to_spill {
-            in_progress_file.append_batch(&batch)?;
-        }
-
-        if !globally_sorted_batches.is_empty() {
-            return internal_err!("This function consumes globally_sorted_batches, so it should be empty after taking.");
-        }
-
-        Ok(())
-    }
-
-    /// Finishes the in-progress spill file and moves it to the finished spill files.
-    async fn spill_finish(&mut self) -> Result<()> {
-        let mut in_progress_file =
-            self.in_progress_spill_file.take().ok_or_else(|| {
-                internal_datafusion_err!("Should be called after `spill_append`")
-            })?;
-        let spill_file = in_progress_file.finish()?;
-
-        if let Some(spill_file) = spill_file {
-            self.finished_spill_files.push(spill_file);
-        }
-
-        Ok(())
     }
 
     /// Reconstruct `globally_sorted_batches` to organize the payload buffers of each
@@ -535,8 +459,10 @@ impl ExternalSorter {
         // reserved again for the next spill.
         self.merge_reservation.free();
 
-        let mut sorted_stream =
+        let sorted_stream =
             self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
+        debug!("SPM stream is constructed");
+
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
         if !self.in_mem_batches.is_empty() {
@@ -544,47 +470,251 @@ impl ExternalSorter {
                 "in_mem_batches should be empty after constructing sorted stream"
             );
         }
-        // 'global' here refers to all buffered batches when the memory limit is
-        // reached. This variable will buffer the sorted batches after
-        // sort-preserving merge and incrementally append to spill files.
-        let mut globally_sorted_batches: Vec<RecordBatch> = vec![];
 
+        let spill_file = self.write_stream_to_spill_file(sorted_stream).await?;
+        self.finished_spill_files.push(spill_file);
+
+        // Reserve headroom for next sort/merge
+        self.reserve_memory_for_merge()?;
+
+        Ok(())
+    }
+
+    /// Create a new spill file, and write all batches from the stream to the file.
+    ///
+    /// Note: After the spill is done, the memory reservation will be freed to 0,
+    /// because `sorted_stream` holds all buffered batches.
+    async fn write_stream_to_spill_file(
+        &mut self,
+        mut sorted_stream: SendableRecordBatchStream,
+    ) -> Result<RefCountedTempFile> {
+        // Release the memory reserved for merge back to the pool so there is some
+        // left when the executed stream requests an allocation (now the stream to
+        // write are SortPreservingMergeStream, which requires memory).
+        // At the end of this function, memory will be reserved again for the next spill.
+        self.merge_reservation.free();
+
+        let mut in_progress_spill_file =
+            self.spill_manager.create_in_progress_file("Sorting")?;
+
+        // Incrementally append globally sorted batches to the spill file, because
+        // there might not be enough memory to materialize all batches at once.
         while let Some(batch) = sorted_stream.next().await {
-            let batch = batch?;
-            let sorted_size = get_reserved_byte_for_record_batch(&batch);
-            if self.reservation.try_grow(sorted_size).is_err() {
-                // Although the reservation is not enough, the batch is
-                // already in memory, so it's okay to combine it with previously
-                // sorted batches, and spill together.
-                globally_sorted_batches.push(batch);
-                self.consume_and_spill_append(&mut globally_sorted_batches)
-                    .await?; // reservation is freed in spill()
-            } else {
-                globally_sorted_batches.push(batch);
-            }
+            let mut batch = vec![batch?];
+            Self::organize_stringview_arrays(&mut batch)?;
+            in_progress_spill_file.append_batch(&batch[0])?;
         }
 
         // Drop early to free up memory reserved by the sorted stream, otherwise the
         // upcoming `self.reserve_memory_for_merge()` may fail due to insufficient memory.
         drop(sorted_stream);
 
-        self.consume_and_spill_append(&mut globally_sorted_batches)
-            .await?;
-        self.spill_finish().await?;
-
-        // Sanity check after spilling
-        let buffers_cleared_property =
-            self.in_mem_batches.is_empty() && globally_sorted_batches.is_empty();
-        if !buffers_cleared_property {
-            return internal_err!(
-                "in_mem_batches and globally_sorted_batches should be cleared before"
-            );
-        }
-
         // Reserve headroom for next sort/merge
         self.reserve_memory_for_merge()?;
 
-        Ok(())
+        let spill_file = in_progress_spill_file.finish()?.ok_or_else(|| {
+            internal_datafusion_err!("Writing stream with 0 batch is not allowed")
+        })?;
+
+        Ok(spill_file)
+    }
+
+    /// Sort-preserving merges the spilled files into a single file.
+    ///
+    /// All of input spill files are sorted by sort keys within each file, and the
+    /// returned file is also sorted by sort keys.
+    ///
+    /// This method consumes the input spill files, and returns a new compacted
+    /// spill file. After returnning, the input files will be cleaned up (deleted).
+    ///
+    /// # Example:
+    /// Input spill files:
+    ///     SpillFile1 (sorted by SortKeys):
+    ///         [batch1(100 rows)], [batch2(100 rows)]
+    ///     SpillFile2 (sorted by SortKeys):
+    ///         [batch1(100 rows)]
+    ///
+    /// After merging, it returns a new spill file:
+    ///     returns MergedSpillFile (sorted by SortKeys):
+    ///         [batch1(100 rows)], [batch2(100 rows)]
+    async fn consume_and_merge_spill_files(
+        &mut self,
+        input_spill_files: Vec<RefCountedTempFile>,
+    ) -> Result<RefCountedTempFile> {
+        // ==== Convert each spill file into a stream ====
+        let partially_sorted_streams = input_spill_files
+            .into_iter()
+            .map(|spill_file| {
+                if !spill_file.path().exists() {
+                    return internal_err!(
+                        "Spill file {:?} does not exist",
+                        spill_file.path()
+                    );
+                }
+
+                self.spill_manager.read_spill_as_stream(spill_file)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let sort_exprs: LexOrdering = self.expr.iter().cloned().collect();
+
+        // ==== Doing sort-preserving merge on input partially sorted streams ====
+        let spm_stream = StreamingMergeBuilder::new()
+            .with_streams(partially_sorted_streams)
+            .with_schema(Arc::clone(&self.schema))
+            .with_expressions(sort_exprs.as_ref())
+            .with_metrics(self.metrics.baseline.clone())
+            .with_batch_size(self.batch_size)
+            .with_fetch(None)
+            .with_reservation(self.merge_reservation.new_empty())
+            .build()?;
+
+        debug!("Combining spilled files");
+
+        // ==== Write to a single merged spill file ====
+        let merged_spill_file = self.write_stream_to_spill_file(spm_stream).await?;
+
+        Ok(merged_spill_file)
+    }
+
+    /// Maximum number of spill files to merge in a single pass
+    const MAX_SPILL_MERGE_DEGREE: usize = 8;
+
+    /// Performs a multi-pass merge of spilled files to create a globally sorted stream. The merge degree is limited by memory constraints.
+    /// - In each pass, existing spill files are split into groups, then sort-preserving merged, and re-spilled to a smaller number of spill files.
+    /// - For each combining step, up to the maximum merge degree of spill files are merged.
+    ///
+    /// # Example
+    /// ```
+    /// Notation: batch(n) means a batch with n rows
+    ///
+    /// Max merge degree: 2
+    /// Initial spill files:
+    ///     spill_file_1: batch(100)
+    ///     spill_file_2: batch(100)
+    ///     spill_file_3: batch(100)
+    ///     spill_file_4: batch(100)
+    ///
+    /// After pass 1:
+    ///     spill_file_1: batch(100), batch(100)
+    ///     spill_file_2: batch(100), batch(100)
+    ///
+    /// After pass 2:
+    ///     merged_stream: batch(100), batch(100), batch(100), batch(100)
+    /// ```
+    async fn merge_spilled_files_multi_pass(
+        &mut self,
+    ) -> Result<SendableRecordBatchStream> {
+        // ──────────────────────────────────────────────────────────────────────
+        // Edge cases
+        // ──────────────────────────────────────────────────────────────────────
+        if self.finished_spill_files.is_empty() {
+            return internal_err!("No spilled files to merge");
+        }
+        if self.finished_spill_files.len() == 1 {
+            return self
+                .spill_manager
+                .read_spill_as_stream(self.finished_spill_files.remove(0));
+        }
+
+        // ──────────────────────────────────────────────────────────────────────
+        // Recursively merge spilled files
+        // ──────────────────────────────────────────────────────────────────────
+        let spill_files = std::mem::take(&mut self.finished_spill_files);
+        let spill_files = self.recursively_merge_spill_files(spill_files).await?;
+
+        // ──────────────────────────────────────────────────────────────────────
+        // Finally, <= max merge degree spilled files are left, merge them into a
+        // single globally sorted stream
+        // ──────────────────────────────────────────────────────────────────────
+        let partially_sorted_streams = spill_files
+            .into_iter()
+            .map(|spill_file| self.spill_manager.read_spill_as_stream(spill_file))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Edge cases
+        if partially_sorted_streams.is_empty() {
+            return internal_err!("No spilled files to merge");
+        }
+        if partially_sorted_streams.len() == 1 {
+            return Ok(partially_sorted_streams.into_iter().next().unwrap());
+        }
+
+        let sort_exprs: LexOrdering = self.expr.iter().cloned().collect();
+
+        let spm_stream = StreamingMergeBuilder::new()
+            .with_streams(partially_sorted_streams)
+            .with_schema(Arc::clone(&self.schema))
+            .with_expressions(sort_exprs.as_ref())
+            .with_metrics(self.metrics.baseline.clone())
+            .with_batch_size(self.batch_size)
+            .with_fetch(None)
+            .with_reservation(self.merge_reservation.new_empty())
+            .build()?;
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&self.schema),
+            spm_stream,
+        )))
+    }
+
+    /// Recursively merges and re-spills files until the number of spill files is ≤ MAX_SPILL_MERGE_DEGREE
+    async fn recursively_merge_spill_files(
+        &mut self,
+        mut spill_files_cur_pass: Vec<RefCountedTempFile>,
+    ) -> Result<Vec<RefCountedTempFile>> {
+        let mut spill_files_next_pass: Vec<RefCountedTempFile> = vec![];
+
+        // Merge spill files to the closest power of the configured max merge
+        // degree, until the number of spill files is <= max merge degree
+        //
+        // Example:
+        // initial spill files count: 30
+        // max merge degree: 4
+        // pass 1: merge 30 files into 16(4^2) files
+        // pass 2: merge 16 files into 4(4^1) files
+        // pass 3: now the number of spill files is <= max merge degree: merge them into a single sorted stream
+        while spill_files_cur_pass.len() > Self::MAX_SPILL_MERGE_DEGREE {
+            let log_base = Self::MAX_SPILL_MERGE_DEGREE as f64;
+            let num_files = spill_files_cur_pass.len() as f64;
+            let num_passes = num_files.log(log_base).ceil() as usize;
+            let next_pass_merge_degree = log_base.powi((num_passes - 1) as i32);
+
+            // Distribute spill files into `next_pass_merge_degree` groups as evenly as possible.
+            // For example, when splitting 11 files into 3 groups:
+            // 1. Base group file count = floor(11 / 3) = 3 files per group
+            //    Initial distribution: [3, 3, 3] files per group
+            // 2. Remainder = 11 % 3 = 2 files
+            // 3. Distribute remainder by adding 1 file to first 2 groups
+            //    Final distribution: [4, 4, 3] files per group
+            let base_size = (num_files / next_pass_merge_degree) as usize;
+            let remainder = (num_files % next_pass_merge_degree) as usize;
+
+            let num_files_per_group: Vec<usize> = (0..next_pass_merge_degree as usize)
+                .map(|i| base_size + if i < remainder { 1 } else { 0 })
+                .collect();
+
+            for num_files_to_merge in num_files_per_group {
+                // take the first num_files_to_merge files from spill_files
+                let files_to_merge =
+                    spill_files_cur_pass.drain(0..num_files_to_merge).collect();
+                let merged_spill_file =
+                    self.consume_and_merge_spill_files(files_to_merge).await?;
+                spill_files_next_pass.push(merged_spill_file);
+            }
+
+            if !spill_files_cur_pass.is_empty() {
+                return internal_err!(
+                    "Spill files should all be compacted, but there are {} files left",
+                    spill_files_cur_pass.len()
+                );
+            }
+
+            // Prepare for the next iteration
+            spill_files_cur_pass = std::mem::take(&mut spill_files_next_pass);
+        }
+
+        Ok(spill_files_cur_pass)
     }
 
     /// Consumes in_mem_batches returning a sorted stream of
@@ -682,6 +812,11 @@ impl ExternalSorter {
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation);
         }
+
+        debug!(
+            "ExternalSorter partial merge degree: {}",
+            self.in_mem_batches.len() // each batch will be converted to a stream later
+        );
 
         let streams = std::mem::take(&mut self.in_mem_batches)
             .into_iter()

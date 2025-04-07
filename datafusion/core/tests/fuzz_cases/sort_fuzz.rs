@@ -17,7 +17,7 @@
 
 //! Fuzz Test for various corner cases sorting RecordBatches exceeds available memory and should spill
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use arrow::{
     array::{as_string_array, ArrayRef, Int32Array, StringArray},
@@ -31,7 +31,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::cast::as_int32_array;
-use datafusion_execution::memory_pool::GreedyMemoryPool;
+use datafusion_execution::memory_pool::{FairSpillPool, TrackConsumersPool};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -258,9 +258,15 @@ impl SortTest {
                     .execution
                     .sort_spill_reservation_bytes,
             );
+            println!("Pool size: {}", pool_size);
 
+            let inner_pool = FairSpillPool::new(pool_size);
+            let pool = Arc::new(TrackConsumersPool::new(
+                inner_pool,
+                NonZeroUsize::new(5).unwrap(),
+            ));
             let runtime = RuntimeEnvBuilder::new()
-                .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
+                .with_memory_pool(pool)
                 .build_arc()
                 .unwrap();
             SessionContext::new_with_config_rt(session_config, runtime)
