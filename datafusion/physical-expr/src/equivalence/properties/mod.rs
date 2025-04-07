@@ -432,15 +432,10 @@ impl EquivalenceProperties {
             let mut new_orderings = oeq_class
                 .into_iter()
                 .filter(|existing| self.is_prefix_of(&filtered_exprs, existing))
-                .map(|existing| {
-                    filtered_exprs
-                        .clone()
-                        .into_iter()
-                        .chain(existing.into_iter().skip(filtered_exprs.len()))
-                        .collect()
-                })
                 .collect::<Vec<_>>();
-            new_orderings.push(filtered_exprs);
+            if new_orderings.is_empty() {
+                new_orderings.push(filtered_exprs);
+            }
 
             self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
         }

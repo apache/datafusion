@@ -1515,13 +1515,13 @@ mod tests {
 
         let result = eq_properties.with_reorder(new_order);
 
-        // Should only contain [b ASC, c ASC]
+        // Should only contain [a/b ASC, c ASC]
         assert_eq!(result.oeq_class().len(), 1);
 
         // Verify orderings
         let ordering = result.oeq_class().iter().next().unwrap();
         assert_eq!(ordering.len(), 2);
-        assert!(ordering[0].expr.eq(&col_b));
+        assert!(ordering[0].expr.eq(&col_a) || ordering[0].expr.eq(&col_b));
         assert!(ordering[0].options.eq(&asc));
         assert!(ordering[1].expr.eq(&col_c));
         assert!(ordering[1].options.eq(&asc));
