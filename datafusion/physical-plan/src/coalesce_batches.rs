@@ -23,7 +23,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
+use super::{
+    DisplayAs, ExecutionPlanProperties, FilterPushdownResult, PlanProperties, Statistics,
+};
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
@@ -219,7 +221,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         plan: &Arc<dyn ExecutionPlan>,
         parent_filters: &[datafusion_physical_expr::PhysicalExprRef],
         config: &ConfigOptions,
-    ) -> Result<crate::ExecutionPlanFilterPushdownResult> {
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
         try_pushdown_filters_to_input(plan, &self.input, parent_filters, config)
     }
 }

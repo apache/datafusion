@@ -18,9 +18,7 @@
 use std::sync::Arc;
 
 use datafusion_common::{config::ConfigOptions, DataFusionError, Result};
-use datafusion_physical_plan::{
-    execution_plan::ExecutionPlanFilterPushdownResult, ExecutionPlan,
-};
+use datafusion_physical_plan::{ExecutionPlan, FilterPushdownResult};
 
 use crate::PhysicalOptimizerRule;
 
@@ -48,8 +46,8 @@ impl PhysicalOptimizerRule for PushdownFilter {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match plan.try_pushdown_filters(&plan, &Vec::new(), config)? {
-            ExecutionPlanFilterPushdownResult::NotPushed => Ok(plan),
-            ExecutionPlanFilterPushdownResult::Pushed { inner, support } => {
+            FilterPushdownResult::NotPushed => Ok(plan),
+            FilterPushdownResult::Pushed { inner, support } => {
                 if !support.is_empty() {
                     return Err(
                         DataFusionError::Plan(

@@ -30,9 +30,7 @@ use datafusion_common::{internal_err, Result};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::{
-    file::{FileSource, FileSourceFilterPushdownResult},
-    file_scan_config::FileScanConfig,
-    file_stream::FileOpener,
+    file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
 };
 use datafusion_expr::test::function_stub::count_udaf;
 use datafusion_physical_expr::expressions::col;
@@ -47,6 +45,7 @@ use datafusion_physical_plan::{
     coalesce_batches::CoalesceBatchesExec,
     filter::FilterExec,
     repartition::RepartitionExec,
+    FilterPushdownResult,
 };
 use datafusion_physical_plan::{
     displayable, filter_pushdown::FilterPushdownSupport,
@@ -150,7 +149,7 @@ impl FileSource for TestSource {
         &self,
         filters: &[PhysicalExprRef],
         config: &ConfigOptions,
-    ) -> Result<FileSourceFilterPushdownResult> {
+    ) -> Result<FilterPushdownResult<Arc<dyn FileSource>>> {
         let support = match self.support {
             Some(support) => support,
             None => {
@@ -166,10 +165,7 @@ impl FileSource for TestSource {
             predicate: Some(conjunction(filters.iter().map(Arc::clone))),
             statistics: self.statistics.clone(),
         });
-        Ok(FileSourceFilterPushdownResult::new(
-            new,
-            vec![support; filters.len()],
-        ))
+        Ok(FilterPushdownResult::new(new, vec![support; filters.len()]))
     }
 }
 

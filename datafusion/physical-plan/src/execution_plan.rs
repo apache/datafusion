@@ -833,7 +833,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         plan: &Arc<dyn ExecutionPlan>,
         parent_filters: &[PhysicalExprRef],
         config: &ConfigOptions,
-    ) -> Result<ExecutionPlanFilterPushdownResult> {
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
         // By default assume that:
         // * Parent filters can't be passed onto children.
         // * We have no filters to contribute.
@@ -843,11 +843,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         let mut pushed = false;
         for child in self.children() {
             match child.try_pushdown_filters(child, &Vec::new(), config)? {
-                ExecutionPlanFilterPushdownResult::NotPushed => {
+                FilterPushdownResult::NotPushed => {
                     // No pushdown possible, keep this child as is
                     new_children.push(Arc::clone(child));
                 }
-                ExecutionPlanFilterPushdownResult::Pushed { inner, support } => {
+                FilterPushdownResult::Pushed { inner, support } => {
                     // We have a child that has pushed down some filters
                     new_children.push(inner);
                     pushed = true;
@@ -863,17 +863,15 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         if pushed {
             let new_inner =
                 with_new_children_if_necessary(Arc::clone(plan), new_children)?;
-            Ok(ExecutionPlanFilterPushdownResult::Pushed {
+            Ok(FilterPushdownResult::Pushed {
                 inner: new_inner,
                 support: vec![FilterPushdownSupport::Unsupported; parent_filters.len()],
             })
         } else {
-            Ok(ExecutionPlanFilterPushdownResult::NotPushed)
+            Ok(FilterPushdownResult::NotPushed)
         }
     }
 }
-
-pub type ExecutionPlanFilterPushdownResult = FilterPushdownResult<Arc<dyn ExecutionPlan>>;
 
 /// A default implementation of [`ExecutionPlan::try_pushdown_filters`] that
 /// pushes down filters transparently to an input.
@@ -887,17 +885,17 @@ pub fn try_pushdown_filters_to_input(
     input: &Arc<dyn ExecutionPlan>,
     parent_filters: &[PhysicalExprRef],
     config: &ConfigOptions,
-) -> Result<ExecutionPlanFilterPushdownResult> {
+) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
     match input.try_pushdown_filters(input, parent_filters, config)? {
-        ExecutionPlanFilterPushdownResult::NotPushed => {
+        FilterPushdownResult::NotPushed => {
             // No pushdown possible, keep this child as is
-            Ok(ExecutionPlanFilterPushdownResult::NotPushed)
+            Ok(FilterPushdownResult::NotPushed)
         }
-        ExecutionPlanFilterPushdownResult::Pushed { inner, support } => {
+        FilterPushdownResult::Pushed { inner, support } => {
             // We have a child that has pushed down some filters
             let new_inner =
                 with_new_children_if_necessary(Arc::clone(plan), vec![inner])?;
-            Ok(ExecutionPlanFilterPushdownResult::Pushed {
+            Ok(FilterPushdownResult::Pushed {
                 inner: new_inner,
                 support,
             })

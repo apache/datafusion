@@ -26,8 +26,7 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanFilterPushdownResult,
-    FilterPushdownResult, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, FilterPushdownResult, PlanProperties,
 };
 
 use crate::file_scan_config::FileScanConfig;
@@ -86,12 +85,10 @@ pub trait DataSource: Send + Sync + Debug {
         &self,
         _filters: &[PhysicalExprRef],
         _config: &ConfigOptions,
-    ) -> Result<DataSourceFilterPushdownResult> {
-        Ok(DataSourceFilterPushdownResult::NotPushed)
+    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
+        Ok(FilterPushdownResult::NotPushed)
     }
 }
-
-pub type DataSourceFilterPushdownResult = FilterPushdownResult<Arc<dyn DataSource>>;
 
 /// [`ExecutionPlan`] handles different file formats like JSON, CSV, AVRO, ARROW, PARQUET
 ///
@@ -210,17 +207,15 @@ impl ExecutionPlan for DataSourceExec {
         _plan: &Arc<dyn ExecutionPlan>,
         parent_filters: &[PhysicalExprRef],
         config: &ConfigOptions,
-    ) -> Result<ExecutionPlanFilterPushdownResult> {
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
         match self
             .data_source
             .try_pushdown_filters(parent_filters, config)?
         {
-            DataSourceFilterPushdownResult::NotPushed => {
-                Ok(ExecutionPlanFilterPushdownResult::NotPushed)
-            }
-            DataSourceFilterPushdownResult::Pushed { inner, support } => {
+            FilterPushdownResult::NotPushed => Ok(FilterPushdownResult::NotPushed),
+            FilterPushdownResult::Pushed { inner, support } => {
                 let new_self = Arc::new(DataSourceExec::new(inner));
-                Ok(ExecutionPlanFilterPushdownResult::Pushed {
+                Ok(FilterPushdownResult::Pushed {
                     inner: new_self,
                     support,
                 })

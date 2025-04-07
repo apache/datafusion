@@ -46,20 +46,20 @@ use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     metrics::ExecutionPlanMetricsSet,
     projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
-    DisplayAs, DisplayFormatType, ExecutionPlan,
+    DisplayAs, DisplayFormatType, ExecutionPlan, FilterPushdownResult,
 };
 use log::{debug, warn};
 
+use crate::file_groups::FileGroup;
 use crate::{
     display::FileGroupsDisplay,
-    file::{FileSource, FileSourceFilterPushdownResult},
+    file::FileSource,
     file_compression_type::FileCompressionType,
     file_stream::FileStream,
     source::{DataSource, DataSourceExec},
     statistics::MinMaxStatistics,
     PartitionedFile,
 };
-use crate::{file_groups::FileGroup, source::DataSourceFilterPushdownResult};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -594,18 +594,16 @@ impl DataSource for FileScanConfig {
         &self,
         filters: &[PhysicalExprRef],
         config: &ConfigOptions,
-    ) -> Result<DataSourceFilterPushdownResult> {
+    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
         match self.file_source.try_pushdown_filters(filters, config)? {
-            FileSourceFilterPushdownResult::NotPushed => {
-                Ok(DataSourceFilterPushdownResult::NotPushed)
-            }
-            FileSourceFilterPushdownResult::Pushed { inner, support } => {
+            FilterPushdownResult::NotPushed => Ok(FilterPushdownResult::NotPushed),
+            FilterPushdownResult::Pushed { inner, support } => {
                 let new_self = Arc::new(
                     FileScanConfigBuilder::from(self.clone())
                         .with_source(inner)
                         .build(),
                 );
-                Ok(DataSourceFilterPushdownResult::Pushed {
+                Ok(FilterPushdownResult::Pushed {
                     inner: new_self,
                     support,
                 })

@@ -103,9 +103,7 @@ pub trait FileSource: Send + Sync {
         &self,
         _filters: &[PhysicalExprRef],
         _config: &ConfigOptions,
-    ) -> Result<FileSourceFilterPushdownResult> {
-        Ok(FileSourceFilterPushdownResult::NotPushed)
+    ) -> Result<FilterPushdownResult<Arc<dyn FileSource>>> {
+        Ok(FilterPushdownResult::NotPushed)
     }
 }
-
-pub type FileSourceFilterPushdownResult = FilterPushdownResult<Arc<dyn FileSource>>;

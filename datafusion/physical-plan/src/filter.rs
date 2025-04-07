@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
 use super::{
-    ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, ExecutionPlanProperties, FilterPushdownResult,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
@@ -31,7 +31,6 @@ use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
     ProjectionExec,
 };
-use crate::ExecutionPlanFilterPushdownResult;
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
@@ -442,7 +441,7 @@ impl ExecutionPlan for FilterExec {
         _plan: &Arc<dyn ExecutionPlan>,
         parent_filters: &[PhysicalExprRef],
         config: &ConfigOptions,
-    ) -> Result<ExecutionPlanFilterPushdownResult> {
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
         // filters are in terms of the output columns of this plan
         let mut all_filters = parent_filters.to_vec();
         all_filters.push(Arc::clone(&self.predicate));
@@ -460,13 +459,13 @@ impl ExecutionPlan for FilterExec {
                 .input
                 .try_pushdown_filters(&self.input, &all_filters, config)?
             {
-                ExecutionPlanFilterPushdownResult::NotPushed => {
+                FilterPushdownResult::NotPushed => {
                     if parent_filters.is_empty() {
-                        return Ok(ExecutionPlanFilterPushdownResult::NotPushed);
+                        return Ok(FilterPushdownResult::NotPushed);
                     }
                     (conjunction(all_filters), Arc::clone(&self.input))
                 }
-                ExecutionPlanFilterPushdownResult::Pushed { inner, support } => {
+                FilterPushdownResult::Pushed { inner, support } => {
                     // Split out the filters that the child plan handled and the ones it did not
                     let unhandled_filters = all_filters
                         .into_iter()
@@ -481,7 +480,7 @@ impl ExecutionPlan for FilterExec {
                         .collect::<Vec<_>>();
                     // If there are no unhandled filters and we have no projection, return the inner plan
                     if unhandled_filters.is_empty() && self.projection.is_none() {
-                        return Ok(ExecutionPlanFilterPushdownResult::Pushed {
+                        return Ok(FilterPushdownResult::Pushed {
                             inner,
                             support: vec![
                                 FilterPushdownSupport::Exact;
@@ -508,7 +507,7 @@ impl ExecutionPlan for FilterExec {
             cache,
             projection: self.projection.clone(),
         };
-        Ok(ExecutionPlanFilterPushdownResult::Pushed {
+        Ok(FilterPushdownResult::Pushed {
             inner: Arc::new(new_self),
             support: vec![FilterPushdownSupport::Exact; parent_filters.len()],
         })
