@@ -214,20 +214,11 @@ pub fn const_exprs_contains(
 ///
 /// Two `EquivalenceClass`es are equal if they contains the same expressions in
 /// without any ordering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EquivalenceClass {
-    /// The expressions in this equivalence class. The order doesn't
-    /// matter for equivalence purposes
-    ///
+    /// The expressions in this equivalence class. The order doesn't matter for
+    /// equivalence purposes.
     exprs: IndexSet<Arc<dyn PhysicalExpr>>,
-}
-
-impl PartialEq for EquivalenceClass {
-    /// Returns true if other is equal in the sense
-    /// of bags (multi-sets), disregarding their orderings.
-    fn eq(&self, other: &Self) -> bool {
-        self.exprs.eq(&other.exprs)
-    }
 }
 
 impl EquivalenceClass {
@@ -264,10 +255,7 @@ impl EquivalenceClass {
 
     /// Inserts all the expressions from other into this class
     pub fn extend(&mut self, other: Self) {
-        for expr in other.exprs {
-            // use push so entries are deduplicated
-            self.push(expr);
-        }
+        self.exprs.extend(other.exprs);
     }
 
     /// Returns true if this equivalence class contains t expression

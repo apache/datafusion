@@ -759,31 +759,6 @@ impl EquivalenceProperties {
                 .all(|(reference, given)| given.compatible(&reference))
     }
 
-    /// Returns the finer ordering among the orderings `lhs` and `rhs`, breaking
-    /// any ties by choosing `lhs`.
-    ///
-    /// The finer ordering is the ordering that satisfies both of the orderings.
-    /// If the orderings are incomparable, returns `None`.
-    ///
-    /// For example, the finer ordering among `[a ASC]` and `[a ASC, b ASC]` is
-    /// the latter.
-    pub fn get_finer_ordering(
-        &self,
-        lhs: LexOrdering,
-        rhs: LexOrdering,
-    ) -> Option<LexOrdering> {
-        let Some(mut rhs) = self.normalize_sort_exprs(rhs) else {
-            return self.normalize_sort_exprs(lhs);
-        };
-        let Some(mut lhs) = self.normalize_sort_exprs(lhs) else {
-            return Some(rhs);
-        };
-        lhs.iter_mut()
-            .zip(rhs.iter_mut())
-            .all(|(lhs, rhs)| lhs.expr.eq(&rhs.expr) && lhs.options == rhs.options)
-            .then_some(if lhs.len() >= rhs.len() { lhs } else { rhs })
-    }
-
     /// Returns the finer ordering among the requirements `lhs` and `rhs`,
     /// breaking any ties by choosing `lhs`.
     ///

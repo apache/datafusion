@@ -17,6 +17,7 @@
 
 //! Sort expressions
 
+use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
@@ -381,17 +382,6 @@ impl LexOrdering {
         Self { inner: orderings }
     }
 
-    /// Reverses each element in the ordering. For instance, `[a ASC NULLS LAST]`
-    /// turns into `[a DESC NULLS FIRST]`. Such reversals are useful in planning,
-    /// e.g. when constructing equivalent window expressions.
-    pub fn reverse_each(&self) -> Self {
-        let mut result = self.clone();
-        for sort_expr in result.iter_mut() {
-            sort_expr.options = !sort_expr.options;
-        }
-        result
-    }
-
     /// Truncates the `LexOrdering`, keeping only the first `len` elements.
     /// Returns `true` if truncation made a change, `false` otherwise. Negative
     /// cases happen in two scenarios: (1) When `len` is greater than or equal
@@ -409,6 +399,18 @@ impl LexOrdering {
     /// in place using the provided closure `f`.
     pub fn transform<F: FnMut(&mut PhysicalSortExpr)>(&mut self, f: F) {
         self.inner.iter_mut().for_each(f);
+    }
+}
+
+impl PartialOrd for LexOrdering {
+    /// There is a partial ordering among `LexOrdering` objects. For example, the
+    /// ordering `[a ASC]` is coarser (less) than ordering `[a ASC, b ASC]`.
+    /// If two orderings do not share a prefix, they are incomparable.
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.iter()
+            .zip(other.iter())
+            .all(|(lhs, rhs)| lhs == rhs)
+            .then(|| self.len().cmp(&other.len()))
     }
 }
 
