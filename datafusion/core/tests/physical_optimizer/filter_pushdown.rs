@@ -279,7 +279,7 @@ fn test_filter_with_projection() {
     let projected_schema = Arc::new(schema().project(&projection).unwrap());
     let predicate = col_lit_predicate("a", "foo", &projected_schema);
     let plan = Arc::new(
-        FilterExec::try_new(predicate, scan)
+        FilterExec::try_new(predicate, Arc::clone(&scan))
             .unwrap()
             .with_projection(Some(projection))
             .unwrap(),
@@ -299,6 +299,29 @@ fn test_filter_with_projection() {
           - FilterExec: true, projection=[b@1, a@0]
           -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
     ",
+    );
+
+    // add a test where the filter is on a column that isn't included in the output
+    let projection = vec![1];
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExec::try_new(predicate, scan)
+            .unwrap()
+            .with_projection(Some(projection))
+            .unwrap(),
+    );
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownFilter{}),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, projection=[b@1]
+        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+      output:
+        Ok:
+          - FilterExec: true, projection=[b@1]
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
+    "
     );
 }
 
