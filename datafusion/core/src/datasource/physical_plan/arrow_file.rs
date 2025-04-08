@@ -273,6 +273,7 @@ impl FileOpener for ArrowOpener {
                 None => {
                     let r = object_store.get(file_meta.location()).await?;
                     match r.payload {
+                        #[cfg(not(target_arch = "wasm32"))]
                         GetResultPayload::File(file, _) => {
                             let arrow_reader = arrow::ipc::reader::FileReader::try_new(
                                 file, projection,
