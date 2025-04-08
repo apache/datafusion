@@ -20,6 +20,8 @@
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{not_impl_err, Result};
 
+pub const BLOCK_SIZE: usize = 4096;
+
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy)]
 pub enum EmitTo {
@@ -50,6 +52,38 @@ impl EmitTo {
                 let mut t = v.split_off(*n);
                 // leave n+1,.. in v
                 std::mem::swap(v, &mut t);
+                t
+            }
+        }
+    }
+
+    /// Removes the number of rows from `v` required to emit the right
+    /// number of rows, returning a `Vec` with elements taken, and the
+    /// remaining values in `v`.
+    ///
+    /// This avoids copying if Self::All
+    pub fn take_needed_blocks<T>(&self, v: &mut Vec<Vec<T>>) -> Vec<Vec<T>> {
+        match self {
+            Self::All => {
+                // Take the entire vector, leave new (empty) vector
+                std::mem::take(v)
+            }
+            Self::First(n) => {
+                let num_blocks = n / BLOCK_SIZE;
+
+                let num_values = n % BLOCK_SIZE;
+                // get num_blocks - 1 from t (unchanged)
+                let mut t = vec![];
+                if num_blocks > 0 {
+                    t = v.split_off(num_blocks - 1);
+                }
+
+                // leave n+1,.. in v[num_blocks]
+                let mut t_v = v[0].split_off(num_values);
+                std::mem::swap(&mut v[0], &mut t_v);
+
+                t.push(t_v);
+
                 t
             }
         }
