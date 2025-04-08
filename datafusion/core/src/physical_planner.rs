@@ -1023,18 +1023,12 @@ impl DefaultPhysicalPlanner {
                         // Collect left & right field indices, the field indices are sorted in ascending order
                         let left_field_indices = cols
                             .iter()
-                            .filter_map(|c| match left_df_schema.index_of_column(c) {
-                                Ok(idx) => Some(idx),
-                                _ => None,
-                            })
+                            .filter_map(|c| left_df_schema.index_of_column(c).ok())
                             .sorted()
                             .collect::<Vec<_>>();
                         let right_field_indices = cols
                             .iter()
-                            .filter_map(|c| match right_df_schema.index_of_column(c) {
-                                Ok(idx) => Some(idx),
-                                _ => None,
-                            })
+                            .filter_map(|c| right_df_schema.index_of_column(c).ok())
                             .sorted()
                             .collect::<Vec<_>>();
 
