@@ -53,8 +53,7 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use datafusion_common::stats::Precision;
-use datafusion_datasource::add_row_stats;
+use datafusion_common::stats::{add_row_stats, Precision};
 use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;

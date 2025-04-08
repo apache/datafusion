@@ -18,7 +18,7 @@
 //! This module provides data structures to represent statistics
 
 use std::fmt::{self, Debug, Display};
-
+use std::mem;
 use crate::{Result, ScalarValue};
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
@@ -327,14 +327,14 @@ impl Statistics {
         }
 
         // Convert to Vec<Slot> so we can avoid copying the statistics
-        let mut columns: Vec<_> = std::mem::take(&mut self.column_statistics)
+        let mut columns: Vec<_> = mem::take(&mut self.column_statistics)
             .into_iter()
             .map(Slot::Present)
             .collect();
 
         for idx in projection {
             let next_idx = self.column_statistics.len();
-            let slot = std::mem::replace(
+            let slot = mem::replace(
                 columns.get_mut(*idx).expect("projection out of bounds"),
                 Slot::Taken(next_idx),
             );
@@ -414,6 +414,54 @@ impl Statistics {
         self.total_byte_size = Precision::Absent;
         Ok(self)
     }
+
+
+    /// Summarize zero or more statistics into a single `Statistics` instance.
+    pub fn merge_iter<'a, I>(items: I, schema: &Schema) -> Statistics
+    where
+        I: IntoIterator<Item = &'a Statistics>,
+    {
+        let mut items = items.into_iter();
+
+        let Some(init) = items.next() else {
+            return Statistics::new_unknown(schema);
+        };
+
+        items.fold(init.clone(), |acc: Statistics, item_stats: &Statistics| {
+            acc.merge(item_stats)
+        })
+    }
+
+    /// Merge this Statistics value with another Statistics value.
+    pub fn merge(self, other: &Statistics) -> Self {
+        let Self {
+            mut num_rows,
+            mut total_byte_size,
+            mut column_statistics,
+        } = self;
+
+        // Accumulate statistics for subsequent items
+        num_rows = add_row_stats(other.num_rows, num_rows);
+        total_byte_size = add_row_stats(other.total_byte_size, total_byte_size);
+
+        for (item_col_stats, col_stats) in other
+            .column_statistics
+            .iter()
+            .zip(column_statistics.iter_mut())
+        {
+            col_stats.null_count =
+                add_row_stats(item_col_stats.null_count, col_stats.null_count);
+            set_max_if_greater(&item_col_stats.max_value, &mut col_stats.max_value);
+            set_min_if_lesser(&item_col_stats.min_value, &mut col_stats.min_value);
+            col_stats.sum_value = item_col_stats.sum_value.add(&col_stats.sum_value);
+        }
+
+        Statistics {
+            num_rows,
+            total_byte_size,
+            column_statistics,
+        }
+    }
 }
 
 /// Creates an estimate of the number of rows in the output using the given
@@ -432,6 +480,81 @@ fn check_num_rows(value: Option<usize>, is_exact: bool) -> Precision<usize> {
         Precision::Absent
     }
 }
+
+
+pub fn add_row_stats(
+    file_num_rows: Precision<usize>,
+    num_rows: Precision<usize>,
+) -> Precision<usize> {
+    match (file_num_rows, &num_rows) {
+        (Precision::Absent, _) => num_rows.to_inexact(),
+        (lhs, Precision::Absent) => lhs.to_inexact(),
+        (lhs, rhs) => lhs.add(rhs),
+    }
+}
+
+/// If the given value is numerically greater than the original maximum value,
+/// return the new maximum value with appropriate exactness information.
+pub fn set_max_if_greater(
+    max_nominee: &Precision<ScalarValue>,
+    max_value: &mut Precision<ScalarValue>,
+) {
+    match (&max_value, max_nominee) {
+        (Precision::Exact(val1), Precision::Exact(val2)) if val1 < val2 => {
+            *max_value = max_nominee.clone();
+        }
+        (Precision::Exact(val1), Precision::Inexact(val2))
+        | (Precision::Inexact(val1), Precision::Inexact(val2))
+        | (Precision::Inexact(val1), Precision::Exact(val2))
+        if val1 < val2 =>
+            {
+                *max_value = max_nominee.clone().to_inexact();
+            }
+        (Precision::Exact(_), Precision::Absent) => {
+            let exact_max = mem::take(max_value);
+            *max_value = exact_max.to_inexact();
+        }
+        (Precision::Absent, Precision::Exact(_)) => {
+            *max_value = max_nominee.clone().to_inexact();
+        }
+        (Precision::Absent, Precision::Inexact(_)) => {
+            *max_value = max_nominee.clone();
+        }
+        _ => {}
+    }
+}
+
+/// If the given value is numerically lesser than the original minimum value,
+/// return the new minimum value with appropriate exactness information.
+pub fn set_min_if_lesser(
+    min_nominee: &Precision<ScalarValue>,
+    min_value: &mut Precision<ScalarValue>,
+) {
+    match (&min_value, min_nominee) {
+        (Precision::Exact(val1), Precision::Exact(val2)) if val1 > val2 => {
+            *min_value = min_nominee.clone();
+        }
+        (Precision::Exact(val1), Precision::Inexact(val2))
+        | (Precision::Inexact(val1), Precision::Inexact(val2))
+        | (Precision::Inexact(val1), Precision::Exact(val2))
+        if val1 > val2 =>
+            {
+                *min_value = min_nominee.clone().to_inexact();
+            }
+        (Precision::Exact(_), Precision::Absent) => {
+            let exact_min = mem::take(min_value);
+            *min_value = exact_min.to_inexact();
+        }
+        (Precision::Absent, Precision::Exact(_)) => {
+            *min_value = min_nominee.clone().to_inexact();
+        }
+        (Precision::Absent, Precision::Inexact(_)) => {
+            *min_value = min_nominee.clone();
+        }
+        _ => {}
+    }
+}
+
 
 impl Display for Statistics {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
