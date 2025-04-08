@@ -263,7 +263,7 @@ config_namespace! {
         pub collect_spans: bool, default = false
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
-        pub recursion_limit: usize, default = 50
+        pub recursion_limit: usize, default = 100
     }
 }
 
