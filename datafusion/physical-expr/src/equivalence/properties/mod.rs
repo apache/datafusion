@@ -52,14 +52,12 @@ use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 use indexmap::IndexSet;
 use itertools::Itertools;
 
-/// `EquivalenceProperties` stores information about the output
-/// of a plan node, that can be used to optimize the plan.
-///
-/// Currently, it keeps track of:
-/// - Sort expressions (orderings)
-/// - Equivalent expressions: expressions that are known to have same value.
-/// - Constants expressions: expressions that are known to contain a single
-///   constant value.
+/// `EquivalenceProperties` stores information about the output of a plan node
+/// that can be used to optimize the plan. Currently, it keeps track of:
+/// - Sort expressions (orderings),
+/// - Equivalent expressions; i.e. expressions known to have the same value.
+/// - Constants expressions; i.e. expressions known to contain a single constant
+///   value.
 ///
 /// Please see the [Using Ordering for Better Plans] blog for more details.
 ///
@@ -81,8 +79,8 @@ use itertools::Itertools;
 /// ```
 ///
 /// In this case, both `a ASC` and `b DESC` can describe the table ordering.
-/// `EquivalenceProperties`, tracks these different valid sort expressions and
-/// treat `a ASC` and `b DESC` on an equal footing. For example if the query
+/// `EquivalenceProperties` tracks these different valid sort expressions and
+/// treat `a ASC` and `b DESC` on an equal footing. For example, if the query
 /// specifies the output sorted by EITHER `a ASC` or `b DESC`, the sort can be
 /// avoided.
 ///
@@ -101,12 +99,11 @@ use itertools::Itertools;
 /// └---┴---┘
 /// ```
 ///
-/// In this case,  columns `a` and `b` always have the same value, which can of
-/// such equivalences inside this object. With this information, Datafusion can
-/// optimize operations such as. For example, if the partition requirement is
-/// `Hash(a)` and output partitioning is `Hash(b)`, then DataFusion avoids
-/// repartitioning the data as the existing partitioning satisfies the
-/// requirement.
+/// In this case,  columns `a` and `b` always have the same value. With this
+/// information, Datafusion can optimize various operations. For example, if
+/// the partition requirement is `Hash(a)` and output partitioning is
+/// `Hash(b)`, then DataFusion avoids repartitioning the data as the existing
+/// partitioning satisfies the requirement.
 ///
 /// # Code Example
 /// ```
@@ -200,11 +197,12 @@ impl EquivalenceProperties {
         &self.eq_group
     }
 
-    /// Returns a reference to the constant expressions
+    /// Returns a reference to the constants within.
     pub fn constants(&self) -> &[ConstExpr] {
         &self.constants
     }
 
+    /// Returns a reference to the constraints within.
     pub fn constraints(&self) -> &Constraints {
         &self.constraints
     }
