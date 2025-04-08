@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::borrow::Cow;
-use std::hash::Hash;
-use std::{any::Any, sync::Arc};
-
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
@@ -512,6 +512,17 @@ impl PhysicalExpr for CaseExpr {
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
             EvalMethod::ExpressionOrExpression => self.expr_or_expr(batch),
         }
+    }
+
+    fn metadata<'a, 'b, 'c>(
+        &'a self,
+        _input_schema: &'b Schema,
+    ) -> Result<Option<&'c HashMap<String, String>>>
+    where
+        'a: 'c,
+        'b: 'c,
+    {
+        Ok(None)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

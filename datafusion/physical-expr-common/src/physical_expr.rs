@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -76,6 +77,17 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     fn nullable(&self, input_schema: &Schema) -> Result<bool>;
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
+    /// Determine if this expression has any associated field metadata in the schema
+    /// In some circumstances we will get the metadata from the schema, and sometimes
+    /// we will get it from the physical expression itself. The lifetime of the result
+    /// must outlive both.
+    fn metadata<'a, 'b, 'c>(
+        &'a self,
+        input_schema: &'b Schema,
+    ) -> Result<Option<&'c HashMap<String, String>>>
+    where
+        'a: 'c,
+        'b: 'c;
     /// Evaluate an expression against a RecordBatch after first applying a
     /// validity array
     fn evaluate_selection(
@@ -453,6 +465,7 @@ where
 /// ```
 /// # // The boiler plate needed to create a `PhysicalExpr` for the example
 /// # use std::any::Any;
+/// use std::collections::HashMap;
 /// # use std::fmt::Formatter;
 /// # use std::sync::Arc;
 /// # use arrow::array::RecordBatch;
@@ -466,6 +479,7 @@ where
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
 /// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
 /// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
+/// # fn metadata<'a>(&self, input_schema: &'a Schema) -> Result<&'a HashMap<String, String>> { unimplemented!() }
 /// # fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>{ unimplemented!() }
 /// # fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }
