@@ -659,9 +659,12 @@ impl DFSchema {
     }
 
     /// Checks if two [`DataType`]s are logically equal. This is a notably weaker constraint
-    /// than datatype_is_semantically_equal in that a Dictionary<K,V> type is logically
-    /// equal to a plain V type, but not semantically equal. Dictionary<K1, V1> is also
-    /// logically equal to Dictionary<K2, V1>.
+    /// than datatype_is_semantically_equal in that different representations of same data can be
+    /// logically but not semantically equivalent. Semantically equivalent types are always also
+    /// logically equivalent. For example:
+    /// - a Dictionary<K,V> type is logically equal to a plain V type
+    /// - a Dictionary<K1, V1> is also logically equal to Dictionary<K2, V1>
+    /// - Utf8 and Utf8View are logically equal
     pub fn datatype_is_logically_equal(dt1: &DataType, dt2: &DataType) -> bool {
         // check nested fields
         match (dt1, dt2) {
@@ -714,12 +717,12 @@ impl DFSchema {
             // Utf8 and Utf8View are logically equivalent
             (DataType::Utf8, DataType::Utf8View) => true,
             (DataType::Utf8View, DataType::Utf8) => true,
-            _ => dt1 == dt2,
+            _ => Self::datatype_is_semantically_equal(dt1, dt2),
         }
     }
 
     /// Returns true of two [`DataType`]s are semantically equal (same
-    /// name and type), ignoring both metadata and nullability.
+    /// name and type), ignoring both metadata and nullability, and decimal precision/scale.
     ///
     /// request to upstream: <https://github.com/apache/arrow-rs/issues/3199>
     pub fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
