@@ -284,6 +284,7 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), DataFusionErro
 /// [`Statement`] for a list of this special syntax
 pub struct DFParser<'a> {
     pub parser: Parser<'a>,
+    recursion_limit: usize,
 }
 
 /// Same as `sqlparser`
@@ -366,6 +367,7 @@ impl<'a> DFParserBuilder<'a> {
             parser: Parser::new(self.dialect)
                 .with_tokens_with_locations(tokens)
                 .with_recursion_limit(self.recursion_limit),
+            recursion_limit: self.recursion_limit,
         })
     }
 }
@@ -471,9 +473,13 @@ impl<'a> DFParser<'a> {
                         if let Token::Word(w) = self.parser.peek_nth_token(1).token {
                             // use native parser for COPY INTO
                             if w.keyword == Keyword::INTO {
-                                return Ok(Statement::Statement(Box::from(
-                                    self.parser.parse_statement()?,
-                                )));
+                                return match self.parser.parse_statement() {
+                                    Ok(stmt) => Ok(Statement::Statement(Box::from(stmt))),
+                                    Err(ParserError::RecursionLimitExceeded) => {
+                                        Err(DataFusionError::from(ParserError::RecursionLimitExceeded))
+                                    }
+                                    Err(e) => Err(e.into()),
+                                };
                             }
                         }
                         self.parser.next_token(); // COPY
@@ -485,17 +491,25 @@ impl<'a> DFParser<'a> {
                     }
                     _ => {
                         // use sqlparser-rs parser
-                        Ok(Statement::Statement(Box::from(
-                            self.parser.parse_statement()?,
-                        )))
+                        match self.parser.parse_statement() {
+                            Ok(stmt) => Ok(Statement::Statement(Box::from(stmt))),
+                            Err(ParserError::RecursionLimitExceeded) => {
+                                Err(DataFusionError::from(ParserError::RecursionLimitExceeded))
+                            }
+                            Err(e) => Err(e.into()),
+                        }
                     }
                 }
             }
             _ => {
                 // use the native parser
-                Ok(Statement::Statement(Box::from(
-                    self.parser.parse_statement()?,
-                )))
+                match self.parser.parse_statement() {
+                    Ok(stmt) => Ok(Statement::Statement(Box::from(stmt))),
+                    Err(ParserError::RecursionLimitExceeded) => {
+                        Err(DataFusionError::from(ParserError::RecursionLimitExceeded))
+                    }
+                    Err(e) => Err(e.into()),
+                }
             }
         }
     }
@@ -1760,6 +1774,9 @@ mod tests {
             .parse_statements()
             .unwrap_err();
 
-        assert_contains!(err.to_string(), "SQL error: RecursionLimitExceeded");
+        assert_contains!(
+            err.to_string(),
+            "sql parser error: recursion limit exceeded (current limit: 1)"
+        );
     }
 }
