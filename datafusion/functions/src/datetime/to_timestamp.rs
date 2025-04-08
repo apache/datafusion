@@ -1015,6 +1015,7 @@ mod tests {
                 assert!(matches!(rt, Timestamp(_, Some(_))));
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
+                    arg_metadata: vec![None; 1],
                     number_rows: 4,
                     return_type: &rt,
                 };
@@ -1062,6 +1063,7 @@ mod tests {
                 assert!(matches!(rt, Timestamp(_, None)));
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
+                    arg_metadata: vec![None; 1],
                     number_rows: 5,
                     return_type: &rt,
                 };

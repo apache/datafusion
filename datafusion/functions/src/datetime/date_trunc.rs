@@ -731,6 +731,7 @@ mod tests {
                     ColumnarValue::Scalar(ScalarValue::from("day")),
                     ColumnarValue::Array(Arc::new(input)),
                 ],
+                arg_metadata: vec![None; 2],
                 number_rows: batch_len,
                 return_type: &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
             };
@@ -893,6 +894,7 @@ mod tests {
                     ColumnarValue::Scalar(ScalarValue::from("hour")),
                     ColumnarValue::Array(Arc::new(input)),
                 ],
+                arg_metadata: vec![None; 2],
                 number_rows: batch_len,
                 return_type: &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
             };

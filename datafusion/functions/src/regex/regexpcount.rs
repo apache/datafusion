@@ -659,6 +659,7 @@ mod tests {
             let expected = expected.get(pos).cloned();
             let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
+                arg_metadata: vec![None; 2],
                 number_rows: 2,
                 return_type: &Int64,
             });
@@ -674,6 +675,7 @@ mod tests {
             let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
             let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
+                arg_metadata: vec![None; 2],
                 number_rows: 2,
                 return_type: &Int64,
             });
@@ -689,6 +691,7 @@ mod tests {
             let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
             let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
+                arg_metadata: vec![None; 2],
                 number_rows: 2,
                 return_type: &Int64,
             });
@@ -719,6 +722,7 @@ mod tests {
                     ColumnarValue::Scalar(regex_sv),
                     ColumnarValue::Scalar(start_sv.clone()),
                 ],
+                arg_metadata: vec![None; 3],
                 number_rows: 3,
                 return_type: &Int64,
             });
@@ -738,6 +742,7 @@ mod tests {
                     ColumnarValue::Scalar(regex_sv),
                     ColumnarValue::Scalar(start_sv.clone()),
                 ],
+                arg_metadata: vec![None; 3],
                 number_rows: 3,
                 return_type: &Int64,
             });
@@ -757,6 +762,7 @@ mod tests {
                     ColumnarValue::Scalar(regex_sv),
                     ColumnarValue::Scalar(start_sv.clone()),
                 ],
+                arg_metadata: vec![None; 3],
                 number_rows: 3,
                 return_type: &Int64,
             });
@@ -790,6 +796,7 @@ mod tests {
                     ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
+                arg_metadata: vec![None; 4],
                 number_rows: 4,
                 return_type: &Int64,
             });
@@ -811,6 +818,7 @@ mod tests {
                     ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
+                arg_metadata: vec![None; 4],
                 number_rows: 4,
                 return_type: &Int64,
             });
@@ -832,6 +840,7 @@ mod tests {
                     ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
+                arg_metadata: vec![None; 4],
                 number_rows: 4,
                 return_type: &Int64,
             });
@@ -914,6 +923,7 @@ mod tests {
                     ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
+                arg_metadata: vec![None; 4],
                 number_rows: 4,
                 return_type: &Int64,
             });
@@ -935,6 +945,7 @@ mod tests {
                     ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
+                arg_metadata: vec![None; 4],
                 number_rows: 4,
                 return_type: &Int64,
             });
@@ -956,6 +967,7 @@ mod tests {
                     ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
+                arg_metadata: vec![None; 4],
                 number_rows: 4,
                 return_type: &Int64,
             });

@@ -236,6 +236,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Date32,
         };
@@ -255,6 +256,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::UInt64(Some(1))),
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Date32,
         };
@@ -274,6 +276,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("1".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("14".to_string()))),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Date32,
         };
@@ -297,6 +300,7 @@ mod tests {
                 ColumnarValue::Array(months),
                 ColumnarValue::Array(days),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: batch_len,
             return_type: &DataType::Date32,
         };
@@ -323,6 +327,7 @@ mod tests {
         // invalid number of arguments
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
+            arg_metadata: vec![None; 1],
             number_rows: 1,
             return_type: &DataType::Date32,
         };
@@ -339,6 +344,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Date32,
         };
@@ -355,6 +361,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::UInt64(Some(u64::MAX))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Date32,
         };
@@ -371,6 +378,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Date32,
         };

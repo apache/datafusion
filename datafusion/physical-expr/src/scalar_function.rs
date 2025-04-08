@@ -211,6 +211,12 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
+        let arg_metadata = self
+            .args
+            .iter()
+            .map(|e| e.metadata(batch.schema_ref()))
+            .collect::<Result<Vec<_>>>()?;
+
         let input_empty = args.is_empty();
         let input_all_scalar = args
             .iter()
@@ -219,6 +225,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // evaluate the function
         let output = self.fun.invoke_with_args(ScalarFunctionArgs {
             args,
+            arg_metadata,
             number_rows: batch.num_rows(),
             return_type: &self.return_type,
         })?;
