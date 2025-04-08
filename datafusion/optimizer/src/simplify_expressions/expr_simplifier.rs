@@ -1058,7 +1058,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 left,
                 op: Divide,
                 right,
-            }) if is_null(&left) => simplify_left_is_null_case(info, left, &right)?,
+            }) if is_null(&left) => simplify_null_div_other_case(info, left, &right)?,
 
             //
             // Rules for Modulo
@@ -2010,7 +2010,9 @@ fn is_exactly_true(expr: Expr, info: &impl SimplifyInfo) -> Result<Expr> {
     }
 }
 
-// i.e. A * 1 -> A
+// A * 1 -> A
+// A / 1 -> A
+//
 // Move this function body out of the large match branch avoid stack overflow
 fn simplify_right_is_one_case<S: SimplifyInfo>(
     info: &S,
@@ -2035,6 +2037,9 @@ fn simplify_right_is_one_case<S: SimplifyInfo>(
 }
 
 // A * null -> null
+// A / null -> null
+//
+// Move this function body out of the large match branch avoid stack overflow
 fn simplify_right_is_null_case<S: SimplifyInfo>(
     info: &S,
     left: &Expr,
@@ -2058,8 +2063,9 @@ fn simplify_right_is_null_case<S: SimplifyInfo>(
 }
 
 // null / A --> null
+//
 // Move this function body out of the large match branch avoid stack overflow
-fn simplify_left_is_null_case<S: SimplifyInfo>(
+fn simplify_null_div_other_case<S: SimplifyInfo>(
     info: &S,
     left: Box<Expr>,
     right: &Expr,
