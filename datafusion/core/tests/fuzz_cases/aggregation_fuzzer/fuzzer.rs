@@ -164,7 +164,7 @@ struct QueryGroup {
 
 impl AggregationFuzzer {
     /// Run the fuzzer, printing an error and panicking if any of the tasks fail
-    pub async fn run(&self) {
+    pub async fn run(&mut self) {
         let res = self.run_inner().await;
 
         if let Err(e) = res {
@@ -176,7 +176,7 @@ impl AggregationFuzzer {
         }
     }
 
-    async fn run_inner(&self) -> Result<()> {
+    async fn run_inner(&mut self) -> Result<()> {
         let mut join_set = JoinSet::new();
         let mut rng = thread_rng();
 
@@ -270,7 +270,7 @@ impl AggregationFuzzer {
 ///   - `sql`, the selected test sql
 ///
 ///   - `dataset_ref`, the input dataset, store it for error reported when found
-///      the inconsistency between the one for `ctx` and `expected results`.
+///     the inconsistency between the one for `ctx` and `expected results`.
 ///
 struct AggregationFuzzTestTask {
     /// Generated session context in current test case

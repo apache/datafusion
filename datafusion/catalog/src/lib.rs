@@ -50,7 +50,7 @@ pub use catalog::*;
 pub use datafusion_session::Session;
 pub use dynamic_file::catalog::*;
 pub use memory::{
-    MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
+    MemTable, MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
 };
 pub use r#async::*;
 pub use schema::*;

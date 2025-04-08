@@ -42,7 +42,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
     FileFormat, FileFormatFactory, DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
@@ -57,6 +57,7 @@ use datafusion_session::Session;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
+use datafusion_datasource::source::DataSourceExec;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
@@ -406,10 +407,9 @@ impl FileFormat for CsvFormat {
     async fn create_physical_plan(
         &self,
         state: &dyn Session,
-        mut conf: FileScanConfig,
+        conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        conf.file_compression_type = self.options.compression.into();
         // Consult configuration options for default values
         let has_header = self
             .options
@@ -419,7 +419,10 @@ impl FileFormat for CsvFormat {
             .options
             .newlines_in_values
             .unwrap_or(state.config_options().catalog.newlines_in_values);
-        conf.new_lines_in_values = newlines_in_values;
+
+        let conf_builder = FileScanConfigBuilder::from(conf)
+            .with_file_compression_type(self.options.compression.into())
+            .with_newlines_in_values(newlines_in_values);
 
         let source = Arc::new(
             CsvSource::new(has_header, self.options.delimiter, self.options.quote)
@@ -427,7 +430,10 @@ impl FileFormat for CsvFormat {
                 .with_terminator(self.options.terminator)
                 .with_comment(self.options.comment),
         );
-        Ok(conf.with_source(source).build())
+
+        let config = conf_builder.with_source(source).build();
+
+        Ok(DataSourceExec::from_data_source(config))
     }
 
     async fn create_writer_physical_plan(

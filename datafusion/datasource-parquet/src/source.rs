@@ -17,9 +17,12 @@
 
 //! ParquetSource implementation for reading parquet files
 use std::any::Any;
+use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use crate::opener::build_page_pruning_predicate;
+use crate::opener::build_pruning_predicate;
 use crate::opener::ParquetOpener;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::DefaultParquetFileReaderFactory;
@@ -41,7 +44,6 @@ use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion_physical_plan::DisplayFormatType;
 
 use itertools::Itertools;
-use log::debug;
 use object_store::ObjectStore;
 
 /// Execution plan for reading one or more Parquet files.
@@ -77,7 +79,7 @@ use object_store::ObjectStore;
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource_parquet::source::ParquetSource;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
@@ -93,9 +95,9 @@ use object_store::ObjectStore;
 ///     .with_predicate(Arc::clone(&file_schema), predicate)
 /// );
 /// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
-/// let file_scan_config = FileScanConfig::new(object_store_url, file_schema, source)
-///    .with_file(PartitionedFile::new("file1.parquet", 100*1024*1024));
-/// let exec = file_scan_config.build();
+/// let config = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+///    .with_file(PartitionedFile::new("file1.parquet", 100*1024*1024)).build();
+/// let exec = DataSourceExec::from_data_source(config);
 /// ```
 ///
 /// # Features
@@ -177,7 +179,7 @@ use object_store::ObjectStore;
 ///         .clone()
 ///        .with_file_groups(vec![file_group.clone()]);
 ///
-///     new_config.build()
+///     (DataSourceExec::from_data_source(new_config))
 ///   })
 ///   .collect::<Vec<_>>();
 /// ```
@@ -200,7 +202,7 @@ use object_store::ObjectStore;
 /// # use arrow::datatypes::{Schema, SchemaRef};
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource_parquet::ParquetAccessPlan;
-/// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource_parquet::source::ParquetSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_datasource::source::DataSourceExec;
@@ -216,11 +218,11 @@ use object_store::ObjectStore;
 /// let partitioned_file = PartitionedFile::new("my_file.parquet", 1234)
 ///   .with_extensions(Arc::new(access_plan));
 /// // create a FileScanConfig to scan this file
-/// let file_scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema(), Arc::new(ParquetSource::default()))
-///     .with_file(partitioned_file);
+/// let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema(), Arc::new(ParquetSource::default()))
+///     .with_file(partitioned_file).build();
 /// // this parquet DataSourceExec will not even try to read row groups 2 and 4. Additional
 /// // pruning based on predicates may also happen
-/// let exec = file_scan_config.build();
+/// let exec = DataSourceExec::from_data_source(config);
 /// ```
 ///
 /// For a complete example, see the [`advanced_parquet_index` example]).
@@ -296,10 +298,9 @@ impl ParquetSource {
         self
     }
 
-    fn with_metrics(&self, metrics: ExecutionPlanMetricsSet) -> Self {
-        let mut conf = self.clone();
-        conf.metrics = metrics;
-        conf
+    fn with_metrics(mut self, metrics: ExecutionPlanMetricsSet) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     /// Set predicate information, also sets pruning_predicate and page_pruning_predicate attributes
@@ -314,27 +315,13 @@ impl ParquetSource {
         let predicate_creation_errors =
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
-        conf.with_metrics(metrics);
+        conf = conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
 
-        match PruningPredicate::try_new(Arc::clone(&predicate), Arc::clone(&file_schema))
-        {
-            Ok(pruning_predicate) => {
-                if !pruning_predicate.always_true() {
-                    conf.pruning_predicate = Some(Arc::new(pruning_predicate));
-                }
-            }
-            Err(e) => {
-                debug!("Could not create pruning predicate for: {e}");
-                predicate_creation_errors.add(1);
-            }
-        };
-
-        let page_pruning_predicate = Arc::new(PagePruningAccessPlanFilter::new(
-            &predicate,
-            Arc::clone(&file_schema),
-        ));
-        conf.page_pruning_predicate = Some(page_pruning_predicate);
+        conf.page_pruning_predicate =
+            Some(build_page_pruning_predicate(&predicate, &file_schema));
+        conf.pruning_predicate =
+            build_pruning_predicate(predicate, &file_schema, &predicate_creation_errors);
 
         conf
     }
@@ -347,16 +334,6 @@ impl ParquetSource {
     /// Optional predicate.
     pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
         self.predicate.as_ref()
-    }
-
-    /// Optional reference to this parquet scan's pruning predicate
-    pub fn pruning_predicate(&self) -> Option<&Arc<PruningPredicate>> {
-        self.pruning_predicate.as_ref()
-    }
-
-    /// Optional reference to this parquet scan's page pruning predicate
-    pub fn page_pruning_predicate(&self) -> Option<&Arc<PagePruningAccessPlanFilter>> {
-        self.page_pruning_predicate.as_ref()
     }
 
     /// return the optional file reader factory
@@ -489,8 +466,6 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
             predicate: self.predicate.clone(),
-            pruning_predicate: self.pruning_predicate.clone(),
-            page_pruning_predicate: self.page_pruning_predicate.clone(),
             table_schema: Arc::clone(&base_config.file_schema),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
@@ -499,6 +474,7 @@ impl FileSource for ParquetSource {
             reorder_filters: self.reorder_filters(),
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
+            enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
             schema_adapter_factory,
         })
     }
@@ -538,11 +514,10 @@ impl FileSource for ParquetSource {
             .expect("projected_statistics must be set");
         // When filters are pushed down, we have no way of knowing the exact statistics.
         // Note that pruning predicate is also a kind of filter pushdown.
-        // (bloom filters use `pruning_predicate` too)
-        if self.pruning_predicate().is_some()
-            || self.page_pruning_predicate().is_some()
-            || (self.predicate().is_some() && self.pushdown_filters())
-        {
+        // (bloom filters use `pruning_predicate` too).
+        // Because filter pushdown may happen dynamically as long as there is a predicate
+        // if we have *any* predicate applied, we can't guarantee the statistics are exact.
+        if self.predicate().is_some() {
             Ok(statistics.to_inexact())
         } else {
             Ok(statistics)
@@ -561,7 +536,8 @@ impl FileSource for ParquetSource {
                     .map(|p| format!(", predicate={p}"))
                     .unwrap_or_default();
                 let pruning_predicate_string = self
-                    .pruning_predicate()
+                    .pruning_predicate
+                    .as_ref()
                     .map(|pre| {
                         let mut guarantees = pre
                             .literal_guarantees()

@@ -41,12 +41,14 @@ use crate::joins::utils::{
     reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
     JoinOnRef,
 };
-use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use crate::metrics::{
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics,
+};
 use crate::projection::{
     join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_on, ProjectionExec,
 };
-use crate::spill::spill_record_batches;
+use crate::spill::spill_manager::SpillManager;
 use crate::{
     metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
@@ -596,12 +598,8 @@ struct SortMergeJoinMetrics {
     /// Peak memory used for buffered data.
     /// Calculated as sum of peak memory values across partitions
     peak_mem_used: metrics::Gauge,
-    /// count of spills during the execution of the operator
-    spill_count: Count,
-    /// total spilled bytes during the execution of the operator
-    spilled_bytes: Count,
-    /// total spilled rows during the execution of the operator
-    spilled_rows: Count,
+    /// Metrics related to spilling
+    spill_metrics: SpillMetrics,
 }
 
 impl SortMergeJoinMetrics {
@@ -615,9 +613,7 @@ impl SortMergeJoinMetrics {
             MetricBuilder::new(metrics).counter("output_batches", partition);
         let output_rows = MetricBuilder::new(metrics).output_rows(partition);
         let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
-        let spill_count = MetricBuilder::new(metrics).spill_count(partition);
-        let spilled_bytes = MetricBuilder::new(metrics).spilled_bytes(partition);
-        let spilled_rows = MetricBuilder::new(metrics).spilled_rows(partition);
+        let spill_metrics = SpillMetrics::new(metrics, partition);
 
         Self {
             join_time,
@@ -626,9 +622,7 @@ impl SortMergeJoinMetrics {
             output_batches,
             output_rows,
             peak_mem_used,
-            spill_count,
-            spilled_bytes,
-            spilled_rows,
+            spill_metrics,
         }
     }
 }
@@ -829,42 +823,65 @@ impl BufferedBatch {
 /// Sort-Merge join stream that consumes streamed and buffered data streams
 /// and produces joined output stream.
 struct SortMergeJoinStream {
-    /// Current state of the stream
-    pub state: SortMergeJoinState,
+    // ========================================================================
+    // PROPERTIES:
+    // These fields are initialized at the start and remain constant throughout
+    // the execution.
+    // ========================================================================
     /// Output schema
     pub schema: SchemaRef,
-    /// Sort options of join columns used to sort streamed and buffered data stream
-    pub sort_options: Vec<SortOptions>,
     /// null == null?
     pub null_equals_null: bool,
-    /// Input schema of streamed
-    pub streamed_schema: SchemaRef,
-    /// Input schema of buffered
-    pub buffered_schema: SchemaRef,
-    /// Streamed data stream
-    pub streamed: SendableRecordBatchStream,
-    /// Buffered data stream
-    pub buffered: SendableRecordBatchStream,
-    /// Current processing record batch of streamed
-    pub streamed_batch: StreamedBatch,
-    /// Current buffered data
-    pub buffered_data: BufferedData,
-    /// (used in outer join) Is current streamed row joined at least once?
-    pub streamed_joined: bool,
-    /// (used in outer join) Is current buffered batches joined at least once?
-    pub buffered_joined: bool,
-    /// State of streamed
-    pub streamed_state: StreamedState,
-    /// State of buffered
-    pub buffered_state: BufferedState,
-    /// The comparison result of current streamed row and buffered batches
-    pub current_ordering: Ordering,
-    /// Join key columns of streamed
-    pub on_streamed: Vec<PhysicalExprRef>,
-    /// Join key columns of buffered
-    pub on_buffered: Vec<PhysicalExprRef>,
+    /// Sort options of join columns used to sort streamed and buffered data stream
+    pub sort_options: Vec<SortOptions>,
     /// optional join filter
     pub filter: Option<JoinFilter>,
+    /// How the join is performed
+    pub join_type: JoinType,
+    /// Target output batch size
+    pub batch_size: usize,
+
+    // ========================================================================
+    // STREAMED FIELDS:
+    // These fields manage the properties and state of the streamed input.
+    // ========================================================================
+    /// Input schema of streamed
+    pub streamed_schema: SchemaRef,
+    /// Streamed data stream
+    pub streamed: SendableRecordBatchStream,
+    /// Current processing record batch of streamed
+    pub streamed_batch: StreamedBatch,
+    /// (used in outer join) Is current streamed row joined at least once?
+    pub streamed_joined: bool,
+    /// State of streamed
+    pub streamed_state: StreamedState,
+    /// Join key columns of streamed
+    pub on_streamed: Vec<PhysicalExprRef>,
+
+    // ========================================================================
+    // BUFFERED FIELDS:
+    // These fields manage the properties and state of the buffered input.
+    // ========================================================================
+    /// Input schema of buffered
+    pub buffered_schema: SchemaRef,
+    /// Buffered data stream
+    pub buffered: SendableRecordBatchStream,
+    /// Current buffered data
+    pub buffered_data: BufferedData,
+    /// (used in outer join) Is current buffered batches joined at least once?
+    pub buffered_joined: bool,
+    /// State of buffered
+    pub buffered_state: BufferedState,
+    /// Join key columns of buffered
+    pub on_buffered: Vec<PhysicalExprRef>,
+
+    // ========================================================================
+    // MERGE JOIN STATES:
+    // These fields track the execution state of merge join and are updated
+    // during the execution.
+    // ========================================================================
+    /// Current state of the stream
+    pub state: SortMergeJoinState,
     /// Staging output array builders
     pub staging_output_record_batches: JoinedRecordBatches,
     /// Output buffer. Currently used by filtering as it requires double buffering
@@ -874,10 +891,15 @@ struct SortMergeJoinStream {
     /// Increased when we put rows into buffer and decreased after we actually output batches.
     /// Used to trigger output when sufficient rows are ready
     pub output_size: usize,
-    /// Target output batch size
-    pub batch_size: usize,
-    /// How the join is performed
-    pub join_type: JoinType,
+    /// The comparison result of current streamed row and buffered batches
+    pub current_ordering: Ordering,
+    /// Manages the process of spilling and reading back intermediate data
+    pub spill_manager: SpillManager,
+
+    // ========================================================================
+    // EXECUTION RESOURCES:
+    // Fields related to managing execution resources and monitoring performance.
+    // ========================================================================
     /// Metrics
     pub join_metrics: SortMergeJoinMetrics,
     /// Memory reservation
@@ -1301,6 +1323,11 @@ impl SortMergeJoinStream {
     ) -> Result<Self> {
         let streamed_schema = streamed.schema();
         let buffered_schema = buffered.schema();
+        let spill_manager = SpillManager::new(
+            Arc::clone(&runtime_env),
+            join_metrics.spill_metrics.clone(),
+            Arc::clone(&buffered_schema),
+        );
         Ok(Self {
             state: SortMergeJoinState::Init,
             sort_options,
@@ -1333,6 +1360,7 @@ impl SortMergeJoinStream {
             join_metrics,
             reservation,
             runtime_env,
+            spill_manager,
             streamed_batch_counter: AtomicUsize::new(0),
         })
     }
@@ -1402,27 +1430,19 @@ impl SortMergeJoinStream {
                 Ok(())
             }
             Err(_) if self.runtime_env.disk_manager.tmp_files_enabled() => {
-                // spill buffered batch to disk
-                let spill_file = self
-                    .runtime_env
-                    .disk_manager
-                    .create_tmp_file("sort_merge_join_buffered_spill")?;
-
+                // Spill buffered batch to disk
                 if let Some(batch) = buffered_batch.batch {
-                    spill_record_batches(
-                        &[batch],
-                        spill_file.path().into(),
-                        Arc::clone(&self.buffered_schema),
-                    )?;
+                    let spill_file = self
+                        .spill_manager
+                        .spill_record_batch_and_finish(
+                            &[batch],
+                            "sort_merge_join_buffered_spill",
+                        )?
+                        .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
+
                     buffered_batch.spill_file = Some(spill_file);
                     buffered_batch.batch = None;
 
-                    // update metrics to register spill
-                    self.join_metrics.spill_count.add(1);
-                    self.join_metrics
-                        .spilled_bytes
-                        .add(buffered_batch.size_estimation);
-                    self.join_metrics.spilled_rows.add(buffered_batch.num_rows);
                     Ok(())
                 } else {
                     internal_err!("Buffered batch has empty body")
