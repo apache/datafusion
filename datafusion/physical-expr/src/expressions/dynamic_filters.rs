@@ -33,8 +33,8 @@ use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
 
 /// A source of dynamic runtime filters.
 ///
-/// During query execution, operators implementing this trait can provide
-/// filter expressions that other operators can use to dynamically prune data.
+/// Operators can create implementations of this trait that get wrapped
+/// in [`DynamicFilterPhysicalExpr`] to be pushed down into and through to scans, joins, etc.
 ///
 /// For example:
 /// - A `HashJoin` operator can use this to provide a filter expression
@@ -43,6 +43,14 @@ use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
 /// - A `TopK` operator can use this to provide a filter expression
 ///   that filters out rows from the input based on the values from the
 ///   top K rows.
+/// 
+/// Initially this trait is intended to be only for internal use as a way to facilitate
+/// building [`DynamicFilterPhysicalExpr`]s in the various operators that will be generating
+/// dynamic filters.
+/// Because of this we've made it a public trait in a private module so that it is only
+/// accessible within the crate.
+/// If you would like to use this trait in your own code, please open an issue
+/// to discuss the use case and we can consider making it public.
 pub trait DynamicFilterSource:
     Send + Sync + std::fmt::Debug + DynEq + DynHash + Display + 'static
 {
