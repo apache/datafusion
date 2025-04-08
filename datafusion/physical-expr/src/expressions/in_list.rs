@@ -382,8 +382,7 @@ impl PhysicalExpr for InListExpr {
     fn metadata(
         &self,
         _input_schema: &Schema,
-    ) -> Result<Option<std::collections::HashMap<String, String>>>
-    {
+    ) -> Result<Option<std::collections::HashMap<String, String>>> {
         Ok(None)
     }
 

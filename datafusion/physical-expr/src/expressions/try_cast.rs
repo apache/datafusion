@@ -111,11 +111,7 @@ impl PhysicalExpr for TryCastExpr {
         }
     }
 
-    fn metadata(
-        &self,
-        input_schema: &Schema,
-    ) -> Result<Option<HashMap<String, String>>>
-    {
+    fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> {
         self.expr.metadata(input_schema)
     }
 

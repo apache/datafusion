@@ -128,11 +128,7 @@ impl PhysicalExpr for Column {
         Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
     }
 
-    fn metadata(
-        &self,
-        input_schema: &Schema,
-    ) -> Result<Option<HashMap<String, String>>>
-    {
+    fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> {
         Ok(Some(input_schema.field(self.index).metadata().clone()))
     }
 

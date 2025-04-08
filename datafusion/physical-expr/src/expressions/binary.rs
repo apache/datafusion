@@ -430,8 +430,7 @@ impl PhysicalExpr for BinaryExpr {
     fn metadata(
         &self,
         _input_schema: &Schema,
-    ) -> Result<Option<HashMap<String, String>>>
-    {
+    ) -> Result<Option<HashMap<String, String>>> {
         Ok(None)
     }
 

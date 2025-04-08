@@ -84,9 +84,8 @@ impl ProjectionExec {
                     e.data_type(&input_schema)?,
                     e.nullable(&input_schema)?,
                 );
-                field.set_metadata(
-                    e.metadata(&input_schema)?.clone().unwrap_or_default(),
-                );
+                field
+                    .set_metadata(e.metadata(&input_schema)?.clone().unwrap_or_default());
 
                 Ok(field)
             })
