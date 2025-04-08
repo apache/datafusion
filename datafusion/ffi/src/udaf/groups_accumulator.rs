@@ -93,6 +93,13 @@ pub struct GroupsAccumulatorPrivateData {
     pub accumulator: Box<dyn GroupsAccumulator>,
 }
 
+impl FFI_GroupsAccumulator {
+    unsafe fn inner(&self) -> &mut Box<dyn GroupsAccumulator> {
+        let private_data = self.private_data as *mut GroupsAccumulatorPrivateData;
+        &mut (*private_data).accumulator
+    }
+}
+
 unsafe extern "C" fn update_batch_fn_wrapper(
     accumulator: &mut FFI_GroupsAccumulator,
     values: RVec<WrappedArray>,
@@ -100,8 +107,7 @@ unsafe extern "C" fn update_batch_fn_wrapper(
     opt_filter: ROption<WrappedArray>,
     total_num_groups: usize,
 ) -> RResult<(), RString> {
-    let private_data = accumulator.private_data as *mut GroupsAccumulatorPrivateData;
-    let accum_data = &mut (*private_data);
+    let accumulator = accumulator.inner();
 
     let values_arrays = values
         .into_iter()
@@ -122,7 +128,7 @@ unsafe extern "C" fn update_batch_fn_wrapper(
     }).map(|arr| arr.into_data());
     let opt_filter = maybe_filter.map(BooleanArray::from);
 
-    rresult!(accum_data.accumulator.update_batch(
+    rresult!(accumulator.update_batch(
         &values_arrays,
         &group_indices,
         opt_filter.as_ref(),
@@ -134,29 +140,25 @@ unsafe extern "C" fn evaluate_fn_wrapper(
     accumulator: &FFI_GroupsAccumulator,
     emit_to: FFI_EmitTo,
 ) -> RResult<WrappedArray, RString> {
-    let private_data = accumulator.private_data as *mut GroupsAccumulatorPrivateData;
-    let accum_data = &mut (*private_data);
+    let accumulator = accumulator.inner();
 
-    let result = rresult_return!(accum_data.accumulator.evaluate(emit_to.into()));
+    let result = rresult_return!(accumulator.evaluate(emit_to.into()));
 
     rresult!(WrappedArray::try_from(&result))
 }
 
 unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_GroupsAccumulator) -> usize {
-    let private_data = accumulator.private_data as *mut GroupsAccumulatorPrivateData;
-    let accum_data = &mut (*private_data);
-
-    accum_data.accumulator.size()
+    let accumulator = accumulator.inner();
+    accumulator.size()
 }
 
 unsafe extern "C" fn state_fn_wrapper(
     accumulator: &FFI_GroupsAccumulator,
     emit_to: FFI_EmitTo,
 ) -> RResult<RVec<WrappedArray>, RString> {
-    let private_data = accumulator.private_data as *mut GroupsAccumulatorPrivateData;
-    let accum_data = &mut (*private_data);
+    let accumulator = accumulator.inner();
 
-    let state = rresult_return!(accum_data.accumulator.state(emit_to.into()));
+    let state = rresult_return!(accumulator.state(emit_to.into()));
     rresult!(state
         .into_iter()
         .map(|arr| WrappedArray::try_from(&arr).map_err(DataFusionError::from))
@@ -170,8 +172,7 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
     opt_filter: ROption<WrappedArray>,
     total_num_groups: usize,
 ) -> RResult<(), RString> {
-    let private_data = accumulator.private_data as *mut GroupsAccumulatorPrivateData;
-    let accum_data = &mut (*private_data);
+    let accumulator = accumulator.inner();
     let values_arrays = values
         .into_iter()
         .map(|v| v.try_into().map_err(DataFusionError::from))
@@ -191,7 +192,7 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
     }).map(|arr| arr.into_data());
     let opt_filter = maybe_filter.map(BooleanArray::from);
 
-    rresult!(accum_data.accumulator.merge_batch(
+    rresult!(accumulator.merge_batch(
         &values_arrays,
         &group_indices,
         opt_filter.as_ref(),
@@ -204,9 +205,7 @@ unsafe extern "C" fn convert_to_state_fn_wrapper(
     values: RVec<WrappedArray>,
     opt_filter: ROption<WrappedArray>,
 ) -> RResult<RVec<WrappedArray>, RString> {
-    let private_data = accumulator.private_data as *mut GroupsAccumulatorPrivateData;
-    let accum_data = &mut (*private_data);
-
+    let accumulator = accumulator.inner();
     let values = rresult_return!(values
         .into_iter()
         .map(|v| ArrayRef::try_from(v).map_err(DataFusionError::from))
@@ -222,9 +221,8 @@ unsafe extern "C" fn convert_to_state_fn_wrapper(
         }
     }).map(|arr| arr.into_data()).map(BooleanArray::from);
 
-    let state = rresult_return!(accum_data
-        .accumulator
-        .convert_to_state(&values, opt_filter.as_ref()));
+    let state =
+        rresult_return!(accumulator.convert_to_state(&values, opt_filter.as_ref()));
 
     rresult!(state
         .iter()
