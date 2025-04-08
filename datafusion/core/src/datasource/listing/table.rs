@@ -891,7 +891,7 @@ impl TableProvider for ListingTable {
         }
 
         let output_ordering = self.try_create_output_ordering()?;
-        let config_options = Arc::new(session_state.config_options().clone());
+        let config_options = Arc::new(state.config_options().clone());
 
         match state
             .config_options()

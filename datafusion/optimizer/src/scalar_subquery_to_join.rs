@@ -352,7 +352,7 @@ fn build_join(
     let mut computation_project_expr = HashMap::new();
     if let Some(expr_map) = collected_count_expr_map {
         for (name, result) in expr_map {
-            if evaluates_to_null(result.clone(), result.column_refs())? {
+            if evaluates_to_null(result.clone(), result.column_refs(), config_options)? {
                 // If expr always returns null when column is null, skip processing
                 continue;
             }

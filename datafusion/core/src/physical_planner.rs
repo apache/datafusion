@@ -2155,8 +2155,12 @@ impl DefaultPhysicalPlanner {
                     physical_name(e)
                 };
 
-                let physical_expr =
-                    self.create_physical_expr(e, input_logical_schema, session_state);
+                let physical_expr = self.create_physical_expr(
+                    e,
+                    input_logical_schema,
+                    session_state,
+                    config_options,
+                );
 
                 // Check for possible column name mismatches
                 let final_physical_expr =
