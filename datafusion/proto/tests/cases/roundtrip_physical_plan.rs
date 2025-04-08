@@ -1705,8 +1705,7 @@ async fn roundtrip_physical_plan_node() {
         .create_physical_plan()
         .await
         .unwrap();
-    #[cfg(feature = "recursive_protection")]
-    recursive::set_minimum_stack_size(256 * 1024);
+
     let node: PhysicalPlanNode =
         PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
             .unwrap();

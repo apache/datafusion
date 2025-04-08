@@ -42,7 +42,6 @@ default = ["parquet"]
 json = ["pbjson", "serde", "serde_json", "datafusion-proto-common/json"]
 parquet = ["datafusion/parquet", "datafusion-common/parquet"]
 avro = ["datafusion/avro", "datafusion-common/avro"]
-recursive_protection = ["dep:recursive"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -54,7 +53,6 @@ datafusion-proto-common = { workspace = true }
 object_store = { workspace = true }
 pbjson = { workspace = true, optional = true }
 prost = { workspace = true }
-recursive = { workspace = true, optional = true }
 serde = { version = "1.0", optional = true }
 serde_json = { workspace = true, optional = true }
 [dev-dependencies]

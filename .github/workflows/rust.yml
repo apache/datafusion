@@ -278,7 +278,7 @@ jobs:
             --lib \
             --tests \
             --bins \
-            --features serde,avro,json,backtrace,integration-tests,recursive_protection
+            --features serde,avro,json,backtrace,integration-tests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -523,7 +523,7 @@ jobs:
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run tests (excluding doctests)
         shell: bash
-        run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests,recursive_protection
+        run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
