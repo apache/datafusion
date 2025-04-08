@@ -490,6 +490,8 @@ impl Dialect for SqliteDialect {
             "character_length" => {
                 character_length_to_sql(unparser, self.character_length_style(), args)
             }
+            "from_unixtime" => sqlite_from_unixtime_to_sql(unparser, args),
+            "date_trunc" => sqlite_date_trunc_to_sql(unparser, args),
             _ => Ok(None),
         }
     }
