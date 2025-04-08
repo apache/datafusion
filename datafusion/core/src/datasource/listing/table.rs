@@ -1127,12 +1127,12 @@ impl ListingTable {
             get_files_with_limit(files, limit, self.options.collect_stat).await?;
 
         let file_groups = file_group.split_files(self.options.target_partitions);
-        compute_all_files_statistics(
+        Ok(compute_all_files_statistics(
             file_groups,
             self.schema(),
             self.options.collect_stat,
             inexact_stats,
-        )
+        ))
     }
 
     /// Collects statistics for a given partitioned file.
