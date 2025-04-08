@@ -889,7 +889,7 @@ explain SELECT * FROM table1 ORDER BY string_col LIMIT 1;
 ----
 physical_plan
 01)┌───────────────────────────┐
-02)│          SortExec         │
+02)│       SortExec(TopK)      │
 03)│    --------------------   │
 04)│          limit: 1         │
 05)│                           │

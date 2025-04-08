@@ -494,7 +494,7 @@ pub fn compute_file_group_statistics(
             file.statistics.as_ref().map(|stats| stats.as_ref())
         });
 
-    Ok(file_group.with_statistics(statistics))
+    Ok(file_group.with_statistics(Arc::new(statistics)))
 }
 
 /// Computes statistics for all files across multiple file groups.
