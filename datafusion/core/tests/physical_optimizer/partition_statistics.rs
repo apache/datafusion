@@ -17,23 +17,30 @@
 
 #[cfg(test)]
 mod test {
+    use arrow::array::{Int32Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion::datasource::listing::ListingTable;
     use datafusion::prelude::SessionContext;
     use datafusion_catalog::TableProvider;
     use datafusion_common::stats::Precision;
+    use datafusion_common::Result;
     use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::TaskContext;
     use datafusion_expr_common::operator::Operator;
     use datafusion_physical_expr::expressions::{binary, lit, Column};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+    use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion_physical_plan::filter::FilterExec;
     use datafusion_physical_plan::joins::CrossJoinExec;
+    use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use datafusion_physical_plan::projection::ProjectionExec;
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::UnionExec;
-    use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_plan::{execute_stream_partitioned, ExecutionPlan};
+    use futures::TryStreamExt;
     use std::sync::Arc;
 
     /// Creates a test table with statistics from the test data directory.
@@ -121,9 +128,63 @@ mod test {
         }
     }
 
+    /// Helper function to validate that statistics from statistics_by_partition match the actual data
+    async fn validate_statistics_with_data(
+        plan: Arc<dyn ExecutionPlan>,
+        expected_stats: Vec<(i32, i32, usize)>, // (min_id, max_id, row_count)
+        id_column_index: usize,
+    ) -> Result<()> {
+        let ctx = TaskContext::default();
+        let partitions = execute_stream_partitioned(plan, Arc::new(ctx))?;
+
+        let mut actual_stats = Vec::new();
+        for partition_stream in partitions.into_iter() {
+            let result: Vec<RecordBatch> = partition_stream.try_collect().await?;
+
+            let mut min_id = i32::MAX;
+            let mut max_id = i32::MIN;
+            let mut row_count = 0;
+
+            for batch in result {
+                if batch.num_columns() > id_column_index {
+                    let id_array = batch
+                        .column(id_column_index)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap();
+                    for i in 0..batch.num_rows() {
+                        let id_value = id_array.value(i);
+                        min_id = min_id.min(id_value);
+                        max_id = max_id.max(id_value);
+                        row_count += 1;
+                    }
+                }
+            }
+
+            if row_count > 0 {
+                actual_stats.push((min_id, max_id, row_count));
+            }
+        }
+
+        // Compare actual data with expected statistics
+        assert_eq!(
+            actual_stats.len(),
+            expected_stats.len(),
+            "Number of partitions with data doesn't match expected"
+        );
+        for i in 0..actual_stats.len() {
+            assert_eq!(
+                actual_stats[i], expected_stats[i],
+                "Partition {} data doesn't match statistics",
+                i
+            );
+        }
+
+        Ok(())
+    }
+
     #[tokio::test]
-    async fn test_statistics_by_partition_of_data_source() -> datafusion_common::Result<()>
-    {
+    async fn test_statistics_by_partition_of_data_source() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         let statistics = scan.statistics_by_partition()?;
         let expected_statistic_partition_1 =
@@ -134,12 +195,19 @@ mod test {
         assert_eq!(statistics.len(), 2);
         assert_eq!(statistics[0], expected_statistic_partition_1);
         assert_eq!(statistics[1], expected_statistic_partition_2);
+
+        // Check the statistics_by_partition with real results
+        let expected_stats = vec![
+            (3, 4, 2), // (min_id, max_id, row_count) for first partition
+            (1, 2, 2), // (min_id, max_id, row_count) for second partition
+        ];
+        validate_statistics_with_data(scan, expected_stats, 0).await?;
+
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_statistics_by_partition_of_projection() -> datafusion_common::Result<()>
-    {
+    async fn test_statistics_by_partition_of_projection() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         // Add projection execution plan
         let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
@@ -154,12 +222,16 @@ mod test {
         assert_eq!(statistics.len(), 2);
         assert_eq!(statistics[0], expected_statistic_partition_1);
         assert_eq!(statistics[1], expected_statistic_partition_2);
+
+        // Check the statistics_by_partition with real results
+        let expected_stats = vec![(3, 4, 2), (1, 2, 2)];
+        validate_statistics_with_data(Arc::new(projection), expected_stats, 0).await?;
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_statistics_by_partition_of_sort() -> datafusion_common::Result<()> {
-        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+    async fn test_statistics_by_partition_of_sort() -> Result<()> {
+        let scan_1 = create_scan_exec_with_statistics(None, Some(1)).await;
         // Add sort execution plan
         let sort = SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
@@ -169,16 +241,34 @@ mod test {
                     nulls_first: false,
                 },
             }]),
-            scan,
+            scan_1,
         );
-        let mut sort_exec = Arc::new(sort.clone());
+        let sort_exec = Arc::new(sort.clone());
         let statistics = sort_exec.statistics_by_partition()?;
         let expected_statistic_partition =
             create_partition_statistics(4, 220, 1, 4, true);
         assert_eq!(statistics.len(), 1);
         assert_eq!(statistics[0], expected_statistic_partition);
+        // Check the statistics_by_partition with real results
+        let expected_stats = vec![(1, 4, 4)];
+        validate_statistics_with_data(sort_exec.clone(), expected_stats, 0).await?;
 
-        sort_exec = Arc::new(sort.with_preserve_partitioning(true));
+        // Sort with preserve_partitioning
+        let scan_2 = create_scan_exec_with_statistics(None, Some(2)).await;
+        // Add sort execution plan
+        let sort_exec = Arc::new(
+            SortExec::new(
+                LexOrdering::new(vec![PhysicalSortExpr {
+                    expr: Arc::new(Column::new("id", 0)),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                }]),
+                scan_2,
+            )
+            .with_preserve_partitioning(true),
+        );
         let expected_statistic_partition_1 =
             create_partition_statistics(2, 110, 3, 4, true);
         let expected_statistic_partition_2 =
@@ -187,11 +277,15 @@ mod test {
         assert_eq!(statistics.len(), 2);
         assert_eq!(statistics[0], expected_statistic_partition_1);
         assert_eq!(statistics[1], expected_statistic_partition_2);
+
+        // Check the statistics_by_partition with real results
+        let expected_stats = vec![(3, 4, 2), (1, 2, 2)];
+        validate_statistics_with_data(sort_exec, expected_stats, 0).await?;
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_statistics_by_partition_of_filter() -> datafusion_common::Result<()> {
+    async fn test_statistics_by_partition_of_filter() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
         let predicate = binary(
@@ -233,7 +327,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_statistic_by_partition_of_union() -> datafusion_common::Result<()> {
+    async fn test_statistic_by_partition_of_union() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         let union_exec = Arc::new(UnionExec::new(vec![scan.clone(), scan]));
         let statistics = union_exec.statistics_by_partition()?;
@@ -252,12 +346,14 @@ mod test {
         // Verify fourth partition (from second scan - same as second partition)
         assert_eq!(statistics[3], expected_statistic_partition_2);
 
+        // Check the statistics_by_partition with real results
+        let expected_stats = vec![(3, 4, 2), (1, 2, 2), (3, 4, 2), (1, 2, 2)];
+        validate_statistics_with_data(union_exec, expected_stats, 0).await?;
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_statistic_by_partition_of_cross_join() -> datafusion_common::Result<()>
-    {
+    async fn test_statistic_by_partition_of_cross_join() -> Result<()> {
         let left_scan = create_scan_exec_with_statistics(None, Some(2)).await;
         let right_create_table_sql = "CREATE EXTERNAL TABLE t2 (id INT NOT NULL) \
                                                 STORED AS PARQUET LOCATION './tests/data/test_statistics_per_partition'\
@@ -292,6 +388,73 @@ mod test {
             });
         assert_eq!(statistics[0], expected_statistic_partition_1);
         assert_eq!(statistics[1], expected_statistic_partition_2);
+
+        // Check the statistics_by_partition with real results
+        let expected_stats = vec![(1, 4, 8), (1, 4, 8)];
+        validate_statistics_with_data(Arc::new(cross_join), expected_stats, 0).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_coalesce_batches() -> Result<()> {
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+        let coalesce_batches = CoalesceBatchesExec::new(scan, 2);
+        let expected_statistic_partition_1 =
+            create_partition_statistics(2, 110, 3, 4, true);
+        let expected_statistic_partition_2 =
+            create_partition_statistics(2, 110, 1, 2, true);
+        let statistics = coalesce_batches.statistics_by_partition()?;
+        assert_eq!(statistics.len(), 2);
+        assert_eq!(statistics[0], expected_statistic_partition_1);
+        assert_eq!(statistics[1], expected_statistic_partition_2);
+
+        // Check the statistics_by_partition with real results
+        let expected_stats = vec![(3, 4, 2), (1, 2, 2)];
+        validate_statistics_with_data(Arc::new(coalesce_batches), expected_stats, 0)
+            .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_coalesce_partitions() -> Result<()> {
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+        let coalesce_partitions = CoalescePartitionsExec::new(scan);
+        let expected_statistic_partition =
+            create_partition_statistics(4, 220, 1, 4, true);
+        let statistics = coalesce_partitions.statistics_by_partition()?;
+        assert_eq!(statistics.len(), 1);
+        assert_eq!(statistics[0], expected_statistic_partition);
+
+        // Check the statistics_by_partition with real results
+        let expected_stats = vec![(1, 4, 4)];
+        validate_statistics_with_data(Arc::new(coalesce_partitions), expected_stats, 0)
+            .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_local_limit() -> Result<()> {
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+        let local_limit = LocalLimitExec::new(scan.clone(), 1);
+        let statistics = local_limit.statistics_by_partition()?;
+        assert_eq!(statistics.len(), 2);
+        let schema = scan.schema();
+        let mut expected_statistic_partition = Statistics::new_unknown(&schema);
+        expected_statistic_partition.num_rows = Precision::Exact(1);
+        assert_eq!(statistics[0], expected_statistic_partition);
+        assert_eq!(statistics[1], expected_statistic_partition);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_global_limit_partitions() -> Result<()> {
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+        let global_limit = GlobalLimitExec::new(scan.clone(), 0, Some(2));
+        let statistics = global_limit.statistics_by_partition()?;
+        assert_eq!(statistics.len(), 1);
+        let mut expected_statistic_partition = Statistics::new_unknown(&scan.schema());
+        expected_statistic_partition.num_rows = Precision::Exact(2);
+        assert_eq!(statistics[0], expected_statistic_partition);
         Ok(())
     }
 }
