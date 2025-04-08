@@ -472,7 +472,7 @@ impl EquivalenceProperties {
         let sort_exprs = sort_exprs
             .into_iter()
             .map(|sort_expr| self.eq_group.normalize_sort_expr(sort_expr))
-            .filter(|order| !self.is_normalized_expr_constant(&order.expr))
+            .filter(|order| !self.is_normalized_expr_constant(&order.expr, false))
             .collect::<Vec<_>>();
         (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs).collapse())
     }
@@ -499,7 +499,7 @@ impl EquivalenceProperties {
         let reqs = sort_reqs
             .into_iter()
             .map(|req| self.eq_group.normalize_sort_requirement(req.clone()))
-            .filter(|order| !self.is_normalized_expr_constant(&order.expr))
+            .filter(|order| !self.is_normalized_expr_constant(&order.expr, false))
             .collect::<Vec<_>>();
         (!reqs.is_empty()).then(|| LexRequirement::new(reqs).collapse())
     }
@@ -1244,7 +1244,7 @@ impl EquivalenceProperties {
     /// group, `false` otherwise.
     pub fn is_expr_constant(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
-        self.is_normalized_expr_constant(&normalized_expr)
+        self.is_normalized_expr_constant(&normalized_expr, false)
     }
 
     /// Helper of the [`Self::is_expr_constant`] function, assumes that the
@@ -1252,17 +1252,26 @@ impl EquivalenceProperties {
     fn is_normalized_expr_constant(
         &self,
         normalized_expr: &Arc<dyn PhysicalExpr>,
+        across_partitions: bool,
     ) -> bool {
         let normalized_constants = self
             .constants
             .iter()
+            .filter(|const_expr| {
+                !across_partitions
+                    || matches!(
+                        const_expr.across_partitions(),
+                        AcrossPartitions::Uniform { .. }
+                    )
+            })
             .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
             .collect::<Vec<_>>();
         is_constant_recurse(&normalized_constants, normalized_expr)
     }
 
     /// This function determines whether the provided expression is constant
-    /// across partitions based on the known constants.
+    /// across partitions based on the known constants. For more details, see
+    /// [`Self::is_expr_constant`].
     ///
     /// # Parameters
     ///
@@ -1277,22 +1286,8 @@ impl EquivalenceProperties {
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> bool {
-        // As an example, assume that we know columns `a` and `b` are constant.
-        // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
-        // return `false`.
-        let normalized_constants = self
-            .constants
-            .iter()
-            .filter(|const_expr| {
-                matches!(
-                    const_expr.across_partitions(),
-                    AcrossPartitions::Uniform { .. }
-                )
-            })
-            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
-            .collect::<Vec<_>>();
         let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
-        is_constant_recurse(&normalized_constants, &normalized_expr)
+        self.is_normalized_expr_constant(&normalized_expr, true)
     }
 
     /// Retrieves the constant value of a given physical expression, if it exists.
@@ -1488,7 +1483,7 @@ fn update_properties(
         .eq_group
         .normalize_expr(Arc::clone(&node.expr));
     let oeq_class = eq_properties.normalized_oeq_class();
-    if eq_properties.is_normalized_expr_constant(&normalized_expr)
+    if eq_properties.is_normalized_expr_constant(&normalized_expr, false)
         || oeq_class.is_expr_partial_const(&normalized_expr)
     {
         node.data.sort_properties = SortProperties::Singleton;
