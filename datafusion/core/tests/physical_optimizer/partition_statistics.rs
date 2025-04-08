@@ -354,7 +354,7 @@ mod test {
 
     #[tokio::test]
     async fn test_statistic_by_partition_of_cross_join() -> Result<()> {
-        let left_scan = create_scan_exec_with_statistics(None, Some(2)).await;
+        let left_scan = create_scan_exec_with_statistics(None, Some(1)).await;
         let right_create_table_sql = "CREATE EXTERNAL TABLE t2 (id INT NOT NULL) \
                                                 STORED AS PARQUET LOCATION './tests/data/test_statistics_per_partition'\
                                                 WITH ORDER (id ASC);";
