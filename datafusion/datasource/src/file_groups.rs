@@ -363,12 +363,13 @@ impl FileGroupPartitioner {
                 }
                 let updated_file =
                     original_file.clone().with_range(range_start, range_end);
-                if let Some(stat) = updated_file.statistics.clone() {
-                    target_group.push(
-                        updated_file.with_statistics(Arc::new(
-                            stat.as_ref().clone().to_inexact(),
-                        )),
-                    );
+                let statistics_option = updated_file
+                    .statistics
+                    .as_ref()
+                    .map(|stat| Arc::new(stat.as_ref().clone().to_inexact()));
+
+                if let Some(statistics) = statistics_option {
+                    target_group.push(updated_file.with_statistics(statistics));
                 } else {
                     target_group.push(updated_file);
                 }
