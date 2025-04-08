@@ -238,19 +238,6 @@ unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_GroupsAccumulator)
     drop(private_data);
 }
 
-// unsafe extern "C" fn clone_fn_wrapper(accumulator: &FFI_GroupsAccumulator) -> FFI_GroupsAccumulator {
-//     let private_data = accumulator.private_data as *const GroupsAccumulatorPrivateData;
-//     let accum_data = &(*private_data);
-
-//     Box::new(accum_data.accumulator).into()
-// }
-
-// impl Clone for FFI_GroupsAccumulator {
-//     fn clone(&self) -> Self {
-//         unsafe { (self.clone)(self) }
-//     }
-// }
-
 impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
     fn from(accumulator: Box<dyn GroupsAccumulator>) -> Self {
         let supports_convert_to_state = accumulator.supports_convert_to_state();
