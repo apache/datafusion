@@ -103,6 +103,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 map_udf()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![keys.clone(), values.clone()],
+                        arg_metadata: vec![None; 2],
                         number_rows: 1,
                         return_type,
                     })

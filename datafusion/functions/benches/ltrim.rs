@@ -145,6 +145,7 @@ fn run_with_string_type<M: Measurement>(
                 let args_cloned = args.clone();
                 black_box(ltrim.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
+                    arg_metadata: vec![None; args.len()],
                     number_rows: size,
                     return_type: &DataType::Utf8,
                 }))

@@ -28,6 +28,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             black_box(uuid.invoke_with_args(ScalarFunctionArgs {
                 args: vec![],
+                arg_metadata: vec![],
                 number_rows: 1024,
                 return_type: &DataType::Utf8,
             }))

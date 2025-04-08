@@ -69,6 +69,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 make_date()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![years.clone(), months.clone(), days.clone()],
+                        arg_metadata: vec![None; 3],
                         number_rows: batch_len,
                         return_type: &DataType::Date32,
                     })
@@ -90,6 +91,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 make_date()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![year.clone(), months.clone(), days.clone()],
+                        arg_metadata: vec![None; 3],
                         number_rows: batch_len,
                         return_type: &DataType::Date32,
                     })
@@ -111,6 +113,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 make_date()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![year.clone(), month.clone(), days.clone()],
+                        arg_metadata: vec![None; 3],
                         number_rows: batch_len,
                         return_type: &DataType::Date32,
                     })
@@ -129,6 +132,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 make_date()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![year.clone(), month.clone(), day.clone()],
+                        arg_metadata: vec![None; 3],
                         number_rows: 1,
                         return_type: &DataType::Date32,
                     })

@@ -93,6 +93,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
+                        arg_metadata: vec![None; 2],
                         number_rows: batch_len,
                         return_type: &DataType::Utf8,
                     })
@@ -114,6 +115,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
+                        arg_metadata: vec![None; 2],
                         number_rows: batch_len,
                         return_type: &DataType::Utf8,
                     })
@@ -141,6 +143,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), pattern.clone()],
+                        arg_metadata: vec![None; 2],
                         number_rows: 1,
                         return_type: &DataType::Utf8,
                     })

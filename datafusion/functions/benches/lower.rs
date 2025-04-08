@@ -129,6 +129,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 let args_cloned = args.clone();
                 black_box(lower.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
+                    arg_metadata: vec![None; args.len()],
                     number_rows: size,
                     return_type: &DataType::Utf8,
                 }))
@@ -143,6 +144,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     let args_cloned = args.clone();
                     black_box(lower.invoke_with_args(ScalarFunctionArgs {
                         args: args_cloned,
+                        arg_metadata: vec![None; args.len()],
                         number_rows: size,
                         return_type: &DataType::Utf8,
                     }))
@@ -158,6 +160,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     let args_cloned = args.clone();
                     black_box(lower.invoke_with_args(ScalarFunctionArgs {
                         args: args_cloned,
+                        arg_metadata: vec![None; args.len()],
                         number_rows: size,
                         return_type: &DataType::Utf8,
                     }))
@@ -183,6 +186,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
                                 args: args_cloned,
+                                arg_metadata: vec![None; args.len()],
                                 number_rows: size,
                                 return_type: &DataType::Utf8,
                             }))
@@ -197,6 +201,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
                                 args: args_cloned,
+                                arg_metadata: vec![None; args.len()],
                                 number_rows: size,
                                 return_type: &DataType::Utf8,
                             }))
@@ -211,6 +216,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
                                 args: args_cloned,
+                                arg_metadata: vec![None; args.len()],
                                 number_rows: size,
                                 return_type: &DataType::Utf8,
                             }))
