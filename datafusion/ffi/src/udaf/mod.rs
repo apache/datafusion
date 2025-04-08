@@ -61,33 +61,40 @@ pub struct FFI_AggregateUDF {
     /// FFI equivalent to the `name` of a [`AggregateUDF`]
     pub name: RString,
 
-    /// FFI equivalent to the `name` of a [`AggregateUDF`]
+    /// FFI equivalent to the `aliases` of a [`AggregateUDF`]
     pub aliases: RVec<RString>,
 
-    /// FFI equivalent to the `name` of a [`AggregateUDF`]
+    /// FFI equivalent to the `volatility` of a [`AggregateUDF`]
     pub volatility: FFI_Volatility,
 
+    /// Determines the return type of the underlying [`AggregateUDF`] based on the
+    /// argument types.
     pub return_type: unsafe extern "C" fn(
         udaf: &Self,
         arg_types: RVec<WrappedSchema>,
     ) -> RResult<WrappedSchema, RString>,
 
+    /// FFI equivalent to the `is_nullable` of a [`AggregateUDF`]
     pub is_nullable: bool,
 
+    /// FFI equivalent to [`AggregateUDF::groups_accumulator_supported`]
     pub groups_accumulator_supported:
         unsafe extern "C" fn(udaf: &FFI_AggregateUDF, args: FFI_AccumulatorArgs) -> bool,
 
+    /// FFI equivalent to [`AggregateUDF::accumulator`]
     pub accumulator: unsafe extern "C" fn(
         udaf: &FFI_AggregateUDF,
         args: FFI_AccumulatorArgs,
     ) -> RResult<FFI_Accumulator, RString>,
 
+    /// FFI equivalent to [`AggregateUDF::create_sliding_accumulator`]
     pub create_sliding_accumulator:
         unsafe extern "C" fn(
             udaf: &FFI_AggregateUDF,
             args: FFI_AccumulatorArgs,
         ) -> RResult<FFI_Accumulator, RString>,
 
+    /// FFI equivalent to [`AggregateUDF::state_fields`]
     #[allow(clippy::type_complexity)]
     pub state_fields: unsafe extern "C" fn(
         udaf: &FFI_AggregateUDF,
@@ -98,18 +105,21 @@ pub struct FFI_AggregateUDF {
         is_distinct: bool,
     ) -> RResult<RVec<RVec<u8>>, RString>,
 
+    /// FFI equivalent to [`AggregateUDF::create_groups_accumulator`]
     pub create_groups_accumulator:
         unsafe extern "C" fn(
             udaf: &FFI_AggregateUDF,
             args: FFI_AccumulatorArgs,
         ) -> RResult<FFI_GroupsAccumulator, RString>,
 
+    /// FFI equivalent to [`AggregateUDF::with_beneficial_ordering`]
     pub with_beneficial_ordering:
         unsafe extern "C" fn(
             udaf: &FFI_AggregateUDF,
             beneficial_ordering: bool,
         ) -> RResult<ROption<FFI_AggregateUDF>, RString>,
 
+    /// FFI equivalent to [`AggregateUDF::order_sensitivity`]
     pub order_sensitivity:
         unsafe extern "C" fn(udaf: &FFI_AggregateUDF) -> FFI_AggregateOrderSensitivity,
 
@@ -585,14 +595,14 @@ mod tests {
     fn test_round_trip_udaf() -> Result<()> {
         let original_udaf = Sum::new();
         let original_name = original_udaf.name().to_owned();
+        let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
 
-        let foreign_udaf = create_test_foreign_udaf(original_udaf)?;
-        // let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
+        // Convert to FFI format
+        let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
 
-        // let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
-
-        // let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
-        // let foreign_udaf: AggregateUDF = foreign_udaf.into();
+        // Convert back to native format
+        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
+        let foreign_udaf: AggregateUDF = foreign_udaf.into();
 
         assert_eq!(original_name, foreign_udaf.name());
         Ok(())

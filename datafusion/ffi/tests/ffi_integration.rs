@@ -19,8 +19,6 @@
 /// when the feature integtation-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
-
-    use abi_stable::library::RootModule;
     use arrow::array::Float64Array;
     use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
@@ -31,8 +29,6 @@ mod tests {
     use datafusion_ffi::tests::utils::get_module;
     use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
     use datafusion_ffi::udaf::ForeignAggregateUDF;
-    use datafusion_ffi::udf::ForeignScalarUDF;
-    use std::path::Path;
     use std::sync::Arc;
 
     /// It is important that this test is in the `tests` directory and not in the
@@ -108,15 +104,15 @@ mod tests {
     async fn test_ffi_udaf() -> Result<()> {
         let module = get_module()?;
 
-        let ffi_avg_func =
+        let ffi_sum_func =
             module
                 .create_sum_udaf()
                 .ok_or(DataFusionError::NotImplemented(
                     "External table provider failed to implement create_udaf".to_string(),
                 ))?();
-        let foreign_avg_func: ForeignAggregateUDF = (&ffi_avg_func).try_into()?;
+        let foreign_sum_func: ForeignAggregateUDF = (&ffi_sum_func).try_into()?;
 
-        let udaf: AggregateUDF = foreign_avg_func.into();
+        let udaf: AggregateUDF = foreign_sum_func.into();
 
         let ctx = SessionContext::default();
         let record_batch = record_batch!(
