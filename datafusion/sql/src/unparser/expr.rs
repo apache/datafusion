@@ -1689,6 +1689,7 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{any::Any, sync::Arc, vec};
 
+    use crate::unparser::dialect::SqliteDialect;
     use arrow::array::{LargeListArray, ListArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
@@ -1712,7 +1713,7 @@ mod tests {
 
     use crate::unparser::dialect::{
         CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
-        Dialect, DuckDBDialect, PostgreSqlDialect, ScalarFnToSqlHandler,
+        DefaultDialect, Dialect, DuckDBDialect, PostgreSqlDialect, ScalarFnToSqlHandler,
     };
 
     use super::*;
@@ -2861,6 +2862,118 @@ mod tests {
             let mut window_func = WindowFunction::new(func, vec![]);
             window_func.params.order_by = vec![Sort::new(col("a"), true, true)];
             let expr = Expr::WindowFunction(window_func);
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = ast.to_string();
+            let expected = expected.to_string();
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_unixtime() -> Result<()> {
+        let default_dialect: Arc<dyn Dialect> = Arc::new(DefaultDialect {});
+        let sqlite_dialect: Arc<dyn Dialect> = Arc::new(SqliteDialect {});
+
+        for (dialect, expected) in [
+            (default_dialect, "from_unixtime(date_col)"),
+            (sqlite_dialect, "datetime(`date_col`, 'unixepoch')"),
+        ] {
+            let unparser = Unparser::new(dialect.as_ref());
+            let expr = Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(
+                    datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc::new(
+                    ),
+                )),
+                args: vec![col("date_col")],
+            });
+
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = ast.to_string();
+            let expected = expected.to_string();
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_date_trunc() -> Result<()> {
+        let default_dialect: Arc<dyn Dialect> = Arc::new(DefaultDialect {});
+        let sqlite_dialect: Arc<dyn Dialect> = Arc::new(SqliteDialect {});
+
+        for (dialect, precision, expected) in [
+            (
+                Arc::clone(&default_dialect),
+                "YEAR",
+                "date_trunc('YEAR', date_col)",
+            ),
+            (
+                Arc::clone(&sqlite_dialect),
+                "YEAR",
+                "strftime('%Y', `date_col`)",
+            ),
+            (
+                Arc::clone(&default_dialect),
+                "MONTH",
+                "date_trunc('MONTH', date_col)",
+            ),
+            (
+                Arc::clone(&sqlite_dialect),
+                "MONTH",
+                "strftime('%Y-%m', `date_col`)",
+            ),
+            (
+                Arc::clone(&default_dialect),
+                "DAY",
+                "date_trunc('DAY', date_col)",
+            ),
+            (
+                Arc::clone(&sqlite_dialect),
+                "DAY",
+                "strftime('%Y-%m-%d', `date_col`)",
+            ),
+            (
+                Arc::clone(&default_dialect),
+                "HOUR",
+                "date_trunc('HOUR', date_col)",
+            ),
+            (
+                Arc::clone(&sqlite_dialect),
+                "HOUR",
+                "strftime('%Y-%m-%d %H', `date_col`)",
+            ),
+            (
+                Arc::clone(&default_dialect),
+                "MINUTE",
+                "date_trunc('MINUTE', date_col)",
+            ),
+            (
+                Arc::clone(&sqlite_dialect),
+                "MINUTE",
+                "strftime('%Y-%m-%d %H:%M', `date_col`)",
+            ),
+            (default_dialect, "SECOND", "date_trunc('SECOND', date_col)"),
+            (
+                sqlite_dialect,
+                "SECOND",
+                "strftime('%Y-%m-%d %H:%M:%S', `date_col`)",
+            ),
+        ] {
+            let unparser = Unparser::new(dialect.as_ref());
+            let expr = Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(
+                    datafusion_functions::datetime::date_trunc::DateTruncFunc::new(),
+                )),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8(Some(precision.to_string()))),
+                    col("date_col"),
+                ],
+            });
+
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = ast.to_string();

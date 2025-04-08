@@ -17,7 +17,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
+use super::{
+    utils::character_length_to_sql, utils::date_part_to_sql,
+    utils::sqlite_date_trunc_to_sql, utils::sqlite_from_unixtime_to_sql, Unparser,
+};
 use arrow::datatypes::TimeUnit;
 use datafusion_common::Result;
 use datafusion_expr::Expr;
