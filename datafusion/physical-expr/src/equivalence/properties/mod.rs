@@ -212,9 +212,8 @@ impl EquivalenceProperties {
     /// Returns the output ordering of the properties.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
         // Prune out constant expressions:
-        let constants = self.constants();
         let mut sort_exprs = self.oeq_class().output_ordering()?.take();
-        sort_exprs.retain(|item| !const_exprs_contains(constants, &item.expr));
+        sort_exprs.retain(|item| !const_exprs_contains(&self.constants, &item.expr));
         (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs))
     }
 
@@ -1090,17 +1089,13 @@ impl EquivalenceProperties {
             if self.is_expr_constant(source)
                 && !const_exprs_contains(&projected_constants, target)
             {
-                if self.is_expr_constant_across_partitions(source) {
-                    projected_constants.push(
-                        ConstExpr::from(target)
-                            .with_across_partitions(self.get_expr_constant_value(source)),
-                    )
+                let uniform = if self.is_expr_constant_across_partitions(source) {
+                    self.get_expr_constant_value(source)
                 } else {
-                    projected_constants.push(
-                        ConstExpr::from(target)
-                            .with_across_partitions(AcrossPartitions::Heterogeneous),
-                    )
-                }
+                    AcrossPartitions::Heterogeneous
+                };
+                let const_expr = ConstExpr::from(target).with_across_partitions(uniform);
+                projected_constants.push(const_expr);
             }
         }
         projected_constants
