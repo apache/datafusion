@@ -24,6 +24,7 @@ mod tests {
     use datafusion::dataframe::DataFrame;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+    use insta::assert_snapshot;
 
     #[tokio::test]
     async fn scalar_function_compound_signature() -> Result<()> {
@@ -40,11 +41,17 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        assert_eq!(
-            format!("{}", plan),
-            "Projection: NOT DATA.D AS EXPR$0\
-            \n  TableScan: DATA"
-        );
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: NOT DATA.D AS EXPR$0
+              TableScan: DATA
+            "#
+                );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
         Ok(())
     }
 
@@ -65,12 +72,75 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        assert_eq!(
-            format!("{}", plan),
-            "Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR\
-            \n  WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]\
-            \n    TableScan: DATA"
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR
+              WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
+                TableScan: DATA
+            "#
+                );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn double_window_function() -> Result<()> {
+        // Confirms a WindowExpr can be repeated in the same project.
+        // This wouldn't normally happen with DF-created plans since CSE would eliminate the duplicate.
+
+        // File generated with substrait-java's Isthmus:
+        // ./isthmus-cli/build/graal/isthmus --create "create table data (a int)" "select ROW_NUMBER() OVER (), ROW_NUMBER() OVER () AS aliased from data";
+        let proto_plan =
+            read_json("tests/testdata/test_plans/double_window.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED
+              WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+                TableScan: DATA
+            "#
+                );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn double_window_function_distinct_windows() -> Result<()> {
+        // Confirms a single project can have multiple window functions with separate windows in it.
+        // This wouldn't normally happen with DF-created plans since logical optimizer would
+        // separate them out.
+
+        // File generated with substrait-java's Isthmus:
+        // ./isthmus-cli/build/graal/isthmus --create "create table data (a int)" "select ROW_NUMBER() OVER (), ROW_NUMBER() OVER (PARTITION BY a) from data";
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/double_window_distinct_windows.substrait.json",
         );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$1
+              WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+                WindowAggr: windowExpr=[[row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+                  TableScan: DATA
+            "#
+                );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
         Ok(())
     }
 
@@ -84,9 +154,14 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        assert_eq!(format!("{}", &plan), "Values: (List([1, 2]))");
+        assert_snapshot!(
+                &plan,
+            @r#"
+        Values: (List([1, 2]))
+        "#
+        );
 
-        // Need to trigger execution to ensure that Arrow has validated the plan
+        // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
 
         Ok(())
@@ -99,13 +174,18 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        assert_eq!(
-            format!("{}", plan),
-            "Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count\
-            \n  Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]\
-            \n    Aggregate: groupBy=[[sales.product]], aggr=[[count(sales.product)]]\
-            \n      TableScan: sales"
-        );
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count
+              Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]
+                Aggregate: groupBy=[[sales.product]], aggr=[[count(sales.product)]]
+                  TableScan: sales
+            "#
+                );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
 
         Ok(())
     }

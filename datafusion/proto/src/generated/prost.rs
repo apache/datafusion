@@ -739,6 +739,11 @@ pub struct AliasNode {
     pub alias: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "3")]
     pub relation: ::prost::alloc::vec::Vec<TableReference>,
+    #[prost(map = "string, string", tag = "4")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BinaryExprNode {
@@ -1043,7 +1048,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1111,6 +1116,8 @@ pub mod physical_plan_node {
         ParquetSink(::prost::alloc::boxed::Box<super::ParquetSinkExecNode>),
         #[prost(message, tag = "30")]
         Unnest(::prost::alloc::boxed::Box<super::UnnestExecNode>),
+        #[prost(message, tag = "31")]
+        JsonScan(super::JsonScanExecNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1510,6 +1517,8 @@ pub struct FileScanExecConf {
     pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
     #[prost(message, optional, tag = "11")]
     pub constraints: ::core::option::Option<super::datafusion_common::Constraints>,
+    #[prost(uint64, optional, tag = "12")]
+    pub batch_size: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -1551,6 +1560,11 @@ pub mod csv_scan_exec_node {
         #[prost(string, tag = "6")]
         Comment(::prost::alloc::string::String),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct JsonScanExecNode {
+    #[prost(message, optional, tag = "1")]
+    pub base_conf: ::core::option::Option<FileScanExecConf>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroScanExecNode {

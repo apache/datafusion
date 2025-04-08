@@ -52,7 +52,7 @@ use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 use indexmap::IndexSet;
 use itertools::Itertools;
 
-/// A `EquivalenceProperties` object stores information known about the output
+/// `EquivalenceProperties` stores information about the output
 /// of a plan node, that can be used to optimize the plan.
 ///
 /// Currently, it keeps track of:
@@ -60,6 +60,10 @@ use itertools::Itertools;
 /// - Equivalent expressions: expressions that are known to have same value.
 /// - Constants expressions: expressions that are known to contain a single
 ///   constant value.
+///
+/// Please see the [Using Ordering for Better Plans] blog for more details.
+///
+/// [Using Ordering for Better Plans]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis/
 ///
 /// # Example equivalent sort expressions
 ///

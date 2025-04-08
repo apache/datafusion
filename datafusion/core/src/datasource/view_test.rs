@@ -17,158 +17,15 @@
 
 //! View data source which uses a LogicalPlan as it's input.
 
-use std::{any::Any, borrow::Cow, sync::Arc};
-
-use crate::{
-    error::Result,
-    logical_expr::{Expr, LogicalPlan},
-    physical_plan::ExecutionPlan,
-};
-use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
-use datafusion_catalog::Session;
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::Column;
-use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
-use datafusion_optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
-use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
-use datafusion_optimizer::Analyzer;
-
-use crate::datasource::{TableProvider, TableType};
-
-/// An implementation of `TableProvider` that uses another logical plan.
-#[derive(Debug)]
-pub struct ViewTable {
-    /// LogicalPlan of the view
-    logical_plan: LogicalPlan,
-    /// File fields + partition columns
-    table_schema: SchemaRef,
-    /// SQL used to create the view, if available
-    definition: Option<String>,
-}
-
-impl ViewTable {
-    /// Create new view that is executed at query runtime.
-    /// Takes a `LogicalPlan` and an optional create statement as input.
-    pub fn try_new(
-        logical_plan: LogicalPlan,
-        definition: Option<String>,
-    ) -> Result<Self> {
-        let logical_plan = Self::apply_required_rule(logical_plan)?;
-        let table_schema = logical_plan.schema().as_ref().to_owned().into();
-
-        let view = Self {
-            logical_plan,
-            table_schema,
-            definition,
-        };
-
-        Ok(view)
-    }
-
-    fn apply_required_rule(logical_plan: LogicalPlan) -> Result<LogicalPlan> {
-        let options = ConfigOptions::default();
-        Analyzer::with_rules(vec![
-            Arc::new(ExpandWildcardRule::new()),
-            Arc::new(TypeCoercion::new()),
-        ])
-        .execute_and_check(logical_plan, &options, |_, _| {})
-    }
-
-    /// Get definition ref
-    pub fn definition(&self) -> Option<&String> {
-        self.definition.as_ref()
-    }
-
-    /// Get logical_plan ref
-    pub fn logical_plan(&self) -> &LogicalPlan {
-        &self.logical_plan
-    }
-}
-
-#[async_trait]
-impl TableProvider for ViewTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
-        Some(Cow::Borrowed(&self.logical_plan))
-    }
-
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.table_schema)
-    }
-
-    fn table_type(&self) -> TableType {
-        TableType::View
-    }
-
-    fn get_table_definition(&self) -> Option<&str> {
-        self.definition.as_deref()
-    }
-    fn supports_filters_pushdown(
-        &self,
-        filters: &[&Expr],
-    ) -> Result<Vec<TableProviderFilterPushDown>> {
-        // A filter is added on the View when given
-        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
-    }
-
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
-        let plan = self.logical_plan().clone();
-        let mut plan = LogicalPlanBuilder::from(plan);
-
-        if let Some(filter) = filter {
-            plan = plan.filter(filter)?;
-        }
-
-        let mut plan = if let Some(projection) = projection {
-            // avoiding adding a redundant projection (e.g. SELECT * FROM view)
-            let current_projection =
-                (0..plan.schema().fields().len()).collect::<Vec<usize>>();
-            if projection == &current_projection {
-                plan
-            } else {
-                let fields: Vec<Expr> = projection
-                    .iter()
-                    .map(|i| {
-                        Expr::Column(Column::from(
-                            self.logical_plan.schema().qualified_field(*i),
-                        ))
-                    })
-                    .collect();
-                plan.project(fields)?
-            }
-        } else {
-            plan
-        };
-
-        if let Some(limit) = limit {
-            plan = plan.limit(0, Some(limit))?;
-        }
-
-        state.create_physical_plan(&plan.build()?).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use datafusion_expr::{col, lit};
-
+    use crate::error::Result;
+    use crate::execution::context::SessionConfig;
     use crate::execution::options::ParquetReadOptions;
     use crate::prelude::SessionContext;
     use crate::test_util::parquet_test_data;
-    use crate::{assert_batches_eq, execution::context::SessionConfig};
-
-    use super::*;
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_expr::{col, lit};
 
     #[tokio::test]
     async fn issue_3242() -> Result<()> {
@@ -189,9 +46,13 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = ["+---+", "| b |", "+---+", "| 2 |", "+---+"];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---+
+        | b |
+        +---+
+        | 2 |
+        +---+
+        "###);
 
         Ok(())
     }
@@ -235,16 +96,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+---------+---------+",
-            "| column1 | column2 | column3 |",
-            "+---------+---------+---------+",
-            "| 1       | 2       | 3       |",
-            "| 4       | 5       | 6       |",
-            "+---------+---------+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+---------+---------+
+        | column1 | column2 | column3 |
+        +---------+---------+---------+
+        | 1       | 2       | 3       |
+        | 4       | 5       | 6       |
+        +---------+---------+---------+
+        "###);
 
         let view_sql =
             "CREATE VIEW replace_xyz AS SELECT * REPLACE (column1*2 as column1) FROM xyz";
@@ -256,16 +115,15 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+---------+---------+",
-            "| column1 | column2 | column3 |",
-            "+---------+---------+---------+",
-            "| 2       | 2       | 3       |",
-            "| 8       | 5       | 6       |",
-            "+---------+---------+---------+",
-        ];
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+---------+---------+
+        | column1 | column2 | column3 |
+        +---------+---------+---------+
+        | 2       | 2       | 3       |
+        | 8       | 5       | 6       |
+        +---------+---------+---------+
+        "###);
 
-        assert_batches_eq!(expected, &results);
         Ok(())
     }
 
@@ -288,16 +146,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------------+",
-            "| column1_alias |",
-            "+---------------+",
-            "| 1             |",
-            "| 4             |",
-            "+---------------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------------+
+        | column1_alias |
+        +---------------+
+        | 1             |
+        | 4             |
+        +---------------+
+        "###);
 
         Ok(())
     }
@@ -321,16 +177,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------------+---------------+",
-            "| column2_alias | column1_alias |",
-            "+---------------+---------------+",
-            "| 2             | 1             |",
-            "| 5             | 4             |",
-            "+---------------+---------------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------------+---------------+
+        | column2_alias | column1_alias |
+        +---------------+---------------+
+        | 2             | 1             |
+        | 5             | 4             |
+        +---------------+---------------+
+        "###);
 
         Ok(())
     }
@@ -359,16 +213,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 1       |",
-            "| 4       |",
-            "+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+
+        | column1 |
+        +---------+
+        | 1       |
+        | 4       |
+        +---------+
+        "###);
 
         Ok(())
     }
@@ -397,15 +249,13 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 4       |",
-            "+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+
+        | column1 |
+        +---------+
+        | 4       |
+        +---------+
+        "###);
 
         Ok(())
     }
@@ -437,16 +287,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+---------+---------+",
-            "| column2 | column1 | column3 |",
-            "+---------+---------+---------+",
-            "| 2       | 1       | 3       |",
-            "| 5       | 4       | 6       |",
-            "+---------+---------+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+---------+---------+
+        | column2 | column1 | column3 |
+        +---------+---------+---------+
+        | 2       | 1       | 3       |
+        | 5       | 4       | 6       |
+        +---------+---------+---------+
+        "###);
 
         Ok(())
     }
@@ -594,16 +442,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 1       |",
-            "| 4       |",
-            "+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+
+        | column1 |
+        +---------+
+        | 1       |
+        | 4       |
+        +---------+
+        "###);
 
         Ok(())
     }

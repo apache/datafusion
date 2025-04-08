@@ -18,9 +18,10 @@
 //! Logical plan types
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
@@ -38,9 +39,8 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_len, exprlist_to_fields, find_base_plan,
-    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    split_conjunction,
+    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
+    grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Execute,
@@ -56,7 +56,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, ScalarValue, TableReference,
+    FunctionalDependencies, ParamValues, Result, ScalarValue, Spans, TableReference,
     UnnestOptions,
 };
 use indexmap::IndexSet;
@@ -940,7 +940,9 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Subquery(Subquery {
-                outer_ref_columns, ..
+                outer_ref_columns,
+                spans,
+                ..
             }) => {
                 self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
@@ -948,6 +950,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Subquery(Subquery {
                     subquery: Arc::new(subquery),
                     outer_ref_columns: outer_ref_columns.clone(),
+                    spans: spans.clone(),
                 }))
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
@@ -1084,6 +1087,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Explain(Explain {
                     verbose: e.verbose,
                     plan: Arc::new(input),
+                    explain_format: e.explain_format.clone(),
                     stringified_plans: e.stringified_plans.clone(),
                     schema: Arc::clone(&e.schema),
                     logical_optimization_succeeded: e.logical_optimization_succeeded,
@@ -2677,24 +2681,16 @@ impl Union {
         Ok(Union { inputs, schema })
     }
 
-    /// When constructing a `UNION BY NAME`, we may need to wrap inputs
+    /// When constructing a `UNION BY NAME`, we need to wrap inputs
     /// in an additional `Projection` to account for absence of columns
-    /// in input schemas.
+    /// in input schemas or differing projection orders.
     fn rewrite_inputs_from_schema(
-        schema: &DFSchema,
+        schema: &Arc<DFSchema>,
         inputs: Vec<Arc<LogicalPlan>>,
     ) -> Result<Vec<Arc<LogicalPlan>>> {
         let schema_width = schema.iter().count();
         let mut wrapped_inputs = Vec::with_capacity(inputs.len());
         for input in inputs {
-            // If the input plan's schema contains the same number of fields
-            // as the derived schema, then it does not to be wrapped in an
-            // additional `Projection`.
-            if input.schema().iter().count() == schema_width {
-                wrapped_inputs.push(input);
-                continue;
-            }
-
             // Any columns that exist within the derived schema but do not exist
             // within an input's schema should be replaced with `NULL` aliased
             // to the appropriate column in the derived schema.
@@ -2709,9 +2705,9 @@ impl Union {
                     expr.push(Expr::Literal(ScalarValue::Null).alias(column.name()));
                 }
             }
-            wrapped_inputs.push(Arc::new(LogicalPlan::Projection(Projection::try_new(
-                expr, input,
-            )?)));
+            wrapped_inputs.push(Arc::new(LogicalPlan::Projection(
+                Projection::try_new_with_schema(expr, input, Arc::clone(schema))?,
+            )));
         }
 
         Ok(wrapped_inputs)
@@ -2745,45 +2741,60 @@ impl Union {
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
-        type FieldData<'a> = (&'a DataType, bool, Vec<&'a HashMap<String, String>>);
-        // Prefer `BTreeMap` as it produces items in order by key when iterated over
-        let mut cols: BTreeMap<&str, FieldData> = BTreeMap::new();
+        type FieldData<'a> =
+            (&'a DataType, bool, Vec<&'a HashMap<String, String>>, usize);
+        let mut cols: Vec<(&str, FieldData)> = Vec::new();
         for input in inputs.iter() {
             for field in input.schema().fields() {
-                match cols.entry(field.name()) {
-                    std::collections::btree_map::Entry::Occupied(mut occupied) => {
-                        let (data_type, is_nullable, metadata) = occupied.get_mut();
-                        if !loose_types && *data_type != field.data_type() {
-                            return plan_err!(
-                                "Found different types for field {}",
-                                field.name()
-                            );
-                        }
-
-                        metadata.push(field.metadata());
-                        // If the field is nullable in any one of the inputs,
-                        // then the field in the final schema is also nullable.
-                        *is_nullable |= field.is_nullable();
+                if let Some((_, (data_type, is_nullable, metadata, occurrences))) =
+                    cols.iter_mut().find(|(name, _)| name == field.name())
+                {
+                    if !loose_types && *data_type != field.data_type() {
+                        return plan_err!(
+                            "Found different types for field {}",
+                            field.name()
+                        );
                     }
-                    std::collections::btree_map::Entry::Vacant(vacant) => {
-                        vacant.insert((
+
+                    metadata.push(field.metadata());
+                    // If the field is nullable in any one of the inputs,
+                    // then the field in the final schema is also nullable.
+                    *is_nullable |= field.is_nullable();
+                    *occurrences += 1;
+                } else {
+                    cols.push((
+                        field.name(),
+                        (
                             field.data_type(),
                             field.is_nullable(),
                             vec![field.metadata()],
-                        ));
-                    }
+                            1,
+                        ),
+                    ));
                 }
             }
         }
 
         let union_fields = cols
             .into_iter()
-            .map(|(name, (data_type, is_nullable, unmerged_metadata))| {
-                let mut field = Field::new(name, data_type.clone(), is_nullable);
-                field.set_metadata(intersect_maps(unmerged_metadata));
+            .map(
+                |(name, (data_type, is_nullable, unmerged_metadata, occurrences))| {
+                    // If the final number of occurrences of the field is less
+                    // than the number of inputs (i.e. the field is missing from
+                    // one or more inputs), then it must be treated as nullable.
+                    let final_is_nullable = if occurrences == inputs.len() {
+                        is_nullable
+                    } else {
+                        true
+                    };
 
-                (None, Arc::new(field))
-            })
+                    let mut field =
+                        Field::new(name, data_type.clone(), final_is_nullable);
+                    field.set_metadata(intersect_maps(unmerged_metadata));
+
+                    (None, Arc::new(field))
+                },
+            )
             .collect::<Vec<(Option<TableReference>, _)>>();
 
         let union_schema_metadata =
@@ -2813,6 +2824,7 @@ impl Union {
             }
         }
 
+        let mut name_counts: HashMap<String, usize> = HashMap::new();
         let union_fields = (0..fields_count)
             .map(|i| {
                 let fields = inputs
@@ -2820,7 +2832,8 @@ impl Union {
                     .map(|input| input.schema().field(i))
                     .collect::<Vec<_>>();
                 let first_field = fields[0];
-                let name = first_field.name();
+                let base_name = first_field.name().to_string();
+
                 let data_type = if loose_types {
                     // TODO apply type coercion here, or document why it's better to defer
                     // temporarily use the data type from the left input and later rely on the analyzer to
@@ -2843,13 +2856,21 @@ impl Union {
                     )?
                 };
                 let nullable = fields.iter().any(|field| field.is_nullable());
-                let mut field = Field::new(name, data_type.clone(), nullable);
+
+                // Generate unique field name
+                let name = if let Some(count) = name_counts.get_mut(&base_name) {
+                    *count += 1;
+                    format!("{}_{}", base_name, count)
+                } else {
+                    name_counts.insert(base_name.clone(), 0);
+                    base_name
+                };
+
+                let mut field = Field::new(&name, data_type.clone(), nullable);
                 let field_metadata =
                     intersect_maps(fields.iter().map(|field| field.metadata()));
                 field.set_metadata(field_metadata);
-                // TODO reusing table reference from the first schema is probably wrong
-                let table_reference = first_schema.qualified_field(i).0.cloned();
-                Ok((table_reference, Arc::new(field)))
+                Ok((None, Arc::new(field)))
             })
             .collect::<Result<_>>()?;
         let union_schema_metadata =
@@ -2924,12 +2945,167 @@ impl PartialOrd for DescribeTable {
     }
 }
 
+/// Output formats for controlling for Explain plans
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplainFormat {
+    /// Indent mode
+    ///
+    /// Example:
+    /// ```text
+    /// > explain format indent select x from values (1) t(x);
+    /// +---------------+-----------------------------------------------------+
+    /// | plan_type     | plan                                                |
+    /// +---------------+-----------------------------------------------------+
+    /// | logical_plan  | SubqueryAlias: t                                    |
+    /// |               |   Projection: column1 AS x                          |
+    /// |               |     Values: (Int64(1))                              |
+    /// | physical_plan | ProjectionExec: expr=[column1@0 as x]               |
+    /// |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
+    /// |               |                                                     |
+    /// +---------------+-----------------------------------------------------+
+    /// ```
+    Indent,
+    /// Tree mode
+    ///
+    /// Example:
+    /// ```text
+    /// > explain format tree select x from values (1) t(x);
+    /// +---------------+-------------------------------+
+    /// | plan_type     | plan                          |
+    /// +---------------+-------------------------------+
+    /// | physical_plan | ┌───────────────────────────┐ |
+    /// |               | │       ProjectionExec      │ |
+    /// |               | │    --------------------   │ |
+    /// |               | │        x: column1@0       │ |
+    /// |               | └─────────────┬─────────────┘ |
+    /// |               | ┌─────────────┴─────────────┐ |
+    /// |               | │       DataSourceExec      │ |
+    /// |               | │    --------------------   │ |
+    /// |               | │         bytes: 128        │ |
+    /// |               | │       format: memory      │ |
+    /// |               | │          rows: 1          │ |
+    /// |               | └───────────────────────────┘ |
+    /// |               |                               |
+    /// +---------------+-------------------------------+
+    /// ```
+    Tree,
+    /// Postgres Json mode
+    ///
+    /// A displayable structure that produces plan in postgresql JSON format.
+    ///
+    /// Users can use this format to visualize the plan in existing plan
+    /// visualization tools, for example [dalibo](https://explain.dalibo.com/)
+    ///
+    /// Example:
+    /// ```text
+    /// > explain format pgjson select x from values (1) t(x);
+    /// +--------------+--------------------------------------+
+    /// | plan_type    | plan                                 |
+    /// +--------------+--------------------------------------+
+    /// | logical_plan | [                                    |
+    /// |              |   {                                  |
+    /// |              |     "Plan": {                        |
+    /// |              |       "Alias": "t",                  |
+    /// |              |       "Node Type": "Subquery",       |
+    /// |              |       "Output": [                    |
+    /// |              |         "x"                          |
+    /// |              |       ],                             |
+    /// |              |       "Plans": [                     |
+    /// |              |         {                            |
+    /// |              |           "Expressions": [           |
+    /// |              |             "column1 AS x"           |
+    /// |              |           ],                         |
+    /// |              |           "Node Type": "Projection", |
+    /// |              |           "Output": [                |
+    /// |              |             "x"                      |
+    /// |              |           ],                         |
+    /// |              |           "Plans": [                 |
+    /// |              |             {                        |
+    /// |              |               "Node Type": "Values", |
+    /// |              |               "Output": [            |
+    /// |              |                 "column1"            |
+    /// |              |               ],                     |
+    /// |              |               "Plans": [],           |
+    /// |              |               "Values": "(Int64(1))" |
+    /// |              |             }                        |
+    /// |              |           ]                          |
+    /// |              |         }                            |
+    /// |              |       ]                              |
+    /// |              |     }                                |
+    /// |              |   }                                  |
+    /// |              | ]                                    |
+    /// +--------------+--------------------------------------+
+    /// ```
+    PostgresJSON,
+    /// Graphviz mode
+    ///
+    /// Example:
+    /// ```text
+    /// > explain format graphviz select x from values (1) t(x);
+    /// +--------------+------------------------------------------------------------------------+
+    /// | plan_type    | plan                                                                   |
+    /// +--------------+------------------------------------------------------------------------+
+    /// | logical_plan |                                                                        |
+    /// |              | // Begin DataFusion GraphViz Plan,                                     |
+    /// |              | // display it online here: https://dreampuf.github.io/GraphvizOnline   |
+    /// |              |                                                                        |
+    /// |              | digraph {                                                              |
+    /// |              |   subgraph cluster_1                                                   |
+    /// |              |   {                                                                    |
+    /// |              |     graph[label="LogicalPlan"]                                         |
+    /// |              |     2[shape=box label="SubqueryAlias: t"]                              |
+    /// |              |     3[shape=box label="Projection: column1 AS x"]                      |
+    /// |              |     2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]                |
+    /// |              |     4[shape=box label="Values: (Int64(1))"]                            |
+    /// |              |     3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]                |
+    /// |              |   }                                                                    |
+    /// |              |   subgraph cluster_5                                                   |
+    /// |              |   {                                                                    |
+    /// |              |     graph[label="Detailed LogicalPlan"]                                |
+    /// |              |     6[shape=box label="SubqueryAlias: t\nSchema: [x:Int64;N]"]         |
+    /// |              |     7[shape=box label="Projection: column1 AS x\nSchema: [x:Int64;N]"] |
+    /// |              |     6 -> 7 [arrowhead=none, arrowtail=normal, dir=back]                |
+    /// |              |     8[shape=box label="Values: (Int64(1))\nSchema: [column1:Int64;N]"] |
+    /// |              |     7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]                |
+    /// |              |   }                                                                    |
+    /// |              | }                                                                      |
+    /// |              | // End DataFusion GraphViz Plan                                        |
+    /// |              |                                                                        |
+    /// +--------------+------------------------------------------------------------------------+
+    /// ```
+    Graphviz,
+}
+
+/// Implement  parsing strings to `ExplainFormat`
+impl FromStr for ExplainFormat {
+    type Err = DataFusionError;
+
+    fn from_str(format: &str) -> std::result::Result<Self, Self::Err> {
+        match format.to_lowercase().as_str() {
+            "indent" => Ok(ExplainFormat::Indent),
+            "tree" => Ok(ExplainFormat::Tree),
+            "pgjson" => Ok(ExplainFormat::PostgresJSON),
+            "graphviz" => Ok(ExplainFormat::Graphviz),
+            _ => {
+                plan_err!("Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got '{format}'")
+            }
+        }
+    }
+}
+
 /// Produces a relation with string representations of
 /// various parts of the plan
+///
+/// See [the documentation] for more information
+///
+/// [the documentation]: https://datafusion.apache.org/user-guide/sql/explain.html
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Explain {
     /// Should extra (detailed, intermediate plans) be included?
     pub verbose: bool,
+    /// Output format for explain, if specified.
+    /// If none, defaults to `text`
+    pub explain_format: ExplainFormat,
     /// The logical plan that is being EXPLAIN'd
     pub plan: Arc<LogicalPlan>,
     /// Represent the various stages plans have gone through
@@ -3494,11 +3670,10 @@ fn calc_func_dependencies_for_project(
         .flatten()
         .collect::<Vec<_>>();
 
-    let len = exprlist_len(exprs, input.schema(), Some(find_base_plan(input).schema()))?;
     Ok(input
         .schema()
         .functional_dependencies()
-        .project_functional_dependencies(&proj_indices, len))
+        .project_functional_dependencies(&proj_indices, exprs.len()))
 }
 
 /// Sorts its input according to a list of sort expressions.
@@ -3617,6 +3792,8 @@ pub struct Subquery {
     pub subquery: Arc<LogicalPlan>,
     /// The outer references used in the subquery
     pub outer_ref_columns: Vec<Expr>,
+    /// Span information for subquery projection columns
+    pub spans: Spans,
 }
 
 impl Normalizeable for Subquery {
@@ -3651,6 +3828,7 @@ impl Subquery {
         Subquery {
             subquery: plan,
             outer_ref_columns: self.outer_ref_columns.clone(),
+            spans: Spans::new(),
         }
     }
 }

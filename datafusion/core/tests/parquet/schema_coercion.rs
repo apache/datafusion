@@ -22,14 +22,17 @@ use arrow::array::{
     StringArray,
 };
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::assert_batches_sorted_eq;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
 use datafusion::test::object_store::local_unpartitioned_file;
+use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::Result;
 use datafusion_execution::object_store::ObjectStoreUrl;
 
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
+use insta::assert_snapshot;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -60,29 +63,32 @@ async fn multi_parquet_coercion() {
         Field::new("c3", DataType::Float64, true),
     ]));
     let source = Arc::new(ParquetSource::default());
-    let conf =
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, source)
-            .with_file_group(file_group);
+    let conf = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        file_schema,
+        source,
+    )
+    .with_file_group(file_group)
+    .build();
 
-    let parquet_exec = conf.build();
+    let parquet_exec = DataSourceExec::from_data_source(conf);
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
     let read = collect(parquet_exec, task_ctx).await.unwrap();
 
-    let expected = [
-        "+-------+----+------+",
-        "| c1    | c2 | c3   |",
-        "+-------+----+------+",
-        "|       |    |      |",
-        "|       | 1  | 10.0 |",
-        "|       | 2  |      |",
-        "|       | 2  | 20.0 |",
-        "| one   | 1  |      |",
-        "| three |    |      |",
-        "+-------+----+------+",
-    ];
-    assert_batches_sorted_eq!(expected, &read);
+    assert_snapshot!(batches_to_sort_string(&read), @r"
+    +-------+----+------+
+    | c1    | c2 | c3   |
+    +-------+----+------+
+    |       |    |      |
+    |       | 1  | 10.0 |
+    |       | 2  |      |
+    |       | 2  | 20.0 |
+    | one   | 1  |      |
+    | three |    |      |
+    +-------+----+------+
+    ");
 }
 
 #[tokio::test]
@@ -114,7 +120,7 @@ async fn multi_parquet_coercion_projection() {
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::Float64, true),
     ]));
-    let parquet_exec = FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         file_schema,
         Arc::new(ParquetSource::default()),
@@ -123,23 +129,24 @@ async fn multi_parquet_coercion_projection() {
     .with_projection(Some(vec![1, 0, 2]))
     .build();
 
+    let parquet_exec = DataSourceExec::from_data_source(config);
+
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
     let read = collect(parquet_exec, task_ctx).await.unwrap();
 
-    let expected = [
-        "+----+-------+------+",
-        "| c2 | c1    | c3   |",
-        "+----+-------+------+",
-        "|    | foo   |      |",
-        "|    | three |      |",
-        "| 1  | baz   | 10.0 |",
-        "| 1  | one   |      |",
-        "| 2  |       |      |",
-        "| 2  | Boo   | 20.0 |",
-        "+----+-------+------+",
-    ];
-    assert_batches_sorted_eq!(expected, &read);
+    assert_snapshot!(batches_to_sort_string(&read), @r"
+    +----+-------+------+
+    | c2 | c1    | c3   |
+    +----+-------+------+
+    |    | foo   |      |
+    |    | three |      |
+    | 1  | baz   | 10.0 |
+    | 1  | one   |      |
+    | 2  |       |      |
+    | 2  | Boo   | 20.0 |
+    +----+-------+------+
+    ");
 }
 
 /// Writes `batches` to a temporary parquet file

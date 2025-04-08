@@ -38,6 +38,7 @@ use crate::cast::{
     as_fixed_size_binary_array, as_fixed_size_list_array,
 };
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
+use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
 use arrow::array::{
@@ -58,8 +59,6 @@ use arrow::datatypes::{
     UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
-
-use crate::format::DEFAULT_CAST_OPTIONS;
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
 
@@ -3037,6 +3036,34 @@ impl ScalarValue {
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ) => ScalarValue::Int64(Some((float_ts * 1_000_000_000_f64).trunc() as i64))
                 .to_array()?,
+            (
+                ScalarValue::Decimal128(Some(decimal_value), _, scale),
+                DataType::Timestamp(time_unit, None),
+            ) => {
+                let scale_factor = 10_i128.pow(*scale as u32);
+                let seconds = decimal_value / scale_factor;
+                let fraction = decimal_value % scale_factor;
+
+                let timestamp_value = match time_unit {
+                    TimeUnit::Second => ScalarValue::Int64(Some(seconds as i64)),
+                    TimeUnit::Millisecond => {
+                        let millis = seconds * 1_000 + (fraction * 1_000) / scale_factor;
+                        ScalarValue::Int64(Some(millis as i64))
+                    }
+                    TimeUnit::Microsecond => {
+                        let micros =
+                            seconds * 1_000_000 + (fraction * 1_000_000) / scale_factor;
+                        ScalarValue::Int64(Some(micros as i64))
+                    }
+                    TimeUnit::Nanosecond => {
+                        let nanos = seconds * 1_000_000_000
+                            + (fraction * 1_000_000_000) / scale_factor;
+                        ScalarValue::Int64(Some(nanos as i64))
+                    }
+                };
+
+                timestamp_value.to_array()?
+            }
             _ => self.to_array()?,
         };
 
@@ -3976,7 +4003,7 @@ mod tests {
         as_map_array, as_string_array, as_struct_array, as_uint32_array, as_uint64_array,
     };
 
-    use crate::assert_batches_eq;
+    use crate::test_util::batches_to_string;
     use arrow::array::{types::Float64Type, NullBufferBuilder};
     use arrow::buffer::{Buffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
@@ -3984,6 +4011,7 @@ mod tests {
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use chrono::NaiveDate;
+    use insta::assert_snapshot;
     use rand::Rng;
 
     #[test]
@@ -6910,14 +6938,13 @@ mod tests {
 
         //verify compared to arrow display
         let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
-        let expected = [
-            "+-------------+",
-            "| s           |",
-            "+-------------+",
-            "| {a: 1, b: } |",
-            "+-------------+",
-        ];
-        assert_batches_eq!(&expected, &[batch]);
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +-------------+
+        | s           |
+        +-------------+
+        | {a: 1, b: } |
+        +-------------+
+        ");
     }
 
     #[test]
@@ -6946,14 +6973,13 @@ mod tests {
 
         //verify compared to arrow display
         let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
-        let expected = [
-            "+--------------+",
-            "| s            |",
-            "+--------------+",
-            "| {a: 1, b: 2} |",
-            "+--------------+",
-        ];
-        assert_batches_eq!(&expected, &[batch]);
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +--------------+
+        | s            |
+        +--------------+
+        | {a: 1, b: 2} |
+        +--------------+
+        ");
     }
 
     #[test]
@@ -6969,15 +6995,13 @@ mod tests {
         //verify compared to arrow display
         let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
 
-        #[rustfmt::skip]
-            let expected = [
-            "+---+",
-            "| s |",
-            "+---+",
-            "|   |",
-            "+---+",
-        ];
-        assert_batches_eq!(&expected, &[batch]);
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +---+
+        | s |
+        +---+
+        |   |
+        +---+
+        ");
     }
 
     #[test]
@@ -7011,17 +7035,16 @@ mod tests {
 
         //verify compared to arrow display
         let batch = RecordBatch::try_from_iter(vec![("m", arr as _)]).unwrap();
-        let expected = [
-            "+--------------------+",
-            "| m                  |",
-            "+--------------------+",
-            "| {joe: 1}           |",
-            "| {blogs: 2, foo: 4} |",
-            "| {}                 |",
-            "|                    |",
-            "+--------------------+",
-        ];
-        assert_batches_eq!(&expected, &[batch]);
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +--------------------+
+        | m                  |
+        +--------------------+
+        | {joe: 1}           |
+        | {blogs: 2, foo: 4} |
+        | {}                 |
+        |                    |
+        +--------------------+
+        ");
     }
 
     #[test]

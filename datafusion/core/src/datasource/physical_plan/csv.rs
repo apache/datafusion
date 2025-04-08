@@ -36,6 +36,7 @@ mod tests {
     use crate::prelude::SessionContext;
     use crate::test::partitioned_file_groups;
     use datafusion_common::test_util::arrow_test_data;
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{assert_batches_eq, Result};
     use datafusion_execution::config::SessionConfig;
     use datafusion_physical_plan::metrics::MetricsSet;
@@ -49,6 +50,9 @@ mod tests {
 
     use arrow::datatypes::*;
     use bytes::Bytes;
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_datasource::source::DataSourceExec;
+    use insta::assert_snapshot;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
@@ -107,13 +111,18 @@ mod tests {
         )?;
 
         let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let config = partitioned_csv_config(file_schema, file_groups, source)
-            .with_file_compression_type(file_compression_type)
-            .with_newlines_in_values(false)
-            .with_projection(Some(vec![0, 2, 4]));
+        let config = FileScanConfigBuilder::from(partitioned_csv_config(
+            file_schema,
+            file_groups,
+            source,
+        ))
+        .with_file_compression_type(file_compression_type)
+        .with_newlines_in_values(false)
+        .with_projection(Some(vec![0, 2, 4]))
+        .build();
 
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = config.build();
+        let csv = DataSourceExec::from_data_source(config);
 
         assert_eq!(3, csv.schema().fields().len());
 
@@ -122,20 +131,17 @@ mod tests {
         assert_eq!(3, batch.num_columns());
         assert_eq!(100, batch.num_rows());
 
-        // slice of the first 5 lines
-        let expected = [
-            "+----+-----+------------+",
-            "| c1 | c3  | c5         |",
-            "+----+-----+------------+",
-            "| c  | 1   | 2033001162 |",
-            "| d  | -40 | 706441268  |",
-            "| b  | 29  | 994303988  |",
-            "| a  | -85 | 1171968280 |",
-            "| b  | -82 | 1824882165 |",
-            "+----+-----+------------+",
-        ];
-
-        assert_batches_eq!(expected, &[batch.slice(0, 5)]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch.slice(0, 5)]), @r###"
+            +----+-----+------------+
+            | c1 | c3  | c5         |
+            +----+-----+------------+
+            | c  | 1   | 2033001162 |
+            | d  | -40 | 706441268  |
+            | b  | 29  | 994303988  |
+            | a  | -85 | 1171968280 |
+            | b  | -82 | 1824882165 |
+            +----+-----+------------+
+        "###);}
         Ok(())
     }
 
@@ -170,12 +176,17 @@ mod tests {
         )?;
 
         let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let config = partitioned_csv_config(file_schema, file_groups, source)
-            .with_newlines_in_values(false)
-            .with_file_compression_type(file_compression_type.to_owned())
-            .with_projection(Some(vec![4, 0, 2]));
+        let config = FileScanConfigBuilder::from(partitioned_csv_config(
+            file_schema,
+            file_groups,
+            source,
+        ))
+        .with_newlines_in_values(false)
+        .with_file_compression_type(file_compression_type.to_owned())
+        .with_projection(Some(vec![4, 0, 2]))
+        .build();
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = config.build();
+        let csv = DataSourceExec::from_data_source(config);
         assert_eq!(3, csv.schema().fields().len());
 
         let mut stream = csv.execute(0, task_ctx)?;
@@ -183,20 +194,17 @@ mod tests {
         assert_eq!(3, batch.num_columns());
         assert_eq!(100, batch.num_rows());
 
-        // slice of the first 5 lines
-        let expected = [
-            "+------------+----+-----+",
-            "| c5         | c1 | c3  |",
-            "+------------+----+-----+",
-            "| 2033001162 | c  | 1   |",
-            "| 706441268  | d  | -40 |",
-            "| 994303988  | b  | 29  |",
-            "| 1171968280 | a  | -85 |",
-            "| 1824882165 | b  | -82 |",
-            "+------------+----+-----+",
-        ];
-
-        assert_batches_eq!(expected, &[batch.slice(0, 5)]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch.slice(0, 5)]), @r###"
+            +------------+----+-----+
+            | c5         | c1 | c3  |
+            +------------+----+-----+
+            | 2033001162 | c  | 1   |
+            | 706441268  | d  | -40 |
+            | 994303988  | b  | 29  |
+            | 1171968280 | a  | -85 |
+            | 1824882165 | b  | -82 |
+            +------------+----+-----+
+        "###);}
         Ok(())
     }
 
@@ -233,12 +241,17 @@ mod tests {
         )?;
 
         let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let config = partitioned_csv_config(file_schema, file_groups, source)
-            .with_newlines_in_values(false)
-            .with_file_compression_type(file_compression_type.to_owned())
-            .with_limit(Some(5));
+        let config = FileScanConfigBuilder::from(partitioned_csv_config(
+            file_schema,
+            file_groups,
+            source,
+        ))
+        .with_newlines_in_values(false)
+        .with_file_compression_type(file_compression_type.to_owned())
+        .with_limit(Some(5))
+        .build();
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = config.build();
+        let csv = DataSourceExec::from_data_source(config);
         assert_eq!(13, csv.schema().fields().len());
 
         let mut it = csv.execute(0, task_ctx)?;
@@ -246,17 +259,17 @@ mod tests {
         assert_eq!(13, batch.num_columns());
         assert_eq!(5, batch.num_rows());
 
-        let expected = ["+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
-            "| c1 | c2 | c3  | c4     | c5         | c6                   | c7  | c8    | c9         | c10                  | c11         | c12                 | c13                            |",
-            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
-            "| c  | 2  | 1   | 18109  | 2033001162 | -6513304855495910254 | 25  | 43062 | 1491205016 | 5863949479783605708  | 0.110830784 | 0.9294097332465232  | 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW |",
-            "| d  | 5  | -40 | 22614  | 706441268  | -7542719935673075327 | 155 | 14337 | 3373581039 | 11720144131976083864 | 0.69632107  | 0.3114712539863804  | C2GT5KVyOPZpgKVl110TyZO0NcJ434 |",
-            "| b  | 1  | 29  | -18218 | 994303988  | 5983957848665088916  | 204 | 9489  | 3275293996 | 14857091259186476033 | 0.53840446  | 0.17909035118828576 | AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz |",
-            "| a  | 1  | -85 | -15154 | 1171968280 | 1919439543497968449  | 77  | 52286 | 774637006  | 12101411955859039553 | 0.12285209  | 0.6864391962767343  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB |",
-            "| b  | 5  | -82 | 22080  | 1824882165 | 7373730676428214987  | 208 | 34331 | 3342719438 | 3330177516592499461  | 0.82634634  | 0.40975383525297016 | Ig1QcuKsjHXkproePdERo2w0mYzIqd |",
-            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+"];
-
-        assert_batches_eq!(expected, &[batch]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
+            +----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+
+            | c1 | c2 | c3  | c4     | c5         | c6                   | c7  | c8    | c9         | c10                  | c11         | c12                 | c13                            |
+            +----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+
+            | c  | 2  | 1   | 18109  | 2033001162 | -6513304855495910254 | 25  | 43062 | 1491205016 | 5863949479783605708  | 0.110830784 | 0.9294097332465232  | 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW |
+            | d  | 5  | -40 | 22614  | 706441268  | -7542719935673075327 | 155 | 14337 | 3373581039 | 11720144131976083864 | 0.69632107  | 0.3114712539863804  | C2GT5KVyOPZpgKVl110TyZO0NcJ434 |
+            | b  | 1  | 29  | -18218 | 994303988  | 5983957848665088916  | 204 | 9489  | 3275293996 | 14857091259186476033 | 0.53840446  | 0.17909035118828576 | AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz |
+            | a  | 1  | -85 | -15154 | 1171968280 | 1919439543497968449  | 77  | 52286 | 774637006  | 12101411955859039553 | 0.12285209  | 0.6864391962767343  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB |
+            | b  | 5  | -82 | 22080  | 1824882165 | 7373730676428214987  | 208 | 34331 | 3342719438 | 3330177516592499461  | 0.82634634  | 0.40975383525297016 | Ig1QcuKsjHXkproePdERo2w0mYzIqd |
+            +----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+
+        "###);}
 
         Ok(())
     }
@@ -291,12 +304,17 @@ mod tests {
         )?;
 
         let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let config = partitioned_csv_config(file_schema, file_groups, source)
-            .with_newlines_in_values(false)
-            .with_file_compression_type(file_compression_type.to_owned())
-            .with_limit(Some(5));
+        let config = FileScanConfigBuilder::from(partitioned_csv_config(
+            file_schema,
+            file_groups,
+            source,
+        ))
+        .with_newlines_in_values(false)
+        .with_file_compression_type(file_compression_type.to_owned())
+        .with_limit(Some(5))
+        .build();
         assert_eq!(14, config.file_schema.fields().len());
-        let csv = config.build();
+        let csv = DataSourceExec::from_data_source(config);
         assert_eq!(14, csv.schema().fields().len());
 
         // errors due to https://github.com/apache/datafusion/issues/4918
@@ -341,9 +359,14 @@ mod tests {
         )?;
 
         let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let mut config = partitioned_csv_config(file_schema, file_groups, source)
-            .with_newlines_in_values(false)
-            .with_file_compression_type(file_compression_type.to_owned());
+        let mut config = FileScanConfigBuilder::from(partitioned_csv_config(
+            file_schema,
+            file_groups,
+            source,
+        ))
+        .with_newlines_in_values(false)
+        .with_file_compression_type(file_compression_type.to_owned())
+        .build();
 
         // Add partition columns
         config.table_partition_cols = vec![Field::new("date", DataType::Utf8, false)];
@@ -357,7 +380,7 @@ mod tests {
         // partitions are resolved during scan anyway
 
         assert_eq!(13, config.file_schema.fields().len());
-        let csv = config.build();
+        let csv = DataSourceExec::from_data_source(config);
         assert_eq!(2, csv.schema().fields().len());
 
         let mut it = csv.execute(0, task_ctx)?;
@@ -365,19 +388,17 @@ mod tests {
         assert_eq!(2, batch.num_columns());
         assert_eq!(100, batch.num_rows());
 
-        // slice of the first 5 lines
-        let expected = [
-            "+----+------------+",
-            "| c1 | date       |",
-            "+----+------------+",
-            "| c  | 2021-10-26 |",
-            "| d  | 2021-10-26 |",
-            "| b  | 2021-10-26 |",
-            "| a  | 2021-10-26 |",
-            "| b  | 2021-10-26 |",
-            "+----+------------+",
-        ];
-        assert_batches_eq!(expected, &[batch.slice(0, 5)]);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch.slice(0, 5)]), @r###"
+            +----+------------+
+            | c1 | date       |
+            +----+------------+
+            | c  | 2021-10-26 |
+            | d  | 2021-10-26 |
+            | b  | 2021-10-26 |
+            | a  | 2021-10-26 |
+            | b  | 2021-10-26 |
+            +----+------------+
+        "###);}
 
         let metrics = csv.metrics().expect("doesn't found metrics");
         let time_elapsed_processing = get_value(&metrics, "time_elapsed_processing");
@@ -443,10 +464,15 @@ mod tests {
         .unwrap();
 
         let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let config = partitioned_csv_config(file_schema, file_groups, source)
-            .with_newlines_in_values(false)
-            .with_file_compression_type(file_compression_type.to_owned());
-        let csv = config.build();
+        let config = FileScanConfigBuilder::from(partitioned_csv_config(
+            file_schema,
+            file_groups,
+            source,
+        ))
+        .with_newlines_in_values(false)
+        .with_file_compression_type(file_compression_type.to_owned())
+        .build();
+        let csv = DataSourceExec::from_data_source(config);
 
         let it = csv.execute(0, task_ctx).unwrap();
         let batches: Vec<_> = it.try_collect().await.unwrap();
@@ -501,16 +527,14 @@ mod tests {
 
         let result = df.collect().await.unwrap();
 
-        let expected = [
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "| 3 | 4 |",
-            "+---+---+",
-        ];
-
-        assert_batches_eq!(expected, &result);
+        assert_snapshot!(batches_to_string(&result), @r###"
+            +---+---+
+            | a | b |
+            +---+---+
+            | 1 | 2 |
+            | 3 | 4 |
+            +---+---+
+        "###);
     }
 
     #[tokio::test]
@@ -532,16 +556,14 @@ mod tests {
 
         let result = df.collect().await.unwrap();
 
-        let expected = [
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "| 3 | 4 |",
-            "+---+---+",
-        ];
-
-        assert_batches_eq!(expected, &result);
+        assert_snapshot!(batches_to_string(&result),@r###"
+            +---+---+
+            | a | b |
+            +---+---+
+            | 1 | 2 |
+            | 3 | 4 |
+            +---+---+
+        "###);
 
         let e = session_ctx
             .read_csv("memory:///", CsvReadOptions::new().terminator(Some(b'\n')))
@@ -571,17 +593,16 @@ mod tests {
         .await?;
 
         let df = ctx.sql(r#"select * from t1"#).await?.collect().await?;
-        let expected = [
-            "+------+--------+",
-            "| col1 | col2   |",
-            "+------+--------+",
-            "| id0  | value0 |",
-            "| id1  | value1 |",
-            "| id2  | value2 |",
-            "| id3  | value3 |",
-            "+------+--------+",
-        ];
-        assert_batches_eq!(expected, &df);
+        assert_snapshot!(batches_to_string(&df),@r###"
+            +------+--------+
+            | col1 | col2   |
+            +------+--------+
+            | id0  | value0 |
+            | id1  | value1 |
+            | id2  | value2 |
+            | id3  | value3 |
+            +------+--------+
+        "###);
         Ok(())
     }
 
