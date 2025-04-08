@@ -32,6 +32,7 @@ use hashbrown::hash_table::HashTable;
 use std::mem::size_of;
 use std::sync::Arc;
 
+const BLOCK_SIZE: usize = 1024;
 /// A trait to allow hashing of floating point numbers
 pub(crate) trait HashValue {
     fn hash(&self, state: &RandomState) -> u64;
@@ -88,8 +89,8 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     map: HashTable<usize>,
     /// The group index of the null value if any
     null_group: Option<usize>,
-    /// The values for each group index
-    values: Vec<T::Native>,
+    /// The values for each group index, stored in blocks of 1024
+    values: Vec<Vec<T::Native>>,
     /// The random state used to generate hashes
     random_state: RandomState,
 }
@@ -100,7 +101,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
         Self {
             data_type,
             map: HashTable::with_capacity(128),
-            values: Vec::with_capacity(128),
+            values: vec![],
             null_group: None,
             random_state: Default::default(),
         }
@@ -118,25 +119,51 @@ where
         for v in cols[0].as_primitive::<T>() {
             let group_id = match v {
                 None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.values.len();
-                    self.values.push(Default::default());
+                    let group_id = self.values.len().saturating_sub(1) * BLOCK_SIZE
+                        + self.values.last().map_or(0, |v| v.len());
+                    let block = group_id / BLOCK_SIZE;
+                    self.values
+                        .resize_with(block + 1, || Vec::with_capacity(BLOCK_SIZE));
+                    self.values[block].push(Default::default());
                     group_id
                 }),
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
+
                     let insert = self.map.entry(
                         hash,
-                        |g| unsafe { self.values.get_unchecked(*g).is_eq(key) },
-                        |g| unsafe { self.values.get_unchecked(*g).hash(state) },
+                        |g| unsafe {
+                            let block = g / BLOCK_SIZE;
+                            let index = g % BLOCK_SIZE;
+
+                            self.values
+                                .get_unchecked(block)
+                                .get_unchecked(index)
+                                .is_eq(key)
+                        },
+                        |g| unsafe {
+                            let block = g / BLOCK_SIZE;
+                            let index = g % BLOCK_SIZE;
+
+                            self.values
+                                .get_unchecked(block)
+                                .get_unchecked(index)
+                                .hash(state)
+                        },
                     );
 
                     match insert {
                         hashbrown::hash_table::Entry::Occupied(o) => *o.get(),
                         hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.values.len();
+                            let g = self.values.len().saturating_sub(1) * BLOCK_SIZE
+                                + self.values.last().map_or(0, |v| v.len());
+                            let block = g / BLOCK_SIZE;
+                            self.values
+                                .resize_with(block + 1, || Vec::with_capacity(1024));
+
                             v.insert(g);
-                            self.values.push(key);
+                            self.values[block].push(key);
                             g
                         }
                     }
@@ -156,23 +183,33 @@ where
     }
 
     fn len(&self) -> usize {
-        self.values.len()
+        self.values.len().saturating_sub(1) * BLOCK_SIZE
+            + self.values.last().map_or(0, |v| v.len())
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         fn build_primitive<T: ArrowPrimitiveType>(
-            values: Vec<T::Native>,
+            values: Vec<Vec<T::Native>>,
             null_idx: Option<usize>,
         ) -> PrimitiveArray<T> {
             let nulls = null_idx.map(|null_idx| {
                 let mut buffer = NullBufferBuilder::new(values.len());
                 buffer.append_n_non_nulls(null_idx);
                 buffer.append_null();
-                buffer.append_n_non_nulls(values.len() - null_idx - 1);
+                buffer.append_n_non_nulls(
+                    values.len().saturating_sub(1) * BLOCK_SIZE
+                        + values.last().map_or(0, |v| v.len())
+                        - null_idx
+                        - 1,
+                );
                 // NOTE: The inner builder must be constructed as there is at least one null
                 buffer.finish().unwrap()
             });
-            PrimitiveArray::<T>::new(values.into(), nulls)
+            // TODO: optimize
+            PrimitiveArray::<T>::from_iter_values_with_nulls(
+                values.into_iter().flatten(),
+                nulls,
+            )
         }
 
         let array: PrimitiveArray<T> = match emit_to {
@@ -201,8 +238,20 @@ where
                     Some(_) => self.null_group.take(),
                     None => None,
                 };
-                let mut split = self.values.split_off(n);
-                std::mem::swap(&mut self.values, &mut split);
+                let num_blocks = n / BLOCK_SIZE;
+
+                let num_values = n % BLOCK_SIZE;
+                // get num_blocks - 1 from t (unchanged)
+                let mut split = vec![];
+                if num_blocks > 0 {
+                    split = self.values.split_off(num_blocks - 1);
+                }
+
+                let mut t_v = self.values[0].split_off(num_values);
+                std::mem::swap(&mut self.values[0], &mut t_v);
+
+                split.push(t_v);
+
                 build_primitive(split, null_group)
             }
         };
