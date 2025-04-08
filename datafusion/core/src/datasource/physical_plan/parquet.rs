@@ -1114,46 +1114,98 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
-        let parquet_exec = scan_format(
-            &state,
-            &ParquetFormat::default().with_coerce_int96(Some("us".to_string())),
-            Some(schema),
-            &testdata,
-            filename,
-            Some(vec![0]),
-            None,
-        )
-        .await
-        .unwrap();
-        assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0, task_ctx)?;
-        let batch = results.next().await.unwrap()?;
+        let time_units_and_expected = vec![
+            (
+                None, // Same as "ns" time_unit
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296123456000), // Reads as nanosecond fine (note 3 extra 0s)
+                    Some(1704070800000000000), // Reads as nanosecond fine (note 3 extra 0s)
+                    Some(-4852191831933722624), // Cannot be represented with nanos timestamp (year 9999)
+                    Some(1735599600000000000), // Reads as nanosecond fine (note 3 extra 0s)
+                    None,
+                    Some(-4864435138808946688), // Cannot be represented with nanos timestamp (year 290000)
+                ])),
+            ),
+            (
+                Some("ns".to_string()),
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296123456000),
+                    Some(1704070800000000000),
+                    Some(-4852191831933722624),
+                    Some(1735599600000000000),
+                    None,
+                    Some(-4864435138808946688),
+                ])),
+            ),
+            (
+                Some("us".to_string()),
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296123456),
+                    Some(1704070800000000),
+                    Some(253402225200000000),
+                    Some(1735599600000000),
+                    None,
+                    Some(9089380393200000000),
+                ])),
+            ),
+            (
+                Some("ms".to_string()),
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296123),
+                    Some(1704070800000),
+                    Some(253402225200000),
+                    Some(1735599600000),
+                    None,
+                    Some(-9357363680509551), //TODO: This one looks wrong
+                ])),
+            ),
+            (
+                Some("s".to_string()),
+                Arc::new(Int64Array::from(vec![
+                    Some(1704141296),
+                    Some(1704070800),
+                    Some(253402225200),
+                    Some(1735599600),
+                    None,
+                    Some(-9357363680509), //TODO: This one looks wrong
+                ])),
+            ),
+        ];
 
-        assert_eq!(6, batch.num_rows());
-        assert_eq!(1, batch.num_columns());
+        for (time_unit, expected) in time_units_and_expected {
+            let parquet_exec = scan_format(
+                &state,
+                &ParquetFormat::default().with_coerce_int96(time_unit.clone()),
+                Some(schema.clone()),
+                &testdata,
+                filename,
+                Some(vec![0]),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        assert_eq!(batch.num_columns(), 1);
-        let column = batch.column(0);
+            let mut results = parquet_exec.execute(0, task_ctx.clone())?;
+            let batch = results.next().await.unwrap()?;
 
-        let expected = Arc::new(Int64Array::from(vec![
-            Some(1704141296123456),
-            Some(1704070800000000),
-            Some(253402225200000000),
-            Some(1735599600000000),
-            None,
-            Some(9089380393200000000),
-        ]));
+            assert_eq!(6, batch.num_rows());
+            assert_eq!(1, batch.num_columns());
 
-        assert_eq!(column.len(), expected.len());
+            assert_eq!(batch.num_columns(), 1);
+            let column = batch.column(0);
 
-        column
-            .as_primitive::<arrow::datatypes::Int64Type>()
-            .iter()
-            .zip(expected.iter())
-            .for_each(|(lhs, rhs)| {
-                assert_eq!(lhs, rhs);
-            });
+            assert_eq!(column.len(), expected.len());
+
+            column
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .iter()
+                .zip(expected.iter())
+                .for_each(|(lhs, rhs)| {
+                    assert_eq!(lhs, rhs);
+                });
+        }
 
         Ok(())
     }
