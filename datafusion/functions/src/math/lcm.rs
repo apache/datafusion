@@ -23,13 +23,15 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use arrow::error::ArrowError;
+use datafusion_common::types::{logical_int64, logical_null, NativeType};
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 use super::gcd::unsigned_gcd;
@@ -55,9 +57,28 @@ impl Default for LcmFunc {
 
 impl LcmFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(2, vec![Int64], Volatility::Immutable),
+            signature: Signature::new(
+                TypeSignature::Coercible(vec![
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![
+                            TypeSignatureClass::Integer,
+                            TypeSignatureClass::Native(logical_null()),
+                        ],
+                        NativeType::Int64,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![
+                            TypeSignatureClass::Integer,
+                            TypeSignatureClass::Native(logical_null()),
+                        ],
+                        NativeType::Int64,
+                    ),
+                ]),
+                Volatility::Immutable,
+            ),
         }
     }
 }

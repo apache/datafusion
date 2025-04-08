@@ -215,8 +215,8 @@ pub enum TypeSignatureClass {
     Interval,
     Duration,
     Native(LogicalTypeRef),
-    // TODO:
-    // Numeric
+    Numeric,
+    Float,
     Integer,
 }
 
@@ -252,6 +252,16 @@ impl TypeSignatureClass {
             TypeSignatureClass::Duration => {
                 vec![DataType::Duration(TimeUnit::Nanosecond)]
             }
+            TypeSignatureClass::Numeric => {
+                vec![
+                    DataType::Int64,
+                    DataType::Float64,
+                    DataType::Decimal256(3, -2),
+                ]
+            }
+            TypeSignatureClass::Float => {
+                vec![DataType::Float64]
+            }
             TypeSignatureClass::Integer => {
                 vec![DataType::Int64]
             }
@@ -263,16 +273,14 @@ impl TypeSignatureClass {
         self: &TypeSignatureClass,
         logical_type: &NativeType,
     ) -> bool {
-        if logical_type == &NativeType::Null {
-            return true;
-        }
-
         match self {
             TypeSignatureClass::Native(t) if t.native() == logical_type => true,
             TypeSignatureClass::Timestamp if logical_type.is_timestamp() => true,
             TypeSignatureClass::Time if logical_type.is_time() => true,
             TypeSignatureClass::Interval if logical_type.is_interval() => true,
             TypeSignatureClass::Duration if logical_type.is_duration() => true,
+            TypeSignatureClass::Numeric if logical_type.is_numeric() => true,
+            TypeSignatureClass::Float if logical_type.is_float() => true,
             TypeSignatureClass::Integer if logical_type.is_integer() => true,
             _ => false,
         }
@@ -299,6 +307,12 @@ impl TypeSignatureClass {
                 Ok(origin_type.to_owned())
             }
             TypeSignatureClass::Duration if native_type.is_duration() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Numeric if native_type.is_numeric() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Float if native_type.is_float() => {
                 Ok(origin_type.to_owned())
             }
             TypeSignatureClass::Integer if native_type.is_integer() => {

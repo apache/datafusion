@@ -19,7 +19,7 @@
 use super::basic::{digest, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    types::{logical_binary, logical_string},
+    types::{logical_binary, logical_null, logical_string, NativeType},
     Result,
 };
 use datafusion_expr::{
@@ -72,12 +72,28 @@ impl DigestFunc {
             signature: Signature::one_of(
                 vec![
                     TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_string()),
+                            vec![TypeSignatureClass::Native(logical_null())],
+                            NativeType::String,
+                        ),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_string()),
+                            vec![TypeSignatureClass::Native(logical_null())],
+                            NativeType::String,
+                        ),
                     ]),
                     TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_binary())),
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_binary()),
+                            vec![TypeSignatureClass::Native(logical_null())],
+                            NativeType::Binary,
+                        ),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_string()),
+                            vec![TypeSignatureClass::Native(logical_null())],
+                            NativeType::String,
+                        ),
                     ]),
                 ],
                 Volatility::Immutable,
