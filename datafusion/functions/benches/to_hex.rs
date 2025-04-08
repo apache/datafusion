@@ -36,6 +36,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 hex.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
+                    arg_metadata: vec![None; i32_args.len()],
                     number_rows: batch_len,
                     return_type: &DataType::Utf8,
                 })
@@ -52,6 +53,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 hex.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
+                    arg_metadata: vec![None; i64_args.len()],
                     number_rows: batch_len,
                     return_type: &DataType::Utf8,
                 })

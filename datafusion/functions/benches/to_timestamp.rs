@@ -120,6 +120,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_timestamp()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![string_array.clone()],
+                        arg_metadata: vec![None; 1],
                         number_rows: batch_len,
                         return_type,
                     })
@@ -138,6 +139,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_timestamp()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![string_array.clone()],
+                        arg_metadata: vec![None; 1],
                         number_rows: batch_len,
                         return_type,
                     })
@@ -156,6 +158,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_timestamp()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![string_array.clone()],
+                        arg_metadata: vec![None; 1],
                         number_rows: batch_len,
                         return_type,
                     })
@@ -179,6 +182,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_timestamp()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: args.clone(),
+                        arg_metadata: vec![None; args.len()],
                         number_rows: batch_len,
                         return_type,
                     })
@@ -210,6 +214,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_timestamp()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: args.clone(),
+                        arg_metadata: vec![None; args.len()],
                         number_rows: batch_len,
                         return_type,
                     })
@@ -242,6 +247,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_timestamp()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: args.clone(),
+                        arg_metadata: vec![None; args.len()],
                         number_rows: batch_len,
                         return_type,
                     })

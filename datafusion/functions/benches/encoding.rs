@@ -33,6 +33,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             let encoded = encoding::encode()
                 .invoke_with_args(ScalarFunctionArgs {
                     args: vec![ColumnarValue::Array(str_array.clone()), method.clone()],
+                    arg_metadata: vec![None; 2],
                     number_rows: size,
                     return_type: &DataType::Utf8,
                 })
@@ -44,6 +45,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     decode
                         .invoke_with_args(ScalarFunctionArgs {
                             args: args.clone(),
+                            arg_metadata: vec![None; args.len()],
                             number_rows: size,
                             return_type: &DataType::Utf8,
                         })
@@ -57,6 +59,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             let encoded = encoding::encode()
                 .invoke_with_args(ScalarFunctionArgs {
                     args: vec![ColumnarValue::Array(str_array.clone()), method.clone()],
+                    arg_metadata: vec![None; 2],
                     number_rows: size,
                     return_type: &DataType::Utf8,
                 })
@@ -68,6 +71,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     decode
                         .invoke_with_args(ScalarFunctionArgs {
                             args: args.clone(),
+                            arg_metadata: vec![None; args.len()],
                             number_rows: size,
                             return_type: &DataType::Utf8,
                         })

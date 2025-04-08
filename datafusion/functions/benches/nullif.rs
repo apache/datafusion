@@ -39,6 +39,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     nullif
                         .invoke_with_args(ScalarFunctionArgs {
                             args: args.clone(),
+                            arg_metadata: vec![None; args.len()],
                             number_rows: size,
                             return_type: &DataType::Utf8,
                         })
