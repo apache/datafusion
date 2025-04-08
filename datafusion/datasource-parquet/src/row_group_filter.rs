@@ -1527,7 +1527,7 @@ mod tests {
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
         let inner = ParquetObjectReader::new(Arc::new(in_memory), object_meta.location)
-            .with_file_size(object_meta.size as usize);
+            .with_file_size(object_meta.size);
 
         let reader = ParquetFileReader {
             inner,

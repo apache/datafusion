@@ -96,21 +96,22 @@ pub(crate) struct ParquetFileReader {
 impl AsyncFileReader for ParquetFileReader {
     fn get_bytes(
         &mut self,
-        range: Range<usize>,
+        range: Range<u64>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        self.file_metrics.bytes_scanned.add(range.end - range.start);
+        let bytes_scanned = range.end - range.start;
+        self.file_metrics.bytes_scanned.add(bytes_scanned as usize);
         self.inner.get_bytes(range)
     }
 
     fn get_byte_ranges(
         &mut self,
-        ranges: Vec<Range<usize>>,
+        ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>>
     where
         Self: Send,
     {
-        let total = ranges.iter().map(|r| r.end - r.start).sum();
-        self.file_metrics.bytes_scanned.add(total);
+        let total: u64 = ranges.iter().map(|r| r.end - r.start).sum();
+        self.file_metrics.bytes_scanned.add(total as usize);
         self.inner.get_byte_ranges(ranges)
     }
 
@@ -137,7 +138,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
         );
         let store = Arc::clone(&self.store);
         let mut inner = ParquetObjectReader::new(store, file_meta.object_meta.location)
-            .with_file_size(file_meta.object_meta.size as usize);
+            .with_file_size(file_meta.object_meta.size);
 
         if let Some(hint) = metadata_size_hint {
             inner = inner.with_footer_size_hint(hint)

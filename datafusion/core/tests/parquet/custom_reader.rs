@@ -219,11 +219,11 @@ struct ParquetFileReader {
 impl AsyncFileReader for ParquetFileReader {
     fn get_bytes(
         &mut self,
-        range: Range<usize>,
+        range: Range<u64>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        self.metrics.bytes_scanned.add(range.end - range.start);
+        let bytes_scanned = range.end - range.start;
+        self.metrics.bytes_scanned.add(bytes_scanned as usize);
 
-        let range = range.start as u64..range.end as u64;
         self.store
             .get_range(&self.meta.location, range)
             .map_err(|e| {
