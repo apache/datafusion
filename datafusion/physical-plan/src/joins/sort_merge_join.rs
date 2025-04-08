@@ -71,7 +71,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::{HashPartitionMode, PhysicalExprRef};
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
@@ -411,8 +411,8 @@ impl ExecutionPlan for SortMergeJoinExec {
             .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
             .unzip();
         vec![
-            Distribution::HashPartitioned(left_expr),
-            Distribution::HashPartitioned(right_expr),
+            Distribution::HashPartitioned(left_expr, HashPartitionMode::HashPartitioned),
+            Distribution::HashPartitioned(right_expr, HashPartitionMode::HashPartitioned),
         ]
     }
 

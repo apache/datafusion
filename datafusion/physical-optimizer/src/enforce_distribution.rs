@@ -40,7 +40,8 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
-    physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
+    physical_exprs_equal, EquivalenceProperties, HashPartitionMode, PhysicalExpr,
+    PhysicalExprRef,
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
@@ -393,7 +394,7 @@ pub fn adjust_input_keys_ordering(
         .map(Transformed::yes);
     } else if let Some(aggregate_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
         if !requirements.data.is_empty() {
-            if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
+            if matches!(aggregate_exec.mode(), AggregateMode::FinalPartitioned(_)) {
                 return reorder_aggregate_keys(requirements, aggregate_exec)
                     .map(Transformed::yes);
             } else {
@@ -522,7 +523,9 @@ pub fn reorder_aggregate_keys(
                             .collect(),
                     );
                     let new_final_agg = Arc::new(AggregateExec::try_new(
-                        AggregateMode::FinalPartitioned,
+                        AggregateMode::FinalPartitioned(
+                            HashPartitionMode::HashPartitioned,
+                        ),
                         new_group_by,
                         agg_exec.aggr_expr().to_vec(),
                         agg_exec.filter_expr().to_vec(),
@@ -890,6 +893,7 @@ fn add_hash_on_top(
     input: DistributionContext,
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
+    mode: HashPartitionMode,
 ) -> Result<DistributionContext> {
     // Early return if hash repartition is unnecessary
     // `RepartitionExec: partitioning=Hash([...], 1), input_partitions=1` is unnecessary.
@@ -897,7 +901,7 @@ fn add_hash_on_top(
         return Ok(input);
     }
 
-    let dist = Distribution::HashPartitioned(hash_exprs);
+    let dist = Distribution::HashPartitioned(hash_exprs, mode);
     let satisfied = input
         .plan
         .output_partitioning()
@@ -1117,7 +1121,7 @@ fn get_repartition_requirement_status(
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
             Precision::Absent => true,
         };
-        let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
+        let is_hash = matches!(requirement, Distribution::HashPartitioned(_, _));
         // Hash re-partitioning is necessary when the input has more than one
         // partitions:
         let multi_partitions = child.output_partitioning().partition_count() > 1;
@@ -1257,7 +1261,7 @@ pub fn ensure_distribution(
                 Distribution::SinglePartition => {
                     child = add_spm_on_top(child);
                 }
-                Distribution::HashPartitioned(exprs) => {
+                Distribution::HashPartitioned(exprs, mode) => {
                     if add_roundrobin {
                         // Add round-robin repartitioning on top of the operator
                         // to increase parallelism.
@@ -1265,8 +1269,12 @@ pub fn ensure_distribution(
                     }
                     // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
-                        child =
-                            add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
+                        child = add_hash_on_top(
+                            child,
+                            exprs.to_vec(),
+                            target_partitions,
+                            *mode,
+                        )?;
                     }
                 }
                 Distribution::UnspecifiedDistribution => {
@@ -1308,7 +1316,8 @@ pub fn ensure_distribution(
                 // no ordering requirement
                 match requirement {
                     // Operator requires specific distribution.
-                    Distribution::SinglePartition | Distribution::HashPartitioned(_) => {
+                    Distribution::SinglePartition
+                    | Distribution::HashPartitioned(_, _) => {
                         // Since there is no ordering requirement, preserving ordering is pointless
                         child = replace_order_preserving_variants(child)?;
                     }

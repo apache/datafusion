@@ -1833,6 +1833,13 @@ pub struct PhysicalHashRepartition {
     pub partition_count: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalHashSelectionVectorRepartition {
+    #[prost(message, repeated, tag = "1")]
+    pub hash_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(uint64, tag = "2")]
+    pub partition_count: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RepartitionExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
@@ -1840,13 +1847,14 @@ pub struct RepartitionExecNode {
     ///    uint64 round_robin = 2;
     ///    PhysicalHashRepartition hash = 3;
     ///    uint64 unknown = 4;
+    ///    PhysicalHashSelectionVectorRepartition hash_selection_vector = 6;
     /// }
     #[prost(message, optional, tag = "5")]
     pub partitioning: ::core::option::Option<Partitioning>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Partitioning {
-    #[prost(oneof = "partitioning::PartitionMethod", tags = "1, 2, 3")]
+    #[prost(oneof = "partitioning::PartitionMethod", tags = "1, 2, 3, 4")]
     pub partition_method: ::core::option::Option<partitioning::PartitionMethod>,
 }
 /// Nested message and enum types in `Partitioning`.
@@ -1859,6 +1867,8 @@ pub mod partitioning {
         Hash(super::PhysicalHashRepartition),
         #[prost(uint64, tag = "3")]
         Unknown(u64),
+        #[prost(message, tag = "4")]
+        HashSelectionVector(super::PhysicalHashSelectionVectorRepartition),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

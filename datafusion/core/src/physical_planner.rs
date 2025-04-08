@@ -82,7 +82,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{HashPartitionMode, LexOrdering};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
@@ -741,8 +741,17 @@ impl DefaultPhysicalPlanner {
                 let updated_aggregates = initial_aggr.aggr_expr().to_vec();
 
                 let next_partition_mode = if can_repartition {
+                    let mode = if session_state
+                        .config_options()
+                        .optimizer
+                        .prefer_hash_selection_vector_partitioning_agg
+                    {
+                        HashPartitionMode::SelectionVector
+                    } else {
+                        HashPartitionMode::HashPartitioned
+                    };
                     // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                    AggregateMode::FinalPartitioned
+                    AggregateMode::FinalPartitioned(mode)
                 } else {
                     // construct a second aggregation, keeping the final column name equal to the
                     // first aggregation and the expressions corresponding to the respective aggregate
@@ -804,7 +813,15 @@ impl DefaultPhysicalPlanner {
                                 )
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        Partitioning::Hash(runtime_expr, *n)
+                        if session_state
+                            .config_options()
+                            .optimizer
+                            .prefer_hash_selection_vector_partitioning_agg
+                        {
+                            Partitioning::HashSelectionVector(runtime_expr, *n)
+                        } else {
+                            Partitioning::Hash(runtime_expr, *n)
+                        }
                     }
                     LogicalPartitioning::DistributeBy(_) => {
                         return not_impl_err!(
