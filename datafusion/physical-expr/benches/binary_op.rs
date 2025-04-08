@@ -130,6 +130,14 @@ fn generate_boolean_cases<const TEST_ALL_FALSE: bool>(
     cases
 }
 
+/// Benchmarks boolean operations `false_count/bool_or` and `true_count/bool_and` on [`BooleanArray`]
+/// You can run this benchmark with:
+/// ```sh
+/// # test true_count/false_count
+/// TEST_BOOL_COUNT=1 cargo bench --bench binary_op -- boolean_ops
+/// # test bool_or/bool_and
+/// cargo bench --bench binary_op -- boolean_ops
+/// ```
 fn benchmark_boolean_ops(c: &mut Criterion) {
     let len = 1_000_000; // Use one million elements for clear performance differentiation
     static TEST_BOOL_COUNT: LazyLock<bool> =
@@ -172,7 +180,7 @@ fn benchmark_boolean_ops(c: &mut Criterion) {
             let arr_ref = Arc::new(array);
 
             // Benchmark test_func across different scenarios
-            c.bench_function(&scenario, |b| {
+            c.bench_function(&format!("boolean_ops/or/{}", scenario), |b| {
                 b.iter(|| test_func::<true>(black_box(&arr_ref)))
             });
         }
@@ -184,18 +192,23 @@ fn benchmark_boolean_ops(c: &mut Criterion) {
             let arr_ref = Arc::new(array);
 
             // Benchmark test_func across different scenarios
-            c.bench_function(&scenario, |b| {
+            c.bench_function(&format!("boolean_ops/and/{}", scenario), |b| {
                 b.iter(|| test_func::<false>(black_box(&arr_ref)))
             });
         }
     }
 }
 
-/// Benchmarks the performance of binary logical operators (AND/OR) with short-circuit behavior.
+/// Benchmarks AND/OR operator short-circuiting by evaluating complex regex conditions.
 ///
-/// This function evaluates the execution time of complex logical expressions when:
-/// 1. AND operator short-circuits (all left values are false)
-/// 2. OR operator short-circuits (all left values are true)
+/// Creates 6 test scenarios per operator:
+/// 1. All values enable short-circuit (all_true/all_false)
+/// 2. 2-6 Single true/false value at different positions to measure early exit
+///
+/// You can run this benchmark with:
+/// ```sh
+/// cargo bench --bench binary_op -- short_circuit
+/// ```
 fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     // Create schema with three columns
     let schema = Arc::new(Schema::new(vec![
@@ -207,11 +220,10 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     // Generate test data with extended content
     let (b_values, c_values) = generate_test_strings(8192);
 
-    // Create two RecordBatches with different boolean values
-    let batch_false =
-        create_record_batch(schema.clone(), false, &b_values, &c_values).unwrap();
-    let batch_true =
-        create_record_batch(schema.clone(), true, &b_values, &c_values).unwrap();
+    let batches_and =
+        create_record_batch::<true>(schema.clone(), &b_values, &c_values).unwrap();
+    let batches_or =
+        create_record_batch::<false>(schema.clone(), &b_values, &c_values).unwrap();
 
     // Build complex string matching conditions
     let right_condition_and = and(
@@ -257,17 +269,21 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
         logical2physical(&right_condition_or, &schema),
     );
 
-    // Benchmark all false and op is and
+    // Each scenario when the test operator is `and`
     {
-        c.bench_function("bench_all_false_and", |b| {
-            b.iter(|| expr_and.evaluate(black_box(&batch_false)).unwrap())
-        });
+        for (name, batch) in batches_and {
+            c.bench_function(&format!("short_circuit/and/{}", name), |b| {
+                b.iter(|| expr_and.evaluate(black_box(&batch)).unwrap())
+            });
+        }
     }
-    // Benchmark all true and op is or
+    // Each scenario when the test operator is `or`
     {
-        c.bench_function("bench_all_true_or", |b| {
-            b.iter(|| expr_or.evaluate(black_box(&batch_true)).unwrap())
-        });
+        for (name, batch) in batches_or {
+            c.bench_function(&format!("short_circuit/or/{}", name), |b| {
+                b.iter(|| expr_or.evaluate(black_box(&batch)).unwrap())
+            });
+        }
     }
 }
 
@@ -323,21 +339,29 @@ fn generate_test_strings(num_rows: usize) -> (Vec<String>, Vec<String>) {
     (urls, markdowns)
 }
 
-/// Create RecordBatch with specified boolean values
-fn create_record_batch(
+/// Creates record batches with boolean arrays that test different short-circuit scenarios.
+/// When TEST_ALL_FALSE = true: creates data for AND operator benchmarks (needs early false exit)
+/// When TEST_ALL_FALSE = false: creates data for OR operator benchmarks (needs early true exit)
+fn create_record_batch<const TEST_ALL_FALSE: bool>(
     schema: Arc<Schema>,
-    a_value: bool,
     b_values: &[String],
     c_values: &[String],
-) -> arrow::error::Result<RecordBatch> {
-    let a_array = BooleanArray::from(vec![a_value; b_values.len()]);
-    let b_array = StringArray::from(b_values.to_vec());
-    let c_array = StringArray::from(c_values.to_vec());
-
-    RecordBatch::try_new(
-        schema,
-        vec![Arc::new(a_array), Arc::new(b_array), Arc::new(c_array)],
-    )
+) -> arrow::error::Result<Vec<(String, RecordBatch)>> {
+    // Generate data for six scenarios, but only the data for the "all_false" and "all_true" cases can be optimized through short-circuiting
+    let boolean_array = generate_boolean_cases::<TEST_ALL_FALSE>(b_values.len());
+    let mut rbs = Vec::with_capacity(boolean_array.len());
+    for (name, a_array) in boolean_array {
+        let b_array = StringArray::from(b_values.to_vec());
+        let c_array = StringArray::from(c_values.to_vec());
+        rbs.push((
+            name,
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(a_array), Arc::new(b_array), Arc::new(c_array)],
+            )?,
+        ));
+    }
+    Ok(rbs)
 }
 
 criterion_group!(
@@ -345,4 +369,5 @@ criterion_group!(
     benchmark_boolean_ops,
     benchmark_binary_op_in_short_circuit
 );
+
 criterion_main!(benches);
