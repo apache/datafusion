@@ -26,7 +26,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::{CastExpr, Column, Literal};
+use super::expressions::{Column, Literal};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -85,7 +85,7 @@ impl ProjectionExec {
                     e.nullable(&input_schema)?,
                 );
                 field.set_metadata(
-                    get_field_metadata(e, &input_schema).unwrap_or_default(),
+                    e.metadata(&input_schema)?.clone().unwrap_or_default(),
                 );
 
                 Ok(field)
@@ -271,24 +271,6 @@ impl ExecutionPlan for ProjectionExec {
             Ok(Some(Arc::new(projection.clone())))
         }
     }
-}
-
-/// If 'e' is a direct column reference, returns the field level
-/// metadata for that field, if any. Otherwise returns None
-pub(crate) fn get_field_metadata(
-    e: &Arc<dyn PhysicalExpr>,
-    input_schema: &Schema,
-) -> Option<HashMap<String, String>> {
-    if let Some(cast) = e.as_any().downcast_ref::<CastExpr>() {
-        return get_field_metadata(cast.expr(), input_schema);
-    }
-
-    // Look up field by index in schema (not NAME as there can be more than one
-    // column with the same name)
-    e.as_any()
-        .downcast_ref::<Column>()
-        .map(|column| input_schema.field(column.index()).metadata())
-        .cloned()
 }
 
 fn stats_projection(

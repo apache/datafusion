@@ -145,13 +145,10 @@ impl PhysicalExpr for CastExpr {
         value.cast_to(&self.cast_type, Some(&self.cast_options))
     }
 
-    fn metadata<'a, 'b, 'c>(
-        &'a self,
-        input_schema: &'b Schema,
-    ) -> Result<Option<&'c HashMap<String, String>>>
-    where
-        'a: 'c,
-        'b: 'c,
+    fn metadata(
+        &self,
+        input_schema: &Schema,
+    ) -> Result<Option<HashMap<String, String>>>
     {
         self.expr.metadata(input_schema)
     }

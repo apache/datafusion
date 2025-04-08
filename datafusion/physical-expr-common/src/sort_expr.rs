@@ -37,6 +37,7 @@ use itertools::Itertools;
 /// Example:
 /// ```
 /// # use std::any::Any;
+/// # use std::collections::HashMap;
 /// # use std::fmt::{Display, Formatter};
 /// # use std::hash::Hasher;
 /// # use std::sync::Arc;
@@ -56,6 +57,7 @@ use itertools::Itertools;
 /// #  fn data_type(&self, input_schema: &Schema) -> Result<DataType> {todo!()}
 /// #  fn nullable(&self, input_schema: &Schema) -> Result<bool> {todo!() }
 /// #  fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {todo!() }
+/// #  fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> { unimplemented!() }
 /// #  fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {todo!()}
 /// #  fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> {todo!()}
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { todo!() }

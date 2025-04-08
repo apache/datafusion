@@ -379,13 +379,10 @@ impl PhysicalExpr for InListExpr {
         Ok(ColumnarValue::Array(Arc::new(r)))
     }
 
-    fn metadata<'a, 'b, 'c>(
-        &'a self,
-        _input_schema: &'b Schema,
-    ) -> Result<Option<&'c std::collections::HashMap<String, String>>>
-    where
-        'a: 'c,
-        'b: 'c,
+    fn metadata(
+        &self,
+        _input_schema: &Schema,
+    ) -> Result<Option<std::collections::HashMap<String, String>>>
     {
         Ok(None)
     }

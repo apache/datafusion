@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::any::Any;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-use arrow::array::as_string_array;
+use arrow::array::{as_string_array, record_batch, UInt64Array};
 use arrow::array::{
     builder::BooleanBuilder, cast::AsArray, Array, ArrayRef, Float32Array, Float64Array,
     Int32Array, RecordBatch, StringArray,
@@ -35,7 +36,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
-    plan_err, DFSchema, DataFusionError, HashMap, Result, ScalarValue,
+    plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -1366,4 +1367,135 @@ async fn register_alltypes_parquet(ctx: &SessionContext) -> Result<()> {
 /// Execute SQL and return results as a RecordBatch
 async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
+}
+
+#[derive(Debug)]
+struct MetadataBasedUdf {
+    name: String,
+    signature: Signature,
+    output_metadata: HashMap<String, String>,
+}
+
+impl MetadataBasedUdf {
+    fn new(metadata: HashMap<String, String>) -> Self {
+        // The name we return must be unique. Otherwise we will not call distinct
+        // instances of this UDF. This is a small hack for the unit tests to get unique
+        // names, but you could do something more elegant with the metadata.
+        let name = format!("metadata_based_udf_{}", metadata.len());
+        Self {
+            name,
+            signature: Signature::exact(vec![DataType::UInt64], Volatility::Immutable),
+            output_metadata: metadata,
+        }
+    }
+}
+
+impl ScalarUDFImpl for MetadataBasedUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::UInt64)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        assert_eq!(args.arg_metadata.len(), 1);
+        let should_double = match &args.arg_metadata[0] {
+            Some(hashmap) => hashmap.get("modify_values").map(|v| v == "double_output").unwrap_or(false),
+            None => false
+        };
+        let mulitplier = if should_double { 2 } else { 1 };
+
+        match &args.args[0] {
+            ColumnarValue::Array(array) => {
+                let array_values: Vec<_> = array.as_any().downcast_ref::<UInt64Array>().unwrap().iter().map(|v| v.map(|x| x * mulitplier)).collect();
+                let array_ref = Arc::new(UInt64Array::from(array_values)) as ArrayRef;
+                Ok(ColumnarValue::Array(array_ref))
+            }
+            ColumnarValue::Scalar(value) => {
+                let ScalarValue::UInt64(value) = value else {
+                    return exec_err!("incorrect data type")
+                };
+
+                Ok(ColumnarValue::Scalar(ScalarValue::UInt64(value.map(|v| v * mulitplier))))
+            }
+        }
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        self.name == other.name()
+    }
+
+    fn metadata(&self, _input_schema: &Schema) -> Option<HashMap<String, String>> {
+        Some(self.output_metadata.clone())
+    }
+}
+
+
+#[tokio::test]
+async fn test_metadata_based_udf() -> Result<()> {
+    let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("no_metadata", DataType::UInt64, true),
+        Field::new("with_metadata", DataType::UInt64, true).with_metadata([("modify_values".to_string(), "double_output".to_string())].into_iter().collect()),
+    ]));
+    let batch = RecordBatch::try_new(schema, vec![Arc::clone(&data_array), Arc::clone(&data_array)])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    let t = ctx.table("t").await?;
+    let no_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new(HashMap::new()));
+    let with_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new([("output_metatype".to_string(), "custom_value".to_string())].into_iter().collect()));
+
+    let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
+        .project(vec![
+            no_output_meta_udf
+                .call(vec![col("no_metadata")])
+                .alias("meta_no_in_no_out"),
+            no_output_meta_udf
+                .call(vec![col("with_metadata")])
+                .alias("meta_with_in_no_out"),
+            with_output_meta_udf
+                .call(vec![col("no_metadata")])
+                .alias("meta_no_in_with_out"),
+            with_output_meta_udf
+                .call(vec![col("with_metadata")])
+                .alias("meta_with_in_with_out"),
+            ]
+        )?
+        .build()?;
+
+    let actual = DataFrame::new(ctx.state(), plan).collect().await?;
+
+    // To test for output metadata handling, we set the expected values on the result
+    // To test for input metadata handling, we check the values returned
+    let mut output_meta = HashMap::new();
+    let _ = output_meta.insert("output_metatype".to_string(), "custom_value".to_string());
+    let expected_schema = Schema::new(vec![
+        Field::new("meta_no_in_no_out", DataType::UInt64, true),
+        Field::new("meta_with_in_no_out", DataType::UInt64, true),
+        Field::new("meta_no_in_with_out", DataType::UInt64, true).with_metadata(output_meta.clone()),
+        Field::new("meta_with_in_with_out", DataType::UInt64, true).with_metadata(output_meta.clone())
+    ]);
+
+    let expected = record_batch!(
+        ("meta_no_in_no_out", UInt64, [0, 5, 10, 15, 20]),
+        ("meta_with_in_no_out", UInt64, [0, 10, 20, 30, 40]),
+        ("meta_no_in_with_out", UInt64, [0, 5, 10, 15, 20]),
+        ("meta_with_in_with_out", UInt64, [0, 10, 20, 30, 40])
+    )?.with_schema(Arc::new(expected_schema))?;
+
+    assert_eq!(expected, actual[0]);
+
+    ctx.deregister_table("t")?;
+    Ok(())
 }

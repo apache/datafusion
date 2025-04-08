@@ -27,7 +27,6 @@ use crate::aggregates::{
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::projection::get_field_metadata;
 use crate::windows::get_ordered_partition_by_indices;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
@@ -286,7 +285,7 @@ impl PhysicalGroupBy {
                     group_expr_nullable || expr.nullable(input_schema)?,
                 )
                 .with_metadata(
-                    get_field_metadata(expr, input_schema).unwrap_or_default(),
+                    expr.metadata(input_schema)?.clone().unwrap_or_default(),
                 ),
             );
         }

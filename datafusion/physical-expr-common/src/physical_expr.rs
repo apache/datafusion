@@ -77,16 +77,10 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
     /// Determine if this expression has any associated field metadata in the schema
-    /// In some circumstances we will get the metadata from the schema, and sometimes
-    /// we will get it from the physical expression itself. The lifetime of the result
-    /// must outlive both.
-    fn metadata<'a, 'b, 'c>(
-        &'a self,
-        input_schema: &'b Schema,
-    ) -> Result<Option<&'c HashMap<String, String>>>
-    where
-        'a: 'c,
-        'b: 'c;
+    fn metadata(
+        &self,
+        input_schema: &Schema,
+    ) -> Result<Option<HashMap<String, String>>>;
     /// Evaluate an expression against a RecordBatch after first applying a
     /// validity array
     fn evaluate_selection(
@@ -424,12 +418,12 @@ where
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
 /// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
 /// # #[derive(Debug, Hash, PartialOrd, PartialEq)]
-/// # struct MyExpr {};
+/// # struct MyExpr {}
 /// # impl PhysicalExpr for MyExpr {fn as_any(&self) -> &dyn Any { unimplemented!() }
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
 /// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
 /// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
-/// # fn metadata<'a>(&self, input_schema: &'a Schema) -> Result<&'a HashMap<String, String>> { unimplemented!() }
+/// # fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> { unimplemented!() }
 /// # fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>{ unimplemented!() }
 /// # fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }

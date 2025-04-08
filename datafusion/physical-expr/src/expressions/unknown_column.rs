@@ -77,13 +77,10 @@ impl PhysicalExpr for UnKnownColumn {
         internal_err!("UnKnownColumn::evaluate() should not be called")
     }
 
-    fn metadata<'a, 'b, 'c>(
-        &'a self,
-        _input_schema: &'b Schema,
-    ) -> Result<Option<&'c HashMap<String, String>>>
-    where
-        'a: 'c,
-        'b: 'c,
+    fn metadata(
+        &self,
+        _input_schema: &Schema,
+    ) -> Result<Option<HashMap<String, String>>>
     {
         Ok(None)
     }

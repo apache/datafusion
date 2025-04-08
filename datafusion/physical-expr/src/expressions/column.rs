@@ -128,15 +128,12 @@ impl PhysicalExpr for Column {
         Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
     }
 
-    fn metadata<'a, 'b, 'c>(
-        &'a self,
-        input_schema: &'b Schema,
-    ) -> Result<Option<&'c HashMap<String, String>>>
-    where
-        'a: 'c,
-        'b: 'c,
+    fn metadata(
+        &self,
+        input_schema: &Schema,
+    ) -> Result<Option<HashMap<String, String>>>
     {
-        Ok(Some(input_schema.field(self.index).metadata()))
+        Ok(Some(input_schema.field(self.index).metadata().clone()))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
