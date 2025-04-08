@@ -86,6 +86,7 @@ pub struct FFI_ScalarUDF {
 
     /// Execute the underlying [`ScalarUDF`] and return the result as a `FFI_ArrowArray`
     /// within an AbiStable wrapper.
+    #[allow(clippy::type_complexity)]
     pub invoke_with_args: unsafe extern "C" fn(
         udf: &Self,
         args: RVec<WrappedArray>,
@@ -376,7 +377,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
                 maybe_map
                     .map(|hashmap| {
                         hashmap
-                            .into_iter()
+                            .iter()
                             .map(|(k, v)| {
                                 (RString::from(k.clone()), RString::from(v.clone()))
                             })
