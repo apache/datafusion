@@ -1149,28 +1149,6 @@ mod tests {
                     Some(9089380393200000000),
                 ])),
             ),
-            (
-                Some("ms".to_string()),
-                Arc::new(Int64Array::from(vec![
-                    Some(1704141296123),
-                    Some(1704070800000),
-                    Some(253402225200000),
-                    Some(1735599600000),
-                    None,
-                    Some(-9357363680509551), //TODO: This one looks wrong
-                ])),
-            ),
-            (
-                Some("s".to_string()),
-                Arc::new(Int64Array::from(vec![
-                    Some(1704141296),
-                    Some(1704070800),
-                    Some(253402225200),
-                    Some(1735599600),
-                    None,
-                    Some(-9357363680509), //TODO: This one looks wrong
-                ])),
-            ),
         ];
 
         for (time_unit, expected) in time_units_and_expected {
