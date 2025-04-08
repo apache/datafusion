@@ -93,11 +93,7 @@ impl PhysicalExpr for IsNullExpr {
         }
     }
 
-    fn metadata(
-        &self,
-        input_schema: &Schema,
-    ) -> Result<Option<HashMap<String, String>>>
-    {
+    fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> {
         self.arg.metadata(input_schema)
     }
 

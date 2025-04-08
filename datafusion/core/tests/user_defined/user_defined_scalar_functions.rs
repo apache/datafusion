@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::any::Any;
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -1410,23 +1410,34 @@ impl ScalarUDFImpl for MetadataBasedUdf {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         assert_eq!(args.arg_metadata.len(), 1);
         let should_double = match &args.arg_metadata[0] {
-            Some(hashmap) => hashmap.get("modify_values").map(|v| v == "double_output").unwrap_or(false),
-            None => false
+            Some(hashmap) => hashmap
+                .get("modify_values")
+                .map(|v| v == "double_output")
+                .unwrap_or(false),
+            None => false,
         };
         let mulitplier = if should_double { 2 } else { 1 };
 
         match &args.args[0] {
             ColumnarValue::Array(array) => {
-                let array_values: Vec<_> = array.as_any().downcast_ref::<UInt64Array>().unwrap().iter().map(|v| v.map(|x| x * mulitplier)).collect();
+                let array_values: Vec<_> = array
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.map(|x| x * mulitplier))
+                    .collect();
                 let array_ref = Arc::new(UInt64Array::from(array_values)) as ArrayRef;
                 Ok(ColumnarValue::Array(array_ref))
             }
             ColumnarValue::Scalar(value) => {
                 let ScalarValue::UInt64(value) = value else {
-                    return exec_err!("incorrect data type")
+                    return exec_err!("incorrect data type");
                 };
 
-                Ok(ColumnarValue::Scalar(ScalarValue::UInt64(value.map(|v| v * mulitplier))))
+                Ok(ColumnarValue::Scalar(ScalarValue::UInt64(
+                    value.map(|v| v * mulitplier),
+                )))
             }
         }
     }
@@ -1440,21 +1451,31 @@ impl ScalarUDFImpl for MetadataBasedUdf {
     }
 }
 
-
 #[tokio::test]
 async fn test_metadata_based_udf() -> Result<()> {
     let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
     let schema = Arc::new(Schema::new(vec![
         Field::new("no_metadata", DataType::UInt64, true),
-        Field::new("with_metadata", DataType::UInt64, true).with_metadata([("modify_values".to_string(), "double_output".to_string())].into_iter().collect()),
+        Field::new("with_metadata", DataType::UInt64, true).with_metadata(
+            [("modify_values".to_string(), "double_output".to_string())]
+                .into_iter()
+                .collect(),
+        ),
     ]));
-    let batch = RecordBatch::try_new(schema, vec![Arc::clone(&data_array), Arc::clone(&data_array)])?;
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::clone(&data_array), Arc::clone(&data_array)],
+    )?;
 
     let ctx = SessionContext::new();
     ctx.register_batch("t", batch)?;
     let t = ctx.table("t").await?;
     let no_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new(HashMap::new()));
-    let with_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new([("output_metatype".to_string(), "custom_value".to_string())].into_iter().collect()));
+    let with_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new(
+        [("output_metatype".to_string(), "custom_value".to_string())]
+            .into_iter()
+            .collect(),
+    ));
 
     let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
         .project(vec![
@@ -1470,8 +1491,7 @@ async fn test_metadata_based_udf() -> Result<()> {
             with_output_meta_udf
                 .call(vec![col("with_metadata")])
                 .alias("meta_with_in_with_out"),
-            ]
-        )?
+        ])?
         .build()?;
 
     let actual = DataFrame::new(ctx.state(), plan).collect().await?;
@@ -1483,8 +1503,10 @@ async fn test_metadata_based_udf() -> Result<()> {
     let expected_schema = Schema::new(vec![
         Field::new("meta_no_in_no_out", DataType::UInt64, true),
         Field::new("meta_with_in_no_out", DataType::UInt64, true),
-        Field::new("meta_no_in_with_out", DataType::UInt64, true).with_metadata(output_meta.clone()),
-        Field::new("meta_with_in_with_out", DataType::UInt64, true).with_metadata(output_meta.clone())
+        Field::new("meta_no_in_with_out", DataType::UInt64, true)
+            .with_metadata(output_meta.clone()),
+        Field::new("meta_with_in_with_out", DataType::UInt64, true)
+            .with_metadata(output_meta.clone()),
     ]);
 
     let expected = record_batch!(
@@ -1492,7 +1514,8 @@ async fn test_metadata_based_udf() -> Result<()> {
         ("meta_with_in_no_out", UInt64, [0, 10, 20, 30, 40]),
         ("meta_no_in_with_out", UInt64, [0, 5, 10, 15, 20]),
         ("meta_with_in_with_out", UInt64, [0, 10, 20, 30, 40])
-    )?.with_schema(Arc::new(expected_schema))?;
+    )?
+    .with_schema(Arc::new(expected_schema))?;
 
     assert_eq!(expected, actual[0]);
 

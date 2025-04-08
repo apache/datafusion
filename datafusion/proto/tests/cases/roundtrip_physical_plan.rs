@@ -868,8 +868,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         fn metadata(
             &self,
             _input_schema: &Schema,
-        ) -> Result<Option<HashMap<String, String>>>
-        {
+        ) -> Result<Option<HashMap<String, String>>> {
             Ok(None)
         }
 

@@ -725,7 +725,9 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// This describes the output metadata associated with this UDF.
     /// Input field metadata is handled through `ScalarFunctionArgs`
-    fn metadata(&self, _input_schema: &Schema) -> Option<HashMap<String, String>> { None }
+    fn metadata(&self, _input_schema: &Schema) -> Option<HashMap<String, String>> {
+        None
+    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to

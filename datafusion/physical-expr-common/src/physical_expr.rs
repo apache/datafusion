@@ -78,10 +78,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
     /// Determine if this expression has any associated field metadata in the schema
-    fn metadata(
-        &self,
-        input_schema: &Schema,
-    ) -> Result<Option<HashMap<String, String>>>;
+    fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>>;
     /// Evaluate an expression against a RecordBatch after first applying a
     /// validity array
     fn evaluate_selection(

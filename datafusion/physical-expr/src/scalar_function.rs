@@ -251,11 +251,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(output)
     }
 
-    fn metadata(
-        &self,
-        input_schema: &Schema,
-    ) -> Result<Option<HashMap<String, String>>>
-    {
+    fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> {
         Ok(self.fun.as_ref().inner().metadata(input_schema))
     }
 
