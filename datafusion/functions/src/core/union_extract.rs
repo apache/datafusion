@@ -198,6 +198,7 @@ mod tests {
                 )),
                 ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
             ],
+            arg_metadata: vec![None; 2],
             number_rows: 1,
             return_type: &DataType::Utf8,
         })?;
@@ -213,6 +214,7 @@ mod tests {
                 )),
                 ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
             ],
+            arg_metadata: vec![None; 2],
             number_rows: 1,
             return_type: &DataType::Utf8,
         })?;
@@ -228,6 +230,7 @@ mod tests {
                 )),
                 ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
             ],
+            arg_metadata: vec![None; 2],
             number_rows: 1,
             return_type: &DataType::Utf8,
         })?;

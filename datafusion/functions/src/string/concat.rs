@@ -471,6 +471,7 @@ mod tests {
 
         let args = ScalarFunctionArgs {
             args: vec![c0, c1, c2, c3, c4],
+            arg_metadata: vec![None; 5],
             number_rows: 3,
             return_type: &Utf8,
         };

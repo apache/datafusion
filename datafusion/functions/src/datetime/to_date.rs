@@ -210,6 +210,7 @@ mod tests {
         fn test_scalar(sv: ScalarValue, tc: &TestCase) {
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(sv)],
+                arg_metadata: vec![None; 1],
                 number_rows: 1,
                 return_type: &DataType::Date32,
             };
@@ -236,6 +237,7 @@ mod tests {
             let batch_len = date_array.len();
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![ColumnarValue::Array(Arc::new(date_array))],
+                arg_metadata: vec![None; 1],
                 number_rows: batch_len,
                 return_type: &DataType::Date32,
             };
@@ -333,6 +335,7 @@ mod tests {
                     ColumnarValue::Scalar(sv),
                     ColumnarValue::Scalar(format_scalar),
                 ],
+                arg_metadata: vec![None; 2],
                 number_rows: 1,
                 return_type: &DataType::Date32,
             };
@@ -363,6 +366,7 @@ mod tests {
                     ColumnarValue::Array(Arc::new(date_array)),
                     ColumnarValue::Array(Arc::new(format_array)),
                 ],
+                arg_metadata: vec![None; 2],
                 number_rows: batch_len,
                 return_type: &DataType::Date32,
             };
@@ -404,6 +408,7 @@ mod tests {
                 ColumnarValue::Scalar(format1_scalar),
                 ColumnarValue::Scalar(format2_scalar),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Date32,
         };
@@ -433,6 +438,7 @@ mod tests {
 
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(formatted_date_scalar)],
+                arg_metadata: vec![None; 1],
                 number_rows: 1,
                 return_type: &DataType::Date32,
             };
@@ -455,6 +461,7 @@ mod tests {
 
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(date_scalar)],
+            arg_metadata: vec![None; 1],
             number_rows: 1,
             return_type: &DataType::Date32,
         };
@@ -480,6 +487,7 @@ mod tests {
 
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(date_scalar)],
+            arg_metadata: vec![None; 1],
             number_rows: 1,
             return_type: &DataType::Date32,
         };

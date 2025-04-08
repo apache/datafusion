@@ -105,6 +105,7 @@ mod test {
         let version = version_udf
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![],
+                arg_metadata: vec![],
                 number_rows: 0,
                 return_type: &DataType::Utf8,
             })

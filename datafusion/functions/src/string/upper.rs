@@ -105,6 +105,7 @@ mod tests {
         let args = ScalarFunctionArgs {
             number_rows: input.len(),
             args: vec![ColumnarValue::Array(input)],
+            arg_metadata: vec![None; 1],
             return_type: &DataType::Utf8,
         };
 

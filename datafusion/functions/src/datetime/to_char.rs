@@ -387,6 +387,7 @@ mod tests {
         for (value, format, expected) in scalar_data {
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
+                arg_metadata: vec![None; 2],
                 number_rows: 1,
                 return_type: &DataType::Utf8,
             };
@@ -470,6 +471,7 @@ mod tests {
                     ColumnarValue::Scalar(value),
                     ColumnarValue::Array(Arc::new(format) as ArrayRef),
                 ],
+                arg_metadata: vec![None; 2],
                 number_rows: batch_len,
                 return_type: &DataType::Utf8,
             };
@@ -601,6 +603,7 @@ mod tests {
                     ColumnarValue::Array(value as ArrayRef),
                     ColumnarValue::Scalar(format),
                 ],
+                arg_metadata: vec![None; 2],
                 number_rows: batch_len,
                 return_type: &DataType::Utf8,
             };
@@ -623,6 +626,7 @@ mod tests {
                     ColumnarValue::Array(value),
                     ColumnarValue::Array(Arc::new(format) as ArrayRef),
                 ],
+                arg_metadata: vec![None; 2],
                 number_rows: batch_len,
                 return_type: &DataType::Utf8,
             };
@@ -645,6 +649,7 @@ mod tests {
         // invalid number of arguments
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
+            arg_metadata: vec![None; 1],
             number_rows: 1,
             return_type: &DataType::Utf8,
         };
@@ -660,6 +665,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 2],
             number_rows: 1,
             return_type: &DataType::Utf8,
         };

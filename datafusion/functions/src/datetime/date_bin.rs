@@ -526,6 +526,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -545,6 +546,7 @@ mod tests {
                 ColumnarValue::Array(timestamps),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: batch_len,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -561,6 +563,7 @@ mod tests {
                 ))),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 2],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -580,6 +583,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -598,6 +602,7 @@ mod tests {
                     milliseconds: 1,
                 },
             )))],
+            arg_metadata: vec![None; 1],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -614,6 +619,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -636,6 +642,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -655,6 +662,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -671,6 +679,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -687,6 +696,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -708,6 +718,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -728,6 +739,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -751,6 +763,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -774,6 +787,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Array(timestamps),
             ],
+            arg_metadata: vec![None; 3],
             number_rows: batch_len,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
         };
@@ -902,6 +916,7 @@ mod tests {
                             tz_opt.clone(),
                         )),
                     ],
+                    arg_metadata: vec![None; 3],
                     number_rows: batch_len,
                     return_type: &DataType::Timestamp(
                         TimeUnit::Nanosecond,
