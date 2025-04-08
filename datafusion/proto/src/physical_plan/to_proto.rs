@@ -211,6 +211,8 @@ pub fn serialize_physical_expr(
     value: &Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
+    // Snapshot the expr in case it has dynamic predicate state so
+    // it can be serialized
     let value = snapshot_physical_expr(Arc::clone(value))?;
     let expr = value.as_any();
 

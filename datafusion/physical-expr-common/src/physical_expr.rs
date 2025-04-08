@@ -285,8 +285,12 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     ///
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result;
 
-    /// Take a snapshot of this `PhysicalExpr` if it is dynamic.
-    /// This is used to capture the current state of `PhysicalExpr`s that may contain
+    /// Take a snapshot of this `PhysicalExpr`, if it is dynamic.
+    ///
+    /// "Dynamic" in this case means containing references to structures that may change
+    /// during plan execution, such as hash tables.
+    ///
+    /// This method is used to capture the current state of `PhysicalExpr`s that may contain
     /// dynamic references to other operators in order to serialize it over the wire
     /// or treat it via downcast matching.
     ///
