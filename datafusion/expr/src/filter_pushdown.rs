@@ -19,7 +19,7 @@
 ///
 /// This is used by:
 /// * `FilterPushdownResult` in `ExecutionPlan` to do predicate pushdown at the physical plan level
-/// (e.g. pushing down dynamic fitlers from a hash join into scans).
+///   (e.g. pushing down dynamic fitlers from a hash join into scans).
 /// * `TableProvider` to do predicate pushdown at planning time (e.g. pruning partitions).
 ///
 /// There are three possible outcomes of a filter pushdown:
@@ -28,8 +28,8 @@
 ///   The caller should treat this the same as [`FilterPushdown::Unsupported`] for the most part
 ///   and must not assume that any pruning / filter was done since there may be false positives.
 /// * [`FilterPushdown::Exact`] - the filter was absorbed by the child plan and it promises
-///  to apply the filter correctly.
-///  The parent plan can drop the filter and assume that the child plan will apply it correctly.
+///   to apply the filter correctly.
+///   The parent plan can drop the filter and assume that the child plan will apply it correctly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterPushdown {
     /// No child plan was able to absorb the filter.
