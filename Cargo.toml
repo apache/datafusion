@@ -214,20 +214,19 @@ used_underscore_binding = "warn"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
 
-
-## Temporary arrow-rs patch until 55
+## Temporary arrow-rs patch until 55 is released
 ## https://github.com/apache/arrow-rs/pull/7391
 
 [patch.crates-io]
-arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-array = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-data = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-select = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
