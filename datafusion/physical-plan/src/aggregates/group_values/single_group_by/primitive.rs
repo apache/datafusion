@@ -32,7 +32,7 @@ use hashbrown::hash_table::HashTable;
 use std::mem::size_of;
 use std::sync::Arc;
 
-const BLOCK_SIZE: usize = 1024;
+const BLOCK_SIZE: usize = 4096;
 /// A trait to allow hashing of floating point numbers
 pub(crate) trait HashValue {
     fn hash(&self, state: &RandomState) -> u64;
