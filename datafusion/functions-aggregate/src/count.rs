@@ -586,10 +586,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         // TODO: optimize this
         let counts = emit_to.take_needed_blocks(&mut self.counts);
         // todo: this could be optimized to minimize copies
-        let counts: Int64Array = counts
-            .into_iter()
-            .flatten()
-            .collect();
+        let counts: Int64Array = counts.into_iter().flatten().collect();
         Ok(vec![Arc::new(counts) as ArrayRef])
     }
 
