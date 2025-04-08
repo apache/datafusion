@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
@@ -864,6 +865,17 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             unreachable!()
         }
 
+        fn metadata<'a, 'b, 'c>(
+            &'a self,
+            _input_schema: &'b Schema,
+        ) -> Result<Option<&'c HashMap<String, String>>>
+        where
+            'a: 'c,
+            'b: 'c,
+        {
+            Ok(None)
+        }
+
         fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
             vec![&self.inner]
         }
@@ -969,6 +981,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         fun_def,
         vec![col("a", &schema)?],
         DataType::Int64,
+        HashMap::default(),
     );
 
     let project =
@@ -1097,6 +1110,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
         DataType::Int64,
+        HashMap::default(),
     ));
 
     let filter = Arc::new(FilterExec::try_new(
@@ -1199,6 +1213,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
         DataType::Int64,
+        HashMap::default(),
     ));
 
     let udaf = Arc::new(AggregateUDF::from(MyAggregateUDF::new(

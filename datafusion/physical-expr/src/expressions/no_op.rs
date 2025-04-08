@@ -18,6 +18,7 @@
 //! NoOp placeholder for physical operations
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -65,6 +66,17 @@ impl PhysicalExpr for NoOp {
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
         internal_err!("NoOp::evaluate() should not be called")
+    }
+
+    fn metadata<'a, 'b, 'c>(
+        &'a self,
+        _input_schema: &'b Schema,
+    ) -> Result<Option<&'c HashMap<String, String>>>
+    where
+        'a: 'c,
+        'b: 'c,
+    {
+        Ok(None)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

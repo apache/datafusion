@@ -18,6 +18,7 @@
 //! Physical column reference: [`Column`]
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -125,6 +126,17 @@ impl PhysicalExpr for Column {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         self.bounds_check(batch.schema().as_ref())?;
         Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
+    }
+
+    fn metadata<'a, 'b, 'c>(
+        &'a self,
+        input_schema: &'b Schema,
+    ) -> Result<Option<&'c HashMap<String, String>>>
+    where
+        'a: 'c,
+        'b: 'c,
+    {
+        Ok(Some(input_schema.field(self.index).metadata()))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

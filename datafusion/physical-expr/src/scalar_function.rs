@@ -30,6 +30,7 @@
 //! to a function that supports f64, it is coerced to f64.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -48,13 +49,35 @@ use datafusion_expr::{
 };
 
 /// Physical expression of a scalar function
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Eq, PartialEq)]
 pub struct ScalarFunctionExpr {
     fun: Arc<ScalarUDF>,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
     nullable: bool,
+    metadata: HashMap<String, String>,
+}
+
+impl Hash for ScalarFunctionExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Sort keys for deterministic hashing
+        let mut keys: Vec<&String> = self.metadata.keys().collect();
+        keys.sort();
+
+        for key in keys {
+            key.hash(state);
+            if let Some(value) = self.metadata.get(key) {
+                value.hash(state);
+            }
+        }
+
+        self.fun.hash(state);
+        self.name.hash(state);
+        self.args.hash(state);
+        self.return_type.hash(state);
+        self.nullable.hash(state);
+    }
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -75,6 +98,7 @@ impl ScalarFunctionExpr {
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
+        metadata: HashMap<String, String>,
     ) -> Self {
         Self {
             fun,
@@ -82,6 +106,7 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             nullable: true,
+            metadata,
         }
     }
 
@@ -125,6 +150,7 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             nullable,
+            metadata: HashMap::new(),
         })
     }
 
@@ -214,6 +240,17 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(output)
     }
 
+    fn metadata<'a, 'b, 'c>(
+        &'a self,
+        _input_schema: &'b Schema,
+    ) -> Result<Option<&'c HashMap<String, String>>>
+    where
+        'a: 'c,
+        'b: 'c,
+    {
+        Ok(Some(&self.metadata))
+    }
+
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         self.args.iter().collect()
     }
@@ -228,6 +265,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 Arc::clone(&self.fun),
                 children,
                 self.return_type().clone(),
+                self.metadata.clone(),
             )
             .with_nullable(self.nullable),
         ))

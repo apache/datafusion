@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::hash::Hash;
-use std::{any::Any, sync::Arc};
-
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::apply_cmp;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 // Like expression
 #[derive(Debug, Eq)]
@@ -128,6 +128,17 @@ impl PhysicalExpr for LikeExpr {
             (true, false) => apply_cmp(&lhs, &rhs, nlike),
             (true, true) => apply_cmp(&lhs, &rhs, nilike),
         }
+    }
+
+    fn metadata<'a, 'b, 'c>(
+        &'a self,
+        _input_schema: &'b Schema,
+    ) -> Result<Option<&'c HashMap<String, String>>>
+    where
+        'a: 'c,
+        'b: 'c,
+    {
+        Ok(None)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

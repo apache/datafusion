@@ -17,9 +17,6 @@
 
 //! IS NULL expression
 
-use std::hash::Hash;
-use std::{any::Any, sync::Arc};
-
 use crate::PhysicalExpr;
 use arrow::{
     datatypes::{DataType, Schema},
@@ -28,6 +25,9 @@ use arrow::{
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 /// IS NULL expression
 #[derive(Debug, Eq)]
@@ -91,6 +91,17 @@ impl PhysicalExpr for IsNullExpr {
                 ScalarValue::Boolean(Some(scalar.is_null())),
             )),
         }
+    }
+
+    fn metadata<'a, 'b, 'c>(
+        &'a self,
+        input_schema: &'b Schema,
+    ) -> Result<Option<&'c HashMap<String, String>>>
+    where
+        'a: 'c,
+        'b: 'c,
+    {
+        self.arg.metadata(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

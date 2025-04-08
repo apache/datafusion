@@ -379,6 +379,17 @@ impl PhysicalExpr for InListExpr {
         Ok(ColumnarValue::Array(Arc::new(r)))
     }
 
+    fn metadata<'a, 'b, 'c>(
+        &'a self,
+        _input_schema: &'b Schema,
+    ) -> Result<Option<&'c std::collections::HashMap<String, String>>>
+    where
+        'a: 'c,
+        'b: 'c,
+    {
+        Ok(None)
+    }
+
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         let mut children = vec![];
         children.push(&self.expr);

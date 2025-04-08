@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -108,6 +109,17 @@ impl PhysicalExpr for TryCastExpr {
                 Ok(ColumnarValue::Scalar(cast_scalar))
             }
         }
+    }
+
+    fn metadata<'a, 'b, 'c>(
+        &'a self,
+        input_schema: &'b Schema,
+    ) -> Result<Option<&'c HashMap<String, String>>>
+    where
+        'a: 'c,
+        'b: 'c,
+    {
+        self.expr.metadata(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

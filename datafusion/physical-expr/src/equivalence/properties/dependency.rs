@@ -424,6 +424,7 @@ pub fn generate_dependency_orderings(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::ops::Not;
     use std::sync::Arc;
 
@@ -1225,6 +1226,7 @@ mod tests {
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
             DataType::Utf8,
+            HashMap::default(),
         ));
 
         // Assume existing ordering is [c ASC, a ASC, b ASC]
@@ -1316,6 +1318,7 @@ mod tests {
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
             DataType::Utf8,
+            HashMap::default(),
         ));
 
         // Assume existing ordering is [concat(a, b) ASC, a ASC, b ASC]
