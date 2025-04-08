@@ -641,7 +641,7 @@ impl DFSchema {
                         || (!DFSchema::datatype_is_semantically_equal(
                             f1.data_type(),
                             f2.data_type(),
-                        ) && !can_cast_types(f2.data_type(), f1.data_type()))
+                        ))
                     {
                         _plan_err!(
                             "Schema mismatch: Expected field '{}' with type {:?}, \
@@ -711,6 +711,9 @@ impl DFSchema {
                         .zip(iter2)
                         .all(|((t1, f1), (t2, f2))| t1 == t2 && Self::field_is_logically_equal(f1, f2))
             }
+            // Utf8 and Utf8View are logically equivalent
+            (DataType::Utf8, DataType::Utf8View) => true,
+            (DataType::Utf8View, DataType::Utf8) => true,
             _ => dt1 == dt2,
         }
     }
