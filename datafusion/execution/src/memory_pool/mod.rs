@@ -161,9 +161,10 @@ impl PartialEq for MemoryConsumer {
     fn eq(&self, other: &Self) -> bool {
         let is_same_id = self.id == other.id;
 
+        #[cfg(debug_assertions)]
         if is_same_id {
-            debug_assert_eq!(self.name, other.name);
-            debug_assert_eq!(self.can_spill, other.can_spill);
+            assert_eq!(self.name, other.name);
+            assert_eq!(self.can_spill, other.can_spill);
         }
 
         is_same_id
