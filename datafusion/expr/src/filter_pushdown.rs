@@ -17,16 +17,19 @@
 
 /// Result of attempting to push down a filter/predicate expression.
 ///
-/// This is used by [`FilterPushdownResult`] to indicate whether the filter was
-/// "absorbed" by the child ([`FilterPushdown::Exact`]) or not
-/// ([`FilterPushdown::Unsupported`] or [`FilterPushdown::Inexact`]).
+/// This is used by:
+/// * `FilterPushdownResult` in `ExecutionPlan` to do predicate pushdown at the physical plan level
+/// (e.g. pushing down dynamic fitlers from a hash join into scans).
+/// * `TableProvider` to do predicate pushdown at planning time (e.g. pruning partitions).
 ///
-/// If the filter was not absorbed, the parent plan must apply the filter
-/// itself, or return to the caller that it was not pushed down.
-///
-/// If the filter was absorbed, the parent plan can drop the filter or
-/// tell the caller that it was pushed down by forwarding on the [`FilterPushdown::Exact`]
-/// information.
+/// There are three possible outcomes of a filter pushdown:
+/// * [`FilterPushdown::Unsupported`] - the filter could not be applied / is not understood.
+/// * [`FilterPushdown::Inexact`] - the filter could be applied, but it may not be exact.
+///   The caller should treat this the same as [`FilterPushdown::Unsupported`] for the most part
+///   and must not assume that any pruning / filter was done since there may be false positives.
+/// * [`FilterPushdown::Exact`] - the filter was absorbed by the child plan and it promises
+///  to apply the filter correctly.
+///  The parent plan can drop the filter and assume that the child plan will apply it correctly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterPushdown {
     /// No child plan was able to absorb the filter.
@@ -45,7 +48,7 @@ pub enum FilterPushdown {
 }
 
 impl FilterPushdown {
-    /// Create a new [`FilterPushdownSupport`].
+    /// Create a new [`FilterPushdown`].
     pub fn is_exact(&self) -> bool {
         matches!(self, Self::Exact)
     }
