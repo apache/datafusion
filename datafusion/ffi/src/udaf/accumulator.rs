@@ -78,9 +78,9 @@ pub struct AccumulatorPrivateData {
 
 impl FFI_Accumulator {
     #[inline]
-    unsafe fn inner(&self) -> &mut AccumulatorPrivateData {
+    unsafe fn inner(&self) -> &mut Box<dyn Accumulator> {
         let private_data = self.private_data as *mut AccumulatorPrivateData;
-        &mut (*private_data)
+        &mut (*private_data).accumulator
     }
 }
 
@@ -88,7 +88,7 @@ unsafe extern "C" fn update_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     values: RVec<WrappedArray>,
 ) -> RResult<(), RString> {
-    let accum_data = accumulator.inner();
+    let accumulator = accumulator.inner();
 
     let values_arrays = values
         .into_iter()
@@ -96,15 +96,15 @@ unsafe extern "C" fn update_batch_fn_wrapper(
         .collect::<Result<Vec<ArrayRef>>>();
     let values_arrays = rresult_return!(values_arrays);
 
-    rresult!(accum_data.accumulator.update_batch(&values_arrays))
+    rresult!(accumulator.update_batch(&values_arrays))
 }
 
 unsafe extern "C" fn evaluate_fn_wrapper(
     accumulator: &FFI_Accumulator,
 ) -> RResult<RVec<u8>, RString> {
-    let accum_data = accumulator.inner();
+    let accumulator = accumulator.inner();
 
-    let scalar_result = rresult_return!(accum_data.accumulator.evaluate());
+    let scalar_result = rresult_return!(accumulator.evaluate());
     let proto_result: datafusion_proto::protobuf::ScalarValue =
         rresult_return!((&scalar_result).try_into());
 
@@ -112,18 +112,15 @@ unsafe extern "C" fn evaluate_fn_wrapper(
 }
 
 unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_Accumulator) -> usize {
-    // let private_data = accumulator.private_data as *mut AccumulatorPrivateData;
-    // let accum_data = &mut (*private_data);
-    accumulator.inner().accumulator.size()
+    accumulator.inner().size()
 }
 
 unsafe extern "C" fn state_fn_wrapper(
     accumulator: &FFI_Accumulator,
 ) -> RResult<RVec<RVec<u8>>, RString> {
-    let private_data = accumulator.private_data as *mut AccumulatorPrivateData;
-    let accum_data = &mut (*private_data);
+    let accumulator = accumulator.inner();
 
-    let state = rresult_return!(accum_data.accumulator.state());
+    let state = rresult_return!(accumulator.state());
     let state = state
         .into_iter()
         .map(|state_val| {
@@ -141,21 +138,21 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     states: RVec<WrappedArray>,
 ) -> RResult<(), RString> {
-    let accum_data = accumulator.inner();
+    let accumulator = accumulator.inner();
 
     let states = rresult_return!(states
         .into_iter()
         .map(|state| ArrayRef::try_from(state).map_err(DataFusionError::from))
         .collect::<Result<Vec<_>>>());
 
-    rresult!(accum_data.accumulator.merge_batch(&states))
+    rresult!(accumulator.merge_batch(&states))
 }
 
 unsafe extern "C" fn retract_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     values: RVec<WrappedArray>,
 ) -> RResult<(), RString> {
-    let accum_data = accumulator.inner();
+    let accumulator = accumulator.inner();
 
     let values_arrays = values
         .into_iter()
@@ -163,7 +160,7 @@ unsafe extern "C" fn retract_batch_fn_wrapper(
         .collect::<Result<Vec<ArrayRef>>>();
     let values_arrays = rresult_return!(values_arrays);
 
-    rresult!(accum_data.accumulator.retract_batch(&values_arrays))
+    rresult!(accumulator.retract_batch(&values_arrays))
 }
 
 unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
@@ -185,8 +182,6 @@ impl From<Box<dyn Accumulator>> for FFI_Accumulator {
             merge_batch: merge_batch_fn_wrapper,
             retract_batch: retract_batch_fn_wrapper,
             supports_retract_batch,
-
-            // clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
         }

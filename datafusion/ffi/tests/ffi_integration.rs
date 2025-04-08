@@ -19,20 +19,16 @@
 /// when the feature integtation-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
-
-    use abi_stable::library::RootModule;
     use arrow::array::Float64Array;
     use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
-    use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
+    use datafusion::logical_expr::AggregateUDF;
     use datafusion::prelude::{col, SessionContext};
     use datafusion_ffi::catalog_provider::ForeignCatalogProvider;
     use datafusion_ffi::table_provider::ForeignTableProvider;
+    use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
-    use datafusion_ffi::tests::{create_record_batch, ForeignLibraryModuleRef};
     use datafusion_ffi::udaf::ForeignAggregateUDF;
-    use datafusion_ffi::udf::ForeignScalarUDF;
-    use std::path::Path;
     use std::sync::Arc;
 
     /// It is important that this test is in the `tests` directory and not in the
@@ -89,9 +85,7 @@ mod tests {
                     "External catalog provider failed to implement create_catalog"
                         .to_string(),
                 ))?();
-        let foreign_abs_func: ForeignScalarUDF = (&ffi_abs_func).try_into()?;
-
-        let udf: ScalarUDF = foreign_abs_func.into();
+        let foreign_catalog: ForeignCatalogProvider = (&ffi_catalog).into();
 
         let ctx = SessionContext::default();
         let _ = ctx.register_catalog("fruit", Arc::new(foreign_catalog));
@@ -110,15 +104,15 @@ mod tests {
     async fn test_ffi_udaf() -> Result<()> {
         let module = get_module()?;
 
-        let ffi_avg_func =
+        let ffi_sum_func =
             module
                 .create_sum_udaf()
                 .ok_or(DataFusionError::NotImplemented(
                     "External table provider failed to implement create_udaf".to_string(),
                 ))?();
-        let foreign_avg_func: ForeignAggregateUDF = (&ffi_avg_func).try_into()?;
+        let foreign_sum_func: ForeignAggregateUDF = (&ffi_sum_func).try_into()?;
 
-        let udaf: AggregateUDF = foreign_avg_func.into();
+        let udaf: AggregateUDF = foreign_sum_func.into();
 
         let ctx = SessionContext::default();
         let record_batch = record_batch!(
