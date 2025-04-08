@@ -18,14 +18,14 @@
 /// Result of attempting to push down a filter/predicate expression.
 ///
 /// This is used by [`FilterPushdownResult`] to indicate whether the filter was
-/// "absorbed" by the child ([`FilterPushdownSupport::Exact`]) or not
-/// ([`FilterPushdownSupport::Unsupported`] or [`FilterPushdownSupport::Inexact`]).
+/// "absorbed" by the child ([`FilterPushdown::Exact`]) or not
+/// ([`FilterPushdown::Unsupported`] or [`FilterPushdown::Inexact`]).
 ///
 /// If the filter was not absorbed, the parent plan must apply the filter
 /// itself, or return to the caller that it was not pushed down.
 ///
 /// If the filter was absorbed, the parent plan can drop the filter or
-/// tell the caller that it was pushed down by forwarding on the [`FilterPushdownSupport::Exact`]
+/// tell the caller that it was pushed down by forwarding on the [`FilterPushdown::Exact`]
 /// information.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterPushdown {
