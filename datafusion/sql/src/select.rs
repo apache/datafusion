@@ -85,7 +85,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
-        match_window_definitions(&mut select.projection, &select.named_window)?;
+        self.match_window_definitions(&mut select.projection, &select.named_window)?;
         // Process the SELECT expressions
         let select_exprs = self.prepare_select_exprs(
             &base_plan,
@@ -868,6 +868,62 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
+
+    // If the projection is done over a named window, that window
+    // name must be defined. Otherwise, it gives an error.
+    fn match_window_definitions(
+        &self,
+        projection: &mut [SelectItem],
+        named_windows: &[NamedWindowDefinition],
+    ) -> Result<()> {
+        let named_windows: Vec<(&NamedWindowDefinition, String)> = named_windows
+            .iter()
+            .map(|w| (w, self.ident_normalizer.normalize(w.0.clone())))
+            .collect();
+        for proj in projection.iter_mut() {
+            if let SelectItem::ExprWithAlias { expr, alias: _ }
+            | SelectItem::UnnamedExpr(expr) = proj
+            {
+                let mut err = None;
+                visit_expressions_mut(expr, |expr| {
+                    if let SQLExpr::Function(f) = expr {
+                        if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                            let normalized_ident =
+                                self.ident_normalizer.normalize(ident.clone());
+                            for (
+                                NamedWindowDefinition(_, window_expr),
+                                normalized_window_ident,
+                            ) in named_windows.iter()
+                            {
+                                if normalized_ident.eq(normalized_window_ident) {
+                                    f.over = Some(match window_expr {
+                                        NamedWindowExpr::NamedWindow(ident) => {
+                                            WindowType::NamedWindow(ident.clone())
+                                        }
+                                        NamedWindowExpr::WindowSpec(spec) => {
+                                            WindowType::WindowSpec(spec.clone())
+                                        }
+                                    })
+                                }
+                            }
+                            // All named windows must be defined with a WindowSpec.
+                            if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                                err = Some(DataFusionError::Plan(format!(
+                                    "The window {ident} is not defined!"
+                                )));
+                                return ControlFlow::Break(());
+                            }
+                        }
+                    }
+                    ControlFlow::Continue(())
+                });
+                if let Some(err) = err {
+                    return Err(err);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 // If there are any multiple-defined windows, we raise an error.
@@ -879,55 +935,6 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
                     "The window {} is defined multiple times!",
                     window_def_i.0
                 );
-            }
-        }
-    }
-    Ok(())
-}
-
-// If the projection is done over a named window, that window
-// name must be defined. Otherwise, it gives an error.
-fn match_window_definitions(
-    projection: &mut [SelectItem],
-    named_windows: &[NamedWindowDefinition],
-) -> Result<()> {
-    for proj in projection.iter_mut() {
-        if let SelectItem::ExprWithAlias { expr, alias: _ }
-        | SelectItem::UnnamedExpr(expr) = proj
-        {
-            let mut err = None;
-            visit_expressions_mut(expr, |expr| {
-                if let SQLExpr::Function(f) = expr {
-                    if let Some(WindowType::NamedWindow(_)) = &f.over {
-                        for NamedWindowDefinition(window_ident, window_expr) in
-                            named_windows
-                        {
-                            if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                                if ident.eq(window_ident) {
-                                    f.over = Some(match window_expr {
-                                        NamedWindowExpr::NamedWindow(ident) => {
-                                            WindowType::NamedWindow(ident.clone())
-                                        }
-                                        NamedWindowExpr::WindowSpec(spec) => {
-                                            WindowType::WindowSpec(spec.clone())
-                                        }
-                                    })
-                                }
-                            }
-                        }
-                        // All named windows must be defined with a WindowSpec.
-                        if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                            err = Some(DataFusionError::Plan(format!(
-                                "The window {ident} is not defined!"
-                            )));
-                            return ControlFlow::Break(());
-                        }
-                    }
-                }
-                ControlFlow::Continue(())
-            });
-            if let Some(err) = err {
-                return Err(err);
             }
         }
     }
