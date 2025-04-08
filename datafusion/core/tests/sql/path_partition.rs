@@ -24,6 +24,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
+use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
@@ -41,6 +42,7 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::stats::Precision;
 use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::ScalarValue;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::metadata::MetadataColumn;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::{col, lit, Expr, Operator};
