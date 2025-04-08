@@ -46,6 +46,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
+use crate::statistics::{compute_summary_statistics, PartitionedStatistics};
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
@@ -340,6 +341,31 @@ impl ExecutionPlan for CrossJoinExec {
         Ok(stats_cartesian_product(
             self.left.statistics()?,
             self.right.statistics()?,
+        ))
+    }
+
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
+        let left_stats = self.left.statistics_by_partition()?;
+        let right_stats = self.right.statistics_by_partition()?;
+
+        if left_stats.is_empty() || right_stats.is_empty() {
+            return Ok(PartitionedStatistics::new(vec![]));
+        }
+
+        // Summarize the `left_stats`
+        let statistics = compute_summary_statistics(
+            left_stats.iter(),
+            self.left.schema().fields().len(),
+            |stats| Some(stats),
+        );
+
+        Ok(PartitionedStatistics::new(
+            right_stats
+                .iter()
+                .map(|right| {
+                    Arc::new(stats_cartesian_product(statistics.clone(), right.clone()))
+                })
+                .collect(),
         ))
     }
 

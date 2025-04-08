@@ -46,6 +46,7 @@ use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{calculate_union, EquivalenceProperties};
 
+use crate::statistics::PartitionedStatistics;
 use futures::Stream;
 use itertools::Itertools;
 use log::{debug, trace, warn};
@@ -268,6 +269,21 @@ impl ExecutionPlan for UnionExec {
             .into_iter()
             .reduce(stats_union)
             .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+    }
+
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
+        let input_stats_vec = self
+            .inputs
+            .iter()
+            .map(|input| input.statistics_by_partition())
+            .collect::<Result<Vec<_>>>()?;
+
+        let all_stats: Vec<_> = input_stats_vec
+            .iter()
+            .flat_map(|input_stats| input_stats.iter().map(|stat| Arc::new(stat.clone())))
+            .collect();
+
+        Ok(PartitionedStatistics::new(all_stats))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

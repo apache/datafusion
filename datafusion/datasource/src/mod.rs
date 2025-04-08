@@ -58,7 +58,6 @@ use file_meta::FileMeta;
 use futures::{Stream, StreamExt};
 use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
-pub use statistics::add_row_stats;
 pub use statistics::compute_all_files_statistics;
 use std::ops::Range;
 use std::pin::Pin;

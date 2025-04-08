@@ -40,6 +40,7 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 
+use datafusion_physical_plan::statistics::PartitionedStatistics;
 use object_store::ObjectStore;
 
 /// Execution plan for scanning Avro data source
@@ -139,6 +140,10 @@ impl ExecutionPlan for AvroExec {
 
     fn statistics(&self) -> Result<Statistics> {
         self.inner.statistics()
+    }
+
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
+        self.inner.statistics_by_partition()
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

@@ -35,6 +35,7 @@ use datafusion_execution::TaskContext;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
 use crate::execution_plan::CardinalityEffect;
+use crate::statistics::PartitionedStatistics;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -193,6 +194,26 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
+    }
+
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
+        let input_stats = self.input.statistics_by_partition()?;
+
+        let stats: Result<Vec<Arc<Statistics>>> = input_stats
+            .iter()
+            .map(|stat| {
+                let fetched_stat = Statistics::with_fetch(
+                    stat.clone(),
+                    self.schema(),
+                    self.fetch,
+                    0,
+                    1,
+                )?;
+                Ok(Arc::new(fetched_stat))
+            })
+            .collect();
+
+        Ok(PartitionedStatistics::new(stats?))
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

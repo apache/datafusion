@@ -51,6 +51,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
+use crate::statistics::PartitionedStatistics;
 use futures::stream::{StreamExt, TryStreamExt};
 
 /// Represent nodes in the DataFusion Physical Plan.
@@ -425,6 +426,19 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// needs to be paid to whether the stats returned by this method are exact or not
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
+    }
+
+    /// Returns statistics for each partition of this `ExecutionPlan` node.
+    /// If statistics are not available, returns an array of
+    /// [`Statistics::new_unknown`] for each partition.
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
+        Ok(PartitionedStatistics::new({
+            let mut v =
+                Vec::with_capacity(self.properties().partitioning.partition_count());
+            (0..self.properties().partitioning.partition_count())
+                .for_each(|_| v.push(Arc::new(Statistics::new_unknown(&self.schema()))));
+            v
+        }))
     }
 
     /// Returns `true` if a limit can be safely pushed down through this

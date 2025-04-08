@@ -42,6 +42,7 @@ use datafusion_physical_plan::{
 };
 
 use datafusion_datasource::file_groups::FileGroup;
+use datafusion_physical_plan::statistics::PartitionedStatistics;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
@@ -190,6 +191,11 @@ impl ExecutionPlan for ArrowExec {
     fn statistics(&self) -> Result<Statistics> {
         self.inner.statistics()
     }
+
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
+        self.inner.statistics_by_partition()
+    }
+
     fn fetch(&self) -> Option<usize> {
         self.inner.fetch()
     }

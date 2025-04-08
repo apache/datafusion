@@ -35,6 +35,7 @@ use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::statistics::PartitionedStatistics;
 
 /// Common behaviors in Data Sources for both from Files and Memory.
 ///
@@ -173,6 +174,28 @@ impl ExecutionPlan for DataSourceExec {
 
     fn statistics(&self) -> datafusion_common::Result<Statistics> {
         self.data_source.statistics()
+    }
+
+    fn statistics_by_partition(
+        &self,
+    ) -> datafusion_common::Result<PartitionedStatistics> {
+        let mut statistics = {
+            let mut v =
+                Vec::with_capacity(self.properties().partitioning.partition_count());
+            (0..self.properties().partitioning.partition_count())
+                .for_each(|_| v.push(Arc::new(Statistics::new_unknown(&self.schema()))));
+            v
+        };
+        if let Some(file_config) =
+            self.data_source.as_any().downcast_ref::<FileScanConfig>()
+        {
+            for (idx, file_group) in file_config.file_groups.iter().enumerate() {
+                if let Some(stat) = file_group.statistics() {
+                    statistics[idx] = Arc::clone(stat);
+                }
+            }
+        }
+        Ok(PartitionedStatistics::new(statistics))
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
