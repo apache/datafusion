@@ -219,15 +219,15 @@ unused_qualifications = "deny"
 ## https://github.com/apache/arrow-rs/pull/7391
 
 [patch.crates-io]
-arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-array = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-data = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-select = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
-parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_55.0.0" }
+arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
+arrow-array = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
+arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
+arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
+arrow-data = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
+arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
+arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
+arrow-select = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
+arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
+arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/test_parquet_api2" }
