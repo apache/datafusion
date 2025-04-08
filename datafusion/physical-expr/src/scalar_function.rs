@@ -211,11 +211,15 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
-        let arg_metadata = self
+        let arg_metadata_owned = self
             .args
             .iter()
             .map(|e| e.metadata(batch.schema_ref()))
             .collect::<Result<Vec<_>>>()?;
+        let arg_metadata = arg_metadata_owned
+            .iter()
+            .map(|opt_map| opt_map.as_ref())
+            .collect::<Vec<_>>();
 
         let input_empty = args.is_empty();
         let input_all_scalar = args
@@ -247,15 +251,12 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(output)
     }
 
-    fn metadata<'a, 'b, 'c>(
-        &'a self,
-        _input_schema: &'b Schema,
-    ) -> Result<Option<&'c HashMap<String, String>>>
-    where
-        'a: 'c,
-        'b: 'c,
+    fn metadata(
+        &self,
+        input_schema: &Schema,
+    ) -> Result<Option<HashMap<String, String>>>
     {
-        Ok(Some(&self.metadata))
+        Ok(self.fun.as_ref().inner().metadata(input_schema))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

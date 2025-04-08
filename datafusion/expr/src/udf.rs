@@ -21,7 +21,7 @@ use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{ColumnarValue, Documentation, Expr, Signature};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -722,6 +722,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
+
+    /// This describes the output metadata associated with this UDF.
+    /// Input field metadata is handled through `ScalarFunctionArgs`
+    fn metadata(&self, _input_schema: &Schema) -> Option<HashMap<String, String>> { None }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to

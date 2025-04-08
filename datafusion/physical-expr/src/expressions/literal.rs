@@ -76,13 +76,10 @@ impl PhysicalExpr for Literal {
         Ok(ColumnarValue::Scalar(self.value.clone()))
     }
 
-    fn metadata<'a, 'b, 'c>(
-        &'a self,
-        _input_schema: &'b Schema,
-    ) -> Result<Option<&'c HashMap<String, String>>>
-    where
-        'a: 'c,
-        'b: 'c,
+    fn metadata(
+        &self,
+        _input_schema: &Schema,
+    ) -> Result<Option<HashMap<String, String>>>
     {
         Ok(None)
     }
