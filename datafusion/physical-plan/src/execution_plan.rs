@@ -483,7 +483,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// # Arguments
     /// * `plan`: `Arc`d instance of self
     /// * `parent_filters`: A vector of [`PhysicalExpr`]s from the parent of this node
-    ///    to try and push down
+    ///   to try and push down
     /// * `config`: The configuration options for execution
     ///
     /// # Default Implementation
