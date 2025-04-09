@@ -2884,8 +2884,7 @@ mod tests {
             let unparser = Unparser::new(dialect.as_ref());
             let expr = Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(
-                    datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc::new(
-                    ),
+                    datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc::new(),
                 )),
                 args: vec![col("date_col")],
             });
