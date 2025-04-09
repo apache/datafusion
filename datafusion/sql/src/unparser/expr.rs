@@ -1680,6 +1680,9 @@ impl Unparser<'_> {
             DataType::RunEndEncoded(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
+            DataType::Extension(_) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
         }
     }
 }

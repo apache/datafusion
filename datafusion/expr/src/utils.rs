@@ -841,7 +841,8 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::ListView(_)
         | DataType::LargeListView(_)
         | DataType::Union(_, _)
-        | DataType::RunEndEncoded(_, _) => false,
+        | DataType::RunEndEncoded(_, _)
+        | DataType::Extension(_) => false,
     }
 }
 
