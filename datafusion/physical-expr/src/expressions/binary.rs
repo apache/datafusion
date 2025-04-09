@@ -376,12 +376,6 @@ impl PhysicalExpr for BinaryExpr {
         // Check for short-circuit cases that need RHS value
         if let Some(result) = get_short_circuit_result(&lhs, &self.op, Some(rhs.clone()))
         {
-            return Ok(result);
-        }
-
-        // Check for short-circuit cases that need RHS value
-        if let Some(result) = get_short_circuit_result(&lhs, &self.op, Some(rhs.clone()))
-        {
             println!("==> Short-circuit with RHS: op={:?}", self.op);
             return Ok(result);
         }
@@ -838,6 +832,16 @@ impl BinaryExpr {
 /// - For `OR`:
 ///    - if LHS is all true  => short-circuit → return LHS
 ///    - if LHS is all false => short-circuit → return RHS
+/// -/// # Arguments
+/// * `arg` - The left-hand side (lhs) columnar value (array or scalar)
+/// * `op` - The logical operator (`AND` or `OR`)
+/// * `rhs` - The right-hand side (rhs) columnar value (array or scalar)
+///
+/// # Implementation Notes
+/// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
+/// 2. Handles both scalar values and array values
+/// 3. For arrays, uses optimized `true_count()`/`false_count()` methods from arrow-rs.
+///    `bool_or`/`bool_and` maybe a better choice too，for detailed discussion,see:[link](https://github.com/apache/datafusion/pull/15462#discussion_r2020558418)
 fn get_short_circuit_result(
     lhs: &ColumnarValue,
     op: &Operator,
