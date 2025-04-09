@@ -4943,8 +4943,11 @@ mod tests {
     #[test]
     fn test_get_short_circuit_result() {
         use crate::planner::logical2physical;
+        use arrow::array::BooleanArray;
         use datafusion_expr::col as logical_col;
         use datafusion_expr::lit;
+
+        // Test with non-nullable arrays
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
@@ -4977,43 +4980,90 @@ mod tests {
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(get_short_circuit_result(&left_value, &Operator::Or, None).is_none());
 
-        // op: AND left: all true - should return RHS when provided
-        let all_true = logical2physical(&logical_col("a").gt(lit(0)), &schema);
-        let all_true_value = all_true.evaluate(&batch).unwrap();
-        let right_expr = logical2physical(&logical_col("b").eq(lit(3)), &schema);
-        let right_value = right_expr.evaluate(&batch).unwrap();
-        let result = get_short_circuit_result(
-            &all_true_value,
+        // Test with nullable arrays and null values
+        let schema_nullable = Arc::new(Schema::new(vec![
+            Field::new("c", DataType::Boolean, true),
+            Field::new("d", DataType::Boolean, true),
+        ]));
+
+        // Create arrays with null values
+        let c_array = Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+            Some(true),
+            None,
+        ])) as ArrayRef;
+        let d_array = Arc::new(BooleanArray::from(vec![
+            Some(false),
+            Some(true),
+            Some(false),
+            None,
+            Some(true),
+        ])) as ArrayRef;
+
+        let batch_nullable = RecordBatch::try_new(
+            Arc::clone(&schema_nullable),
+            vec![Arc::clone(&c_array), Arc::clone(&d_array)],
+        )
+        .unwrap();
+
+        // Case: Mixed values with nulls - shouldn't short-circuit for AND
+        let mixed_nulls = logical2physical(&logical_col("c"), &schema_nullable);
+        let mixed_nulls_value = mixed_nulls.evaluate(&batch_nullable).unwrap();
+        assert!(
+            get_short_circuit_result(&mixed_nulls_value, &Operator::And, None).is_none()
+        );
+
+        // Case: Mixed values with nulls - shouldn't short-circuit for OR
+        assert!(
+            get_short_circuit_result(&mixed_nulls_value, &Operator::Or, None).is_none()
+        );
+
+        // Test with all nulls
+        let all_nulls = Arc::new(BooleanArray::from(vec![None, None, None])) as ArrayRef;
+        let null_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("e", DataType::Boolean, true)])),
+            vec![all_nulls],
+        )
+        .unwrap();
+
+        let null_expr = logical2physical(&logical_col("e"), &null_batch.schema());
+        let null_value = null_expr.evaluate(&null_batch).unwrap();
+
+        // All nulls shouldn't short-circuit for AND or OR
+        assert!(get_short_circuit_result(&null_value, &Operator::And, None).is_none());
+        assert!(get_short_circuit_result(&null_value, &Operator::Or, None).is_none());
+
+        // Test with scalar values
+        // Scalar true
+        let scalar_true = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
+        assert!(get_short_circuit_result(&scalar_true, &Operator::Or, None).is_some()); // Should short-circuit OR
+        assert!(get_short_circuit_result(&scalar_true, &Operator::And, None).is_none()); // Shouldn't short-circuit AND without RHS
+
+        let scalar_right = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
+        assert!(get_short_circuit_result(
+            &scalar_true,
             &Operator::And,
-            Some(right_value.clone()),
-        );
-        assert!(result.is_some());
-        // Convert both ColumnarValue instances to their string representations for comparison
-        // since ColumnarValue doesn't implement PartialEq
-        let result_str = result_to_str(result);
-        let right_value_str = format!("{:?}", right_value);
-        assert_eq!(result_str, right_value_str);
+            Some(scalar_right.clone())
+        )
+        .is_some());
 
-        // op: OR left: all false - should return RHS when provided
-        let all_false = logical2physical(&logical_col("a").lt(lit(0)), &schema);
-        let all_false_value = all_false.evaluate(&batch).unwrap();
-        let result = get_short_circuit_result(
-            &all_false_value,
+        // Scalar false
+        let scalar_false = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
+        assert!(get_short_circuit_result(&scalar_false, &Operator::And, None).is_some()); // Should short-circuit AND
+        assert!(get_short_circuit_result(&scalar_false, &Operator::Or, None).is_none()); // Shouldn't short-circuit OR without RHS
+
+        assert!(get_short_circuit_result(
+            &scalar_false,
             &Operator::Or,
-            Some(right_value.clone()),
-        );
-        assert!(result.is_some());
+            Some(scalar_true)
+        )
+        .is_some());
 
-        // Convert both ColumnarValue instances to their string representations for comparison
-        // since ColumnarValue doesn't implement PartialEq
-        let result_str = result_to_str(result);
-        let right_value_str = format!("{:?}", right_value);
-        assert_eq!(result_str, right_value_str);
-    }
-
-    fn result_to_str(result: Option<ColumnarValue>) -> String {
-        let result_value = result.unwrap();
-        let result_str = format!("{:?}", result_value);
-        result_str
+        // Scalar null
+        let scalar_null = ColumnarValue::Scalar(ScalarValue::Boolean(None));
+        assert!(get_short_circuit_result(&scalar_null, &Operator::And, None).is_none());
+        assert!(get_short_circuit_result(&scalar_null, &Operator::Or, None).is_none());
     }
 }
