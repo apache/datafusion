@@ -846,10 +846,12 @@ fn get_short_circuit_result(
             match lhs {
                 ColumnarValue::Array(array) => {
                     if let Ok(array) = as_boolean_array(&array) {
-                        if array.false_count() == array.len() {
+                        // For AND, only short-circuit if ALL values are false and there are NO nulls
+                        if array.false_count() == array.len() && array.null_count() == 0 {
                             return Some(lhs.clone()); // all false → result is false
                         }
-                        if array.true_count() == array.len() {
+                        // Only short-circuit to RHS if ALL values are true and there are NO nulls
+                        if array.true_count() == array.len() && array.null_count() == 0 {
                             return rhs; // all true → just return RHS
                         }
                     }
@@ -870,10 +872,12 @@ fn get_short_circuit_result(
             match lhs {
                 ColumnarValue::Array(array) => {
                     if let Ok(array) = as_boolean_array(&array) {
-                        if array.true_count() == array.len() {
+                        // For OR, only short-circuit if ALL values are true and there are NO nulls
+                        if array.true_count() == array.len() && array.null_count() == 0 {
                             return Some(lhs.clone()); // all true → result is true
                         }
-                        if array.false_count() == array.len() {
+                        // Only short-circuit to RHS if ALL values are false and there are NO nulls
+                        if array.false_count() == array.len() && array.null_count() == 0 {
                             return rhs; // all false → just return RHS
                         }
                     }
@@ -2025,7 +2029,7 @@ mod tests {
                 Some(value),
                 Some(value - 1),
             ],
-            11,
+            10,
             0,
         ));
 
