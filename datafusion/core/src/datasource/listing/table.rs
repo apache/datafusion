@@ -789,9 +789,14 @@ impl ListingOptions {
 #[derive(Debug)]
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
-    /// File fields only
+    /// `file_schema` contains only the columns physically stored in the data files themselves.
+    ///     - Represents the actual fields found in files like Parquet, CSV, etc.
+    ///     - Used when reading the raw data from files
     file_schema: SchemaRef,
-    /// File fields + partition columns + metadata columns
+    /// `table_schema` combines `file_schema` + partition columns + metadata columns
+    ///     - Partition columns are derived from directory paths (not stored in files)
+    ///     - These are columns like "year=2022/month=01" in paths like `/data/year=2022/month=01/file.parquet`
+    ///     - Metadata columns are optional columns that are not part of the file schema but are derived from the file metadata
     table_schema: SchemaRef,
     options: ListingOptions,
     definition: Option<String>,
