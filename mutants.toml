@@ -1,0 +1,12 @@
+[cargo]
+test = [
+    "--profile", "ci",
+    "--exclude", "datafusion-examples",
+    "--exclude", "ffi_example_table_provider",
+    "--exclude", "datafusion-benchmarks",
+    "--workspace",
+    "--lib",
+    "--tests",
+    "--bins",
+    "--features", "avro,json,backtrace,integration-tests",
+]
