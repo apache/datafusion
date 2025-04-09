@@ -22,7 +22,7 @@ use log::debug;
 use parking_lot::Mutex;
 use std::{
     num::NonZeroUsize,
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 /// A [`MemoryPool`] that enforces no limit
@@ -253,7 +253,26 @@ fn insufficient_capacity_err(
 struct TrackedConsumer {
     name: String,
     can_spill: bool,
-    reserved: AtomicU64,
+    reserved: AtomicUsize,
+}
+
+impl TrackedConsumer {
+    /// Shorthand to return the currently reserved value
+    fn reserved(&self) -> usize {
+        self.reserved.load(Ordering::Relaxed)
+    }
+
+    /// Grows the tracked consumer's reserved size,
+    /// should be called after the pool has successfully performed the grow().
+    fn grow(&self, additional: usize) {
+        self.reserved.fetch_add(additional, Ordering::Relaxed);
+    }
+
+    /// Reduce the tracked consumer's reserved size,
+    /// should be called after the pool has successfully performed the shrink().
+    fn shrink(&self, shrink: usize) {
+        self.reserved.fetch_sub(shrink, Ordering::Relaxed);
+    }
 }
 
 /// A [`MemoryPool`] that tracks the consumers that have
@@ -266,8 +285,11 @@ struct TrackedConsumer {
 /// The same consumer can have multiple reservations.
 #[derive(Debug)]
 pub struct TrackConsumersPool<I> {
+    /// The wrapped memory pool that actually handles reservation logic
     inner: I,
+    /// The amount of consumers to report(ordered top to bottom by reservation size)
     top: NonZeroUsize,
+    /// Maps consumer_id --> TrackedConsumer
     tracked_consumers: Mutex<HashMap<usize, TrackedConsumer>>,
 }
 
@@ -297,7 +319,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
                         tracked_consumer.name.to_owned(),
                         tracked_consumer.can_spill,
                     ),
-                    tracked_consumer.reserved.load(Ordering::Acquire),
+                    tracked_consumer.reserved(),
                 )
             })
             .collect::<Vec<_>>();
@@ -344,9 +366,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
             .lock()
             .entry(reservation.consumer().id())
             .and_modify(|tracked_consumer| {
-                tracked_consumer
-                    .reserved
-                    .fetch_add(additional as u64, Ordering::AcqRel);
+                tracked_consumer.grow(additional);
             });
     }
 
@@ -356,9 +376,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
             .lock()
             .entry(reservation.consumer().id())
             .and_modify(|tracked_consumer| {
-                tracked_consumer
-                    .reserved
-                    .fetch_sub(shrink as u64, Ordering::AcqRel);
+                tracked_consumer.shrink(shrink);
             });
     }
 
@@ -382,9 +400,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
             .lock()
             .entry(reservation.consumer().id())
             .and_modify(|tracked_consumer| {
-                tracked_consumer
-                    .reserved
-                    .fetch_add(additional as u64, Ordering::AcqRel);
+                tracked_consumer.grow(additional);
             });
         Ok(())
     }

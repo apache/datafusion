@@ -147,6 +147,11 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 /// [`MemoryReservation`] in a [`MemoryPool`]. All allocations are registered to
 /// a particular `MemoryConsumer`;
 ///
+/// Each `MemoryConsumer` is identifiable by a process-unique id, and is therefor not cloneable,
+/// If you want a clone of a `MemoryConsumer`, you should look into [`MemoryConsumer::clone_with_new_id`],
+/// but note that this `MemoryConsumer` may be treated as a separate entity based on the used pool,
+/// and is only guaranteed to share the name and inner properties.
+///
 /// For help with allocation accounting, see the [`proxy`] module.
 ///
 /// [proxy]: datafusion_common::utils::proxy
@@ -196,6 +201,9 @@ impl MemoryConsumer {
         }
     }
 
+    /// Returns a clone of this [`MemoryConsumer`] with a new unique id,
+    /// which can be registered with a [`MemoryPool`],
+    /// This new consumer is separate from the original.
     pub fn clone_with_new_id(&self) -> Self {
         Self {
             name: self.name.clone(),
@@ -394,7 +402,7 @@ pub mod units {
     pub const KB: u64 = 1 << 10;
 }
 
-/// Present size in human readable form
+/// Present size in human-readable form
 pub fn human_readable_size(size: usize) -> String {
     use units::*;
 
