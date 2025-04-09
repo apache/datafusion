@@ -616,10 +616,10 @@ impl ExternalSorter {
         }
 
         // ──────────────────────────────────────────────────────────────────────
-        // Recursively merge spilled files
+        // Merge spilled files in multiple pass
         // ──────────────────────────────────────────────────────────────────────
         let spill_files = std::mem::take(&mut self.finished_spill_files);
-        let spill_files = self.recursively_merge_spill_files(spill_files).await?;
+        let spill_files = self.merge_spill_files_multipass(spill_files).await?;
 
         // ──────────────────────────────────────────────────────────────────────
         // Finally, <= max merge degree spilled files are left, merge them into a
@@ -656,8 +656,8 @@ impl ExternalSorter {
         )))
     }
 
-    /// Recursively merges and re-spills files until the number of spill files is ≤ MAX_SPILL_MERGE_DEGREE
-    async fn recursively_merge_spill_files(
+    /// Iteratively merges and re-spills files until the number of spill files is ≤ MAX_SPILL_MERGE_DEGREE
+    async fn merge_spill_files_multipass(
         &mut self,
         mut spill_files_cur_pass: Vec<RefCountedTempFile>,
     ) -> Result<Vec<RefCountedTempFile>> {
