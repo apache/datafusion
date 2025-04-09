@@ -370,14 +370,17 @@ impl PhysicalExpr for BinaryExpr {
             return Ok(result);
         }
 
-        // Check for short-circuit evaluation based on LHS alone
-        if let Some(result) = get_short_circuit_result(&lhs, &self.op, Some(rhs_lazy()?))
+        // Only evaluate RHS if short-circuit evaluation doesn't apply
+        let rhs = rhs_lazy()?;
+
+        // Check for short-circuit cases that need RHS value
+        if let Some(result) = get_short_circuit_result(&lhs, &self.op, Some(rhs.clone()))
         {
             return Ok(result);
         }
 
-        // Only evaluate RHS if short-circuit evaluation doesn't apply
-        let rhs = rhs_lazy()?;
+        let left_data_type = lhs.data_type();
+        let right_data_type = rhs.data_type();
 
         // Check for short-circuit cases that need RHS value
         if let Some(result) = get_short_circuit_result(&lhs, &self.op, Some(rhs.clone()))
