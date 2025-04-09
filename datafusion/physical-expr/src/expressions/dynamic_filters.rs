@@ -22,7 +22,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crate::{utils::conjunction, PhysicalExpr};
+use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
@@ -31,51 +31,7 @@ use datafusion_common::{
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
 
-/// A source of dynamic runtime filters.
-///
-/// Operators can create implementations of this trait that get wrapped
-/// in [`DynamicFilterPhysicalExpr`] to be pushed down into and through to scans, joins, etc.
-///
-/// For example:
-/// - A `HashJoin` operator can use this to provide a filter expression
-///   that filters out rows from the right side of the join based on the
-///   values from the left side.
-/// - A `TopK` operator can use this to provide a filter expression
-///   that filters out rows from the input based on the values from the
-///   top K rows.
-/// 
-/// Initially this trait is intended to be only for internal use as a way to facilitate
-/// building [`DynamicFilterPhysicalExpr`]s in the various operators that will be generating
-/// dynamic filters.
-/// Because of this we've made it a public trait in a private module so that it is only
-/// accessible within the crate.
-/// If you would like to use this trait in your own code, please open an issue
-/// to discuss the use case and we can consider making it public.
-pub trait DynamicFilterSource:
-    Send + Sync + std::fmt::Debug + DynEq + DynHash + Display + 'static
-{
-    /// Take a snapshot of the current state of filtering, returning a non-dynamic PhysicalExpr.
-    /// This is used to e.g. serialize dynamic filters across the wire or to pass them into systems
-    /// that won't use the `PhysicalExpr` API (e.g. matching on the concrete types of the expressions like `PruningPredicate` does).
-    /// For example, it is expected that this returns a relatively simple expression such as `col1 > 5` for a TopK operator or
-    /// `col2 IN (1, 2, ... N)` for a HashJoin operator.
-    fn snapshot_current_filters(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>>;
-
-    fn as_any(&self) -> &dyn Any;
-}
-
-impl PartialEq for dyn DynamicFilterSource {
-    fn eq(&self, other: &Self) -> bool {
-        self.dyn_eq(other.as_any())
-    }
-}
-
-impl Eq for dyn DynamicFilterSource {}
-
-/// A wrapper around a [`DynamicFilterSource`] that allows it to be used as a physical expression.
-/// This will call [`DynamicFilterSource::snapshot_current_filters`] to get the current filters for each call to
-/// [`PhysicalExpr::evaluate`], [`PhysicalExpr::data_type`], and [`PhysicalExpr::nullable`].
-/// It also implements [`PhysicalExpr::snapshot`] by forwarding the call to [`DynamicFilterSource::snapshot_current_filters`].
+/// A dynamic [`PhysicalExpr`] that can be updated by anyone with a reference to it.
 #[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.
@@ -87,7 +43,7 @@ pub struct DynamicFilterPhysicalExpr {
     /// so that when we update `current()` in subsequent iterations we can re-apply the replacements.
     remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
     /// The source of dynamic filters.
-    inner: Arc<dyn DynamicFilterSource>,
+    inner: Arc<RwLock<Arc<dyn PhysicalExpr>>>,
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in our tests.
@@ -97,7 +53,8 @@ pub struct DynamicFilterPhysicalExpr {
 
 impl Hash for DynamicFilterPhysicalExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.inner.dyn_hash(state);
+        let inner = self.current().expect("Failed to get current expression");
+        inner.dyn_hash(state);
         self.children.dyn_hash(state);
         self.remapped_children.dyn_hash(state);
     }
@@ -105,9 +62,11 @@ impl Hash for DynamicFilterPhysicalExpr {
 
 impl PartialEq for DynamicFilterPhysicalExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.dyn_eq(other.inner.as_any())
-            && self.children == other.children
-            && self.remapped_children == other.remapped_children
+        let inner = self.current().expect("Failed to get current expression");
+        let our_children = self.remapped_children.as_ref().unwrap_or(&self.children);
+        let other_children = other.remapped_children.as_ref().unwrap_or(&other.children);
+        let other = other.current().expect("Failed to get current expression");
+        inner.dyn_eq(other.as_any()) && our_children == other_children
     }
 }
 
@@ -115,27 +74,62 @@ impl Eq for DynamicFilterPhysicalExpr {}
 
 impl Display for DynamicFilterPhysicalExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DynamicFilterPhysicalExpr [ {} ]", self.inner)
+        let inner = self.current().expect("Failed to get current expression");
+        write!(f, "DynamicFilterPhysicalExpr [ {} ]", inner)
     }
 }
 
 impl DynamicFilterPhysicalExpr {
+    /// Create a new [`DynamicFilterPhysicalExpr`]
+    /// from an initial expression and a list of children.
+    /// The list of children is provided separately because
+    /// the initial expression may not have the same children.
+    /// For example, if the initial expression is just `true`
+    /// it will not reference any columns, but we may know that
+    /// we are going to replace this expression with a real one
+    /// that does reference certain columns.
+    /// In this case you **must** pass in the columns that will be
+    /// used in the final expression as children to this function
+    /// since DataFusion is generally not compatible with dynamic
+    /// *children* in expressions.
+    ///
+    /// To determine the children you can:
+    ///
+    /// - Use [`collect_columns`] to collect the columns from the expression.
+    /// - Use existing information, such as the sort columns in a `SortExec`.
+    ///
+    /// Generally the important bit is that the *leaf children that reference columns
+    /// do not change* since those will be used to determine what columns need to read or projected
+    /// when evaluating the expression.
+    ///
+    /// [`collect_columns`]: crate::utils::collect_columns
     #[allow(dead_code)] // Only used in tests for now
     pub fn new(
         children: Vec<Arc<dyn PhysicalExpr>>,
-        inner: Arc<dyn DynamicFilterSource>,
+        inner: Arc<dyn PhysicalExpr>,
     ) -> Self {
         Self {
             children,
             remapped_children: None, // Initially no remapped children
-            inner,
+            inner: Arc::new(RwLock::new(inner)),
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
     }
 
-    fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        let current = conjunction(self.inner.snapshot_current_filters()?);
+    /// Get the current expression.
+    /// This will return the current expression with any children
+    /// remapped to match calls to [`PhysicalExpr::with_new_children`].
+    pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
+        let current = self
+            .inner
+            .read()
+            .map_err(|_| {
+                datafusion_common::DataFusionError::Execution(
+                    "Failed to acquire read lock for inner".to_string(),
+                )
+            })?
+            .clone();
         if let Some(remapped_children) = &self.remapped_children {
             // Remap children to the current children
             // of the expression.
@@ -160,6 +154,22 @@ impl DynamicFilterPhysicalExpr {
         } else {
             Ok(current)
         }
+    }
+
+    /// Update the current expression.
+    /// Any children of this expression must be a subset of the original children
+    /// passed to the constructor.
+    /// This should be called e.g.:
+    /// - When we've computed the probe side's hash table in a HashJoinExec
+    /// - After every batch is processed if we update the TopK heap in a SortExec using a TopK approach.
+    pub fn update(&self, new_expr: Arc<dyn PhysicalExpr>) -> Result<()> {
+        let mut current = self.inner.write().map_err(|_| {
+            datafusion_common::DataFusionError::Execution(
+                "Failed to acquire write lock for inner".to_string(),
+            )
+        })?;
+        *current = new_expr;
+        Ok(())
     }
 }
 
@@ -255,11 +265,8 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Ok(inner) = self.inner.snapshot_current_filters() {
-            conjunction(inner).fmt_sql(f)
-        } else {
-            write!(f, "dynamic_filter_expr()") // What do we want to do here?
-        }
+        let inner = self.current().map_err(|_| std::fmt::Error)?;
+        inner.fmt_sql(f)
     }
 
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
@@ -282,65 +289,6 @@ mod test {
 
     use super::*;
 
-    #[derive(Debug)]
-    struct MockDynamicFilterSource {
-        current_expr: Arc<RwLock<Arc<dyn PhysicalExpr>>>,
-    }
-
-    impl Hash for MockDynamicFilterSource {
-        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-            // Hash the current expression to ensure uniqueness
-            self.current_expr.read().unwrap().dyn_hash(state);
-        }
-    }
-
-    impl DynEq for MockDynamicFilterSource {
-        fn dyn_eq(&self, other: &dyn Any) -> bool {
-            if let Some(other) = other.downcast_ref::<MockDynamicFilterSource>() {
-                self.current_expr
-                    .read()
-                    .unwrap()
-                    .eq(&other.current_expr.read().unwrap())
-            } else {
-                false
-            }
-        }
-    }
-
-    impl DynamicFilterSource for MockDynamicFilterSource {
-        fn snapshot_current_filters(&self) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
-            let expr = self.current_expr.read().unwrap().clone();
-            Ok(vec![expr])
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-    }
-
-    impl Display for MockDynamicFilterSource {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(
-                f,
-                "MockDynamicFilterSource [ current_expr: {:?} ]",
-                self.current_expr.read().unwrap()
-            )
-        }
-    }
-
-    impl MockDynamicFilterSource {
-        fn new(current_expr: Arc<dyn PhysicalExpr>) -> Self {
-            Self {
-                current_expr: Arc::new(RwLock::new(current_expr)),
-            }
-        }
-
-        fn update_current_expr(&self, new_expr: Arc<dyn PhysicalExpr>) {
-            let mut current = self.current_expr.write().unwrap();
-            *current = new_expr;
-        }
-    }
-
     #[test]
     fn test_remap_children() {
         let table_schema = Arc::new(Schema::new(vec![
@@ -356,10 +304,9 @@ mod test {
             datafusion_expr::Operator::Gt,
             lit(42) as Arc<dyn PhysicalExpr>,
         ));
-        let source = Arc::new(MockDynamicFilterSource::new(expr));
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![col("a", &table_schema).unwrap()],
-            Arc::clone(&source) as Arc<dyn DynamicFilterSource>,
+            expr as Arc<dyn PhysicalExpr>,
         ));
         // Take an initial snapshot
         let snap = dynamic_filter.snapshot().unwrap().unwrap();
@@ -375,11 +322,7 @@ mod test {
     #[test]
     fn test_snapshot() {
         let expr = lit(42) as Arc<dyn PhysicalExpr>;
-        let source = Arc::new(MockDynamicFilterSource::new(Arc::clone(&expr)));
-        let dynamic_filter = DynamicFilterPhysicalExpr::new(
-            vec![],
-            Arc::clone(&source) as Arc<dyn DynamicFilterSource>,
-        );
+        let dynamic_filter = DynamicFilterPhysicalExpr::new(vec![], Arc::clone(&expr));
 
         // Take a snapshot of the current expression
         let snapshot = dynamic_filter.snapshot().unwrap();
@@ -387,7 +330,7 @@ mod test {
 
         // Update the current expression
         let new_expr = lit(100) as Arc<dyn PhysicalExpr>;
-        source.update_current_expr(Arc::clone(&new_expr));
+        dynamic_filter.update(Arc::clone(&new_expr)).unwrap();
         // Take another snapshot
         let snapshot = dynamic_filter.snapshot().unwrap();
         assert_eq!(snapshot, Some(new_expr));
@@ -395,13 +338,8 @@ mod test {
 
     #[test]
     fn test_dynamic_filter_physical_expr_misbehaves_data_type_nullable() {
-        let source = Arc::new(MockDynamicFilterSource::new(
-            lit(42) as Arc<dyn PhysicalExpr>
-        ));
-        let dynamic_filter = DynamicFilterPhysicalExpr::new(
-            vec![],
-            Arc::clone(&source) as Arc<dyn DynamicFilterSource>,
-        );
+        let dynamic_filter =
+            DynamicFilterPhysicalExpr::new(vec![], lit(42) as Arc<dyn PhysicalExpr>);
 
         // First call to data_type and nullable should set the initial values.
         let initial_data_type = dynamic_filter.data_type(&Schema::empty()).unwrap();
@@ -420,10 +358,9 @@ mod test {
         );
 
         // Now change the current expression to something else.
-        {
-            let mut current = source.current_expr.write().unwrap();
-            *current = lit(ScalarValue::Utf8(None)) as Arc<dyn PhysicalExpr>;
-        }
+        dynamic_filter
+            .update(lit(ScalarValue::Utf8(None)) as Arc<dyn PhysicalExpr>)
+            .expect("Failed to update expression");
         // Check that we error if we call data_type, nullable or evaluate after changing the expression.
         assert!(
             dynamic_filter.data_type(&Schema::empty()).is_err(),
