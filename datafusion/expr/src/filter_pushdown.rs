@@ -19,7 +19,7 @@
 ///
 /// This is used by:
 /// * `FilterPushdownResult` in `ExecutionPlan` to do predicate pushdown at the physical plan level
-///   (e.g. pushing down dynamic fitlers from a hash join into scans).
+///   (e.g. pushing down dynamic filters from a hash join into scans).
 /// * `TableProvider` to do predicate pushdown at planning time (e.g. pruning partitions).
 ///
 /// There are three possible outcomes of a filter pushdown:
@@ -41,8 +41,8 @@ pub enum FilterPushdown {
     /// In this case the parent **must** behave as if the filter was not pushed down
     /// and must apply the filter itself.
     Inexact,
-    /// Filter was pushed down to the child plan and the child plan promises that
-    /// it will apply the filter correctly with no false positives or false negatives.
+    /// Filter was pushed down to the child plan and the child plan guarantees that
+    /// it will apply the filter correctly.
     /// The parent can safely drop the filter.
     Exact,
 }
