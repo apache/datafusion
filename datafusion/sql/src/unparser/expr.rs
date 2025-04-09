@@ -1702,6 +1702,7 @@ mod tests {
         ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
+    use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
     use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
@@ -2883,10 +2884,7 @@ mod tests {
         ] {
             let unparser = Unparser::new(dialect.as_ref());
             let expr = Expr::ScalarFunction(ScalarFunction {
-                func: Arc::new(ScalarUDF::from(
-                    datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc::new(
-                    ), // I don't know why, but cargo fmt wants this split on this line
-                )),
+                func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::new())),
                 args: vec![col("date_col")],
             });
 
