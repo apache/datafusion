@@ -24,7 +24,7 @@ use arrow::array::types::{
 };
 use arrow::array::{downcast_primitive, ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 
 use datafusion_expr::EmitTo;
 

@@ -27,8 +27,12 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+    BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
+};
 use half::f16;
 use hashbrown::hash_table::HashTable;
+use std::collections::VecDeque;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -81,17 +85,31 @@ hash_float!(f16, f32, f64);
 pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// The data type of the output array
     data_type: DataType,
+
     /// Stores the group index based on the hash of its value
     ///
     /// We don't store the hashes as hashing fixed width primitives
     /// is fast enough for this not to benefit performance
-    map: HashTable<usize>,
+    map: HashTable<u64>,
+
     /// The group index of the null value if any
-    null_group: Option<usize>,
+    null_group: Option<u64>,
+
     /// The values for each group index
-    values: Vec<T::Native>,
+    values: VecDeque<Vec<T::Native>>,
+
     /// The random state used to generate hashes
     random_state: RandomState,
+
+    /// Block size of current `GroupValues` if exist:
+    ///   - If `None`, it means block optimization is disabled,
+    ///     all `group values`` will be stored in a single `Vec`
+    ///
+    ///   - If `Some(blk_size)`, it means block optimization is enabled,
+    ///     `group values` will be stored in multiple `Vec`s, and each
+    ///     `Vec` if of `blk_size` len, and we call it a `block`
+    ///
+    block_size: Option<usize>,
 }
 
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
@@ -100,9 +118,10 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
         Self {
             data_type,
             map: HashTable::with_capacity(128),
-            values: Vec::with_capacity(128),
+            values: VecDeque::new(),
             null_group: None,
             random_state: Default::default(),
+            block_size: None,
         }
     }
 }
@@ -112,43 +131,30 @@ where
     T::Native: HashValue,
 {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        assert_eq!(cols.len(), 1);
-        groups.clear();
-
-        for v in cols[0].as_primitive::<T>() {
-            let group_id = match v {
-                None => *self.null_group.get_or_insert_with(|| {
-                    let group_id = self.values.len();
-                    self.values.push(Default::default());
-                    group_id
-                }),
-                Some(key) => {
-                    let state = &self.random_state;
-                    let hash = key.hash(state);
-                    let insert = self.map.entry(
-                        hash,
-                        |g| unsafe { self.values.get_unchecked(*g).is_eq(key) },
-                        |g| unsafe { self.values.get_unchecked(*g).hash(state) },
-                    );
-
-                    match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => *o.get(),
-                        hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.values.len();
-                            v.insert(g);
-                            self.values.push(key);
-                            g
-                        }
-                    }
+        if let Some(block_size) = self.block_size {
+            let before_add_group = |group_values: &mut VecDeque<Vec<T::Native>>| {
+                if group_values.back().unwrap().len() == block_size {
+                    let new_block = Vec::with_capacity(block_size);
+                    group_values.push_back(new_block);
                 }
             };
-            groups.push(group_id)
+            self.get_or_create_groups::<_, BlockedGroupIndexOperations>(
+                cols,
+                groups,
+                before_add_group,
+            )
+        } else {
+            self.get_or_create_groups::<_, FlatGroupIndexOperations>(
+                cols,
+                groups,
+                |_: &mut VecDeque<Vec<T::Native>>| {},
+            )
         }
-        Ok(())
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<usize>() + self.values.allocated_size()
+        todo!()
+        // self.map.capacity() * size_of::<usize>() + self.values.len
     }
 
     fn is_empty(&self) -> bool {
@@ -160,54 +166,55 @@ where
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        fn build_primitive<T: ArrowPrimitiveType>(
-            values: Vec<T::Native>,
-            null_idx: Option<usize>,
-        ) -> PrimitiveArray<T> {
-            let nulls = null_idx.map(|null_idx| {
-                let mut buffer = NullBufferBuilder::new(values.len());
-                buffer.append_n_non_nulls(null_idx);
-                buffer.append_null();
-                buffer.append_n_non_nulls(values.len() - null_idx - 1);
-                // NOTE: The inner builder must be constructed as there is at least one null
-                buffer.finish().unwrap()
-            });
-            PrimitiveArray::<T>::new(values.into(), nulls)
-        }
+        todo!()
+        // fn build_primitive<T: ArrowPrimitiveType>(
+        //     values: Vec<T::Native>,
+        //     null_idx: Option<usize>,
+        // ) -> PrimitiveArray<T> {
+        //     let nulls = null_idx.map(|null_idx| {
+        //         let mut buffer = NullBufferBuilder::new(values.len());
+        //         buffer.append_n_non_nulls(null_idx);
+        //         buffer.append_null();
+        //         buffer.append_n_non_nulls(values.len() - null_idx - 1);
+        //         // NOTE: The inner builder must be constructed as there is at least one null
+        //         buffer.finish().unwrap()
+        //     });
+        //     PrimitiveArray::<T>::new(values.into(), nulls)
+        // }
 
-        let array: PrimitiveArray<T> = match emit_to {
-            EmitTo::All => {
-                self.map.clear();
-                build_primitive(std::mem::take(&mut self.values), self.null_group.take())
-            }
-            EmitTo::First(n) => {
-                self.map.retain(|group_idx| {
-                    // Decrement group index by n
-                    match group_idx.checked_sub(n) {
-                        // Group index was >= n, shift value down
-                        Some(sub) => {
-                            *group_idx = sub;
-                            true
-                        }
-                        // Group index was < n, so remove from table
-                        None => false,
-                    }
-                });
-                let null_group = match &mut self.null_group {
-                    Some(v) if *v >= n => {
-                        *v -= n;
-                        None
-                    }
-                    Some(_) => self.null_group.take(),
-                    None => None,
-                };
-                let mut split = self.values.split_off(n);
-                std::mem::swap(&mut self.values, &mut split);
-                build_primitive(split, null_group)
-            }
-        };
+        // let array: PrimitiveArray<T> = match emit_to {
+        //     EmitTo::All => {
+        //         self.map.clear();
+        //         build_primitive(std::mem::take(&mut self.values), self.null_group.take())
+        //     }
+        //     EmitTo::First(n) => {
+        //         self.map.retain(|group_idx| {
+        //             // Decrement group index by n
+        //             match group_idx.checked_sub(n) {
+        //                 // Group index was >= n, shift value down
+        //                 Some(sub) => {
+        //                     *group_idx = sub;
+        //                     true
+        //                 }
+        //                 // Group index was < n, so remove from table
+        //                 None => false,
+        //             }
+        //         });
+        //         let null_group = match &mut self.null_group {
+        //             Some(v) if *v >= n => {
+        //                 *v -= n;
+        //                 None
+        //             }
+        //             Some(_) => self.null_group.take(),
+        //             None => None,
+        //         };
+        //         let mut split = self.values.split_off(n);
+        //         std::mem::swap(&mut self.values, &mut split);
+        //         build_primitive(split, null_group)
+        //     }
+        // };
 
-        Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
+        // Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {
@@ -216,5 +223,88 @@ where
         self.values.shrink_to(count);
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
+    }
+}
+
+impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T>
+where
+    T::Native: HashValue,
+{
+    fn get_or_create_groups<F, O>(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        mut before_add_group: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&mut VecDeque<Vec<T::Native>>),
+        O: GroupIndexOperations,
+    {
+        assert_eq!(cols.len(), 1);
+        groups.clear();
+
+        for v in cols[0].as_primitive::<T>() {
+            let group_index = match v {
+                None => *self.null_group.get_or_insert_with(|| {
+                    // actions before add new group like checking if room is enough
+                    before_add_group(&mut self.values);
+
+                    // get block infos and update block
+                    let block_id = self.values.len() as u32;
+                    let current_block = self.values.back_mut().unwrap();
+                    let block_offset = current_block.len() as u64;
+                    current_block.push(Default::default());
+
+                    // get group index and finish actions needed it
+                    O::pack_index(block_id, block_offset)
+                }),
+                Some(key) => {
+                    let state = &self.random_state;
+                    let hash = key.hash(state);
+                    let insert = self.map.entry(
+                        hash,
+                        |g| unsafe {
+                            let block_id = O::get_block_id(*g);
+                            let block_offset = O::get_block_offset(*g);
+                            self.values
+                                .get(block_id as usize)
+                                .unwrap()
+                                .get_unchecked(block_offset as usize)
+                                .is_eq(key)
+                        },
+                        |g| unsafe {
+                            let block_id = O::get_block_id(*g);
+                            let block_offset = O::get_block_offset(*g);
+                            self.values
+                                .get(block_id as usize)
+                                .unwrap()
+                                .get_unchecked(block_offset as usize)
+                                .hash(state)
+                        },
+                    );
+
+                    match insert {
+                        hashbrown::hash_table::Entry::Occupied(o) => *o.get(),
+                        hashbrown::hash_table::Entry::Vacant(v) => {
+                            // actions before add new group like checking if room is enough
+                            before_add_group(&mut self.values);
+
+                            // get block infos and update block
+                            let block_id = self.values.len() as u32;
+                            let current_block = self.values.back_mut().unwrap();
+                            let block_offset = current_block.len() as u64;
+                            current_block.push(key);
+
+                            // get group index and finish actions needed it
+                            let packed_index = O::pack_index(block_id, block_offset);
+                            v.insert(packed_index);
+                            packed_index
+                        }
+                    }
+                }
+            };
+            groups.push(group_index as usize)
+        }
+        Ok(())
     }
 }
