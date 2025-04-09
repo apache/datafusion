@@ -507,3 +507,81 @@ pub(crate) fn slice_and_maybe_filter(
         Ok(sliced_arrays)
     }
 }
+
+/// Blocked style group index used in blocked mode group values and accumulators
+///   - High 32 bits represent `block_id`
+///   - Low 32 bits represent `block_offset`
+///
+pub trait GroupIndexOperations {
+    fn pack_index(block_id: u32, block_offset: u64) -> u64;
+
+    fn get_block_id(packed_index: u64) -> u32;
+
+    fn get_block_offset(packed_index: u64) -> u64;
+}
+
+pub struct BlockedGroupIndexOperations;
+
+impl GroupIndexOperations for BlockedGroupIndexOperations {
+    fn pack_index(block_id: u32, block_offset: u64) -> u64 {
+        ((block_id as u64) << 32) | block_offset
+    }
+
+    fn get_block_id(packed_index: u64) -> u32 {
+        (packed_index >> 32) as u32
+    }
+
+    fn get_block_offset(packed_index: u64) -> u64 {
+        (packed_index as u32) as u64
+    }
+}
+
+pub struct FlatGroupIndexOperations;
+
+impl GroupIndexOperations for FlatGroupIndexOperations {
+    fn pack_index(_block_id: u32, block_offset: u64) -> u64 {
+        block_offset
+    }
+
+    fn get_block_id(_packed_index: u64) -> u32 {
+        0
+    }
+
+    fn get_block_offset(packed_index: u64) -> u64 {
+        packed_index
+    }
+}
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+
+//     #[test]
+//     fn test_blocked_group_index_build() {
+//         let group_index1 = 1;
+//         let group_index2 = (42_u64 << 32) | 2;
+//         let group_index3 = ((u32::MAX as u64) << 32) | 3;
+
+//         let index_builder = BlockedGroupIndexBuilder::new(false);
+//         let flat1 = index_builder.build(group_index1 as usize);
+//         let flat2 = index_builder.build(group_index2 as usize);
+//         let flat3 = index_builder.build(group_index3 as usize);
+//         let expected1 = BlockedGroupIndex::new_from_parts(0, group_index1);
+//         let expected2 = BlockedGroupIndex::new_from_parts(0, group_index2);
+//         let expected3 = BlockedGroupIndex::new_from_parts(0, group_index3);
+//         assert_eq!(flat1, expected1);
+//         assert_eq!(flat2, expected2);
+//         assert_eq!(flat3, expected3);
+
+//         let index_builder = BlockedGroupIndexBuilder::new(true);
+//         let blocked1 = index_builder.build(group_index1 as usize);
+//         let blocked2 = index_builder.build(group_index2 as usize);
+//         let blocked3 = index_builder.build(group_index3 as usize);
+//         let expected1 = BlockedGroupIndex::new_from_parts(0, 1);
+//         let expected2 = BlockedGroupIndex::new_from_parts(42, 2);
+//         let expected3 = BlockedGroupIndex::new_from_parts(u32::MAX, 3);
+//         assert_eq!(blocked1, expected1);
+//         assert_eq!(blocked2, expected2);
+//         assert_eq!(blocked3, expected3);
+//     }
+// }
