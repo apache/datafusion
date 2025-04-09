@@ -303,7 +303,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Callers however should *not* assume anything about the returned expressions
     /// since callers and implementers may not agree on what "simple" or "built-in"
     /// means.
-    /// In other words, if you need to searlize a `PhysicalExpr` across the wire
+    /// In other words, if you need to serialize a `PhysicalExpr` across the wire
     /// you should call this method and then try to serialize the result,
     /// but you should handle unknown or unexpected `PhysicalExpr` implementations gracefully
     /// just as if you had not called this method at all.
