@@ -360,6 +360,8 @@ impl PhysicalExpr for BinaryExpr {
 
         let lhs = self.left.evaluate(batch)?;
 
+        println!("==> Evaluating binary op: {}", self.op);
+
         // Delay evaluating RHS unless we really need it
         let rhs_lazy = || self.right.evaluate(batch);
 
@@ -380,6 +382,7 @@ impl PhysicalExpr for BinaryExpr {
         // Check for short-circuit cases that need RHS value
         if let Some(result) = get_short_circuit_result(&lhs, &self.op, Some(rhs.clone()))
         {
+            println!("==> Short-circuit with RHS: op={:?}", self.op);
             return Ok(result);
         }
 
@@ -840,28 +843,43 @@ fn get_short_circuit_result(
     op: &Operator,
     rhs: Option<ColumnarValue>, // we pass RHS only if needed
 ) -> Option<ColumnarValue> {
+    println!(
+        "==> Checking short-circuit: op={:?}, lhs_type={:?}, has_rhs={}",
+        op,
+        lhs.data_type(),
+        rhs.is_some()
+    );
+
     let data_type = lhs.data_type();
     match (data_type, op) {
         (DataType::Boolean, Operator::And) => {
             match lhs {
                 ColumnarValue::Array(array) => {
                     if let Ok(array) = as_boolean_array(&array) {
+                        println!("==> AND Array - false_count={}, true_count={}, null_count={}, len={}",
+                                array.false_count(), array.true_count(), array.null_count(), array.len());
+
                         // For AND, only short-circuit if ALL values are false and there are NO nulls
                         if array.false_count() == array.len() && array.null_count() == 0 {
+                            println!("==> Short-circuit AND: all false");
                             return Some(lhs.clone()); // all false → result is false
                         }
                         // Only short-circuit to RHS if ALL values are true and there are NO nulls
                         if array.true_count() == array.len() && array.null_count() == 0 {
+                            println!("==> Short-circuit AND: all true, returning RHS");
                             return rhs; // all true → just return RHS
                         }
                     }
                 }
                 ColumnarValue::Scalar(scalar) => {
+                    println!("==> AND Scalar: scalar={:?}", scalar);
                     if let ScalarValue::Boolean(Some(value)) = scalar {
                         if !value {
+                            println!("==> Short-circuit AND scalar: false");
                             return Some(lhs.clone()); // false → result is false
                         }
                         if *value && rhs.is_some() {
+                            println!("==> Short-circuit AND scalar: true, returning RHS");
                             return rhs; // true → just return RHS
                         }
                     }
@@ -872,22 +890,30 @@ fn get_short_circuit_result(
             match lhs {
                 ColumnarValue::Array(array) => {
                     if let Ok(array) = as_boolean_array(&array) {
+                        println!("==> OR Array - false_count={}, true_count={}, null_count={}, len={}",
+                                array.false_count(), array.true_count(), array.null_count(), array.len());
+
                         // For OR, only short-circuit if ALL values are true and there are NO nulls
                         if array.true_count() == array.len() && array.null_count() == 0 {
+                            println!("==> Short-circuit OR: all true");
                             return Some(lhs.clone()); // all true → result is true
                         }
                         // Only short-circuit to RHS if ALL values are false and there are NO nulls
                         if array.false_count() == array.len() && array.null_count() == 0 {
+                            println!("==> Short-circuit OR: all false, returning RHS");
                             return rhs; // all false → just return RHS
                         }
                     }
                 }
                 ColumnarValue::Scalar(scalar) => {
+                    println!("==> OR Scalar: scalar={:?}", scalar);
                     if let ScalarValue::Boolean(Some(value)) = scalar {
                         if *value {
+                            println!("==> Short-circuit OR scalar: true");
                             return Some(lhs.clone()); // true → result is true
                         }
                         if !value && rhs.is_some() {
+                            println!("==> Short-circuit OR scalar: false, returning RHS");
                             return rhs; // false → just return RHS
                         }
                     }
@@ -896,6 +922,7 @@ fn get_short_circuit_result(
         }
         _ => {}
     }
+    println!("==> No short-circuit applies");
     None
 }
 
