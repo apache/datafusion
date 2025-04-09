@@ -360,23 +360,13 @@ impl PhysicalExpr for BinaryExpr {
 
         let lhs = self.left.evaluate(batch)?;
 
-        // Optimize for short-circuiting `Operator::And` or `Operator::Or` operations and return early.
-        let strategy = get_short_circuit_strategy(&lhs, &self.op);
-        match strategy {
-            ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
-            ShortCircuitStrategy::ReturnRight(value) => return Ok(value),
-            // Currently, we can't utilize the PreSelection strategy without changing the API
-            // but in the future we could add evaluate_selection to PhysicalExpr
-            ShortCircuitStrategy::PreSelection(_) | ShortCircuitStrategy::None => {
-                // Continue with existing logic
-                if let Some(result) = get_short_circuit_result(&lhs, &self.op, None) {
-                    return Ok(result);
-                }
-            }
-        }
-
         // Delay evaluating RHS unless we really need it
         let rhs_lazy = || self.right.evaluate(batch);
+
+        // Optimize for short-circuiting `Operator::And` or `Operator::Or` operations and return early.
+        if let Some(result) = get_short_circuit_result(&lhs, &self.op, None) {
+            return Ok(result);
+        }
 
         // Only evaluate RHS if short-circuit evaluation doesn't apply
         let rhs = rhs_lazy()?;
