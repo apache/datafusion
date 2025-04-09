@@ -4919,7 +4919,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_short_circuit() {
+    fn test_get_short_circuit_result() {
         use crate::planner::logical2physical;
         use datafusion_expr::col as logical_col;
         use datafusion_expr::lit;
@@ -4938,78 +4938,57 @@ mod tests {
         // op: AND left: all false
         let left_expr = logical2physical(&logical_col("a").eq(lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(check_short_circuit(&left_value, &Operator::And));
+        assert!(get_short_circuit_result(&left_value, &Operator::And, None).is_some());
+
         // op: AND left: not all false
         let left_expr = logical2physical(&logical_col("a").eq(lit(3)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(!check_short_circuit(&left_value, &Operator::And));
+        assert!(get_short_circuit_result(&left_value, &Operator::And, None).is_none());
+
         // op: OR left: all true
-        let left_expr = logical2physical(&logical_col("a").gt(lit(0)), &schema);
-        let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(check_short_circuit(&left_value, &Operator::Or));
-        // op: OR left: not all true
-        let left_expr = logical2physical(&logical_col("a").gt(lit(2)), &schema);
-        let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(!check_short_circuit(&left_value, &Operator::Or));
-    }
-
-    #[test]
-    fn test_get_short_circuit_result() {
-        use crate::planner::logical2physical;
-        use datafusion_expr::col as logical_col;
-        use datafusion_expr::lit;
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]));
-        let a_array = Int32Array::from(vec![1, 3, 4, 5, 6]);
-        let b_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(a_array), Arc::new(b_array)],
-        )
-        .unwrap();
-
-        // Case 1: AND with all false LHS
-        let left_expr = logical2physical(&logical_col("a").eq(lit(2)), &schema);
-        let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(get_short_circuit_result(&left_value, &Operator::And, None).is_some());
-
-        // Case 2: AND with all true LHS
-        let left_expr = logical2physical(&logical_col("a").gt(lit(0)), &schema);
-        let left_value = left_expr.evaluate(&batch).unwrap();
-        let right_expr = logical2physical(&logical_col("b").gt(lit(1)), &schema);
-        let right_value = right_expr.evaluate(&batch).unwrap();
-        let result = get_short_circuit_result(
-            &left_value,
-            &Operator::And,
-            Some(right_value.clone()),
-        );
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), right_value);
-
-        // Case 3: OR with all true LHS
         let left_expr = logical2physical(&logical_col("a").gt(lit(0)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(get_short_circuit_result(&left_value, &Operator::Or, None).is_some());
 
-        // Case 4: OR with all false LHS
-        let left_expr = logical2physical(&logical_col("a").eq(lit(2)), &schema);
+        // op: OR left: not all true
+        let left_expr = logical2physical(&logical_col("a").gt(lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
-        let right_expr = logical2physical(&logical_col("b").gt(lit(1)), &schema);
+        assert!(get_short_circuit_result(&left_value, &Operator::Or, None).is_none());
+
+        // Test additional cases for the new function:
+        // 1. AND with all true - should return RHS when provided
+        let all_true = logical2physical(&logical_col("a").gt(lit(0)), &schema);
+        let all_true_value = all_true.evaluate(&batch).unwrap();
+        let right_expr = logical2physical(&logical_col("b").eq(lit(3)), &schema);
         let right_value = right_expr.evaluate(&batch).unwrap();
         let result = get_short_circuit_result(
-            &left_value,
+            &all_true_value,
+            &Operator::And,
+            Some(right_value.clone()),
+        );
+        assert!(result.is_some());
+        // Convert both ColumnarValue instances to their string representations for comparison
+        // since ColumnarValue doesn't implement PartialEq
+        let result_value = result.unwrap();
+        let result_str = format!("{:?}", result_value);
+        let right_value_str = format!("{:?}", right_value);
+        assert_eq!(result_str, right_value_str);
+
+        // 2. OR with all false - should return RHS when provided
+        let all_false = logical2physical(&logical_col("a").lt(lit(0)), &schema);
+        let all_false_value = all_false.evaluate(&batch).unwrap();
+        let result = get_short_circuit_result(
+            &all_false_value,
             &Operator::Or,
             Some(right_value.clone()),
         );
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), right_value);
 
-        // Case 5: Mixed values - no short circuit
-        let left_expr = logical2physical(&logical_col("a").gt(lit(3)), &schema);
-        let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(get_short_circuit_result(&left_value, &Operator::And, None).is_none());
-        assert!(get_short_circuit_result(&left_value, &Operator::Or, None).is_none());
+        // Convert both ColumnarValue instances to their string representations for comparison
+        // since ColumnarValue doesn't implement PartialEq
+        let result_value = result.unwrap();
+        let result_str = format!("{:?}", result_value);
+        let right_value_str = format!("{:?}", right_value);
+        assert_eq!(result_str, right_value_str);
     }
 }
