@@ -1469,7 +1469,7 @@ impl ScalarValue {
     }
 
     /// Calculate arithmetic negation for a scalar value
-    pub fn arithmetic_negate(&self) -> Result<Self> {
+    pub fn negate(&self) -> Result<Self> {
         fn neg_checked_with_ctx<T: ArrowNativeTypeOp>(
             v: T,
             ctx: impl Fn() -> String,
@@ -1576,20 +1576,11 @@ impl ScalarValue {
                     tz.clone(),
                 ))
             }
+            ScalarValue::Boolean(None) => Ok(self.clone()),
+            ScalarValue::Boolean(Some(value)) => Ok(ScalarValue::Boolean(Some(!value))),
             value => _internal_err!(
                 "Can not run arithmetic negative on scalar value {value:?}"
             ),
-        }
-    }
-
-    /// Returns negation for a boolean scalar value
-    pub fn boolean_negate(&self) -> Result<Self> {
-        match self {
-            ScalarValue::Boolean(None) => Ok(self.clone()),
-            ScalarValue::Boolean(Some(value)) => Ok(ScalarValue::Boolean(Some(!value))),
-            value => {
-                _internal_err!("Can not run boolean negative on scalar value {value:?}")
-            }
         }
     }
 
@@ -4590,7 +4581,7 @@ mod tests {
         let try_into_value: i128 = decimal_value.clone().try_into().unwrap();
         assert_eq!(123_i128, try_into_value);
         assert!(!decimal_value.is_null());
-        let neg_decimal_value = decimal_value.arithmetic_negate()?;
+        let neg_decimal_value = decimal_value.negate()?;
         match neg_decimal_value {
             ScalarValue::Decimal128(v, _, _) => {
                 assert_eq!(-123, v.unwrap());
@@ -6326,15 +6317,15 @@ mod tests {
     fn test_scalar_negative() -> Result<()> {
         // positive test
         let value = ScalarValue::Int32(Some(12));
-        assert_eq!(ScalarValue::Int32(Some(-12)), value.arithmetic_negate()?);
+        assert_eq!(ScalarValue::Int32(Some(-12)), value.negate()?);
         let value = ScalarValue::Int32(None);
-        assert_eq!(ScalarValue::Int32(None), value.arithmetic_negate()?);
+        assert_eq!(ScalarValue::Int32(None), value.negate()?);
 
         // negative test
         let value = ScalarValue::UInt8(Some(12));
-        assert!(value.arithmetic_negate().is_err());
+        assert!(value.negate().is_err());
         let value = ScalarValue::Boolean(None);
-        assert!(value.arithmetic_negate().is_err());
+        assert!(value.negate().is_err());
         Ok(())
     }
 
@@ -6345,7 +6336,7 @@ mod tests {
             ($($val:expr),* $(,)?) => {$(
                 {
                     let value: ScalarValue = $val;
-                    let err = value.arithmetic_negate().expect_err("Should receive overflow error on negating {value:?}");
+                    let err = value.negate().expect_err("Should receive overflow error on negating {value:?}");
                     let root_err = err.find_root();
                     match  root_err{
                         DataFusionError::ArrowError(
@@ -6396,7 +6387,7 @@ mod tests {
         ];
         // skip float 16 because they aren't supported
         for (test, expected) in float_cases.into_iter().skip(2) {
-            assert_eq!(test.arithmetic_negate()?, expected);
+            assert_eq!(test.negate()?, expected);
         }
         Ok(())
     }
@@ -6416,7 +6407,7 @@ mod tests {
         ];
 
         for (test, expected) in cases {
-            assert_eq!(test.arithmetic_negate().unwrap(), expected);
+            assert_eq!(test.negate().unwrap(), expected);
         }
     }
 
@@ -6713,7 +6704,7 @@ mod tests {
             ),
         ];
         for (expr, expected) in cases.iter() {
-            let result = expr.arithmetic_negate().unwrap();
+            let result = expr.negate().unwrap();
             assert_eq!(*expected, result, "-expr:{expr:?}");
         }
     }

@@ -933,23 +933,10 @@ impl Interval {
     /// This method computes the arithmetic negation of the interval, reflecting
     /// it about the origin of the number line. This operation swaps and negates
     /// the lower and upper bounds of the interval.
-    pub fn arithmetic_negate(&self) -> Result<Self> {
+    pub fn negate(&self) -> Result<Self> {
         Ok(Self {
-            lower: self.upper.arithmetic_negate()?,
-            upper: self.lower.arithmetic_negate()?,
-        })
-    }
-
-    pub fn boolean_negate(self) -> Result<Self> {
-        if self.data_type() != DataType::Boolean {
-            return internal_err!(
-                "Boolean negation is only supported for boolean intervals"
-            );
-        }
-
-        Ok(Self {
-            lower: self.lower().clone().boolean_negate()?,
-            upper: self.upper().clone().boolean_negate()?,
+            lower: self.upper.negate()?,
+            upper: self.lower.negate()?,
         })
     }
 }

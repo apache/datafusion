@@ -99,7 +99,7 @@ impl PhysicalExpr for NegativeExpr {
                 Ok(ColumnarValue::Array(result))
             }
             ColumnarValue::Scalar(scalar) => {
-                Ok(ColumnarValue::Scalar(scalar.arithmetic_negate()?))
+                Ok(ColumnarValue::Scalar(scalar.negate()?))
             }
         }
     }
@@ -119,7 +119,7 @@ impl PhysicalExpr for NegativeExpr {
     /// It replaces the upper and lower bounds after multiplying them with -1.
     /// Ex: `(a, b]` => `[-b, -a)`
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        children[0].arithmetic_negate()
+        children[0].negate()
     }
 
     fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
@@ -133,7 +133,7 @@ impl PhysicalExpr for NegativeExpr {
         interval: &Interval,
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        let negated_interval = interval.arithmetic_negate()?;
+        let negated_interval = interval.negate()?;
 
         Ok(children[0]
             .intersect(negated_interval)?
@@ -146,24 +146,24 @@ impl PhysicalExpr for NegativeExpr {
         _schema: &SchemaRef,
     ) -> Result<Distribution> {
         match children[0] {
-            Uniform(u) => Distribution::new_uniform(u.range().arithmetic_negate()?),
+            Uniform(u) => Distribution::new_uniform(u.range().negate()?),
             Exponential(e) => Distribution::new_exponential(
                 e.rate().clone(),
-                e.offset().arithmetic_negate()?,
+                e.offset().negate()?,
                 !e.positive_tail(),
             ),
             Gaussian(g) => Distribution::new_gaussian(
-                g.mean().arithmetic_negate()?,
+                g.mean().negate()?,
                 g.variance().clone(),
             ),
             Bernoulli(_) => {
                 internal_err!("NegativeExpr cannot operate on Boolean datatypes")
             }
             Generic(u) => Distribution::new_generic(
-                u.mean().arithmetic_negate()?,
-                u.median().arithmetic_negate()?,
+                u.mean().negate()?,
+                u.median().negate()?,
                 u.variance().clone(),
-                u.range().arithmetic_negate()?,
+                u.range().negate()?,
             ),
         }
     }
@@ -172,7 +172,7 @@ impl PhysicalExpr for NegativeExpr {
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties {
             sort_properties: -children[0].sort_properties,
-            range: children[0].range.clone().arithmetic_negate()?,
+            range: children[0].range.clone().negate()?,
             preserves_lex_ordering: false,
         })
     }

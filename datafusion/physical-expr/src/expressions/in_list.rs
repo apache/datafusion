@@ -447,7 +447,7 @@ impl PhysicalExpr for InListExpr {
             .try_fold(children[1].clone(), |acc, item| acc.union(*item))?;
 
         if self.negated {
-            expr_bounds.contains(list_bounds)?.boolean_negate()
+            expr_bounds.contains(list_bounds)?.negate()
         } else {
             expr_bounds.contains(list_bounds)
         }
