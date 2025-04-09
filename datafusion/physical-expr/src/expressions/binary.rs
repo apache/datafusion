@@ -848,6 +848,7 @@ fn get_short_circuit_result(
 ) -> Option<ColumnarValue> {
     // Only apply short-circuiting for logical operators And/Or.
     if !matches!(op, Operator::And | Operator::Or) {
+        println!("==> No short-circuit applies");
         return None;
     }
 
@@ -1135,6 +1136,8 @@ mod tests {
             // verify that the result itself is correct
             for (i, x) in $VEC.iter().enumerate() {
                 let v = result.value(i);
+                println!("==> Evaluating binary op: +, result = {:?}", v);
+                println!("==> Evaluating binary op: +, expected = {:?}", x);
                 assert_eq!(
                     v,
                     *x,
