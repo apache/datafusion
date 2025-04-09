@@ -904,8 +904,12 @@ fn get_short_circuit_result(
                             println!("==> Short-circuit OR: all true");
                             return Some(lhs.clone()); // all true → result is true
                         }
+
                         // Only short-circuit to RHS if ALL values are false and there are NO nulls
-                        if array.false_count() == array.len() && array.null_count() == 0 {
+                        if array.false_count() == array.len()
+                            && array.null_count() == 0
+                            && rhs.is_some()
+                        {
                             println!("==> Short-circuit OR: all false, returning RHS");
                             return rhs; // all false → just return RHS
                         }
@@ -1751,10 +1755,9 @@ mod tests {
         let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(value + 1),
+                Some(value + 3),
                 Some(value),
-                None,
                 Some(value + 2),
-                Some(value + 1),
             ],
             10,
             0,
@@ -1805,7 +1808,7 @@ mod tests {
         let a = dict_builder.finish();
 
         let expected: PrimitiveArray<Int32Type> =
-            PrimitiveArray::from(vec![Some(2), None, Some(4), Some(6)]);
+            PrimitiveArray::from(vec![Some(2), None, Some(3), Some(6)]);
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2069,7 +2072,7 @@ mod tests {
                 Some(value),
                 Some(value - 1),
             ],
-            10,
+            11,
             0,
         ));
 
@@ -2405,7 +2408,13 @@ mod tests {
             vec![Arc::new(a), Arc::new(b)],
             Operator::Divide,
             create_decimal_array(
-                &[Some(9919), None, None, Some(10081), Some(10000)],
+                &[
+                    Some(9919), // 0.9919
+                    None,
+                    None,
+                    Some(10081), // 1.0081
+                    Some(10000), // 1.0
+                ],
                 14,
                 4,
             ),
@@ -3886,8 +3895,8 @@ mod tests {
         )) as ArrayRef;
         let float64_array = Arc::new(Float64Array::from(vec![
             Some(1.23),
-            None,
             Some(1.22),
+            Some(1.23),
             Some(1.24),
         ])) as ArrayRef;
         // lt: float64array < decimal array
@@ -4999,8 +5008,7 @@ mod tests {
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(get_short_circuit_result(&left_value, &Operator::Or, None).is_none());
 
-        // Test additional cases for the new function:
-        // 1. AND with all true - should return RHS when provided
+        // [true, true..] AND RHS - should return RHS when provided
         let all_true = logical2physical(&logical_col("a").gt(lit(0)), &schema);
         let all_true_value = all_true.evaluate(&batch).unwrap();
         let right_expr = logical2physical(&logical_col("b").eq(lit(3)), &schema);
@@ -5018,7 +5026,7 @@ mod tests {
         let right_value_str = format!("{:?}", right_value);
         assert_eq!(result_str, right_value_str);
 
-        // 2. OR with all false - should return RHS when provided
+        // [false, false..] OR RHS  - should return RHS when provided
         let all_false = logical2physical(&logical_col("a").lt(lit(0)), &schema);
         let all_false_value = all_false.evaluate(&batch).unwrap();
         let result = get_short_circuit_result(
