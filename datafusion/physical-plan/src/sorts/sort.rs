@@ -1084,20 +1084,11 @@ impl SortExec {
             .equivalence_properties()
             .extract_common_sort_prefix(&requirement);
 
-        let sort_partially_satisfied = !sort_prefix.is_empty();
-
         // The emission type depends on whether the input is already sorted:
         // - If already fully sorted, we can emit results in the same way as the input
-        // - If partially sorted, we might be able to emit results incrementally, but it is not guaranteed (Both)
         // - If not sorted, we must wait until all data is processed to emit results (Final)
         let emission_type = if sort_satisfied {
             input.pipeline_behavior()
-        } else if sort_partially_satisfied {
-            if input.pipeline_behavior() == EmissionType::Incremental {
-                EmissionType::Both
-            } else {
-                input.pipeline_behavior()
-            }
         } else {
             EmissionType::Final
         };
