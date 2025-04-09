@@ -26,6 +26,7 @@ use super::metrics::BaselineMetrics;
 use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
 
+use arrow::array::RecordBatchOptions;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::{exec_err, Result};
 use datafusion_common_runtime::JoinSet;
@@ -428,7 +429,13 @@ where
         let ret = this.stream.poll_next(cx);
         if transform_schema {
             if let Poll::Ready(Some(Ok(batch))) = ret {
-                return Poll::Ready(Some(batch.with_schema(schema).map_err(|e| {
+                let options = RecordBatchOptions::default().with_row_count(Some(batch.num_rows()));
+                return Poll::Ready(Some(RecordBatch::try_new_with_options(
+                    schema,
+                    batch.columns().to_vec(),
+                    &options,
+                )
+                .map_err(|e| {
                     datafusion_common::DataFusionError::ArrowError(e, None)
                 })));
             }
