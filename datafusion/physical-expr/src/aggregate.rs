@@ -97,6 +97,94 @@ impl AggregateExprBuilder {
     /// Constructs an `AggregateFunctionExpr` from the builder
     ///
     /// Note that an [`Self::alias`] must be provided before calling this method.
+    ///
+    /// # Example: Create an [`AggregateUDF`]
+    ///
+    /// In the following example, [`AggregateFunctionExpr`] will be built using [`AggregateExprBuilder`]
+    /// which provides a build function. Full example could be accessed from the source file.
+    ///
+    /// ```
+    /// # use std::any::Any;
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::DataType;
+    /// # use datafusion_common::{Result, ScalarValue};
+    /// # use datafusion_expr::{col, ColumnarValue, Documentation, Signature, Volatility, Expr};
+    /// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::{AccumulatorArgs, StateFieldsArgs}};
+    /// # use arrow::datatypes::Field;
+    /// #
+    /// # #[derive(Debug, Clone)]
+    /// # struct FirstValueUdf {
+    /// #     signature: Signature,
+    /// # }
+    /// #
+    /// # impl FirstValueUdf {
+    /// #     fn new() -> Self {
+    /// #         Self {
+    /// #             signature: Signature::any(1, Volatility::Immutable),
+    /// #         }
+    /// #     }
+    /// # }
+    /// #
+    /// # impl AggregateUDFImpl for FirstValueUdf {
+    /// #     fn as_any(&self) -> &dyn Any {
+    /// #         unimplemented!()
+    /// # }
+    /// #     fn name(&self) -> &str {
+    /// #         unimplemented!()
+    /// }
+    /// #     fn signature(&self) -> &Signature {
+    /// #         unimplemented!()
+    /// # }
+    /// #     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+    /// #         unimplemented!()
+    /// #     }
+    /// #     
+    /// #     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    /// #         unimplemented!()
+    /// #         }
+    /// #     
+    /// #     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    /// #         unimplemented!()
+    /// #     }
+    /// #     
+    /// #     fn documentation(&self) -> Option<&Documentation> {
+    /// #         unimplemented!()
+    /// #     }
+    /// # }
+    /// #
+    /// # let first_value = AggregateUDF::from(FirstValueUdf::new());
+    /// # let expr = first_value.call(vec![col("a")]);
+    /// #
+    /// # use datafusion_physical_expr::expressions::Column;
+    /// # use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    /// # use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    /// # use datafusion_physical_expr::expressions::PhysicalSortExpr;
+    /// # use datafusion_physical_expr::PhysicalSortRequirement;
+    /// #
+    /// fn build_aggregate_expr() -> Result<()> {
+    ///     let args = vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>];
+    ///     let order_by = vec![PhysicalSortExpr {
+    ///         expr: Arc::new(Column::new("x", 1)) as Arc<dyn PhysicalExpr>,
+    ///         options: Default::default(),
+    ///     }];
+    ///
+    ///     let first_value = AggregateUDF::from(FirstValueUdf::new());
+    ///     
+    ///     let aggregate_expr = AggregateExprBuilder::new(
+    ///         Arc::new(first_value),
+    ///         args
+    ///     )
+    ///     .order_by(order_by.into())
+    ///     .alias("first_a_by_x")
+    ///     .ignore_nulls()
+    ///     .build()?;
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// This creates a physical expression equivalent to SQL:
+    /// `first_value(a ORDER BY x) IGNORE NULLS AS first_a_by_x`
     pub fn build(self) -> Result<AggregateFunctionExpr> {
         let Self {
             fun,

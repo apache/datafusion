@@ -27,7 +27,7 @@ use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    FileMeta, FileScanConfig, ParquetFileMetrics, ParquetFileReaderFactory, ParquetSource,
+    FileMeta, ParquetFileMetrics, ParquetFileReaderFactory, ParquetSource,
 };
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -36,6 +36,8 @@ use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::Result;
 
 use bytes::Bytes;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::DataSourceExec;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 use insta::assert_snapshot;
@@ -83,15 +85,16 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
                 InMemoryParquetFileReaderFactory(Arc::clone(&in_memory_object_store)),
             )),
     );
-    let base_config = FileScanConfig::new(
+    let base_config = FileScanConfigBuilder::new(
         // just any url that doesn't point to in memory object store
         ObjectStoreUrl::local_filesystem(),
         file_schema,
         source,
     )
-    .with_file_group(file_group);
+    .with_file_group(file_group)
+    .build();
 
-    let parquet_exec = base_config.build();
+    let parquet_exec = DataSourceExec::from_data_source(base_config);
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();

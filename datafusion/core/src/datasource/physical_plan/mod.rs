@@ -58,6 +58,7 @@ pub use datafusion_datasource::file_groups::FileGroupPartitioner;
 pub use datafusion_datasource::file_meta::FileMeta;
 pub use datafusion_datasource::file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
+    FileScanConfigBuilder,
 };
 pub use datafusion_datasource::file_sink_config::*;
 

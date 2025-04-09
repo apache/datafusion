@@ -24,10 +24,9 @@ pub mod empty;
 pub mod file_format;
 pub mod listing;
 pub mod listing_table_factory;
-pub mod memory;
+mod memory_test;
 pub mod physical_plan;
 pub mod provider;
-mod statistics;
 mod view_test;
 
 // backwards compatibility
@@ -40,6 +39,7 @@ pub use crate::catalog::TableProvider;
 pub use crate::logical_expr::TableType;
 pub use datafusion_catalog::cte_worktable;
 pub use datafusion_catalog::default_table_source;
+pub use datafusion_catalog::memory;
 pub use datafusion_catalog::stream;
 pub use datafusion_catalog::view;
 pub use datafusion_datasource::schema_adapter;
@@ -47,7 +47,6 @@ pub use datafusion_datasource::sink;
 pub use datafusion_datasource::source;
 pub use datafusion_execution::object_store;
 pub use datafusion_physical_expr::create_ordering;
-pub use statistics::get_statistics_with_limit;
 
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
@@ -60,8 +59,8 @@ mod tests {
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::assert_batches_sorted_eq;
-    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
@@ -72,6 +71,7 @@ mod tests {
 
     use ::object_store::path::Path;
     use ::object_store::ObjectMeta;
+    use datafusion_datasource::source::DataSourceExec;
     use datafusion_physical_plan::collect;
     use tempfile::TempDir;
 
@@ -128,25 +128,27 @@ mod tests {
             ParquetSource::default()
                 .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
         );
-        let base_conf =
-            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
-                .with_file(partitioned_file);
+        let base_conf = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            schema,
+            source,
+        )
+        .with_file(partitioned_file)
+        .build();
 
-        let parquet_exec = base_conf.build();
+        let parquet_exec = DataSourceExec::from_data_source(base_conf);
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let read = collect(parquet_exec, task_ctx).await.unwrap();
 
-        let expected = [
-            "+----+--------------+",
-            "| id | extra_column |",
-            "+----+--------------+",
-            "| 1  | foo          |",
-            "+----+--------------+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &read);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
+        +----+--------------+
+        | id | extra_column |
+        +----+--------------+
+        | 1  | foo          |
+        +----+--------------+
+        "###);
     }
 
     #[test]

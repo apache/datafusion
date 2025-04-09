@@ -81,7 +81,7 @@ use datafusion_expr::{
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
@@ -1023,18 +1023,12 @@ impl DefaultPhysicalPlanner {
                         // Collect left & right field indices, the field indices are sorted in ascending order
                         let left_field_indices = cols
                             .iter()
-                            .filter_map(|c| match left_df_schema.index_of_column(c) {
-                                Ok(idx) => Some(idx),
-                                _ => None,
-                            })
+                            .filter_map(|c| left_df_schema.index_of_column(c).ok())
                             .sorted()
                             .collect::<Vec<_>>();
                         let right_field_indices = cols
                             .iter()
-                            .filter_map(|c| match right_df_schema.index_of_column(c) {
-                                Ok(idx) => Some(idx),
-                                _ => None,
-                            })
+                            .filter_map(|c| right_df_schema.index_of_column(c).ok())
                             .sorted()
                             .collect::<Vec<_>>();
 
@@ -2006,7 +2000,8 @@ impl DefaultPhysicalPlanner {
         input: &Arc<LogicalPlan>,
         expr: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input_schema = input.as_ref().schema();
+        let input_logical_schema = input.as_ref().schema();
+        let input_physical_schema = input_exec.schema();
         let physical_exprs = expr
             .iter()
             .map(|e| {
@@ -2025,7 +2020,7 @@ impl DefaultPhysicalPlanner {
                 // This depends on the invariant that logical schema field index MUST match
                 // with physical schema field index.
                 let physical_name = if let Expr::Column(col) = e {
-                    match input_schema.index_of_column(col) {
+                    match input_logical_schema.index_of_column(col) {
                         Ok(idx) => {
                             // index physical field using logical field index
                             Ok(input_exec.schema().field(idx).name().to_string())
@@ -2038,10 +2033,14 @@ impl DefaultPhysicalPlanner {
                     physical_name(e)
                 };
 
-                tuple_err((
-                    self.create_physical_expr(e, input_schema, session_state),
-                    physical_name,
-                ))
+                let physical_expr =
+                    self.create_physical_expr(e, input_logical_schema, session_state);
+
+                // Check for possible column name mismatches
+                let final_physical_expr =
+                    maybe_fix_physical_column_name(physical_expr, &input_physical_schema);
+
+                tuple_err((final_physical_expr, physical_name))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -2059,6 +2058,40 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
         (Ok(_), Err(e1)) => Err(e1),
         (Err(e), Err(_)) => Err(e),
     }
+}
+
+// Handle the case where the name of a physical column expression does not match the corresponding physical input fields names.
+// Physical column names are derived from the physical schema, whereas physical column expressions are derived from the logical column names.
+//
+// This is a special case that applies only to column expressions. Logical plans may slightly modify column names by appending a suffix (e.g., using ':'),
+// to avoid duplicates—since DFSchemas do not allow duplicate names. For example: `count(Int64(1)):1`.
+fn maybe_fix_physical_column_name(
+    expr: Result<Arc<dyn PhysicalExpr>>,
+    input_physical_schema: &SchemaRef,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    if let Ok(e) = &expr {
+        if let Some(column) = e.as_any().downcast_ref::<Column>() {
+            let physical_field = input_physical_schema.field(column.index());
+            let expr_col_name = column.name();
+            let physical_name = physical_field.name();
+
+            if physical_name != expr_col_name {
+                // handle edge cases where the physical_name contains ':'.
+                let colon_count = physical_name.matches(':').count();
+                let mut splits = expr_col_name.match_indices(':');
+                let split_pos = splits.nth(colon_count);
+
+                if let Some((idx, _)) = split_pos {
+                    let base_name = &expr_col_name[..idx];
+                    if base_name == physical_name {
+                        let updated_column = Column::new(physical_name, column.index());
+                        return Ok(Arc::new(updated_column));
+                    }
+                }
+            }
+        }
+    }
+    expr
 }
 
 struct OptimizationInvariantChecker<'a> {
@@ -2656,6 +2689,30 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_maybe_fix_colon_in_physical_name() {
+        // The physical schema has a field name with a colon
+        let schema = Schema::new(vec![Field::new("metric:avg", DataType::Int32, false)]);
+        let schema_ref: SchemaRef = Arc::new(schema);
+
+        // What might happen after deduplication
+        let logical_col_name = "metric:avg:1";
+        let expr_with_suffix =
+            Arc::new(Column::new(logical_col_name, 0)) as Arc<dyn PhysicalExpr>;
+        let expr_result = Ok(expr_with_suffix);
+
+        // Call function under test
+        let fixed_expr =
+            maybe_fix_physical_column_name(expr_result, &schema_ref).unwrap();
+
+        // Downcast back to Column so we can check the name
+        let col = fixed_expr
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("Column");
+
+        assert_eq!(col.name(), "metric:avg");
+    }
     struct ErrorExtensionPlanner {}
 
     #[async_trait]

@@ -33,7 +33,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{JoinType, Result};
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
@@ -69,27 +69,31 @@ use datafusion_physical_plan::{
 
 /// Create a non sorted parquet exec
 pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
         Arc::new(ParquetSource::default()),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
-    .build()
+    .build();
+
+    DataSourceExec::from_data_source(config)
 }
 
 /// Create a single parquet file that is sorted
 pub(crate) fn parquet_exec_with_sort(
     output_ordering: Vec<LexOrdering>,
 ) -> Arc<DataSourceExec> {
-    FileScanConfig::new(
+    let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema(),
         Arc::new(ParquetSource::default()),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(output_ordering)
-    .build()
+    .build();
+
+    DataSourceExec::from_data_source(config)
 }
 
 pub fn schema() -> SchemaRef {

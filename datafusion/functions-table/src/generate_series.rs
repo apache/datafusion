@@ -138,12 +138,15 @@ impl TableProvider for GenerateSeriesTable {
     async fn scan(
         &self,
         state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let batch_size = state.config_options().execution.batch_size;
-
+        let schema = match projection {
+            Some(projection) => Arc::new(self.schema.project(projection)?),
+            None => self.schema(),
+        };
         let state = match self.args {
             // if args have null, then return 0 row
             GenSeriesArgs::ContainsNull { include_end, name } => GenerateSeriesState {
@@ -175,7 +178,7 @@ impl TableProvider for GenerateSeriesTable {
         };
 
         Ok(Arc::new(LazyMemoryExec::try_new(
-            self.schema(),
+            schema,
             vec![Arc::new(RwLock::new(state))],
         )?))
     }

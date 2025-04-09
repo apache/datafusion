@@ -407,7 +407,7 @@
 //! See the [implementors of `ExecutionPlan`] for a list of physical operators available.
 //!
 //! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
-//! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
+//! [Volcano style]: https://doi.org/10.1145/93605.98720
 //! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
 //! [DataFusion paper in SIGMOD 2024]: https://github.com/apache/datafusion/files/15149988/DataFusion_Query_Engine___SIGMOD_2024-FINAL-mk4.pdf
 //! [such as DuckDB]: https://github.com/duckdb/duckdb/issues/1583
