@@ -846,6 +846,11 @@ fn get_short_circuit_result(
     op: &Operator,
     rhs: Option<ColumnarValue>, // we pass RHS only if needed
 ) -> Option<ColumnarValue> {
+    // Only apply short-circuiting for logical operators And/Or.
+    if !matches!(op, Operator::And | Operator::Or) {
+        return None;
+    }
+
     println!(
         "==> Checking short-circuit: op={:?}, lhs_type={:?}, has_rhs={}",
         op,
