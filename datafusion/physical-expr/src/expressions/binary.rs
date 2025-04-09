@@ -1739,10 +1739,15 @@ mod tests {
             0,
         ));
 
+        // Add debug prints to show dictionary values
+        println!("==> Dictionary values: {:?}", decimal_array);
+
         let keys = Int8Array::from(vec![Some(0), Some(2), None, Some(3), Some(0)]);
+        println!("==> A keys: {:?}", keys);
         let a = DictionaryArray::try_new(keys, decimal_array)?;
 
         let keys = Int8Array::from(vec![Some(0), None, Some(3), Some(2), Some(2)]);
+        println!("==> B keys: {:?}", keys);
         let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(value + 1),
