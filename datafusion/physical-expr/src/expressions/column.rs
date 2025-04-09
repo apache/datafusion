@@ -18,13 +18,12 @@
 //! Physical column reference: [`Column`]
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 use arrow::{
-    datatypes::{DataType, Schema, SchemaRef},
+    datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -128,8 +127,8 @@ impl PhysicalExpr for Column {
         Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
     }
 
-    fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> {
-        Ok(Some(input_schema.field(self.index).metadata().clone()))
+    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
+        Ok(Some(input_schema.field(self.index).clone()))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

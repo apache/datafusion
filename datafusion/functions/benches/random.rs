@@ -34,7 +34,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     random_func
                         .invoke_with_args(ScalarFunctionArgs {
                             args: vec![],
-                            arg_metadata: vec![],
+                            arg_fields: vec![],
                             number_rows: 8192,
                             return_type: &DataType::Float64,
                         })
@@ -53,7 +53,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     random_func
                         .invoke_with_args(ScalarFunctionArgs {
                             args: vec![],
-                            arg_metadata: vec![],
+                            arg_fields: vec![],
                             number_rows: 128,
                             return_type: &DataType::Float64,
                         })

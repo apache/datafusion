@@ -18,12 +18,12 @@
 //! UnKnownColumn expression
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
+use arrow::datatypes::Field;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -77,10 +77,7 @@ impl PhysicalExpr for UnKnownColumn {
         internal_err!("UnKnownColumn::evaluate() should not be called")
     }
 
-    fn metadata(
-        &self,
-        _input_schema: &Schema,
-    ) -> Result<Option<HashMap<String, String>>> {
+    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
         Ok(None)
     }
 

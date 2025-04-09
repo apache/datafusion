@@ -284,7 +284,11 @@ impl PhysicalGroupBy {
                     expr.data_type(input_schema)?,
                     group_expr_nullable || expr.nullable(input_schema)?,
                 )
-                .with_metadata(expr.metadata(input_schema)?.clone().unwrap_or_default()),
+                .with_metadata(
+                    expr.output_field(input_schema)?
+                        .map(|f| f.metadata().clone())
+                        .unwrap_or_default(),
+                ),
             );
         }
         if !self.is_single() {

@@ -18,6 +18,7 @@
 //! IS NOT NULL expression
 
 use crate::PhysicalExpr;
+use arrow::datatypes::Field;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -25,7 +26,6 @@ use arrow::{
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
@@ -94,8 +94,8 @@ impl PhysicalExpr for IsNotNullExpr {
         }
     }
 
-    fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> {
-        self.arg.metadata(input_schema)
+    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
+        self.arg.output_field(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

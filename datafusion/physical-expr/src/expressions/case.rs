@@ -18,14 +18,13 @@
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, and_not, is_null, not, nullif, or, prep_null_mask_filter};
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
@@ -514,10 +513,7 @@ impl PhysicalExpr for CaseExpr {
         }
     }
 
-    fn metadata(
-        &self,
-        _input_schema: &Schema,
-    ) -> Result<Option<HashMap<String, String>>> {
+    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
         Ok(None)
     }
 
@@ -610,7 +606,7 @@ mod tests {
     use crate::expressions::{binary, cast, col, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
-    use arrow::datatypes::*;
+
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};

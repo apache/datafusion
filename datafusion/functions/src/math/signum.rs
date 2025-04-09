@@ -159,7 +159,7 @@ mod test {
         ]));
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
-            arg_metadata: vec![None; 1],
+            arg_fields: vec![None; 1],
             number_rows: array.len(),
             return_type: &DataType::Float32,
         };
@@ -204,7 +204,7 @@ mod test {
         ]));
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
-            arg_metadata: vec![None; 1],
+            arg_fields: vec![None; 1],
             number_rows: array.len(),
             return_type: &DataType::Float64,
         };

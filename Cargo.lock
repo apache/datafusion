@@ -454,6 +454,7 @@ checksum = "85934a9d0261e0fa5d4e2a5295107d743b543a6e0484a835d4b8db2da15306f9"
 dependencies = [
  "bitflags 2.8.0",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

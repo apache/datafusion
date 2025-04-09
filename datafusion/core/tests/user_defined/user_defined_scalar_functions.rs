@@ -20,13 +20,15 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-use arrow::array::{as_string_array, record_batch, UInt64Array};
+use arrow::array::{as_string_array, record_batch, Int8Array, UInt64Array};
 use arrow::array::{
     builder::BooleanBuilder, cast::AsArray, Array, ArrayRef, Float32Array, Float64Array,
     Int32Array, RecordBatch, StringArray,
 };
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Schema};
+use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
+use arrow_schema::ArrowError;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
@@ -1373,7 +1375,7 @@ async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordB
 struct MetadataBasedUdf {
     name: String,
     signature: Signature,
-    output_metadata: HashMap<String, String>,
+    output_field: Field,
 }
 
 impl MetadataBasedUdf {
@@ -1382,10 +1384,12 @@ impl MetadataBasedUdf {
         // instances of this UDF. This is a small hack for the unit tests to get unique
         // names, but you could do something more elegant with the metadata.
         let name = format!("metadata_based_udf_{}", metadata.len());
+        let output_field =
+            Field::new(&name, DataType::UInt64, true).with_metadata(metadata);
         Self {
             name,
             signature: Signature::exact(vec![DataType::UInt64], Volatility::Immutable),
-            output_metadata: metadata,
+            output_field,
         }
     }
 }
@@ -1408,9 +1412,10 @@ impl ScalarUDFImpl for MetadataBasedUdf {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        assert_eq!(args.arg_metadata.len(), 1);
-        let should_double = match &args.arg_metadata[0] {
-            Some(hashmap) => hashmap
+        assert_eq!(args.arg_fields.len(), 1);
+        let should_double = match &args.arg_fields[0] {
+            Some(field) => field
+                .metadata()
                 .get("modify_values")
                 .map(|v| v == "double_output")
                 .unwrap_or(false),
@@ -1446,8 +1451,8 @@ impl ScalarUDFImpl for MetadataBasedUdf {
         self.name == other.name()
     }
 
-    fn metadata(&self, _input_schema: &Schema) -> Option<HashMap<String, String>> {
-        Some(self.output_metadata.clone())
+    fn output_field(&self, _input_schema: &Schema) -> Option<Field> {
+        Some(self.output_field.clone())
     }
 }
 
@@ -1497,7 +1502,7 @@ async fn test_metadata_based_udf() -> Result<()> {
     let actual = DataFrame::new(ctx.state(), plan).collect().await?;
 
     // To test for output metadata handling, we set the expected values on the result
-    // To test for input metadata handling, we check the values returned
+    // To test for input metadata handling, we check the numbers returned
     let mut output_meta = HashMap::new();
     let _ = output_meta.insert("output_metatype".to_string(), "custom_value".to_string());
     let expected_schema = Schema::new(vec![
@@ -1514,6 +1519,192 @@ async fn test_metadata_based_udf() -> Result<()> {
         ("meta_with_in_no_out", UInt64, [0, 10, 20, 30, 40]),
         ("meta_no_in_with_out", UInt64, [0, 5, 10, 15, 20]),
         ("meta_with_in_with_out", UInt64, [0, 10, 20, 30, 40])
+    )?
+    .with_schema(Arc::new(expected_schema))?;
+
+    assert_eq!(expected, actual[0]);
+
+    ctx.deregister_table("t")?;
+    Ok(())
+}
+
+/// This UDF is to test extension handling, both on the input and output
+/// sides. For the input, we will handle the data differently if there is
+/// the canonical extension type Bool8. For the output we will add a
+/// user defined extension type.
+#[derive(Debug)]
+struct ExtensionBasedUdf {
+    name: String,
+    signature: Signature,
+}
+
+impl Default for ExtensionBasedUdf {
+    fn default() -> Self {
+        Self {
+            name: "canonical_extension_udf".to_string(),
+            signature: Signature::exact(vec![DataType::Int8], Volatility::Immutable),
+        }
+    }
+}
+impl ScalarUDFImpl for ExtensionBasedUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        assert_eq!(args.arg_fields.len(), 1);
+        let input_field = args.arg_fields[0].unwrap();
+
+        let output_as_bool = matches!(
+            CanonicalExtensionType::try_from(input_field),
+            Ok(CanonicalExtensionType::Bool8(_))
+        );
+
+        // If we have the extension type set, we are outputting a boolean value.
+        // Otherwise we output a string representation of the numeric value.
+        fn print_value(v: Option<i8>, as_bool: bool) -> Option<String> {
+            v.map(|x| match as_bool {
+                true => format!("{}", x != 0),
+                false => format!("{x}"),
+            })
+        }
+
+        match &args.args[0] {
+            ColumnarValue::Array(array) => {
+                let array_values: Vec<_> = array
+                    .as_any()
+                    .downcast_ref::<Int8Array>()
+                    .unwrap()
+                    .iter()
+                    .map(|v| print_value(v, output_as_bool))
+                    .collect();
+                let array_ref = Arc::new(StringArray::from(array_values)) as ArrayRef;
+                Ok(ColumnarValue::Array(array_ref))
+            }
+            ColumnarValue::Scalar(value) => {
+                let ScalarValue::Int8(value) = value else {
+                    return exec_err!("incorrect data type");
+                };
+
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(print_value(
+                    *value,
+                    output_as_bool,
+                ))))
+            }
+        }
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        self.name == other.name()
+    }
+
+    fn output_field(&self, _input_schema: &Schema) -> Option<Field> {
+        Some(
+            Field::new("canonical_extension_udf", DataType::Utf8, true)
+                .with_extension_type(MyUserExtentionType {}),
+        )
+    }
+}
+
+struct MyUserExtentionType {}
+
+impl ExtensionType for MyUserExtentionType {
+    const NAME: &'static str = "my_user_extention_type";
+    type Metadata = ();
+
+    fn metadata(&self) -> &Self::Metadata {
+        &()
+    }
+
+    fn serialize_metadata(&self) -> Option<String> {
+        None
+    }
+
+    fn deserialize_metadata(
+        _metadata: Option<&str>,
+    ) -> std::result::Result<Self::Metadata, ArrowError> {
+        Ok(())
+    }
+
+    fn supports_data_type(
+        &self,
+        data_type: &DataType,
+    ) -> std::result::Result<(), ArrowError> {
+        if let DataType::Utf8 = data_type {
+            Ok(())
+        } else {
+            Err(ArrowError::InvalidArgumentError(
+                "only utf8 supported".to_string(),
+            ))
+        }
+    }
+
+    fn try_new(
+        _data_type: &DataType,
+        _metadata: Self::Metadata,
+    ) -> std::result::Result<Self, ArrowError> {
+        Ok(Self {})
+    }
+}
+
+#[tokio::test]
+async fn test_extension_based_udf() -> Result<()> {
+    let data_array = Arc::new(Int8Array::from(vec![0, 0, 10, 20])) as ArrayRef;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("no_extension", DataType::Int8, true),
+        Field::new("with_extension", DataType::Int8, true).with_extension_type(Bool8),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::clone(&data_array), Arc::clone(&data_array)],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    let t = ctx.table("t").await?;
+    let extension_based_udf = ScalarUDF::from(ExtensionBasedUdf::default());
+
+    let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
+        .project(vec![
+            extension_based_udf
+                .call(vec![col("no_extension")])
+                .alias("without_bool8_extension"),
+            extension_based_udf
+                .call(vec![col("with_extension")])
+                .alias("with_bool8_extension"),
+        ])?
+        .build()?;
+
+    let actual = DataFrame::new(ctx.state(), plan).collect().await?;
+
+    // To test for output extension handling, we set the expected values on the result
+    // To test for input extensions handling, we check the strings returned
+    let expected_schema = Schema::new(vec![
+        Field::new("without_bool8_extension", DataType::Utf8, true)
+            .with_extension_type(MyUserExtentionType {}),
+        Field::new("with_bool8_extension", DataType::Utf8, true)
+            .with_extension_type(MyUserExtentionType {}),
+    ]);
+
+    let expected = record_batch!(
+        ("without_bool8_extension", Utf8, ["0", "0", "10", "20"]),
+        (
+            "with_bool8_extension",
+            Utf8,
+            ["false", "false", "true", "true"]
+        )
     )?
     .with_schema(Arc::new(expected_schema))?;
 

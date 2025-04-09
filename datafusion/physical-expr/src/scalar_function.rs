@@ -39,7 +39,7 @@ use crate::expressions::Literal;
 use crate::PhysicalExpr;
 
 use arrow::array::{Array, RecordBatch};
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
@@ -211,12 +211,12 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
-        let arg_metadata_owned = self
+        let arg_fields_owned = self
             .args
             .iter()
-            .map(|e| e.metadata(batch.schema_ref()))
+            .map(|e| e.output_field(batch.schema_ref()))
             .collect::<Result<Vec<_>>>()?;
-        let arg_metadata = arg_metadata_owned
+        let arg_fields = arg_fields_owned
             .iter()
             .map(|opt_map| opt_map.as_ref())
             .collect::<Vec<_>>();
@@ -229,7 +229,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // evaluate the function
         let output = self.fun.invoke_with_args(ScalarFunctionArgs {
             args,
-            arg_metadata,
+            arg_fields,
             number_rows: batch.num_rows(),
             return_type: &self.return_type,
         })?;
@@ -251,8 +251,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(output)
     }
 
-    fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> {
-        Ok(self.fun.as_ref().inner().metadata(input_schema))
+    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
+        Ok(self.fun.as_ref().inner().output_field(input_schema))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

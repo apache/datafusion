@@ -40,7 +40,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_ascii.clone(),
-                        arg_metadata: vec![None; args_string_ascii.len()],
+                        arg_fields: vec![None; args_string_ascii.len()],
                         number_rows: n_rows,
                         return_type: &return_type,
                     }))
@@ -56,7 +56,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_utf8.clone(),
-                        arg_metadata: vec![None; args_string_utf8.len()],
+                        arg_fields: vec![None; args_string_utf8.len()],
                         number_rows: n_rows,
                         return_type: &return_type,
                     }))
@@ -72,7 +72,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_ascii.clone(),
-                        arg_metadata: vec![None; args_string_view_ascii.len()],
+                        arg_fields: vec![None; args_string_view_ascii.len()],
                         number_rows: n_rows,
                         return_type: &return_type,
                     }))
@@ -88,7 +88,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_utf8.clone(),
-                        arg_metadata: vec![None; args_string_view_utf8.len()],
+                        arg_fields: vec![None; args_string_view_utf8.len()],
                         number_rows: n_rows,
                         return_type: &return_type,
                     }))

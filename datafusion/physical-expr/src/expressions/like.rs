@@ -16,12 +16,11 @@
 // under the License.
 
 use crate::PhysicalExpr;
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::apply_cmp;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
@@ -130,10 +129,7 @@ impl PhysicalExpr for LikeExpr {
         }
     }
 
-    fn metadata(
-        &self,
-        _input_schema: &Schema,
-    ) -> Result<Option<HashMap<String, String>>> {
+    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
         Ok(None)
     }
 

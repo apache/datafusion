@@ -18,12 +18,12 @@
 //! Literal expressions for physical operations
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 
+use arrow::datatypes::Field;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -76,10 +76,7 @@ impl PhysicalExpr for Literal {
         Ok(ColumnarValue::Scalar(self.value.clone()))
     }
 
-    fn metadata(
-        &self,
-        _input_schema: &Schema,
-    ) -> Result<Option<HashMap<String, String>>> {
+    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
         Ok(None)
     }
 
@@ -120,7 +117,7 @@ mod tests {
     use super::*;
 
     use arrow::array::Int32Array;
-    use arrow::datatypes::*;
+
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 

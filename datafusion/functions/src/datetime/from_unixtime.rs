@@ -172,7 +172,7 @@ mod test {
     fn test_without_timezone() {
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(Int64(Some(1729900800)))],
-            arg_metadata: vec![None; 1],
+            arg_fields: vec![None; 1],
             number_rows: 1,
             return_type: &DataType::Timestamp(Second, None),
         };
@@ -195,7 +195,7 @@ mod test {
                     "America/New_York".to_string(),
                 ))),
             ],
-            arg_metadata: vec![None; 2],
+            arg_fields: vec![None; 2],
             number_rows: 2,
             return_type: &DataType::Timestamp(
                 Second,

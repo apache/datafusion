@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -24,7 +23,7 @@ use std::sync::Arc;
 use crate::physical_expr::PhysicalExpr;
 
 use arrow::compute::{can_cast_types, CastOptions};
-use arrow::datatypes::{DataType, DataType::*, Schema};
+use arrow::datatypes::{DataType, DataType::*, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result};
@@ -145,8 +144,8 @@ impl PhysicalExpr for CastExpr {
         value.cast_to(&self.cast_type, Some(&self.cast_options))
     }
 
-    fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> {
-        self.expr.metadata(input_schema)
+    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
+        self.expr.output_field(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

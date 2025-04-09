@@ -47,7 +47,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![array_a.clone(), array_b.clone()],
-                    arg_metadata: vec![None; 2],
+                    arg_fields: vec![None; 2],
                     number_rows: 0,
                     return_type: &DataType::Int64,
                 })
@@ -64,7 +64,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![array_a.clone(), scalar_b.clone()],
-                    arg_metadata: vec![None; 2],
+                    arg_fields: vec![None; 2],
                     number_rows: 0,
                     return_type: &DataType::Int64,
                 })
@@ -81,7 +81,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![scalar_a.clone(), scalar_b.clone()],
-                    arg_metadata: vec![None; 2],
+                    arg_fields: vec![None; 2],
                     number_rows: 0,
                     return_type: &DataType::Int64,
                 })

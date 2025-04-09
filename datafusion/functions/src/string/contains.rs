@@ -167,7 +167,7 @@ mod test {
 
         let args = ScalarFunctionArgs {
             args: vec![array, scalar],
-            arg_metadata: vec![None; 2],
+            arg_fields: vec![None; 2],
             number_rows: 2,
             return_type: &DataType::Boolean,
         };

@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::std_types::{RHashMap, ROption};
+use abi_stable::std_types::ROption;
 use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::{
     array::ArrayRef,
     error::ArrowError,
@@ -42,7 +42,6 @@ use return_info::FFI_ReturnInfo;
 use return_type_args::{
     FFI_ReturnTypeArgs, ForeignReturnTypeArgs, ForeignReturnTypeArgsOwned,
 };
-use std::collections::HashMap;
 use std::{ffi::c_void, sync::Arc};
 
 use crate::{
@@ -90,7 +89,7 @@ pub struct FFI_ScalarUDF {
     pub invoke_with_args: unsafe extern "C" fn(
         udf: &Self,
         args: RVec<WrappedArray>,
-        arg_metadata: RVec<ROption<RHashMap<RString, RString>>>,
+        arg_fields: RVec<ROption<WrappedSchema>>,
         num_rows: usize,
         return_type: WrappedSchema,
     ) -> RResult<WrappedArray, RString>,
@@ -177,7 +176,7 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
     udf: &FFI_ScalarUDF,
     args: RVec<WrappedArray>,
-    arg_metadata: RVec<ROption<RHashMap<RString, RString>>>,
+    arg_fields: RVec<ROption<WrappedSchema>>,
     number_rows: usize,
     return_type: WrappedSchema,
 ) -> RResult<WrappedArray, RString> {
@@ -195,27 +194,24 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
     let args = rresult_return!(args);
     let return_type = rresult_return!(DataType::try_from(&return_type.0));
 
-    let arg_metadata_owned: Vec<Option<HashMap<String, String>>> = arg_metadata
+    let arg_fields_owned = arg_fields
         .into_iter()
-        .map(|maybe_map| {
-            maybe_map
-                .map(|hashmap| {
-                    hashmap
-                        .into_iter()
-                        .map(|kv| (String::from(kv.0), String::from(kv.1)))
-                        .collect::<HashMap<_, _>>()
-                })
-                .into()
+        .map(|maybe_field| {
+            Option::from(maybe_field.as_ref().map(|wrapped_field| {
+                (&wrapped_field.0).try_into().map_err(DataFusionError::from)
+            }))
+            .transpose()
         })
-        .collect();
-    let arg_metadata = arg_metadata_owned
+        .collect::<Result<Vec<Option<Field>>>>();
+    let arg_fields_owned = rresult_return!(arg_fields_owned);
+    let arg_fields = arg_fields_owned
         .iter()
         .map(|maybe_map| maybe_map.as_ref())
         .collect::<Vec<_>>();
 
     let args = ScalarFunctionArgs {
         args,
-        arg_metadata,
+        arg_fields,
         number_rows,
         return_type: &return_type,
     };
@@ -352,7 +348,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
     fn invoke_with_args(&self, invoke_args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs {
             args,
-            arg_metadata,
+            arg_fields,
             number_rows,
             return_type,
         } = invoke_args;
@@ -371,20 +367,14 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             .collect::<std::result::Result<Vec<_>, ArrowError>>()?
             .into();
 
-        let arg_metadata = arg_metadata
+        let arg_fields_wrapped = arg_fields
+            .iter()
+            .map(|maybe_field| maybe_field.map(FFI_ArrowSchema::try_from).transpose())
+            .collect::<std::result::Result<Vec<_>, ArrowError>>()?;
+
+        let arg_fields = arg_fields_wrapped
             .into_iter()
-            .map(|maybe_map| {
-                maybe_map
-                    .map(|hashmap| {
-                        hashmap
-                            .iter()
-                            .map(|(k, v)| {
-                                (RString::from(k.clone()), RString::from(v.clone()))
-                            })
-                            .collect::<RHashMap<_, _>>()
-                    })
-                    .into()
-            })
+            .map(|maybe_field| maybe_field.map(WrappedSchema).into())
             .collect::<RVec<_>>();
 
         let return_type = WrappedSchema(FFI_ArrowSchema::try_from(return_type)?);
@@ -393,7 +383,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             (self.udf.invoke_with_args)(
                 &self.udf,
                 args,
-                arg_metadata,
+                arg_fields,
                 number_rows,
                 return_type,
             )
