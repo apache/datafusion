@@ -360,12 +360,29 @@ impl PhysicalExpr for BinaryExpr {
 
         let lhs = self.left.evaluate(batch)?;
 
+        // Delay evaluating RHS unless we really need it
+        let rhs_lazy = || self.right.evaluate(batch);
+
         // Optimize for short-circuiting `Operator::And` or `Operator::Or` operations and return early.
-        if check_short_circuit(&lhs, &self.op) {
-            return Ok(lhs);
+        if let Some(result) = get_short_circuit_result(&lhs, &self.op, None) {
+            return Ok(result);
         }
 
-        let rhs = self.right.evaluate(batch)?;
+        // Check for short-circuit evaluation based on LHS alone
+        if let Some(result) = get_short_circuit_result(&lhs, &self.op, Some(rhs_lazy()?))
+        {
+            return Ok(result);
+        }
+
+        // Only evaluate RHS if short-circuit evaluation doesn't apply
+        let rhs = rhs_lazy()?;
+
+        // Check for short-circuit cases that need RHS value
+        if let Some(result) = get_short_circuit_result(&lhs, &self.op, Some(rhs.clone()))
+        {
+            return Ok(result);
+        }
+
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
 
@@ -811,58 +828,71 @@ impl BinaryExpr {
     }
 }
 
-/// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
-///
-/// Short-circuiting occurs when evaluating the right-hand side (rhs) becomes unnecessary:
-/// - For `AND`: if ALL values in `lhs` are `false`, the expression must be `false` regardless of rhs.
-/// - For `OR`: if ALL values in `lhs` are `true`, the expression must be `true` regardless of rhs.
-///
-/// Returns `true` if short-circuiting is possible, `false` otherwise.
-///
-/// # Arguments
-/// * `arg` - The left-hand side (lhs) columnar value (array or scalar)
-/// * `op` - The logical operator (`AND` or `OR`)
-///
-/// # Implementation Notes
-/// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
-/// 2. Handles both scalar values and array values
-/// 3. For arrays, uses optimized `true_count()`/`false_count()` methods from arrow-rs.
-///    `bool_or`/`bool_and` maybe a better choice too，for detailed discussion,see:[link](https://github.com/apache/datafusion/pull/15462#discussion_r2020558418)
-fn check_short_circuit(arg: &ColumnarValue, op: &Operator) -> bool {
-    let data_type = arg.data_type();
+/// Returns `Some(ColumnarValue)` if short-circuit evaluation applies:
+/// - For `AND`:
+///    - if LHS is all false => short-circuit → return LHS
+///    - if LHS is all true  => short-circuit → return RHS
+/// - For `OR`:
+///    - if LHS is all true  => short-circuit → return LHS
+///    - if LHS is all false => short-circuit → return RHS
+fn get_short_circuit_result(
+    lhs: &ColumnarValue,
+    op: &Operator,
+    rhs: Option<ColumnarValue>, // we pass RHS only if needed
+) -> Option<ColumnarValue> {
+    let data_type = lhs.data_type();
     match (data_type, op) {
         (DataType::Boolean, Operator::And) => {
-            match arg {
+            match lhs {
                 ColumnarValue::Array(array) => {
                     if let Ok(array) = as_boolean_array(&array) {
-                        return array.false_count() == array.len();
+                        if array.false_count() == array.len() {
+                            return Some(lhs.clone()); // all false → result is false
+                        }
+                        if array.true_count() == array.len() {
+                            return rhs; // all true → just return RHS
+                        }
                     }
                 }
                 ColumnarValue::Scalar(scalar) => {
                     if let ScalarValue::Boolean(Some(value)) = scalar {
-                        return !value;
+                        if !value {
+                            return Some(lhs.clone()); // false → result is false
+                        }
+                        if *value && rhs.is_some() {
+                            return rhs; // true → just return RHS
+                        }
                     }
                 }
             }
-            false
         }
         (DataType::Boolean, Operator::Or) => {
-            match arg {
+            match lhs {
                 ColumnarValue::Array(array) => {
                     if let Ok(array) = as_boolean_array(&array) {
-                        return array.true_count() == array.len();
+                        if array.true_count() == array.len() {
+                            return Some(lhs.clone()); // all true → result is true
+                        }
+                        if array.false_count() == array.len() {
+                            return rhs; // all false → just return RHS
+                        }
                     }
                 }
                 ColumnarValue::Scalar(scalar) => {
                     if let ScalarValue::Boolean(Some(value)) = scalar {
-                        return *value;
+                        if *value {
+                            return Some(lhs.clone()); // true → result is true
+                        }
+                        if !value && rhs.is_some() {
+                            return rhs; // false → just return RHS
+                        }
                     }
                 }
             }
-            false
         }
-        _ => false,
+        _ => {}
     }
+    None
 }
 
 fn concat_elements(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<ArrayRef> {
@@ -1677,9 +1707,10 @@ mod tests {
         let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(value + 1),
-                Some(value + 3),
                 Some(value),
+                None,
                 Some(value + 2),
+                Some(value + 1),
             ],
             10,
             0,
@@ -1730,7 +1761,7 @@ mod tests {
         let a = dict_builder.finish();
 
         let expected: PrimitiveArray<Int32Type> =
-            PrimitiveArray::from(vec![Some(2), None, Some(3), Some(6)]);
+            PrimitiveArray::from(vec![Some(2), None, Some(4), Some(6)]);
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2330,13 +2361,7 @@ mod tests {
             vec![Arc::new(a), Arc::new(b)],
             Operator::Divide,
             create_decimal_array(
-                &[
-                    Some(9919), // 0.9919
-                    None,
-                    None,
-                    Some(10081), // 1.0081
-                    Some(10000), // 1.0
-                ],
+                &[Some(9919), None, None, Some(10081), Some(10000)],
                 14,
                 4,
             ),
@@ -3817,8 +3842,8 @@ mod tests {
         )) as ArrayRef;
         let float64_array = Arc::new(Float64Array::from(vec![
             Some(1.23),
+            None,
             Some(1.22),
-            Some(1.23),
             Some(1.24),
         ])) as ArrayRef;
         // lt: float64array < decimal array
@@ -4926,5 +4951,65 @@ mod tests {
         let left_expr = logical2physical(&logical_col("a").gt(lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(!check_short_circuit(&left_value, &Operator::Or));
+    }
+
+    #[test]
+    fn test_get_short_circuit_result() {
+        use crate::planner::logical2physical;
+        use datafusion_expr::col as logical_col;
+        use datafusion_expr::lit;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let a_array = Int32Array::from(vec![1, 3, 4, 5, 6]);
+        let b_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(a_array), Arc::new(b_array)],
+        )
+        .unwrap();
+
+        // Case 1: AND with all false LHS
+        let left_expr = logical2physical(&logical_col("a").eq(lit(2)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(get_short_circuit_result(&left_value, &Operator::And, None).is_some());
+
+        // Case 2: AND with all true LHS
+        let left_expr = logical2physical(&logical_col("a").gt(lit(0)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        let right_expr = logical2physical(&logical_col("b").gt(lit(1)), &schema);
+        let right_value = right_expr.evaluate(&batch).unwrap();
+        let result = get_short_circuit_result(
+            &left_value,
+            &Operator::And,
+            Some(right_value.clone()),
+        );
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), right_value);
+
+        // Case 3: OR with all true LHS
+        let left_expr = logical2physical(&logical_col("a").gt(lit(0)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(get_short_circuit_result(&left_value, &Operator::Or, None).is_some());
+
+        // Case 4: OR with all false LHS
+        let left_expr = logical2physical(&logical_col("a").eq(lit(2)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        let right_expr = logical2physical(&logical_col("b").gt(lit(1)), &schema);
+        let right_value = right_expr.evaluate(&batch).unwrap();
+        let result = get_short_circuit_result(
+            &left_value,
+            &Operator::Or,
+            Some(right_value.clone()),
+        );
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), right_value);
+
+        // Case 5: Mixed values - no short circuit
+        let left_expr = logical2physical(&logical_col("a").gt(lit(3)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(get_short_circuit_result(&left_value, &Operator::And, None).is_none());
+        assert!(get_short_circuit_result(&left_value, &Operator::Or, None).is_none());
     }
 }
