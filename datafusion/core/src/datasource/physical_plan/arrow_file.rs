@@ -332,8 +332,8 @@ impl FileOpener for ArrowOpener {
                         .iter()
                         .flatten()
                         .map(|block| {
-                            let block_len = block.bodyLength() as u64
-                                + block.metaDataLength() as u64;
+                            let block_len =
+                                block.bodyLength() as u64 + block.metaDataLength() as u64;
                             let block_offset = block.offset() as u64;
                             block_offset..block_offset + block_len
                         })
@@ -364,8 +364,8 @@ impl FileOpener for ArrowOpener {
                     let recordbatch_ranges = recordbatches
                         .iter()
                         .map(|block| {
-                            let block_len = block.bodyLength() as u64
-                                + block.metaDataLength() as u64;
+                            let block_len =
+                                block.bodyLength() as u64 + block.metaDataLength() as u64;
                             let block_offset = block.offset() as u64;
                             block_offset..block_offset + block_len
                         })

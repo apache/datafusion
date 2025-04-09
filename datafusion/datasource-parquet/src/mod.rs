@@ -267,7 +267,8 @@ impl ParquetExec {
             builder = builder.with_predicate(predicate);
         }
         if let Some(metadata_size_hint) = metadata_size_hint {
-            builder = builder.with_metadata_size_hint(metadata_size_hint.try_into().unwrap());
+            builder =
+                builder.with_metadata_size_hint(metadata_size_hint.try_into().unwrap());
         }
         builder.build()
     }

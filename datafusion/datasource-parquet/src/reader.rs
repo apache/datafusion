@@ -112,12 +112,15 @@ impl AsyncFileReader for ParquetFileReader {
         Self: Send,
     {
         let total: u64 = ranges.iter().map(|r| r.end - r.start).sum();
-        self.file_metrics.bytes_scanned.add(total.try_into().unwrap());
+        self.file_metrics
+            .bytes_scanned
+            .add(total.try_into().unwrap());
         self.inner.get_byte_ranges(ranges)
     }
 
     fn get_metadata<'a>(
-        &'a mut self, options: Option<&'a ArrowReaderOptions>
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         self.inner.get_metadata(options)
     }
