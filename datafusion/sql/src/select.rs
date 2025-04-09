@@ -29,7 +29,7 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -908,9 +908,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             }
                             // All named windows must be defined with a WindowSpec.
                             if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                                err = Some(DataFusionError::Plan(format!(
-                                    "The window {ident} is not defined!"
-                                )));
+                                err =
+                                    Some(plan_err!("The window {ident} is not defined!"));
                                 return ControlFlow::Break(());
                             }
                         }
@@ -918,7 +917,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     ControlFlow::Continue(())
                 });
                 if let Some(err) = err {
-                    return Err(err);
+                    return err;
                 }
             }
         }
