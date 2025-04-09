@@ -429,15 +429,16 @@ where
         let ret = this.stream.poll_next(cx);
         if transform_schema {
             if let Poll::Ready(Some(Ok(batch))) = ret {
-                let options = RecordBatchOptions::default().with_row_count(Some(batch.num_rows()));
-                return Poll::Ready(Some(RecordBatch::try_new_with_options(
-                    schema,
-                    batch.columns().to_vec(),
-                    &options,
-                )
-                .map_err(|e| {
-                    datafusion_common::DataFusionError::ArrowError(e, None)
-                })));
+                let options =
+                    RecordBatchOptions::default().with_row_count(Some(batch.num_rows()));
+                return Poll::Ready(Some(
+                    RecordBatch::try_new_with_options(
+                        schema,
+                        batch.columns().to_vec(),
+                        &options,
+                    )
+                    .map_err(|e| datafusion_common::DataFusionError::ArrowError(e, None)),
+                ));
             }
         }
         ret
