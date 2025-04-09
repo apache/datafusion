@@ -20,6 +20,7 @@
 //! This parser implements DataFusion specific statements such as
 //! `CREATE EXTERNAL TABLE`
 
+use datafusion_common::config::SqlParserOptions;
 use datafusion_common::DataFusionError;
 use datafusion_common::{sql_err, Diagnostic, Span};
 use sqlparser::ast::{ExprWithAlias, OrderByOptions};
@@ -284,7 +285,7 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), DataFusionErro
 /// [`Statement`] for a list of this special syntax
 pub struct DFParser<'a> {
     pub parser: Parser<'a>,
-    recursion_limit: usize,
+    options: SqlParserOptions,
 }
 
 /// Same as `sqlparser`
@@ -367,7 +368,10 @@ impl<'a> DFParserBuilder<'a> {
             parser: Parser::new(self.dialect)
                 .with_tokens_with_locations(tokens)
                 .with_recursion_limit(self.recursion_limit),
-            recursion_limit: self.recursion_limit,
+            options: SqlParserOptions {
+                recursion_limit: self.recursion_limit,
+                ..Default::default()
+            },
         })
     }
 }
