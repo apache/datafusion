@@ -360,8 +360,6 @@ impl PhysicalExpr for BinaryExpr {
 
         let lhs = self.left.evaluate(batch)?;
 
-        println!("==> Evaluating binary op: {}", self.op);
-
         // Delay evaluating RHS unless we really need it
         let rhs_lazy = || self.right.evaluate(batch);
 
@@ -376,7 +374,6 @@ impl PhysicalExpr for BinaryExpr {
         // Check for short-circuit cases that need RHS value
         if let Some(result) = get_short_circuit_result(&lhs, &self.op, Some(rhs.clone()))
         {
-            println!("==> Short-circuit with RHS: op={:?}", self.op);
             return Ok(result);
         }
 
@@ -832,7 +829,7 @@ impl BinaryExpr {
 /// - For `OR`:
 ///    - if LHS is all true  => short-circuit → return LHS
 ///    - if LHS is all false => short-circuit → return RHS
-/// -/// # Arguments
+/// # Arguments
 /// * `arg` - The left-hand side (lhs) columnar value (array or scalar)
 /// * `op` - The logical operator (`AND` or `OR`)
 /// * `rhs` - The right-hand side (rhs) columnar value (array or scalar)
@@ -849,16 +846,8 @@ fn get_short_circuit_result(
 ) -> Option<ColumnarValue> {
     // Only apply short-circuiting for logical operators And/Or.
     if !matches!(op, Operator::And | Operator::Or) {
-        println!("==> No short-circuit applies");
         return None;
     }
-
-    println!(
-        "==> Checking short-circuit: op={:?}, lhs_type={:?}, has_rhs={}",
-        op,
-        lhs.data_type(),
-        rhs.is_some()
-    );
 
     let data_type = lhs.data_type();
     match (data_type, op) {
@@ -866,30 +855,22 @@ fn get_short_circuit_result(
             match lhs {
                 ColumnarValue::Array(array) => {
                     if let Ok(array) = as_boolean_array(&array) {
-                        println!("==> AND Array - false_count={}, true_count={}, null_count={}, len={}",
-                                array.false_count(), array.true_count(), array.null_count(), array.len());
-
                         // For AND, only short-circuit if ALL values are false and there are NO nulls
                         if array.false_count() == array.len() && array.null_count() == 0 {
-                            println!("==> Short-circuit AND: all false");
                             return Some(lhs.clone()); // all false → result is false
                         }
                         // Only short-circuit to RHS if ALL values are true and there are NO nulls
                         if array.true_count() == array.len() && array.null_count() == 0 {
-                            println!("==> Short-circuit AND: all true, returning RHS");
                             return rhs; // all true → just return RHS
                         }
                     }
                 }
                 ColumnarValue::Scalar(scalar) => {
-                    println!("==> AND Scalar: scalar={:?}", scalar);
                     if let ScalarValue::Boolean(Some(value)) = scalar {
                         if !value {
-                            println!("==> Short-circuit AND scalar: false");
                             return Some(lhs.clone()); // false → result is false
                         }
                         if *value && rhs.is_some() {
-                            println!("==> Short-circuit AND scalar: true, returning RHS");
                             return rhs; // true → just return RHS
                         }
                     }
@@ -900,12 +881,8 @@ fn get_short_circuit_result(
             match lhs {
                 ColumnarValue::Array(array) => {
                     if let Ok(array) = as_boolean_array(&array) {
-                        println!("==> OR Array - false_count={}, true_count={}, null_count={}, len={}",
-                                array.false_count(), array.true_count(), array.null_count(), array.len());
-
                         // For OR, only short-circuit if ALL values are true and there are NO nulls
                         if array.true_count() == array.len() && array.null_count() == 0 {
-                            println!("==> Short-circuit OR: all true");
                             return Some(lhs.clone()); // all true → result is true
                         }
 
@@ -914,20 +891,16 @@ fn get_short_circuit_result(
                             && array.null_count() == 0
                             && rhs.is_some()
                         {
-                            println!("==> Short-circuit OR: all false, returning RHS");
                             return rhs; // all false → just return RHS
                         }
                     }
                 }
                 ColumnarValue::Scalar(scalar) => {
-                    println!("==> OR Scalar: scalar={:?}", scalar);
                     if let ScalarValue::Boolean(Some(value)) = scalar {
                         if *value {
-                            println!("==> Short-circuit OR scalar: true");
                             return Some(lhs.clone()); // true → result is true
                         }
                         if !value && rhs.is_some() {
-                            println!("==> Short-circuit OR scalar: false, returning RHS");
                             return rhs; // false → just return RHS
                         }
                     }
@@ -936,7 +909,6 @@ fn get_short_circuit_result(
         }
         _ => {}
     }
-    println!("==> No short-circuit applies");
     None
 }
 
@@ -1141,8 +1113,6 @@ mod tests {
             // verify that the result itself is correct
             for (i, x) in $VEC.iter().enumerate() {
                 let v = result.value(i);
-                println!("==> Evaluating binary op: +, result = {:?}", v);
-                println!("==> Evaluating binary op: +, expected = {:?}", x);
                 assert_eq!(
                     v,
                     *x,
@@ -1747,15 +1717,10 @@ mod tests {
             0,
         ));
 
-        // Add debug prints to show dictionary values
-        println!("==> Dictionary values: {:?}", decimal_array);
-
         let keys = Int8Array::from(vec![Some(0), Some(2), None, Some(3), Some(0)]);
-        println!("==> A keys: {:?}", keys);
         let a = DictionaryArray::try_new(keys, decimal_array)?;
 
         let keys = Int8Array::from(vec![Some(0), None, Some(3), Some(2), Some(2)]);
-        println!("==> B keys: {:?}", keys);
         let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(value + 1),
@@ -5012,7 +4977,7 @@ mod tests {
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(get_short_circuit_result(&left_value, &Operator::Or, None).is_none());
 
-        // [true, true..] AND RHS - should return RHS when provided
+        // op: AND left: all true - should return RHS when provided
         let all_true = logical2physical(&logical_col("a").gt(lit(0)), &schema);
         let all_true_value = all_true.evaluate(&batch).unwrap();
         let right_expr = logical2physical(&logical_col("b").eq(lit(3)), &schema);
@@ -5025,12 +4990,11 @@ mod tests {
         assert!(result.is_some());
         // Convert both ColumnarValue instances to their string representations for comparison
         // since ColumnarValue doesn't implement PartialEq
-        let result_value = result.unwrap();
-        let result_str = format!("{:?}", result_value);
+        let result_str = result_to_str(result);
         let right_value_str = format!("{:?}", right_value);
         assert_eq!(result_str, right_value_str);
 
-        // [false, false..] OR RHS  - should return RHS when provided
+        // op: OR left: all false - should return RHS when provided
         let all_false = logical2physical(&logical_col("a").lt(lit(0)), &schema);
         let all_false_value = all_false.evaluate(&batch).unwrap();
         let result = get_short_circuit_result(
@@ -5042,9 +5006,14 @@ mod tests {
 
         // Convert both ColumnarValue instances to their string representations for comparison
         // since ColumnarValue doesn't implement PartialEq
-        let result_value = result.unwrap();
-        let result_str = format!("{:?}", result_value);
+        let result_str = result_to_str(result);
         let right_value_str = format!("{:?}", right_value);
         assert_eq!(result_str, right_value_str);
+    }
+
+    fn result_to_str(result: Option<ColumnarValue>) -> String {
+        let result_value = result.unwrap();
+        let result_str = format!("{:?}", result_value);
+        result_str
     }
 }
