@@ -25,7 +25,7 @@ use chrono::prelude::*;
 use chrono::TimeDelta;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::ThreadRng;
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use rand::Rng;
 
 use datafusion_common::ScalarValue;

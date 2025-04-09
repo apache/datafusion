@@ -59,7 +59,7 @@ pub(super) struct ParquetOpener {
     pub table_schema: SchemaRef,
     /// Optional hint for how large the initial request to read parquet metadata
     /// should be
-    pub metadata_size_hint: Option<usize>,
+    pub metadata_size_hint: Option<u64>,
     /// Metrics for reporting
     pub metrics: ExecutionPlanMetricsSet,
     /// Factory for instantiating parquet reader

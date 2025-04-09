@@ -103,7 +103,7 @@ mod tests {
 
         async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
             let bytes = self.bytes_to_repeat.clone();
-            let range = 0..bytes.len() * self.max_iterations;
+            let range = 0..bytes.len() as u64 * self.max_iterations as u64;
             let arc = self.iterations_detected.clone();
             let stream = futures::stream::repeat_with(move || {
                 let arc_inner = arc.clone();
@@ -138,7 +138,7 @@ mod tests {
         async fn get_ranges(
             &self,
             _location: &Path,
-            _ranges: &[Range<usize>],
+            _ranges: &[Range<u64>],
         ) -> object_store::Result<Vec<Bytes>> {
             unimplemented!()
         }
@@ -153,8 +153,8 @@ mod tests {
 
         fn list(
             &self,
-            _prefix: Option<&Path>,
-        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+            _: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             unimplemented!()
         }
 
@@ -371,7 +371,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };
@@ -429,7 +429,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };

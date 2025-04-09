@@ -30,7 +30,7 @@ pub struct FileMeta {
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
     /// Size hint for the metadata of this file
-    pub metadata_size_hint: Option<usize>,
+    pub metadata_size_hint: Option<u64>,
 }
 
 impl FileMeta {

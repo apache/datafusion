@@ -25,7 +25,7 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
     UInt32Type, UInt64Type, UInt8Type,
 };
-use rand::distributions::Standard;
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::rngs::StdRng;
 use rand::Rng;
@@ -40,7 +40,7 @@ macro_rules! basic_random_data {
     ($ARROW_TYPE: ty) => {
         impl RandomNativeData for $ARROW_TYPE
         where
-            Standard: Distribution<Self::Native>,
+            StandardUniform: Distribution<Self::Native>,
         {
             #[inline]
             fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {

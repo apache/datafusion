@@ -428,7 +428,7 @@ config_namespace! {
         /// bytes of the parquet file optimistically. If not specified, two reads are required:
         /// One read to fetch the 8-byte parquet footer and
         /// another to fetch the metadata length encoded in the footer
-        pub metadata_size_hint: Option<usize>, default = None
+        pub metadata_size_hint: Option<u64>, default = None
 
         /// (reading) If true, filter expressions are be applied during the parquet decoding operation to
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".

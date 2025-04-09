@@ -305,7 +305,7 @@ impl FileOpener for ArrowOpener {
                     )?;
                     // read footer according to footer_len
                     let get_option = GetOptions {
-                        range: Some(GetRange::Suffix(10 + footer_len)),
+                        range: Some(GetRange::Suffix(10 + footer_len as u64)),
                         ..Default::default()
                     };
                     let get_result = object_store
@@ -332,9 +332,9 @@ impl FileOpener for ArrowOpener {
                         .iter()
                         .flatten()
                         .map(|block| {
-                            let block_len = block.bodyLength() as usize
-                                + block.metaDataLength() as usize;
-                            let block_offset = block.offset() as usize;
+                            let block_len = block.bodyLength() as u64
+                                + block.metaDataLength() as u64;
+                            let block_offset = block.offset() as u64;
                             block_offset..block_offset + block_len
                         })
                         .collect_vec();
@@ -364,9 +364,9 @@ impl FileOpener for ArrowOpener {
                     let recordbatch_ranges = recordbatches
                         .iter()
                         .map(|block| {
-                            let block_len = block.bodyLength() as usize
-                                + block.metaDataLength() as usize;
-                            let block_offset = block.offset() as usize;
+                            let block_len = block.bodyLength() as u64
+                                + block.metaDataLength() as u64;
+                            let block_offset = block.offset() as u64;
                             block_offset..block_offset + block_len
                         })
                         .collect_vec();

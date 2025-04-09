@@ -21,7 +21,7 @@ use arrow::array::{StringArray, StringViewArray};
 use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::str::Chars;

@@ -193,13 +193,13 @@ impl ParquetFormat {
     /// another read to fetch the metadata length encoded in the footer.
     ///
     /// - If `None`, defaults to value on `config_options`
-    pub fn with_metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
+    pub fn with_metadata_size_hint(mut self, size_hint: Option<u64>) -> Self {
         self.options.global.metadata_size_hint = size_hint;
         self
     }
 
     /// Return the metadata size hint if set
-    pub fn metadata_size_hint(&self) -> Option<usize> {
+    pub fn metadata_size_hint(&self) -> Option<u64> {
         self.options.global.metadata_size_hint
     }
 
@@ -290,7 +290,7 @@ fn clear_metadata(
 async fn fetch_schema_with_location(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
-    metadata_size_hint: Option<usize>,
+    metadata_size_hint: Option<u64>,
 ) -> Result<(Path, Schema)> {
     let loc_path = file.location.clone();
     let schema = fetch_schema(store, file, metadata_size_hint).await?;
@@ -735,15 +735,13 @@ impl<'a> ObjectStoreFetch<'a> {
 }
 
 impl MetadataFetch for ObjectStoreFetch<'_> {
-    fn fetch(
-        &mut self,
-        range: Range<usize>,
-    ) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
-        async {
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+        async move {
+            let range_usize: Range<u64> = range.start..range.end;
             self.store
-                .get_range(&self.meta.location, range)
+                .get_range(&self.meta.location, range_usize)
                 .await
-                .map_err(ParquetError::from)
+                .map_err(|e| ParquetError::External(Box::new(e)))
         }
         .boxed()
     }
@@ -758,13 +756,13 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
 pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
     meta: &ObjectMeta,
-    size_hint: Option<usize>,
+    size_hint: Option<u64>,
 ) -> Result<ParquetMetaData> {
     let file_size = meta.size;
     let fetch = ObjectStoreFetch::new(store, meta);
 
     ParquetMetaDataReader::new()
-        .with_prefetch_hint(size_hint)
+        .with_prefetch_hint(size_hint.map(|n| n.try_into().unwrap()))
         .load_and_finish(fetch, file_size)
         .await
         .map_err(DataFusionError::from)
@@ -774,7 +772,7 @@ pub async fn fetch_parquet_metadata(
 async fn fetch_schema(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
-    metadata_size_hint: Option<usize>,
+    metadata_size_hint: Option<u64>,
 ) -> Result<Schema> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
     let file_metadata = metadata.file_metadata();
@@ -792,7 +790,7 @@ pub async fn fetch_statistics(
     store: &dyn ObjectStore,
     table_schema: SchemaRef,
     file: &ObjectMeta,
-    metadata_size_hint: Option<usize>,
+    metadata_size_hint: Option<u64>,
 ) -> Result<Statistics> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
     statistics_from_parquet_meta_calc(&metadata, table_schema)

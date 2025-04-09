@@ -104,7 +104,7 @@ impl From<ParquetExec> for ParquetExecBuilder {
 pub struct ParquetExecBuilder {
     file_scan_config: FileScanConfig,
     predicate: Option<Arc<dyn PhysicalExpr>>,
-    metadata_size_hint: Option<usize>,
+    metadata_size_hint: Option<u64>,
     table_parquet_options: TableParquetOptions,
     parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
@@ -154,7 +154,7 @@ impl ParquetExecBuilder {
     /// [`ParquetFileReaderFactory`] will request in the initial IO. If this is
     /// too small, the ParquetExec will need to make additional IO requests to
     /// read the footer.
-    pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
+    pub fn with_metadata_size_hint(mut self, metadata_size_hint: u64) -> Self {
         self.metadata_size_hint = Some(metadata_size_hint);
         self
     }
@@ -267,7 +267,7 @@ impl ParquetExec {
             builder = builder.with_predicate(predicate);
         }
         if let Some(metadata_size_hint) = metadata_size_hint {
-            builder = builder.with_metadata_size_hint(metadata_size_hint);
+            builder = builder.with_metadata_size_hint(metadata_size_hint.try_into().unwrap());
         }
         builder.build()
     }

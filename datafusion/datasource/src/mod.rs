@@ -113,7 +113,7 @@ pub struct PartitionedFile {
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
     /// The estimated size of the parquet metadata, in bytes
-    pub metadata_size_hint: Option<usize>,
+    pub metadata_size_hint: Option<u64>,
 }
 
 impl PartitionedFile {
@@ -123,7 +123,7 @@ impl PartitionedFile {
             object_meta: ObjectMeta {
                 location: Path::from(path.into()),
                 last_modified: chrono::Utc.timestamp_nanos(0),
-                size: size as usize,
+                size,
                 e_tag: None,
                 version: None,
             },
@@ -141,7 +141,7 @@ impl PartitionedFile {
             object_meta: ObjectMeta {
                 location: Path::from(path),
                 last_modified: chrono::Utc.timestamp_nanos(0),
-                size: size as usize,
+                size,
                 e_tag: None,
                 version: None,
             },
@@ -157,7 +157,7 @@ impl PartitionedFile {
     /// Provide a hint to the size of the file metadata. If a hint is provided
     /// the reader will try and fetch the last `size_hint` bytes of the parquet file optimistically.
     /// Without an appropriate hint, two read may be required to fetch the metadata.
-    pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
+    pub fn with_metadata_size_hint(mut self, metadata_size_hint: u64) -> Self {
         self.metadata_size_hint = Some(metadata_size_hint);
         self
     }
@@ -224,7 +224,7 @@ impl From<ObjectMeta> for PartitionedFile {
 ///   Indicates that the range calculation determined no further action is
 ///   necessary, possibly because the calculated range is empty or invalid.
 pub enum RangeCalculation {
-    Range(Option<Range<usize>>),
+    Range(Option<Range<u64>>),
     TerminateEarly,
 }
 
@@ -250,21 +250,29 @@ pub async fn calculate_range(
     match file_meta.range {
         None => Ok(RangeCalculation::Range(None)),
         Some(FileRange { start, end }) => {
-            let (start, end) = (start as usize, end as usize);
-
-            let start_delta = if start != 0 {
-                find_first_newline(store, location, start - 1, file_size, newline).await?
+            let ustart = start as u64;
+            let uend = end as u64;
+            let start_delta = if ustart != 0 {
+                find_first_newline(store, location, ustart - 1, file_size, newline)
+                    .await?
             } else {
                 0
             };
 
-            let end_delta = if end != file_size {
-                find_first_newline(store, location, end - 1, file_size, newline).await?
+            let end_delta = if uend != file_size {
+                find_first_newline(
+                    store,
+                    location,
+                    (end - 1).try_into().unwrap(),
+                    file_size,
+                    newline,
+                )
+                .await?
             } else {
                 0
             };
 
-            let range = start + start_delta..end + end_delta;
+            let range = start as u64 + start_delta..uend + end_delta;
 
             if range.start == range.end {
                 return Ok(RangeCalculation::TerminateEarly);
@@ -289,10 +297,10 @@ pub async fn calculate_range(
 async fn find_first_newline(
     object_store: &Arc<dyn ObjectStore>,
     location: &Path,
-    start: usize,
-    end: usize,
+    start: u64,
+    end: u64,
     newline: u8,
-) -> Result<usize> {
+) -> Result<u64> {
     let options = GetOptions {
         range: Some(GetRange::Bounded(start..end)),
         ..Default::default()
@@ -301,14 +309,14 @@ async fn find_first_newline(
     let result = object_store.get_opts(location, options).await?;
     let mut result_stream = result.into_stream();
 
-    let mut index = 0;
+    let mut index: u64 = 0;
 
     while let Some(chunk) = result_stream.next().await.transpose()? {
         if let Some(position) = chunk.iter().position(|&byte| byte == newline) {
-            return Ok(index + position);
+            return Ok(index + position as u64);
         }
 
-        index += chunk.len();
+        index += chunk.len() as u64;
     }
 
     Ok(index)

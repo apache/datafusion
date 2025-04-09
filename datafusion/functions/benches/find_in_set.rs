@@ -25,7 +25,7 @@ use arrow::util::bench_util::{
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;

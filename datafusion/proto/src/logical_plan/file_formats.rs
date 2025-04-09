@@ -465,7 +465,7 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             pruning: proto.pruning,
             skip_metadata: proto.skip_metadata,
             metadata_size_hint: proto.metadata_size_hint_opt.as_ref().map(|opt| match opt {
-                parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size) => *size as usize,
+                parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size) => *size,
             }),
             pushdown_filters: proto.pushdown_filters,
             reorder_filters: proto.reorder_filters,
