@@ -2884,7 +2884,8 @@ mod tests {
             let unparser = Unparser::new(dialect.as_ref());
             let expr = Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(
-                    datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc::new(),
+                    datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc::new(
+                    ), // I don't know why, but cargo fmt wants this split on this line
                 )),
                 args: vec![col("date_col")],
             });
