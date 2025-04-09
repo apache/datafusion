@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashSet;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -28,7 +29,7 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -45,8 +46,8 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderBy,
-    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
+    visit_expressions_mut, Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr,
+    OrderBy, SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -758,11 +759,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// # Arguments
     ///
     /// * `input`           - The input plan that will be aggregated. The grouping, aggregate, and
-    ///                       "having" expressions must all be resolvable from this plan.
+    ///   "having" expressions must all be resolvable from this plan.
     /// * `select_exprs`    - The projection expressions from the SELECT clause.
     /// * `having_expr_opt` - Optional HAVING clause.
     /// * `group_by_exprs`  - Grouping expressions from the GROUP BY clause. These can be column
-    ///                       references or more complex expressions.
+    ///   references or more complex expressions.
     /// * `aggr_exprs`      - Aggregate expressions, such as `SUM(a)` or `COUNT(1)`.
     ///
     /// # Return
@@ -771,9 +772,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///
     /// * `plan`                   - A [LogicalPlan::Aggregate] plan for the newly created aggregate.
     /// * `select_exprs_post_aggr` - The projection expressions rewritten to reference columns from
-    ///                              the aggregate
+    ///   the aggregate
     /// * `having_expr_post_aggr`  - The "having" expression rewritten to reference a column from
-    ///                              the aggregate
+    ///   the aggregate
     fn aggregate(
         &self,
         input: &LogicalPlan,
@@ -891,29 +892,42 @@ fn match_window_definitions(
     named_windows: &[NamedWindowDefinition],
 ) -> Result<()> {
     for proj in projection.iter_mut() {
-        if let SelectItem::ExprWithAlias {
-            expr: SQLExpr::Function(f),
-            alias: _,
-        }
-        | SelectItem::UnnamedExpr(SQLExpr::Function(f)) = proj
+        if let SelectItem::ExprWithAlias { expr, alias: _ }
+        | SelectItem::UnnamedExpr(expr) = proj
         {
-            for NamedWindowDefinition(window_ident, window_expr) in named_windows.iter() {
-                if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                    if ident.eq(window_ident) {
-                        f.over = Some(match window_expr {
-                            NamedWindowExpr::NamedWindow(ident) => {
-                                WindowType::NamedWindow(ident.clone())
+            let mut err = None;
+            visit_expressions_mut(expr, |expr| {
+                if let SQLExpr::Function(f) = expr {
+                    if let Some(WindowType::NamedWindow(_)) = &f.over {
+                        for NamedWindowDefinition(window_ident, window_expr) in
+                            named_windows
+                        {
+                            if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                                if ident.eq(window_ident) {
+                                    f.over = Some(match window_expr {
+                                        NamedWindowExpr::NamedWindow(ident) => {
+                                            WindowType::NamedWindow(ident.clone())
+                                        }
+                                        NamedWindowExpr::WindowSpec(spec) => {
+                                            WindowType::WindowSpec(spec.clone())
+                                        }
+                                    })
+                                }
                             }
-                            NamedWindowExpr::WindowSpec(spec) => {
-                                WindowType::WindowSpec(spec.clone())
-                            }
-                        })
+                        }
+                        // All named windows must be defined with a WindowSpec.
+                        if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                            err = Some(DataFusionError::Plan(format!(
+                                "The window {ident} is not defined!"
+                            )));
+                            return ControlFlow::Break(());
+                        }
                     }
                 }
-            }
-            // All named windows must be defined with a WindowSpec.
-            if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                return plan_err!("The window {ident} is not defined!");
+                ControlFlow::Continue(())
+            });
+            if let Some(err) = err {
+                return Err(err);
             }
         }
     }

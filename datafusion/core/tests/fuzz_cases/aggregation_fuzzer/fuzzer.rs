@@ -270,7 +270,7 @@ impl AggregationFuzzer {
 ///   - `sql`, the selected test sql
 ///
 ///   - `dataset_ref`, the input dataset, store it for error reported when found
-///      the inconsistency between the one for `ctx` and `expected results`.
+///     the inconsistency between the one for `ctx` and `expected results`.
 ///
 struct AggregationFuzzTestTask {
     /// Generated session context in current test case
