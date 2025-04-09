@@ -202,7 +202,7 @@ mod tests {
                     3.0, 2.0, 4.0, 4.0,
                 ]))), // exponent
             ],
-            arg_metadata: vec![None; 2],
+            arg_fields: vec![None; 2],
             number_rows: 4,
             return_type: &DataType::Float64,
         };
@@ -233,7 +233,7 @@ mod tests {
                 ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
                 ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
             ],
-            arg_metadata: vec![None; 2],
+            arg_fields: vec![None; 2],
             number_rows: 4,
             return_type: &DataType::Int64,
         };

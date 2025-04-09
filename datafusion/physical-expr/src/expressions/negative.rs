@@ -18,12 +18,12 @@
 //! Negation (-) expression
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
+use arrow::datatypes::Field;
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
@@ -104,8 +104,8 @@ impl PhysicalExpr for NegativeExpr {
         }
     }
 
-    fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> {
-        self.arg.metadata(input_schema)
+    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
+        self.arg.output_field(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

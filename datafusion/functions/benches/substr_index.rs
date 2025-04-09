@@ -96,7 +96,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 substr_index()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: args.clone(),
-                        arg_metadata: vec![None; args.len()],
+                        arg_fields: vec![None; args.len()],
                         number_rows: batch_len,
                         return_type: &DataType::Utf8,
                     })

@@ -20,7 +20,6 @@ mod kernels;
 use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
@@ -433,10 +432,7 @@ impl PhysicalExpr for BinaryExpr {
             .map(ColumnarValue::Array)
     }
 
-    fn metadata(
-        &self,
-        _input_schema: &Schema,
-    ) -> Result<Option<HashMap<String, String>>> {
+    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
         Ok(None)
     }
 

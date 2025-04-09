@@ -541,7 +541,7 @@ mod tests {
         let res = ToLocalTimeFunc::new()
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(input)],
-                arg_metadata: vec![None; 1],
+                arg_fields: vec![None; 1],
                 number_rows: 1,
                 return_type: &expected.data_type(),
             })
@@ -605,7 +605,7 @@ mod tests {
             let batch_size = input.len();
             let args = ScalarFunctionArgs {
                 args: vec![ColumnarValue::Array(Arc::new(input))],
-                arg_metadata: vec![None; 1],
+                arg_fields: vec![None; 1],
                 number_rows: batch_size,
                 return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
             };

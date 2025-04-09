@@ -39,7 +39,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     trunc
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f32_args.clone(),
-                            arg_metadata: vec![None; f32_args.len()],
+                            arg_fields: vec![None; f32_args.len()],
                             number_rows: size,
                             return_type: &DataType::Float32,
                         })
@@ -55,7 +55,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     trunc
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f64_args.clone(),
-                            arg_metadata: vec![None; f64_args.len()],
+                            arg_fields: vec![None; f64_args.len()],
                             number_rows: size,
                             return_type: &DataType::Float64,
                         })

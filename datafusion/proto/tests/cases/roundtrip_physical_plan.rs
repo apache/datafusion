@@ -865,10 +865,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             unreachable!()
         }
 
-        fn metadata(
-            &self,
-            _input_schema: &Schema,
-        ) -> Result<Option<HashMap<String, String>>> {
+        fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
             Ok(None)
         }
 

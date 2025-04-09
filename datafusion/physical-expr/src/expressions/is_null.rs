@@ -19,13 +19,12 @@
 
 use crate::PhysicalExpr;
 use arrow::{
-    datatypes::{DataType, Schema},
+    datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
@@ -93,8 +92,8 @@ impl PhysicalExpr for IsNullExpr {
         }
     }
 
-    fn metadata(&self, input_schema: &Schema) -> Result<Option<HashMap<String, String>>> {
-        self.arg.metadata(input_schema)
+    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
+        self.arg.output_field(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

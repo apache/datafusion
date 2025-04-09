@@ -53,7 +53,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![interval.clone(), timestamps.clone()],
-                    arg_metadata: vec![None; 2],
+                    arg_fields: vec![None; 2],
                     number_rows: batch_len,
                     return_type: &return_type,
                 })

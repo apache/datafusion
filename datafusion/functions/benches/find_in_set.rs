@@ -157,7 +157,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
-                    arg_metadata: vec![None; args.len()],
+                    arg_fields: vec![None; args.len()],
                     number_rows: n_rows,
                     return_type: &DataType::Int32,
                 }))
@@ -169,7 +169,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
-                    arg_metadata: vec![None; args.len()],
+                    arg_fields: vec![None; args.len()],
                     number_rows: n_rows,
                     return_type: &DataType::Int32,
                 }))
@@ -185,7 +185,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
-                    arg_metadata: vec![None; args.len()],
+                    arg_fields: vec![None; args.len()],
                     number_rows: n_rows,
                     return_type: &DataType::Int32,
                 }))
@@ -197,7 +197,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
-                    arg_metadata: vec![None; args.len()],
+                    arg_fields: vec![None; args.len()],
                     number_rows: n_rows,
                     return_type: &DataType::Int32,
                 }))

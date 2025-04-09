@@ -271,7 +271,7 @@ mod tests {
                 ]))), // num
                 ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 10, 15, 20]))),
             ],
-            arg_metadata: vec![None; 2],
+            arg_fields: vec![None; 2],
             number_rows: 4,
             return_type: &DataType::Float64,
         };
@@ -284,7 +284,7 @@ mod tests {
             args: vec![
                 ColumnarValue::Array(Arc::new(Int64Array::from(vec![10]))), // num
             ],
-            arg_metadata: vec![None; 1],
+            arg_fields: vec![None; 1],
             number_rows: 1,
             return_type: &DataType::Float64,
         };
@@ -299,7 +299,7 @@ mod tests {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0))), // num
             ],
-            arg_metadata: vec![None; 1],
+            arg_fields: vec![None; 1],
             number_rows: 1,
             return_type: &DataType::Float32,
         };
@@ -327,7 +327,7 @@ mod tests {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0))), // num
             ],
-            arg_metadata: vec![None; 1],
+            arg_fields: vec![None; 1],
             number_rows: 1,
             return_type: &DataType::Float64,
         };
@@ -356,7 +356,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))), // num
                 ColumnarValue::Scalar(ScalarValue::Float32(Some(32.0))), // num
             ],
-            arg_metadata: vec![None; 2],
+            arg_fields: vec![None; 2],
             number_rows: 1,
             return_type: &DataType::Float32,
         };
@@ -385,7 +385,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // num
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(64.0))), // num
             ],
-            arg_metadata: vec![None; 2],
+            arg_fields: vec![None; 2],
             number_rows: 1,
             return_type: &DataType::Float64,
         };
@@ -415,7 +415,7 @@ mod tests {
                     10.0, 100.0, 1000.0, 10000.0,
                 ]))), // num
             ],
-            arg_metadata: vec![None; 1],
+            arg_fields: vec![None; 1],
             number_rows: 4,
             return_type: &DataType::Float64,
         };
@@ -448,7 +448,7 @@ mod tests {
                     10.0, 100.0, 1000.0, 10000.0,
                 ]))), // num
             ],
-            arg_metadata: vec![None; 1],
+            arg_fields: vec![None; 1],
             number_rows: 4,
             return_type: &DataType::Float32,
         };
@@ -484,7 +484,7 @@ mod tests {
                     8.0, 4.0, 81.0, 625.0,
                 ]))), // num
             ],
-            arg_metadata: vec![None; 2],
+            arg_fields: vec![None; 2],
             number_rows: 4,
             return_type: &DataType::Float64,
         };
@@ -520,7 +520,7 @@ mod tests {
                     8.0, 4.0, 81.0, 625.0,
                 ]))), // num
             ],
-            arg_metadata: vec![None; 2],
+            arg_fields: vec![None; 2],
             number_rows: 4,
             return_type: &DataType::Float32,
         };

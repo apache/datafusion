@@ -379,10 +379,7 @@ impl PhysicalExpr for InListExpr {
         Ok(ColumnarValue::Array(Arc::new(r)))
     }
 
-    fn metadata(
-        &self,
-        _input_schema: &Schema,
-    ) -> Result<Option<std::collections::HashMap<String, String>>> {
+    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
         Ok(None)
     }
 
