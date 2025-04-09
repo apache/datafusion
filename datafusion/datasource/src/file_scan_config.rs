@@ -592,19 +592,25 @@ impl DataSource for FileScanConfig {
 
     fn try_pushdown_filters(
         &self,
-        filters: &[PhysicalExprRef],
+        parent_filters: &[PhysicalExprRef],
         config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
-        match self.file_source.try_pushdown_filters(filters, config)? {
+        match self
+            .file_source
+            .try_pushdown_filters(parent_filters, config)?
+        {
             FilterPushdownResult::NotPushed => Ok(FilterPushdownResult::NotPushed),
-            FilterPushdownResult::Pushed { inner, support } => {
+            FilterPushdownResult::Pushed {
+                updated: inner,
+                support,
+            } => {
                 let new_self = Arc::new(
                     FileScanConfigBuilder::from(self.clone())
                         .with_source(inner)
                         .build(),
                 );
                 Ok(FilterPushdownResult::Pushed {
-                    inner: new_self,
+                    updated: new_self,
                     support,
                 })
             }

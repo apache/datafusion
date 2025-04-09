@@ -146,7 +146,7 @@ impl FileSource for TestSource {
 
     fn try_pushdown_filters(
         &self,
-        filters: &[PhysicalExprRef],
+        parent_filters: &[PhysicalExprRef],
         config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn FileSource>>> {
         let support = match self.support {
@@ -161,12 +161,12 @@ impl FileSource for TestSource {
         };
         let new = Arc::new(TestSource {
             support: self.support,
-            predicate: Some(conjunction(filters.iter().map(Arc::clone))),
+            predicate: Some(conjunction(parent_filters.iter().map(Arc::clone))),
             statistics: self.statistics.clone(),
         });
         Ok(FilterPushdownResult::Pushed {
-            inner: new,
-            support: vec![support; filters.len()],
+            updated: new,
+            support: vec![support; parent_filters.len()],
         })
     }
 }

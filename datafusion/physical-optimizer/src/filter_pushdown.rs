@@ -47,7 +47,10 @@ impl PhysicalOptimizerRule for PushdownFilter {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match plan.try_pushdown_filters(&plan, &Vec::new(), config)? {
             FilterPushdownResult::NotPushed => Ok(plan),
-            FilterPushdownResult::Pushed { inner, support } => {
+            FilterPushdownResult::Pushed {
+                updated: inner,
+                support,
+            } => {
                 if !support.is_empty() {
                     return Err(
                         DataFusionError::Plan(

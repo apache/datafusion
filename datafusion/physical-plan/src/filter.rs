@@ -466,7 +466,10 @@ impl ExecutionPlan for FilterExec {
                     }
                     (conjunction(all_filters), Arc::clone(&self.input))
                 }
-                FilterPushdownResult::Pushed { inner, support } => {
+                FilterPushdownResult::Pushed {
+                    updated: inner,
+                    support,
+                } => {
                     // Split out the filters that the child plan handled and the ones it did not
                     let unhandled_filters = all_filters
                         .into_iter()
@@ -476,7 +479,7 @@ impl ExecutionPlan for FilterExec {
                     // If there are no unhandled filters and we have no projection, return the inner plan
                     if unhandled_filters.is_empty() && self.projection.is_none() {
                         return Ok(FilterPushdownResult::Pushed {
-                            inner,
+                            updated: inner,
                             support: vec![FilterPushdown::Exact; parent_filters.len()],
                         });
                     }
@@ -500,7 +503,7 @@ impl ExecutionPlan for FilterExec {
             projection: self.projection.clone(),
         };
         Ok(FilterPushdownResult::Pushed {
-            inner: Arc::new(new_self),
+            updated: Arc::new(new_self),
             support: vec![FilterPushdown::Exact; parent_filters.len()],
         })
     }

@@ -20,7 +20,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 
 /// The combined result of a filter pushdown operation.
 /// This includes:
-/// * The inner plan that was produced by the pushdown operation.
+/// * The inner node that was produced by the pushdown operation.
 /// * The support for each filter that was pushed down.
 pub enum FilterPushdownResult<T> {
     /// No pushdown was possible, keep this node as is in the tree.
@@ -29,28 +29,28 @@ pub enum FilterPushdownResult<T> {
     /// The caller should replace the node in the tree with the new one provided
     /// and should transmit to parents the support for each filter.
     Pushed {
-        /// The inner node that was produced by the pushdown operation.
-        inner: T,
+        /// The updated node that was produced by the pushdown operation.
+        updated: T,
         /// The support for each filter that was pushed down.
         support: Vec<FilterPushdown>,
     },
 }
 
 impl<T> FilterPushdownResult<T> {
-    /// Create a new [`FilterPushdownResult`] with the given inner plan and marking
+    /// Create a new [`FilterPushdownResult`] with the given updated node and marking
     /// all filters as pushed down with `Exact` support.
-    pub fn new_exact(inner: T, filters: &[PhysicalExprRef]) -> Self {
+    pub fn new_exact(updated: T, filters: &[PhysicalExprRef]) -> Self {
         Self::Pushed {
-            inner,
+            updated,
             support: vec![FilterPushdown::Exact; filters.len()],
         }
     }
 
-    /// Create a new [`FilterPushdownResult`] with the given inner plan and support
+    /// Create a new [`FilterPushdownResult`] with the given inner node and support
     /// for each filter that was pushed down as `Inexact`.
-    pub fn new_inexact(inner: T, filters: &[PhysicalExprRef]) -> Self {
+    pub fn new_inexact(updated: T, filters: &[PhysicalExprRef]) -> Self {
         Self::Pushed {
-            inner,
+            updated,
             support: vec![FilterPushdown::Inexact; filters.len()],
         }
     }

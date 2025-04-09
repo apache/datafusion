@@ -213,10 +213,13 @@ impl ExecutionPlan for DataSourceExec {
             .try_pushdown_filters(parent_filters, config)?
         {
             FilterPushdownResult::NotPushed => Ok(FilterPushdownResult::NotPushed),
-            FilterPushdownResult::Pushed { inner, support } => {
+            FilterPushdownResult::Pushed {
+                updated: inner,
+                support,
+            } => {
                 let new_self = Arc::new(DataSourceExec::new(inner));
                 Ok(FilterPushdownResult::Pushed {
-                    inner: new_self,
+                    updated: new_self,
                     support,
                 })
             }

@@ -847,7 +847,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
                     // No pushdown possible, keep this child as is
                     new_children.push(Arc::clone(child));
                 }
-                FilterPushdownResult::Pushed { inner, support } => {
+                FilterPushdownResult::Pushed {
+                    updated: inner,
+                    support,
+                } => {
                     // We have a child that has pushed down some filters
                     new_children.push(inner);
                     pushed = true;
@@ -864,7 +867,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             let new_inner =
                 with_new_children_if_necessary(Arc::clone(plan), new_children)?;
             Ok(FilterPushdownResult::Pushed {
-                inner: new_inner,
+                updated: new_inner,
                 support: vec![FilterPushdown::Unsupported; parent_filters.len()],
             })
         } else {
@@ -891,12 +894,15 @@ pub fn try_pushdown_filters_to_input(
             // No pushdown possible, keep this child as is
             Ok(FilterPushdownResult::NotPushed)
         }
-        FilterPushdownResult::Pushed { inner, support } => {
+        FilterPushdownResult::Pushed {
+            updated: inner,
+            support,
+        } => {
             // We have a child that has pushed down some filters
             let new_inner =
                 with_new_children_if_necessary(Arc::clone(plan), vec![inner])?;
             Ok(FilterPushdownResult::Pushed {
-                inner: new_inner,
+                updated: new_inner,
                 support,
             })
         }

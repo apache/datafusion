@@ -2844,7 +2844,9 @@ mod tests {
             &self,
             filters: &[&Expr],
         ) -> Result<Vec<TableProviderFilterPushDown>> {
-            Ok((0..filters.len()).map(|_| self.filter_support).collect())
+            Ok((0..filters.len())
+                .map(|_| self.filter_support)
+                .collect())
         }
 
         fn as_any(&self) -> &dyn Any {
