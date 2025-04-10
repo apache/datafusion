@@ -33,8 +33,8 @@ use datafusion_common::{
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
-    WindowFunctionDefinition,
+    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
+    Operator, Volatility, WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
@@ -976,30 +976,39 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // Rules for Multiply
             //
 
-            // A * 1 --> A
+            // A * 1 --> A (with type coercion if needed)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if is_one(&right) => Transformed::yes(*left),
+            }) if is_one(&right) => {
+                simplify_right_is_one_case(info, left, &Multiply, &right)?
+            }
+            // A * null --> null
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            }) if is_null(&right) => {
+                simplify_right_is_null_case(info, &left, &Multiply, right)?
+            }
             // 1 * A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if is_one(&left) => Transformed::yes(*right),
-            // A * null --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left: _,
-                op: Multiply,
-                right,
-            }) if is_null(&right) => Transformed::yes(*right),
+            }) if is_one(&left) => {
+                // 1 * A is equivalent to A * 1
+                simplify_right_is_one_case(info, right, &Multiply, &left)?
+            }
             // null * A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
+                right,
+            }) if is_null(&left) => {
+                simplify_right_is_null_case(info, &right, &Multiply, left)?
+            }
 
             // A * 0 --> 0 (if A is not null and not floating, since NAN * 0 -> NAN)
             Expr::BinaryExpr(BinaryExpr {
@@ -1033,19 +1042,23 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 left,
                 op: Divide,
                 right,
-            }) if is_one(&right) => Transformed::yes(*left),
+            }) if is_one(&right) => {
+                simplify_right_is_one_case(info, left, &Divide, &right)?
+            }
+            // A / null --> null
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Divide,
+                right,
+            }) if is_null(&right) => {
+                simplify_right_is_null_case(info, &left, &Divide, right)?
+            }
             // null / A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
-            // A / null --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left: _,
-                op: Divide,
                 right,
-            }) if is_null(&right) => Transformed::yes(*right),
+            }) if is_null(&left) => simplify_null_div_other_case(info, left, &right)?,
 
             //
             // Rules for Modulo
@@ -1997,6 +2010,84 @@ fn is_exactly_true(expr: Expr, info: &impl SimplifyInfo) -> Result<Expr> {
     }
 }
 
+// A * 1 -> A
+// A / 1 -> A
+//
+// Move this function body out of the large match branch avoid stack overflow
+fn simplify_right_is_one_case<S: SimplifyInfo>(
+    info: &S,
+    left: Box<Expr>,
+    op: &Operator,
+    right: &Expr,
+) -> Result<Transformed<Expr>> {
+    // Check if resulting type would be different due to coercion
+    let left_type = info.get_data_type(&left)?;
+    let right_type = info.get_data_type(right)?;
+    match BinaryTypeCoercer::new(&left_type, op, &right_type).get_result_type() {
+        Ok(result_type) => {
+            // Only cast if the types differ
+            if left_type != result_type {
+                Ok(Transformed::yes(Expr::Cast(Cast::new(left, result_type))))
+            } else {
+                Ok(Transformed::yes(*left))
+            }
+        }
+        Err(_) => Ok(Transformed::yes(*left)),
+    }
+}
+
+// A * null -> null
+// A / null -> null
+//
+// Move this function body out of the large match branch avoid stack overflow
+fn simplify_right_is_null_case<S: SimplifyInfo>(
+    info: &S,
+    left: &Expr,
+    op: &Operator,
+    right: Box<Expr>,
+) -> Result<Transformed<Expr>> {
+    // Check if resulting type would be different due to coercion
+    let left_type = info.get_data_type(left)?;
+    let right_type = info.get_data_type(&right)?;
+    match BinaryTypeCoercer::new(&left_type, op, &right_type).get_result_type() {
+        Ok(result_type) => {
+            // Only cast if the types differ
+            if right_type != result_type {
+                Ok(Transformed::yes(Expr::Cast(Cast::new(right, result_type))))
+            } else {
+                Ok(Transformed::yes(*right))
+            }
+        }
+        Err(_) => Ok(Transformed::yes(*right)),
+    }
+}
+
+// null / A --> null
+//
+// Move this function body out of the large match branch avoid stack overflow
+fn simplify_null_div_other_case<S: SimplifyInfo>(
+    info: &S,
+    left: Box<Expr>,
+    right: &Expr,
+) -> Result<Transformed<Expr>> {
+    // Check if resulting type would be different due to coercion
+    let left_type = info.get_data_type(&left)?;
+    let right_type = info.get_data_type(right)?;
+    match BinaryTypeCoercer::new(&left_type, &Operator::Divide, &right_type)
+        .get_result_type()
+    {
+        Ok(result_type) => {
+            // Only cast if the types differ
+            if left_type != result_type {
+                Ok(Transformed::yes(Expr::Cast(Cast::new(left, result_type))))
+            } else {
+                Ok(Transformed::yes(*left))
+            }
+        }
+        Err(_) => Ok(Transformed::yes(*left)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::simplify_expressions::SimplifyContext;
@@ -2316,12 +2407,12 @@ mod tests {
         // A / null --> null
         let null = lit(ScalarValue::Null);
         {
-            let expr = col("c") / null.clone();
+            let expr = col("c1") / null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null / A --> null
         {
-            let expr = null.clone() / col("c");
+            let expr = null.clone() / col("c1");
             assert_eq!(simplify(expr), null);
         }
     }
