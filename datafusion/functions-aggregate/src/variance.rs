@@ -460,11 +460,11 @@ impl VarianceGroupsAccumulator {
         &mut self,
         emit_to: datafusion_expr::EmitTo,
     ) -> (Vec<f64>, NullBuffer) {
-        let mut counts = emit_to.take_needed(&mut self.counts);
+        let mut counts = emit_to.take_needed_rows(&mut self.counts);
         // means are only needed for updating m2s and are not needed for the final result.
         // But we still need to take them to ensure the internal state is consistent.
-        let _ = emit_to.take_needed(&mut self.means);
-        let m2s = emit_to.take_needed(&mut self.m2s);
+        let _ = emit_to.take_needed_rows(&mut self.means);
+        let m2s = emit_to.take_needed_rows(&mut self.m2s);
 
         if let StatsType::Sample = self.stats_type {
             counts.iter_mut().for_each(|count| {
@@ -555,9 +555,9 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
     }
 
     fn state(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<Vec<ArrayRef>> {
-        let counts = emit_to.take_needed(&mut self.counts);
-        let means = emit_to.take_needed(&mut self.means);
-        let m2s = emit_to.take_needed(&mut self.m2s);
+        let counts = emit_to.take_needed_rows(&mut self.counts);
+        let means = emit_to.take_needed_rows(&mut self.means);
+        let m2s = emit_to.take_needed_rows(&mut self.m2s);
 
         Ok(vec![
             Arc::new(UInt64Array::new(counts.into(), None)),

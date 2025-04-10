@@ -229,6 +229,9 @@ impl GroupValues for GroupValuesRows {
                 });
                 output
             }
+            EmitTo::NextBlock(_) => {
+                unreachable!("this group values still not support blocked groups")
+            }
         };
 
         // TODO: Materialize dictionaries in group keys

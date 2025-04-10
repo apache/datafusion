@@ -428,13 +428,16 @@ where
     }
 
     fn take_orderings(&mut self, emit_to: EmitTo) -> Vec<Vec<ScalarValue>> {
-        let result = emit_to.take_needed(&mut self.orderings);
+        let result = emit_to.take_needed_rows(&mut self.orderings);
 
         match emit_to {
             EmitTo::All => self.size_of_orderings = 0,
             EmitTo::First(_) => {
                 self.size_of_orderings -=
                     result.iter().map(ScalarValue::size_of_vec).sum::<usize>()
+            }
+            EmitTo::NextBlock(_) => {
+                unreachable!("this accumulator still not support blocked groups")
             }
         }
 
@@ -459,6 +462,9 @@ where
                     bool_buf_builder.append(b);
                 }
                 first_n
+            }
+            EmitTo::NextBlock(_) => {
+                unreachable!("this group values still not support blocked groups")
             }
         }
     }
@@ -513,7 +519,7 @@ where
         &mut self,
         emit_to: EmitTo,
     ) -> (ArrayRef, Vec<Vec<ScalarValue>>, BooleanBuffer) {
-        emit_to.take_needed(&mut self.min_of_each_group_buf.0);
+        emit_to.take_needed_rows(&mut self.min_of_each_group_buf.0);
         self.min_of_each_group_buf
             .1
             .truncate(self.min_of_each_group_buf.0.len());
@@ -615,7 +621,7 @@ where
     }
 
     fn take_vals_and_null_buf(&mut self, emit_to: EmitTo) -> ArrayRef {
-        let r = emit_to.take_needed(&mut self.vals);
+        let r = emit_to.take_needed_rows(&mut self.vals);
 
         let null_buf = NullBuffer::new(Self::take_need(&mut self.null_builder, emit_to));
 

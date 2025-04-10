@@ -228,6 +228,7 @@ impl NullState {
                 }
                 first_n_null
             }
+            EmitTo::NextBlock(_) => todo!(),
         };
         NullBuffer::new(nulls)
     }
