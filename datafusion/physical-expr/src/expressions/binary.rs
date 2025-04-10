@@ -838,8 +838,7 @@ enum ShortCircuitStrategy {
 /// # Implementation Notes
 /// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
 /// 2. Handles both scalar values and array values
-/// 3. For arrays, uses optimized `true_count()`/`false_count()` methods from arrow-rs.
-///    `bool_or`/`bool_and` maybe a better choice too，for detailed discussion,see:[link](https://github.com/apache/datafusion/pull/15462#discussion_r2020558418)
+/// 3. For arrays, uses optimized bit counting techniques for boolean arrays
 fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrategy {
     // Only apply short-circuiting for logical operators And/Or.
     if !matches!(op, Operator::And | Operator::Or) {
@@ -861,36 +860,38 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
                     return ShortCircuitStrategy::None;
                 }
 
-                // For AND: return left if all false, return right if all true
-                // For OR: return left if all true, return right if all false
-                let true_count = array.true_count();
                 let len = array.len();
 
-                // Check for all true values
-                if true_count == len {
-                    return if is_and {
-                        ShortCircuitStrategy::ReturnRight
-                    } else {
-                        ShortCircuitStrategy::ReturnLeft
-                    };
-                }
+                // Optimize evaluation order based on operator type
+                // This avoids redundant counting operations
+                if is_and {
+                    // For AND, check for all false values first (most common short-circuit case)
+                    let false_count = array.false_count();
+                    if false_count == len {
+                        return ShortCircuitStrategy::ReturnLeft; // All false for AND
+                    }
 
-                // Check for all false values
-                let false_count = array.false_count();
-                if false_count == len {
-                    return if is_and {
-                        ShortCircuitStrategy::ReturnLeft
-                    } else {
-                        ShortCircuitStrategy::ReturnRight
-                    };
+                    if false_count == 0 {
+                        // This means all true
+                        return ShortCircuitStrategy::ReturnRight; // All true for AND
+                    }
+                } else {
+                    // is OR
+                    // For OR, check for all true values first (most common short-circuit case)
+                    let true_count = array.true_count();
+                    if true_count == len {
+                        return ShortCircuitStrategy::ReturnLeft; // All true for OR
+                    }
+
+                    if true_count == 0 {
+                        // This means all false
+                        return ShortCircuitStrategy::ReturnRight; // All false for OR
+                    }
                 }
             }
         }
         ColumnarValue::Scalar(scalar) => {
             if let ScalarValue::Boolean(Some(value)) = scalar {
-                // For AND: return left if false, return right if true
-                // For OR: return left if true, return right if false
-
                 let is_true = *value;
 
                 if (is_and && !is_true) || (!is_and && is_true) {
