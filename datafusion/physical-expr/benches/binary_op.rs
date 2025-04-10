@@ -17,7 +17,6 @@
 
 use arrow::{
     array::BooleanArray,
-    compute::{bool_and, bool_or},
     datatypes::{DataType, Field, Schema},
 };
 use arrow::{array::StringArray, record_batch::RecordBatch};
@@ -28,7 +27,7 @@ use datafusion_physical_expr::{
     planner::logical2physical,
     PhysicalExpr,
 };
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 /// Generates BooleanArrays with different true/false distributions for benchmarking.
 ///
@@ -130,75 +129,6 @@ fn generate_boolean_cases<const TEST_ALL_FALSE: bool>(
     cases
 }
 
-/// Benchmarks boolean operations `false_count/bool_or` and `true_count/bool_and` on [`BooleanArray`]
-/// You can run this benchmark with:
-/// ```sh
-/// # test true_count/false_count
-/// TEST_BOOL_COUNT=1 cargo bench --bench binary_op -- boolean_ops
-/// # test bool_or/bool_and
-/// cargo bench --bench binary_op -- boolean_ops
-/// ```
-fn benchmark_boolean_ops(c: &mut Criterion) {
-    let len = 1_000_000; // Use one million elements for clear performance differentiation
-    static TEST_BOOL_COUNT: LazyLock<bool> =
-        LazyLock::new(|| match std::env::var("TEST_BOOL_COUNT") {
-            Ok(_) => {
-                println!("TEST_BOOL_COUNT=ON");
-                true
-            }
-            Err(_) => {
-                println!("TEST_BOOL_COUNT=OFF");
-                false
-            }
-        });
-
-    // Determine the test function to be executed based on the ENV `TEST_BOOL_COUNT`
-    fn test_func<const TEST_ALL_FALSE: bool>(array: &BooleanArray) -> bool {
-        // Use false_count for all false and true_count for all true
-        if *TEST_BOOL_COUNT {
-            if TEST_ALL_FALSE {
-                array.false_count() == array.len()
-            } else {
-                array.true_count() == array.len()
-            }
-        }
-        // Use bool_or for all false and bool_and for all true
-        else if TEST_ALL_FALSE {
-            match bool_or(array) {
-                Some(v) => !v,
-                None => false,
-            }
-        } else {
-            bool_and(array).unwrap_or(false)
-        }
-    }
-
-    // Test cases for false_count and bool_or
-    {
-        let test_cases = generate_boolean_cases::<true>(len);
-        for (scenario, array) in test_cases {
-            let arr_ref = Arc::new(array);
-
-            // Benchmark test_func across different scenarios
-            c.bench_function(&format!("boolean_ops/or/{}", scenario), |b| {
-                b.iter(|| test_func::<true>(black_box(&arr_ref)))
-            });
-        }
-    }
-    // Test cases for true_count and bool_and
-    {
-        let test_cases = generate_boolean_cases::<false>(len);
-        for (scenario, array) in test_cases {
-            let arr_ref = Arc::new(array);
-
-            // Benchmark test_func across different scenarios
-            c.bench_function(&format!("boolean_ops/and/{}", scenario), |b| {
-                b.iter(|| test_func::<false>(black_box(&arr_ref)))
-            });
-        }
-    }
-}
-
 /// Benchmarks AND/OR operator short-circuiting by evaluating complex regex conditions.
 ///
 /// Creates 6 test scenarios per operator:
@@ -265,12 +195,14 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     );
 
     // Create physical binary expressions
+    // a AND ((b ~ regex) AND (c ~ regex))
     let expr_and = BinaryExpr::new(
         Arc::new(Column::new("a", 0)),
         Operator::And,
         logical2physical(&right_condition_and, &schema),
     );
 
+    // a OR ((b ~ regex) OR (c ~ regex))
     let expr_or = BinaryExpr::new(
         Arc::new(Column::new("a", 0)),
         Operator::Or,
@@ -377,10 +309,6 @@ fn create_record_batch<const TEST_ALL_FALSE: bool>(
     Ok(rbs)
 }
 
-criterion_group!(
-    benches,
-    benchmark_boolean_ops,
-    benchmark_binary_op_in_short_circuit
-);
+criterion_group!(benches, benchmark_binary_op_in_short_circuit);
 
 criterion_main!(benches);
