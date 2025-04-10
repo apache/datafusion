@@ -236,6 +236,10 @@ impl CommonSubexprEliminate {
         aggregate: Aggregate,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        if matches!(aggregate.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
+            return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate.clone())));
+        }
+
         let Aggregate {
             group_expr,
             aggr_expr,
