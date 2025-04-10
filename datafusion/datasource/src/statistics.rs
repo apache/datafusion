@@ -493,7 +493,7 @@ pub fn compute_file_group_statistics(
             file.statistics.as_ref().map(|stats| stats.as_ref())
         });
 
-    Ok(file_group.with_statistics(statistics))
+    Ok(file_group.with_statistics(Arc::new(statistics)))
 }
 
 /// Computes statistics for all files across multiple file groups.
@@ -505,7 +505,7 @@ pub fn compute_file_group_statistics(
 ///
 /// # Parameters
 /// * `file_groups` - Vector of file groups to process
-/// * `file_schema` - Schema of the files
+/// * `table_schema` - Schema of the table
 /// * `collect_stats` - Whether to collect statistics
 /// * `inexact_stats` - Whether to mark the resulting statistics as inexact
 ///
@@ -515,7 +515,7 @@ pub fn compute_file_group_statistics(
 /// * The summary statistics across all file groups, aka all files summary statistics
 pub fn compute_all_files_statistics(
     file_groups: Vec<FileGroup>,
-    file_schema: SchemaRef,
+    table_schema: SchemaRef,
     collect_stats: bool,
     inexact_stats: bool,
 ) -> Result<(Vec<FileGroup>, Statistics)> {
@@ -525,16 +525,17 @@ pub fn compute_all_files_statistics(
     for file_group in file_groups {
         file_groups_with_stats.push(compute_file_group_statistics(
             file_group,
-            Arc::clone(&file_schema),
+            Arc::clone(&table_schema),
             collect_stats,
         )?);
     }
 
     // Then summary statistics across all file groups
-    let mut statistics =
-        compute_summary_statistics(&file_groups_with_stats, &file_schema, |file_group| {
-            file_group.statistics()
-        });
+    let mut statistics = compute_summary_statistics(
+        &file_groups_with_stats,
+        &table_schema,
+        |file_group| file_group.statistics(),
+    );
 
     if inexact_stats {
         statistics = statistics.to_inexact()

@@ -174,7 +174,7 @@ impl GroupOrderingPartial {
                 assert!(*current_sort >= n);
                 *current_sort -= n;
             }
-            State::Complete { .. } => panic!("invalid state: complete"),
+            State::Complete => panic!("invalid state: complete"),
         }
     }
 

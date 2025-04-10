@@ -836,7 +836,7 @@ fn new_join_conditions(
 ///
 /// * `input`: Current node.
 /// * `n_target`: desired target partition number, if partition number of the
-///    current executor is less than this value. Partition number will be increased.
+///   current executor is less than this value. Partition number will be increased.
 ///
 /// # Returns
 ///
@@ -879,7 +879,7 @@ fn add_roundrobin_on_top(
 /// * `input`: Current node.
 /// * `hash_exprs`: Stores Physical Exprs that are used during hashing.
 /// * `n_target`: desired target partition number, if partition number of the
-///    current executor is less than this value. Partition number will be increased.
+///   current executor is less than this value. Partition number will be increased.
 ///
 /// # Returns
 ///

@@ -509,52 +509,11 @@ impl EquivalenceProperties {
     ) -> bool {
         // First, standardize the given ordering:
         let Some(normalized_ordering) = self.normalize_sort_exprs(given) else {
-            // If the requirement vanishes after normalization, it is satisfied
-            // by any ordering.
+            // If the ordering vanishes after normalization, it is satisfied:
             return true;
         };
-        // Then, check whether given ordering is satisfied by constraints:
-        if self.satisfied_by_constraints_ordering(&normalized_ordering) {
-            return true;
-        }
-        let schema = self.schema();
-        let mut eq_properties = self.clone();
-        for element in normalized_ordering {
-            // Check whether given ordering is satisfied:
-            let ExprProperties {
-                sort_properties, ..
-            } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
-            let satisfy = match sort_properties {
-                SortProperties::Ordered(options) => {
-                    let sort_expr = PhysicalSortExpr {
-                        expr: Arc::clone(&element.expr),
-                        options,
-                    };
-                    sort_expr.satisfy_expr(&element, schema)
-                }
-                // Singleton expressions satisfies any ordering.
-                SortProperties::Singleton => true,
-                SortProperties::Unordered => false,
-            };
-            if !satisfy {
-                return false;
-            }
-            // Treat satisfied keys as constants in subsequent iterations. We
-            // can do this because the "next" key only matters in a lexicographical
-            // ordering when the keys to its left have the same values.
-            //
-            // Note that these expressions are not properly "constants". This is just
-            // an implementation strategy confined to this function.
-            //
-            // For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
-            // and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
-            // From the analysis above, we know that `[a ASC]` is satisfied. Then,
-            // we add column `a` as constant to the algorithm state. This enables us
-            // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
-            eq_properties = eq_properties
-                .with_constants(std::iter::once(ConstExpr::from(element.expr)));
-        }
-        true
+        let length = normalized_ordering.len();
+        self.compute_common_sort_prefix_length(&normalized_ordering) == length
     }
 
     /// Checks whether the given sort requirements are satisfied by any of the
@@ -565,8 +524,7 @@ impl EquivalenceProperties {
     ) -> bool {
         // First, standardize the given requirement:
         let Some(normalized_reqs) = self.normalize_sort_requirements(given) else {
-            // If the requirement vanishes after normalization, it is satisfied
-            // by any ordering.
+            // If the requirement vanishes after normalization, it is satisfied:
             return true;
         };
         // Then, check whether given requirement is satisfied by constraints:
@@ -611,6 +569,82 @@ impl EquivalenceProperties {
                 .with_constants(std::iter::once(ConstExpr::from(element.expr)));
         }
         true
+    }
+
+    /// Returns the number of consecutive sort expressions (starting from the
+    /// left) that are satisfied by the existing ordering.
+    fn compute_common_sort_prefix_length(
+        &self,
+        normalized_ordering: &LexOrdering,
+    ) -> usize {
+        // Check whether the given ordering is satisfied by constraints:
+        if self.satisfied_by_constraints_ordering(normalized_ordering) {
+            // If constraints satisfy all sort expressions, return the full
+            // length:
+            return normalized_ordering.len();
+        }
+        let schema = self.schema();
+        let mut eq_properties = self.clone();
+        for (idx, element) in normalized_ordering.iter().enumerate() {
+            // Check whether given ordering is satisfied:
+            let ExprProperties {
+                sort_properties, ..
+            } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
+            let satisfy = match sort_properties {
+                SortProperties::Ordered(options) => {
+                    let sort_expr = PhysicalSortExpr {
+                        expr: Arc::clone(&element.expr),
+                        options,
+                    };
+                    sort_expr.satisfy_expr(element, schema)
+                }
+                // Singleton expressions satisfies any ordering.
+                SortProperties::Singleton => true,
+                SortProperties::Unordered => false,
+            };
+            if !satisfy {
+                // As soon as one sort expression is unsatisfied, return how
+                // many we've satisfied so far:
+                return idx;
+            }
+            // Treat satisfied keys as constants in subsequent iterations. We
+            // can do this because the "next" key only matters in a lexicographical
+            // ordering when the keys to its left have the same values.
+            //
+            // Note that these expressions are not properly "constants". This is just
+            // an implementation strategy confined to this function.
+            //
+            // For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
+            // and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
+            // From the analysis above, we know that `[a ASC]` is satisfied. Then,
+            // we add column `a` as constant to the algorithm state. This enables us
+            // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
+            let const_expr = ConstExpr::from(Arc::clone(&element.expr));
+            eq_properties = eq_properties.with_constants(std::iter::once(const_expr));
+        }
+
+        // All sort expressions are satisfied:
+        normalized_ordering.len()
+    }
+
+    /// Determines the longest normalized prefix of `ordering` satisfied by the
+    /// existing ordering. Returns that prefix as a new `LexOrdering`, and a
+    /// boolean indicating whether all the sort expressions are satisfied.
+    pub fn extract_common_sort_prefix(
+        &self,
+        ordering: LexOrdering,
+    ) -> (Vec<PhysicalSortExpr>, bool) {
+        // First, standardize the given ordering:
+        let Some(normalized_ordering) = self.normalize_sort_exprs(ordering) else {
+            // If the ordering vanishes after normalization, it is satisfied:
+            return (vec![], true);
+        };
+        let prefix_len = self.compute_common_sort_prefix_length(&normalized_ordering);
+        if prefix_len == normalized_ordering.len() {
+            (normalized_ordering.take(), true)
+        } else {
+            (normalized_ordering[..prefix_len].to_vec(), false)
+        }
     }
 
     /// Checks if the sort expressions are satisfied by any of the table
@@ -1108,7 +1142,7 @@ impl EquivalenceProperties {
     /// # Arguments
     ///
     /// * `mapping` - A reference to `ProjectionMapping` that defines how expressions are mapped
-    ///               in the projection operation
+    ///   in the projection operation
     ///
     /// # Returns
     ///

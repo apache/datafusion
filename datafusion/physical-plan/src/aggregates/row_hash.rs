@@ -507,6 +507,16 @@ impl GroupedHashAggregateStream {
             AggregateMode::Partial,
         )?;
 
+        // Need to update the GROUP BY expressions to point to the correct column after schema change
+        let merging_group_by_expr = agg_group_by
+            .expr
+            .iter()
+            .enumerate()
+            .map(|(idx, (_, name))| {
+                (Arc::new(Column::new(name.as_str(), idx)) as _, name.clone())
+            })
+            .collect();
+
         let partial_agg_schema = Arc::new(partial_agg_schema);
 
         let spill_expr = group_schema
@@ -541,7 +551,7 @@ impl GroupedHashAggregateStream {
             spill_schema: partial_agg_schema,
             is_stream_merging: false,
             merging_aggregate_arguments,
-            merging_group_by: PhysicalGroupBy::new_single(agg_group_by.expr.clone()),
+            merging_group_by: PhysicalGroupBy::new_single(merging_group_by_expr),
             peak_mem_used: MetricBuilder::new(&agg.metrics)
                 .gauge("peak_mem_used", partition),
             spill_manager,
@@ -956,7 +966,7 @@ impl GroupedHashAggregateStream {
     /// memory. Currently only [`GroupOrdering::None`] is supported for spilling.
     fn spill_previous_if_necessary(&mut self, batch: &RecordBatch) -> Result<()> {
         // TODO: support group_ordering for spilling
-        if self.group_values.len() > 0
+        if !self.group_values.is_empty()
             && batch.num_rows() > 0
             && matches!(self.group_ordering, GroupOrdering::None)
             && !self.spill_state.is_stream_merging

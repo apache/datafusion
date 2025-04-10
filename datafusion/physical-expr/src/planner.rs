@@ -102,7 +102,7 @@ use datafusion_expr::{
 ///
 /// * `e` - The logical expression
 /// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
-///                      to qualified or unqualified fields by name.
+///   to qualified or unqualified fields by name.
 pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,

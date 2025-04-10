@@ -197,13 +197,13 @@ fn update_coalesce_ctx_children(
 ///
 /// Optimizer consists of 5 main parts which work sequentially
 /// 1. [`ensure_sorting`] Works down-to-top to be able to remove unnecessary [`SortExec`]s, [`SortPreservingMergeExec`]s
-///     add [`SortExec`]s if necessary by a requirement and adjusts window operators.
+///    add [`SortExec`]s if necessary by a requirement and adjusts window operators.
 /// 2. [`parallelize_sorts`] (Optional, depends on the `repartition_sorts` configuration)
-///     Responsible to identify and remove unnecessary partition unifier operators
-///     such as [`SortPreservingMergeExec`], [`CoalescePartitionsExec`] follows [`SortExec`]s does possible simplifications.
+///    Responsible to identify and remove unnecessary partition unifier operators
+///    such as [`SortPreservingMergeExec`], [`CoalescePartitionsExec`] follows [`SortExec`]s does possible simplifications.
 /// 3. [`replace_with_order_preserving_variants()`] Replaces with alternative operators, for example can merge
-///     a [`SortExec`] and a [`CoalescePartitionsExec`] into one [`SortPreservingMergeExec`]
-///     or a [`SortExec`] + [`RepartitionExec`] combination into an order preserving [`RepartitionExec`]
+///    a [`SortExec`] and a [`CoalescePartitionsExec`] into one [`SortPreservingMergeExec`]
+///    or a [`SortExec`] + [`RepartitionExec`] combination into an order preserving [`RepartitionExec`]
 /// 4. [`sort_pushdown`] Works top-down. Responsible to push down sort operators as deep as possible in the plan.
 /// 5. `replace_with_partial_sort` Checks if it's possible to replace [`SortExec`]s with [`PartialSortExec`] operators
 impl PhysicalOptimizerRule for EnforceSorting {
@@ -301,11 +301,11 @@ fn replace_with_partial_sort(
     Ok(plan)
 }
 
-/// Transform [`CoalescePartitionsExec`] + [`SortExec`] into
-/// [`SortExec`] + [`SortPreservingMergeExec`] as illustrated below:
+/// Transform [`CoalescePartitionsExec`] + [`SortExec`] cascades into [`SortExec`]
+/// + [`SortPreservingMergeExec`] cascades, as illustrated below.
 ///
-/// The [`CoalescePartitionsExec`] + [`SortExec`] cascades
-/// combine the partitions first, and then sort:
+/// A [`CoalescePartitionsExec`] + [`SortExec`] cascade combines partitions
+/// first, and then sorts:
 /// ```text
 ///   ┌ ─ ─ ─ ─ ─ ┐
 ///    ┌─┬─┬─┐
@@ -324,8 +324,8 @@ fn replace_with_partial_sort(
 /// ```
 ///
 ///
-/// The [`SortExec`] + [`SortPreservingMergeExec`] cascades
-/// sorts each partition first, then merge partitions while retaining the sort:
+/// A [`SortExec`] + [`SortPreservingMergeExec`] cascade sorts each partition
+/// first, then merges partitions while preserving the sort:
 /// ```text
 ///   ┌ ─ ─ ─ ─ ─ ┐   ┌────────┐   ┌ ─ ─ ─ ─ ─ ┐
 ///    ┌─┬─┬─┐        │        │    ┌─┬─┬─┐
@@ -343,9 +343,8 @@ fn replace_with_partial_sort(
 ///    Partition 2                  Partition 2
 /// ```
 ///
-/// The latter [`SortExec`] + [`SortPreservingMergeExec`] cascade performs the
-/// sort first on a per-partition basis, thereby parallelizing the sort.
-///
+/// The latter [`SortExec`] + [`SortPreservingMergeExec`] cascade performs
+/// sorting first on a per-partition basis, thereby parallelizing the sort.
 ///
 /// The outcome is that plans of the form
 /// ```text
@@ -362,10 +361,12 @@ fn replace_with_partial_sort(
 ///      "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
 /// ```
 /// by following connections from [`CoalescePartitionsExec`]s to [`SortExec`]s.
-/// By performing sorting in parallel, we can increase performance in some scenarios.
+/// By performing sorting in parallel, we can increase performance in some
+/// scenarios.
 ///
-/// This requires that there are no nodes between the [`SortExec`] and [`CoalescePartitionsExec`]
-/// which require single partitioning. Do not parallelize when the following scenario occurs:
+/// This optimization requires that there are no nodes between the [`SortExec`]
+/// and the [`CoalescePartitionsExec`], which requires single partitioning. Do
+/// not parallelize when the following scenario occurs:
 /// ```text
 ///      "SortExec: expr=\[a@0 ASC\]",
 ///      "  ...nodes requiring single partitioning..."
@@ -374,15 +375,18 @@ fn replace_with_partial_sort(
 /// ```
 ///
 /// **Steps**
-/// 1. Checks if the plan is either [`SortExec`]/[`SortPreservingMergeExec`]/[`CoalescePartitionsExec`] otherwise does nothing
-/// 2. If the plan is a [`SortExec`] or a final [`SortPreservingMergeExec`] (output partitioning is 1)
-///     2.1. Check for [`CoalescePartitionsExec`] in children, when found check if it can be removed (with possible [`RepartitionExec`]s)
-///         if so remove. (see `remove_bottleneck_in_subplan`)
-///     2.2. If the plan is satisfying the ordering requirements, add a `SortExec`
-///     2.3. Add an SPM above the plan and return
-/// 3. If the plan is a [`CoalescePartitionsExec`]
-///     3.1. Check if it can be removed (with possible [`RepartitionExec`]s)
-///         if so remove (see `remove_bottleneck_in_subplan`)
+/// 1. Checks if the plan is either a [`SortExec`], a [`SortPreservingMergeExec`],
+///    or a [`CoalescePartitionsExec`]. Otherwise, does nothing.
+/// 2. If the plan is a [`SortExec`] or a final [`SortPreservingMergeExec`]
+///    (i.e. output partitioning is 1):
+///      - Check for [`CoalescePartitionsExec`] in children. If found, check if
+///        it can be removed (with possible [`RepartitionExec`]s). If so, remove
+///        (see `remove_bottleneck_in_subplan`).
+///      - If the plan is satisfying the ordering requirements, add a `SortExec`.
+///      - Add an SPM above the plan and return.
+/// 3. If the plan is a [`CoalescePartitionsExec`]:
+///      - Check if it can be removed (with possible [`RepartitionExec`]s).
+///        If so, remove (see `remove_bottleneck_in_subplan`).
 pub fn parallelize_sorts(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<Transformed<PlanWithCorrespondingCoalescePartitions>> {
@@ -447,18 +451,23 @@ pub fn parallelize_sorts(
 /// violating these requirements whenever possible. Requires a bottom-up traversal.
 ///
 /// **Steps**
-/// 1. Analyze if there are any immediate removals of [`SortExec`]s if so, removes them (see `analyze_immediate_sort_removal`)
-/// 2. For each child of the plan, if the plan requires input ordering
-///     2.1. Checks if ordering is satisfied with the child, if it's not satisfied
-///         2.1.1. If the child has output ordering, removes the unnecessary `SortExec`
-///         2.1.2. Adds sort above the child plan
-///     2.2 (Plan not requires input ordering)
-///         2.2.1 Checks if the `SortExec` is neutralized in the plan, if so removes it.
-/// 3. Check and modify window operator
-///     3.1.  Checks if the plan is a window operator, and connected with a sort.
-///         If so, either tries to update the window definition or removes unnecessary [`SortExec`]s (see `adjust_window_sort_removal`)
-/// 4. Check and remove possibly unnecessary SPM
-///     4.1. Checks if the plan is SPM and child 1 output partitions, if so decides this SPM is unnecessary and removes it from the plan.
+/// 1. Analyze if there are any immediate removals of [`SortExec`]s. If so,
+///    removes them (see `analyze_immediate_sort_removal`).
+/// 2. For each child of the plan, if the plan requires an input ordering:
+///      - Checks if ordering is satisfied with the child. If not:
+///          - If the child has an output ordering, removes the unnecessary
+///            `SortExec`.
+///          - Adds sort above the child plan.
+///      - (Plan not requires input ordering)
+///          - Checks if the `SortExec` is neutralized in the plan. If so,
+///            removes it.
+/// 3. Check and modify window operator:
+///      - Checks if the plan is a window operator, and connected with a sort.
+///        If so, either tries to update the window definition or removes
+///        unnecessary [`SortExec`]s (see `adjust_window_sort_removal`).
+/// 4. Check and remove possibly unnecessary SPM:
+///       -  Checks if the plan is SPM and child 1 output partitions, if so
+///          decides this SPM is unnecessary and removes it from the plan.
 pub fn ensure_sorting(
     mut requirements: PlanWithCorrespondingSort,
 ) -> Result<Transformed<PlanWithCorrespondingSort>> {

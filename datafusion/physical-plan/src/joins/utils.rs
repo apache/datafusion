@@ -32,6 +32,7 @@ use crate::{
 // compatibility
 pub use super::join_filter::JoinFilter;
 pub use super::join_hash_map::{JoinHashMap, JoinHashMapType};
+pub use crate::joins::{JoinOn, JoinOnRef};
 
 use arrow::array::{
     builder::UInt64Builder, downcast_array, new_null_array, Array, ArrowPrimitiveType,
@@ -61,11 +62,6 @@ use crate::projection::ProjectionExec;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
-
-/// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
-/// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
 
 /// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
 /// They are valid whenever their columns' intersection equals the set `on`
@@ -331,7 +327,7 @@ pub fn build_join_schema(
 }
 
 /// A [`OnceAsync`] runs an `async` closure once, where multiple calls to
-/// [`OnceAsync::once`] return a [`OnceFut`] that resolves to the result of the
+/// [`OnceAsync::try_once`] return a [`OnceFut`] that resolves to the result of the
 /// same computation.
 ///
 /// This is useful for joins where the results of one child are needed to proceed
@@ -344,7 +340,7 @@ pub fn build_join_schema(
 ///
 /// Each output partition waits on the same `OnceAsync` before proceeding.
 pub(crate) struct OnceAsync<T> {
-    fut: Mutex<Option<OnceFut<T>>>,
+    fut: Mutex<Option<SharedResult<OnceFut<T>>>>,
 }
 
 impl<T> Default for OnceAsync<T> {
@@ -363,19 +359,22 @@ impl<T> Debug for OnceAsync<T> {
 
 impl<T: 'static> OnceAsync<T> {
     /// If this is the first call to this function on this object, will invoke
-    /// `f` to obtain a future and return a [`OnceFut`] referring to this
+    /// `f` to obtain a future and return a [`OnceFut`] referring to this. `f`
+    /// may fail, in which case its error is returned.
     ///
     /// If this is not the first call, will return a [`OnceFut`] referring
-    /// to the same future as was returned by the first call
-    pub(crate) fn once<F, Fut>(&self, f: F) -> OnceFut<T>
+    /// to the same future as was returned by the first call - or the same
+    /// error if the initial call to `f` failed.
+    pub(crate) fn try_once<F, Fut>(&self, f: F) -> Result<OnceFut<T>>
     where
-        F: FnOnce() -> Fut,
+        F: FnOnce() -> Result<Fut>,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         self.fut
             .lock()
-            .get_or_insert_with(|| OnceFut::new(f()))
+            .get_or_insert_with(|| f().map(OnceFut::new).map_err(Arc::new))
             .clone()
+            .map_err(DataFusionError::Shared)
     }
 }
 
