@@ -19,7 +19,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::cast::AsArray;
-use arrow::array::{new_null_array, Array, ArrayRef, GenericStringArray, StringArray};
+use arrow::array::{new_null_array, Array, ArrayRef, StringArray};
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{
@@ -28,7 +28,6 @@ use arrow::datatypes::DataType::{
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
-use chrono::format::{Fixed, Item, Numeric, StrftimeItems};
 use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -179,7 +178,9 @@ fn build_format_options<'a>(
         return Ok(FormatOptions::new());
     };
     let format_options = match data_type {
-        Date32 => FormatOptions::new().with_date_format(Some(format)),
+        Date32 => FormatOptions::new()
+            .with_date_format(Some(format))
+            .with_datetime_format(Some(format)),
         Date64 => FormatOptions::new().with_datetime_format(Some(format)),
         Time32(_) => FormatOptions::new().with_time_format(Some(format)),
         Time64(_) => FormatOptions::new().with_time_format(Some(format)),
@@ -209,21 +210,16 @@ fn to_char_scalar(
 ) -> Result<ColumnarValue> {
     // it's possible that the expression is a scalar however because
     // of the implementation in arrow-rs we need to convert it to an array
-    let mut data_type = &expression.data_type();
+    let data_type = &expression.data_type();
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
-    let mut array = expression.into_array(1)?;
+    let array = expression.clone().into_array(1)?;
 
     if format.is_none() {
-        if is_scalar_expression {
-            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+        return if is_scalar_expression {
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
         } else {
-            return Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())));
-        }
-    }
-
-    if data_type == &Date32 && has_time_specifier(format.unwrap()) {
-        data_type = &Date64;
-        array = cast(array.as_ref(), data_type)?;
+            Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())))
+        };
     }
 
     let format_options = match build_format_options(data_type, format) {
@@ -253,25 +249,23 @@ fn to_char_scalar(
             ))
         }
     } else {
+        // if the format attempt is with a Date32, it's possible the attempt failed because
+        // the format string contained time-specifiers, so we'll retry casting as Date64
+        if data_type == &Date32 {
+            return to_char_scalar(expression.clone().cast_to(&Date64, None)?, format);
+        }
+
         exec_err!("{}", formatted.unwrap_err())
     }
 }
 
 fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let mut arrays = ColumnarValue::values_to_arrays(args)?;
-    let (data, right) = arrays.split_at_mut(1);
-    let format_array = right[0].as_string::<i32>();
-    let mut data_type = data[0].data_type();
-
-    if data_type == &Date32 && has_any_time_specifiers(format_array) {
-        data_type = &Date64;
-        data[0] = cast(data[0].as_ref(), data_type)?;
-    }
-
-    let data = &data[0];
+    let arrays = ColumnarValue::values_to_arrays(args)?;
     let mut results: Vec<Option<String>> = vec![];
+    let format_array = arrays[1].as_string::<i32>();
+    let data_type = arrays[0].data_type();
 
-    for idx in 0..data.len() {
+    for idx in 0..arrays[0].len() {
         let format = if format_array.is_null(idx) {
             None
         } else {
@@ -286,12 +280,30 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             Err(value) => return value,
         };
         // this isn't ideal but this can't use ValueFormatter as it isn't independent
-        // of ArrayFormatter
-        let formatter = ArrayFormatter::try_new(data.as_ref(), &format_options)?;
+        // from ArrayFormatter
+        let formatter = ArrayFormatter::try_new(arrays[0].as_ref(), &format_options)?;
         let result = formatter.value(idx).try_to_string();
         match result {
             Ok(value) => results.push(Some(value)),
-            Err(e) => return exec_err!("{}", e),
+            Err(e) => {
+                // if the format attempt is with a Date32, it's possible the attempt failed because
+                // the format string contained time-specifiers, so we'll retry the specific failed Date32 as a Date64
+                if data_type == &Date32 {
+                    let failed_date_value = arrays[0].slice(idx, 1);
+
+                    match retry_date_as_timestamp(failed_date_value, &format_options) {
+                        Ok(value) => {
+                            results.push(Some(value));
+                            continue;
+                        }
+                        Err(e) => {
+                            return exec_err!("{}", e);
+                        }
+                    }
+                }
+
+                return exec_err!("{}", e);
+            }
         }
     }
 
@@ -308,56 +320,17 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 }
 
-fn has_time_specifier(format: &str) -> bool {
-    let items = StrftimeItems::new(format);
-    for item in items {
-        match item {
-            Item::Fixed(v) => match v {
-                Fixed::LowerAmPm => return true,
-                Fixed::UpperAmPm => return true,
-                Fixed::RFC2822 => return true,
-                Fixed::RFC3339 => return true,
-                Fixed::Nanosecond => return true,
-                Fixed::Nanosecond3 => return true,
-                Fixed::Nanosecond6 => return true,
-                Fixed::Nanosecond9 => return true,
-                Fixed::TimezoneName => return true,
-                Fixed::TimezoneOffset => return true,
-                Fixed::TimezoneOffsetZ => return true,
-                Fixed::TimezoneOffsetColon => return true,
-                Fixed::TimezoneOffsetColonZ => return true,
-                Fixed::TimezoneOffsetDoubleColon => return true,
-                Fixed::TimezoneOffsetTripleColon => return true,
-                _ => (),
-            },
-            Item::Numeric(v, _pad) => match v {
-                Numeric::Hour => return true,
-                Numeric::Hour12 => return true,
-                Numeric::Minute => return true,
-                Numeric::Second => return true,
-                Numeric::Nanosecond => return true,
-                Numeric::Timestamp => return true,
-                _ => (),
-            },
-            _ => (),
-        }
-    }
+fn retry_date_as_timestamp(
+    array_ref: ArrayRef,
+    format_options: &FormatOptions,
+) -> Result<String> {
+    let target_data_type = Date64;
 
-    false
-}
+    let date_value = cast(&array_ref, &target_data_type)?;
+    let formatter = ArrayFormatter::try_new(date_value.as_ref(), format_options)?;
+    let result = formatter.value(0).try_to_string()?;
 
-fn has_any_time_specifiers(format_array: &GenericStringArray<i32>) -> bool {
-    for idx in 0..format_array.len() {
-        if format_array.is_null(idx) {
-            continue;
-        }
-
-        if has_time_specifier(format_array.value(idx)) {
-            return true;
-        }
-    }
-
-    false
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -374,6 +347,37 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
+
+    #[test]
+    fn test_array_array() {
+        let array_array_data = vec![(
+            Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
+            StringArray::from(vec!["%Y::%m::%d", "%Y::%m::%d %S::%M::%H %f"]),
+            StringArray::from(vec!["2020::09::01", "2020::09::02 00::00::00 000000000"]),
+        )];
+
+        for (value, format, expected) in array_array_data {
+            let batch_len = value.len();
+            let args = datafusion_expr::ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Array(value),
+                    ColumnarValue::Array(Arc::new(format) as ArrayRef),
+                ],
+                number_rows: batch_len,
+                return_type: &DataType::Utf8,
+            };
+            let result = ToCharFunc::new()
+                .invoke_with_args(args)
+                .expect("that to_char parsed values without error");
+
+            if let ColumnarValue::Array(result) = result {
+                assert_eq!(result.len(), 2);
+                assert_eq!(&expected as &dyn Array, result.as_ref());
+            } else {
+                panic!("Expected an array value")
+            }
+        }
+    }
 
     #[test]
     fn test_to_char() {
