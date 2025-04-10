@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use rstest::rstest;
+use std::io::Read;
 use std::process::Command;
 
-use rstest::rstest;
-
-use insta::{glob, Settings};
+use insta::{assert_snapshot, glob, Settings};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
+use pty_process::blocking::Command as PtyCommand;
 use std::{env, fs};
 
 fn cli() -> Command {
@@ -82,6 +83,33 @@ fn cli_quick_test<'a>(
     cmd.args(args);
 
     assert_cmd_snapshot!(cmd);
+}
+
+#[test]
+// redirect stdout to a pty to make sure the pager works
+fn cli_use_pager() {
+    let (mut pty, pts) = pty_process::blocking::open().unwrap();
+
+    let cmd = PtyCommand::new(get_cargo_bin("datafusion-cli")).args([
+        "--file",
+        "tests/sql/select.sql",
+        "-q",
+    ]);
+    let mut child = cmd.spawn(pts).unwrap();
+
+    let mut stdout = Vec::new();
+    pty.read_to_end(&mut stdout).unwrap();
+
+    let actual = String::from_utf8_lossy(&stdout);
+    assert_snapshot!(actual, @r"
+   +----------+
+   | Int64(1) |
+   +----------+
+   | 1        |
+   +----------+
+    "
+    );
+    child.wait().unwrap();
 }
 
 #[test]
