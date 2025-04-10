@@ -360,23 +360,18 @@ impl PhysicalExpr for BinaryExpr {
 
         let lhs = self.left.evaluate(batch)?;
 
-        // Delay evaluating RHS unless we really need it
-        let rhs_lazy = || self.right.evaluate(batch);
-
-        // Optimize for short-circuiting `Operator::And` or `Operator::Or` operations and return early.
-        if let Some(result) = get_short_circuit_result(&lhs, &self.op, None) {
-            return Ok(result);
+        // Check if we can apply short-circuit evaluation
+        match check_short_circuit(&lhs, &self.op) {
+            ShortCircuitStrategy::None => (),
+            ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
+            ShortCircuitStrategy::ReturnRight => {
+                let rhs = self.right.evaluate(batch)?;
+                return Ok(rhs);
+            }
         }
 
-        // Only evaluate RHS if short-circuit evaluation doesn't apply
-        let rhs = rhs_lazy()?;
-
-        // Check for short-circuit cases that need RHS value
-        if let Some(result) = get_short_circuit_result(&lhs, &self.op, Some(rhs.clone()))
-        {
-            return Ok(result);
-        }
-
+        // If no short-circuit applies, evaluate the right-hand side
+        let rhs = self.right.evaluate(batch)?;
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
 
@@ -822,7 +817,14 @@ impl BinaryExpr {
     }
 }
 
-/// Returns `Some(ColumnarValue)` if short-circuit evaluation applies:
+enum ShortCircuitStrategy {
+    ReturnLeft,
+    ReturnRight,
+    None,
+}
+/// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
+///
+/// Short-circuiting occurs under these circumstances:
 /// - For `AND`:
 ///    - if LHS is all false => short-circuit → return LHS
 ///    - if LHS is all true  => short-circuit → return RHS
@@ -831,79 +833,78 @@ impl BinaryExpr {
 ///    - if LHS is all false => short-circuit → return RHS
 /// # Arguments
 /// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
+/// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
 /// * `op` - The logical operator (`AND` or `OR`)
-/// * `rhs` - The right-hand side (rhs) columnar value (array or scalar)
 ///
 /// # Implementation Notes
 /// 1. Only works with Boolean-typed arguments (other types automatically return `None`)
 /// 2. Handles both scalar values and array values
-/// 3. For arrays, uses optimized `true_count()`/`false_count()` methods from arrow-rs.
-fn get_short_circuit_result(
-    lhs: &ColumnarValue,
-    op: &Operator,
-    rhs: Option<ColumnarValue>, // we pass RHS only if needed
-) -> Option<ColumnarValue> {
-    // Early return if not a logical operator or not a Boolean data type
-    if !matches!(op, Operator::And | Operator::Or) || lhs.data_type() != DataType::Boolean
-    {
-        return None;
+/// 3. For arrays, uses optimized bit counting techniques for boolean arrays
+fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrategy {
+    // Only apply short-circuiting for logical operators And/Or.
+    if !matches!(op, Operator::And | Operator::Or) {
+        return ShortCircuitStrategy::None;
+    }
+
+    let is_and = matches!(op, Operator::And);
+
+    // Early return for non-boolean types
+    if lhs.data_type() != DataType::Boolean {
+        return ShortCircuitStrategy::None;
     }
 
     match lhs {
         ColumnarValue::Array(array) => {
-            if let Ok(bool_array) = as_boolean_array(array) {
-                // Skip short-circuit if there are nulls
-                let null_count = bool_array.null_count();
-                if null_count > 0 {
-                    return None;
+            if let Ok(array) = as_boolean_array(&array) {
+                // For both operations, check if we have nulls
+                if array.null_count() > 0 {
+                    return ShortCircuitStrategy::None;
                 }
 
-                let len = bool_array.len();
-                match op {
-                    Operator::And => {
-                        // For AND: check if all values are false
-                        let false_count = bool_array.false_count();
-                        if false_count == len {
-                            return Some(lhs.clone());
-                        }
+                let len = array.len();
 
-                        // For AND: if all values are true and RHS exists,
-                        // we can short-circuit directly to RHS
-                        if false_count == 0 && rhs.is_some() {
-                            return rhs;
-                        }
+                // Optimize evaluation order based on operator type
+                // This avoids redundant counting operations
+                if is_and {
+                    // For AND, check for all false values first (most common short-circuit case)
+                    let false_count = array.false_count();
+                    if false_count == len {
+                        return ShortCircuitStrategy::ReturnLeft; // All false for AND
                     }
-                    Operator::Or => {
-                        // For OR: check if all values are true
-                        let true_count = bool_array.true_count();
-                        if true_count == len {
-                            return Some(lhs.clone());
-                        }
 
-                        // For OR: if all values are false and RHS exists,
-                        // we can short-circuit directly to RHS
-                        if true_count == 0 && rhs.is_some() {
-                            return rhs;
-                        }
+                    if false_count == 0 {
+                        // This means all true
+                        return ShortCircuitStrategy::ReturnRight; // All true for AND
                     }
-                    _ => unreachable!(),
+                } else {
+                    // is OR
+                    // For OR, check for all true values first (most common short-circuit case)
+                    let true_count = array.true_count();
+                    if true_count == len {
+                        return ShortCircuitStrategy::ReturnLeft; // All true for OR
+                    }
+
+                    if true_count == 0 {
+                        // This means all false
+                        return ShortCircuitStrategy::ReturnRight; // All false for OR
+                    }
                 }
             }
         }
-        ColumnarValue::Scalar(ScalarValue::Boolean(Some(value))) => {
-            // Handle scalar values with a more direct pattern match
-            match (op, *value) {
-                (Operator::And, false) => return Some(lhs.clone()),
-                (Operator::And, true) if rhs.is_some() => return rhs,
-                (Operator::Or, true) => return Some(lhs.clone()),
-                (Operator::Or, false) if rhs.is_some() => return rhs,
-                _ => {}
+        ColumnarValue::Scalar(scalar) => {
+            if let ScalarValue::Boolean(Some(value)) = scalar {
+                let is_true = *value;
+
+                if (is_and && !is_true) || (!is_and && is_true) {
+                    return ShortCircuitStrategy::ReturnLeft;
+                } else {
+                    return ShortCircuitStrategy::ReturnRight;
+                }
             }
         }
-        _ => {}
     }
 
-    None
+    ShortCircuitStrategy::None
 }
 
 fn concat_elements(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<ArrayRef> {
@@ -960,10 +961,14 @@ pub fn similar_to(
 mod tests {
     use super::*;
     use crate::expressions::{col, lit, try_cast, Column, Literal};
+    use datafusion_expr::lit as expr_lit;
 
     use datafusion_common::plan_datafusion_err;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
+    use crate::planner::logical2physical;
+    use arrow::array::BooleanArray;
+    use datafusion_expr::col as logical_col;
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
         left: Arc<dyn PhysicalExpr>,
@@ -4935,12 +4940,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_short_circuit_result() {
-        use crate::planner::logical2physical;
-        use arrow::array::BooleanArray;
-        use datafusion_expr::col as logical_col;
-        use datafusion_expr::lit;
-
+    fn test_check_short_circuit() {
         // Test with non-nullable arrays
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -4955,24 +4955,37 @@ mod tests {
         .unwrap();
 
         // op: AND left: all false
-        let left_expr = logical2physical(&logical_col("a").eq(lit(2)), &schema);
+        let left_expr = logical2physical(&logical_col("a").eq(expr_lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(get_short_circuit_result(&left_value, &Operator::And, None).is_some());
+        assert!(matches!(
+            check_short_circuit(&left_value, &Operator::And),
+            ShortCircuitStrategy::ReturnLeft
+        ));
 
         // op: AND left: not all false
-        let left_expr = logical2physical(&logical_col("a").eq(lit(3)), &schema);
+        let left_expr = logical2physical(&logical_col("a").eq(expr_lit(3)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(get_short_circuit_result(&left_value, &Operator::And, None).is_none());
+        assert!(matches!(
+            check_short_circuit(&left_value, &Operator::And),
+            ShortCircuitStrategy::None
+        ));
 
         // op: OR left: all true
-        let left_expr = logical2physical(&logical_col("a").gt(lit(0)), &schema);
+        let left_expr = logical2physical(&logical_col("a").gt(expr_lit(0)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(get_short_circuit_result(&left_value, &Operator::Or, None).is_some());
+        assert!(matches!(
+            check_short_circuit(&left_value, &Operator::Or),
+            ShortCircuitStrategy::ReturnLeft
+        ));
 
         // op: OR left: not all true
-        let left_expr = logical2physical(&logical_col("a").gt(lit(2)), &schema);
+        let left_expr: Arc<dyn PhysicalExpr> =
+            logical2physical(&logical_col("a").gt(expr_lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(get_short_circuit_result(&left_value, &Operator::Or, None).is_none());
+        assert!(matches!(
+            check_short_circuit(&left_value, &Operator::Or),
+            ShortCircuitStrategy::None
+        ));
 
         // Test with nullable arrays and null values
         let schema_nullable = Arc::new(Schema::new(vec![
@@ -5005,14 +5018,16 @@ mod tests {
         // Case: Mixed values with nulls - shouldn't short-circuit for AND
         let mixed_nulls = logical2physical(&logical_col("c"), &schema_nullable);
         let mixed_nulls_value = mixed_nulls.evaluate(&batch_nullable).unwrap();
-        assert!(
-            get_short_circuit_result(&mixed_nulls_value, &Operator::And, None).is_none()
-        );
+        assert!(matches!(
+            check_short_circuit(&mixed_nulls_value, &Operator::And),
+            ShortCircuitStrategy::None
+        ));
 
         // Case: Mixed values with nulls - shouldn't short-circuit for OR
-        assert!(
-            get_short_circuit_result(&mixed_nulls_value, &Operator::Or, None).is_none()
-        );
+        assert!(matches!(
+            check_short_circuit(&mixed_nulls_value, &Operator::Or),
+            ShortCircuitStrategy::None
+        ));
 
         // Test with all nulls
         let all_nulls = Arc::new(BooleanArray::from(vec![None, None, None])) as ArrayRef;
@@ -5026,38 +5041,47 @@ mod tests {
         let null_value = null_expr.evaluate(&null_batch).unwrap();
 
         // All nulls shouldn't short-circuit for AND or OR
-        assert!(get_short_circuit_result(&null_value, &Operator::And, None).is_none());
-        assert!(get_short_circuit_result(&null_value, &Operator::Or, None).is_none());
+        assert!(matches!(
+            check_short_circuit(&null_value, &Operator::And),
+            ShortCircuitStrategy::None
+        ));
+        assert!(matches!(
+            check_short_circuit(&null_value, &Operator::Or),
+            ShortCircuitStrategy::None
+        ));
 
         // Test with scalar values
         // Scalar true
         let scalar_true = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
-        assert!(get_short_circuit_result(&scalar_true, &Operator::Or, None).is_some()); // Should short-circuit OR
-        assert!(get_short_circuit_result(&scalar_true, &Operator::And, None).is_none()); // Shouldn't short-circuit AND without RHS
-
-        let scalar_right = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
-        assert!(get_short_circuit_result(
-            &scalar_true,
-            &Operator::And,
-            Some(scalar_right.clone())
-        )
-        .is_some());
+        assert!(matches!(
+            check_short_circuit(&scalar_true, &Operator::Or),
+            ShortCircuitStrategy::ReturnLeft
+        )); // Should short-circuit OR
+        assert!(matches!(
+            check_short_circuit(&scalar_true, &Operator::And),
+            ShortCircuitStrategy::ReturnRight
+        )); // Should return the RHS for AND
 
         // Scalar false
         let scalar_false = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
-        assert!(get_short_circuit_result(&scalar_false, &Operator::And, None).is_some()); // Should short-circuit AND
-        assert!(get_short_circuit_result(&scalar_false, &Operator::Or, None).is_none()); // Shouldn't short-circuit OR without RHS
-
-        assert!(get_short_circuit_result(
-            &scalar_false,
-            &Operator::Or,
-            Some(scalar_true)
-        )
-        .is_some());
+        assert!(matches!(
+            check_short_circuit(&scalar_false, &Operator::And),
+            ShortCircuitStrategy::ReturnLeft
+        )); // Should short-circuit AND
+        assert!(matches!(
+            check_short_circuit(&scalar_false, &Operator::Or),
+            ShortCircuitStrategy::ReturnRight
+        )); // Should return the RHS for OR
 
         // Scalar null
         let scalar_null = ColumnarValue::Scalar(ScalarValue::Boolean(None));
-        assert!(get_short_circuit_result(&scalar_null, &Operator::And, None).is_none());
-        assert!(get_short_circuit_result(&scalar_null, &Operator::Or, None).is_none());
+        assert!(matches!(
+            check_short_circuit(&scalar_null, &Operator::And),
+            ShortCircuitStrategy::None
+        ));
+        assert!(matches!(
+            check_short_circuit(&scalar_null, &Operator::Or),
+            ShortCircuitStrategy::None
+        ));
     }
 }
