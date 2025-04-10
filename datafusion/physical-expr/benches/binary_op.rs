@@ -126,6 +126,16 @@ fn generate_boolean_cases<const TEST_ALL_FALSE: bool>(
         ));
     }
 
+    // Scenario 7: Test all true or all false in AND/OR
+    // This situation won't cause a short circuit, but it can skip the bool calculation
+    if TEST_ALL_FALSE {
+        let all_true = vec![true; len];
+        cases.push(("all_true_in_and".to_string(), BooleanArray::from(all_true)));
+    } else {
+        let all_false = vec![false; len];
+        cases.push(("all_false_in_or".to_string(), BooleanArray::from(all_false)));
+    }
+
     cases
 }
 
@@ -154,14 +164,6 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
         create_record_batch::<true>(schema.clone(), &b_values, &c_values).unwrap();
     let batches_or =
         create_record_batch::<false>(schema.clone(), &b_values, &c_values).unwrap();
-
-    // Create a specific batch for the all_false OR scenario
-    // Extract this BEFORE consuming any vectors
-    let all_false_batch = batches_and
-        .iter()
-        .find(|(name, _)| name == "all_false")
-        .map(|(name, batch)| (name.clone(), batch.clone()))
-        .expect("all_false batch should exist");
 
     // Build complex string matching conditions
     let right_condition_and = and(
@@ -211,7 +213,7 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
 
     // Each scenario when the test operator is `and`
     {
-        for (name, batch) in batches_and {
+        for (name, batch) in batches_and.into_iter() {
             c.bench_function(&format!("short_circuit/and/{}", name), |b| {
                 b.iter(|| expr_and.evaluate(black_box(&batch)).unwrap())
             });
@@ -219,17 +221,11 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     }
     // Each scenario when the test operator is `or`
     {
-        // Use .into_iter() explicitly to show we're consuming the vector
         for (name, batch) in batches_or.into_iter() {
             c.bench_function(&format!("short_circuit/or/{}", name), |b| {
                 b.iter(|| expr_or.evaluate(black_box(&batch)).unwrap())
             });
         }
-
-        // Add specific benchmark for OR with all false values (no short-circuit)
-        c.bench_function("short_circuit/or/all_false", |b| {
-            b.iter(|| expr_or.evaluate(black_box(&all_false_batch.1)).unwrap())
-        });
     }
 }
 
