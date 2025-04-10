@@ -51,6 +51,9 @@ mod serde;
 /// Run all tests that are found in the `catalog` directory
 mod catalog;
 
+/// Run all tests that are found in the `tracing` directory
+mod tracing;
+
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
