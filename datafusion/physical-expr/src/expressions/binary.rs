@@ -822,6 +822,23 @@ enum ShortCircuitStrategy {
     ReturnRight,
     None,
 }
+/// Helper function to count the number of true and false values in a BooleanArray.
+/// Assumes the array does not contain nulls.
+#[inline(always)]
+fn count_boolean_values(array: &BooleanArray) -> (usize, usize) {
+    let mut true_count = 0;
+    let mut false_count = 0;
+    for i in 0..array.len() {
+        // Since we assume there are no nulls (null_count() == 0), we can directly call value(i)
+        if array.value(i) {
+            true_count += 1;
+        } else {
+            false_count += 1;
+        }
+    }
+    (true_count, false_count)
+}
+
 /// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
 ///
 /// Short-circuiting occurs under these circumstances:
@@ -831,6 +848,7 @@ enum ShortCircuitStrategy {
 /// - For `OR`:
 ///    - if LHS is all true  => short-circuit → return LHS
 ///    - if LHS is all false => short-circuit → return RHS
+///
 /// # Arguments
 /// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
 /// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
@@ -839,7 +857,7 @@ enum ShortCircuitStrategy {
 /// # Implementation Notes
 /// 1. Only works with Boolean-typed arguments (other types automatically return `None`)
 /// 2. Handles both scalar values and array values
-/// 3. For arrays, uses optimized bit counting techniques for boolean arrays
+/// 3. For arrays, uses a single-pass count to acquire both true and false counts
 fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrategy {
     // Only apply short-circuiting for logical operators And/Or.
     if !matches!(op, Operator::And | Operator::Or) {
@@ -855,37 +873,32 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
 
     match lhs {
         ColumnarValue::Array(array) => {
-            if let Ok(array) = as_boolean_array(&array) {
-                // For both operations, check if we have nulls
-                if array.null_count() > 0 {
+            if let Ok(bool_array) = as_boolean_array(&array) {
+                // If there are any nulls, we cannot safely short-circuit.
+                if bool_array.null_count() > 0 {
                     return ShortCircuitStrategy::None;
                 }
 
-                let len = array.len();
+                let len = bool_array.len();
+                // Use the helper to count true and false in one pass.
+                let (true_count, false_count) = count_boolean_values(bool_array);
 
-                // Optimize evaluation order based on operator type
-                // This avoids redundant counting operations
                 if is_and {
-                    // For AND, check for all false values first (most common short-circuit case)
-                    let false_count = array.false_count();
+                    // For AND, if every value is false, we can return LHS.
                     if false_count == len {
                         return ShortCircuitStrategy::ReturnLeft; // All false for AND
                     }
-
-                    if false_count == 0 {
-                        // This means all true
+                    // If every value is true, we must evaluate the RHS.
+                    if true_count == len {
                         return ShortCircuitStrategy::ReturnRight; // All true for AND
                     }
                 } else {
-                    // is OR
-                    // For OR, check for all true values first (most common short-circuit case)
-                    let true_count = array.true_count();
+                    // For OR, if every value is true, we can return LHS.
                     if true_count == len {
                         return ShortCircuitStrategy::ReturnLeft; // All true for OR
                     }
-
-                    if true_count == 0 {
-                        // This means all false
+                    // If every value is false, we must evaluate the RHS.
+                    if false_count == len {
                         return ShortCircuitStrategy::ReturnRight; // All false for OR
                     }
                 }
@@ -894,7 +907,8 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
         ColumnarValue::Scalar(scalar) => {
             if let ScalarValue::Boolean(Some(value)) = scalar {
                 let is_true = *value;
-
+                // For AND, a false scalar immediately determines the result,
+                // and for OR, a true scalar immediately determines the result.
                 if (is_and && !is_true) || (!is_and && is_true) {
                     return ShortCircuitStrategy::ReturnLeft;
                 } else {
