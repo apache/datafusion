@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::trace_utils::{trace_block, trace_future};
+use crate::trace_utils::{trace_spawn, trace_spawn_blocking, Spawner};
 use std::future::Future;
 use std::task::{Context, Poll};
 use tokio::runtime::Handle;
@@ -33,6 +33,47 @@ pub struct JoinSet<T> {
 impl<T> Default for JoinSet<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<T: 'static + Send> Spawner<T> for JoinSet<T> {
+    type ReturnHandle = AbortHandle;
+
+    fn spawn_impl<F>(&mut self, future: F) -> Self::ReturnHandle
+    where
+        F: Future<Output = T> + Send + 'static
+    {
+        self.inner.spawn(future)
+    }
+
+    fn spawn_blocking_impl<F>(&mut self, f: F) -> Self::ReturnHandle
+    where
+        F: FnOnce() -> T + Send + 'static
+    {
+        self.inner.spawn_blocking(f)
+    }
+}
+
+struct JoinSetWithHandle<'a, T: 'static + Send> {
+    inner: &'a mut JoinSet<T>,
+    handle: &'a Handle,
+}
+
+impl<T: 'static + Send> Spawner<T> for JoinSetWithHandle<'_, T> {
+    type ReturnHandle = AbortHandle;
+
+    fn spawn_impl<F>(&mut self, future: F) -> Self::ReturnHandle
+    where
+        F: Future<Output = T> + Send + 'static
+    {
+        self.inner.inner.spawn_on(future, self.handle)
+    }
+
+    fn spawn_blocking_impl<F>(&mut self, f: F) -> Self::ReturnHandle
+    where
+        F: FnOnce() -> T + Send + 'static
+    {
+        self.inner.inner.spawn_blocking_on(f, self.handle)
     }
 }
 
@@ -63,7 +104,7 @@ impl<T: 'static> JoinSet<T> {
         F: Send + 'static,
         T: Send,
     {
-        self.inner.spawn(trace_future(task))
+        trace_spawn(task, self)
     }
 
     /// [JoinSet::spawn_on](tokio::task::JoinSet::spawn_on) - Spawn a task on a provided runtime.
@@ -73,7 +114,10 @@ impl<T: 'static> JoinSet<T> {
         F: Send + 'static,
         T: Send,
     {
-        self.inner.spawn_on(trace_future(task), handle)
+        trace_spawn(task, &mut JoinSetWithHandle {
+            inner: self,
+            handle,
+        })
     }
 
     /// [JoinSet::spawn_local](tokio::task::JoinSet::spawn_local) - Spawn a local task.
@@ -101,7 +145,7 @@ impl<T: 'static> JoinSet<T> {
         F: Send + 'static,
         T: Send,
     {
-        self.inner.spawn_blocking(trace_block(f))
+        trace_spawn_blocking(f, self)
     }
 
     /// [JoinSet::spawn_blocking_on](tokio::task::JoinSet::spawn_blocking_on) - Spawn a blocking task on a provided runtime.
@@ -111,7 +155,10 @@ impl<T: 'static> JoinSet<T> {
         F: Send + 'static,
         T: Send,
     {
-        self.inner.spawn_blocking_on(trace_block(f), handle)
+        trace_spawn_blocking(f, &mut JoinSetWithHandle {
+            inner: self,
+            handle,
+        })
     }
 
     /// [JoinSet::join_next](tokio::task::JoinSet::join_next) - Await the next completed task.
