@@ -52,7 +52,7 @@ use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 use indexmap::IndexSet;
 use itertools::Itertools;
 
-/// A `EquivalenceProperties` object stores information known about the output
+/// `EquivalenceProperties` stores information about the output
 /// of a plan node, that can be used to optimize the plan.
 ///
 /// Currently, it keeps track of:
@@ -60,6 +60,10 @@ use itertools::Itertools;
 /// - Equivalent expressions: expressions that are known to have same value.
 /// - Constants expressions: expressions that are known to contain a single
 ///   constant value.
+///
+/// Please see the [Using Ordering for Better Plans] blog for more details.
+///
+/// [Using Ordering for Better Plans]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis/
 ///
 /// # Example equivalent sort expressions
 ///
@@ -542,22 +546,26 @@ impl EquivalenceProperties {
         self.ordering_satisfy_requirement(&sort_requirements)
     }
 
-    /// Checks whether the given sort requirements are satisfied by any of the
-    /// existing orderings.
-    pub fn ordering_satisfy_requirement(&self, reqs: &LexRequirement) -> bool {
-        let mut eq_properties = self.clone();
-        // First, standardize the given requirement:
-        let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
-
+    /// Returns the number of consecutive requirements (starting from the left)
+    /// that are satisfied by the plan ordering.
+    fn compute_common_sort_prefix_length(
+        &self,
+        normalized_reqs: &LexRequirement,
+    ) -> usize {
         // Check whether given ordering is satisfied by constraints first
-        if self.satisfied_by_constraints(&normalized_reqs) {
-            return true;
+        if self.satisfied_by_constraints(normalized_reqs) {
+            // If the constraints satisfy all requirements, return the full normalized requirements length
+            return normalized_reqs.len();
         }
 
-        for normalized_req in normalized_reqs {
+        let mut eq_properties = self.clone();
+
+        for (i, normalized_req) in normalized_reqs.iter().enumerate() {
             // Check whether given ordering is satisfied
-            if !eq_properties.ordering_satisfy_single(&normalized_req) {
-                return false;
+            if !eq_properties.ordering_satisfy_single(normalized_req) {
+                // As soon as one requirement is not satisfied, return
+                // how many we've satisfied so far
+                return i;
             }
             // Treat satisfied keys as constants in subsequent iterations. We
             // can do this because the "next" key only matters in a lexicographical
@@ -571,10 +579,35 @@ impl EquivalenceProperties {
             // From the analysis above, we know that `[a ASC]` is satisfied. Then,
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
-            eq_properties = eq_properties
-                .with_constants(std::iter::once(ConstExpr::from(normalized_req.expr)));
+            eq_properties = eq_properties.with_constants(std::iter::once(
+                ConstExpr::from(Arc::clone(&normalized_req.expr)),
+            ));
         }
-        true
+
+        // All requirements are satisfied.
+        normalized_reqs.len()
+    }
+
+    /// Determines the longest prefix of `reqs` that is satisfied by the existing ordering.
+    /// Returns that prefix as a new `LexRequirement`, and a boolean indicating if all the requirements are satisfied.
+    pub fn extract_common_sort_prefix(
+        &self,
+        reqs: &LexRequirement,
+    ) -> (LexRequirement, bool) {
+        // First, standardize the given requirement:
+        let normalized_reqs = self.normalize_sort_requirements(reqs);
+
+        let prefix_len = self.compute_common_sort_prefix_length(&normalized_reqs);
+        (
+            LexRequirement::new(normalized_reqs[..prefix_len].to_vec()),
+            prefix_len == normalized_reqs.len(),
+        )
+    }
+
+    /// Checks whether the given sort requirements are satisfied by any of the
+    /// existing orderings.
+    pub fn ordering_satisfy_requirement(&self, reqs: &LexRequirement) -> bool {
+        self.extract_common_sort_prefix(reqs).1
     }
 
     /// Checks if the sort requirements are satisfied by any of the table constraints (primary key or unique).
@@ -1079,7 +1112,7 @@ impl EquivalenceProperties {
     /// # Arguments
     ///
     /// * `mapping` - A reference to `ProjectionMapping` that defines how expressions are mapped
-    ///               in the projection operation
+    ///   in the projection operation
     ///
     /// # Returns
     ///

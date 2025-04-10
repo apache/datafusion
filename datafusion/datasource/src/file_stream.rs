@@ -88,10 +88,10 @@ impl FileStream {
                 .collect::<Vec<_>>(),
         );
 
-        let files = config.file_groups[partition].clone();
+        let file_group = config.file_groups[partition].clone();
 
         Ok(Self {
-            file_iter: files.into(),
+            file_iter: file_group.into_inner().into_iter().collect(),
             projected_schema,
             remain: config.limit,
             file_opener,
@@ -522,7 +522,7 @@ impl FileStreamMetrics {
 
 #[cfg(test)]
 mod tests {
-    use crate::file_scan_config::FileScanConfig;
+    use crate::file_scan_config::FileScanConfigBuilder;
     use crate::tests::make_partition;
     use crate::PartitionedFile;
     use arrow::error::ArrowError;
@@ -656,13 +656,14 @@ mod tests {
 
             let on_error = self.on_error;
 
-            let config = FileScanConfig::new(
+            let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema,
                 Arc::new(MockSource::default()),
             )
             .with_file_group(file_group)
-            .with_limit(self.limit);
+            .with_limit(self.limit)
+            .build();
             let metrics_set = ExecutionPlanMetricsSet::new();
             let file_stream =
                 FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)

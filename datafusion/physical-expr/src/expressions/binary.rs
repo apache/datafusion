@@ -33,7 +33,7 @@ use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
@@ -168,9 +168,12 @@ fn boolean_op(
 macro_rules! binary_string_array_flag_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
         match $LEFT.data_type() {
-            DataType::Utf8View | DataType::Utf8 => {
+            DataType::Utf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
             },
+            DataType::Utf8View => {
+                compute_utf8view_flag_op!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
+            }
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             },
@@ -207,14 +210,42 @@ macro_rules! compute_utf8_flag_op {
     }};
 }
 
+/// Invoke a compute kernel on a pair of binary data arrays with flags
+macro_rules! compute_utf8view_flag_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("compute_utf8view_flag_op failed to downcast array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("compute_utf8view_flag_op failed to downcast array");
+
+        let flag = if $FLAG {
+            Some($ARRAYTYPE::from(vec!["i"; ll.len()]))
+        } else {
+            None
+        };
+        let mut array = $OP(ll, rr, flag.as_ref())?;
+        if $NOT {
+            array = not(&array).unwrap();
+        }
+        Ok(Arc::new(array))
+    }};
+}
+
 macro_rules! binary_string_array_flag_op_scalar {
     ($LEFT:ident, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
         // This macro is slightly different from binary_string_array_flag_op because, when comparing with a scalar value,
         // the query can be optimized in such a way that operands will be dicts, so we need to support it here
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Utf8View | DataType::Utf8 => {
+            DataType::Utf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
             },
+            DataType::Utf8View => {
+                compute_utf8view_flag_op_scalar!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
+            }
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             },
@@ -222,7 +253,8 @@ macro_rules! binary_string_array_flag_op_scalar {
                 let values = $LEFT.as_any_dictionary().values();
 
                 match values.data_type() {
-                    DataType::Utf8View | DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::Utf8View => compute_utf8view_flag_op_scalar!(values, $RIGHT, $OP, StringViewArray, $NOT, $FLAG),
                     DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
                     other => internal_err!(
                         "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
@@ -276,6 +308,34 @@ macro_rules! compute_utf8_flag_op_scalar {
     }};
 }
 
+/// Invoke a compute kernel on a data array and a scalar value with flag
+macro_rules! compute_utf8view_flag_op_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("compute_utf8view_flag_op_scalar failed to downcast array");
+
+        let string_value = match $RIGHT.try_as_str() {
+            Some(Some(string_value)) => string_value,
+            // null literal or non string
+            _ => return internal_err!(
+                        "compute_utf8view_flag_op_scalar failed to cast literal value {} for operation '{}'",
+                        $RIGHT, stringify!($OP)
+                    )
+        };
+
+        let flag = $FLAG.then_some("i");
+        let mut array =
+            paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
+        if $NOT {
+            array = not(&array).unwrap();
+        }
+
+        Ok(Arc::new(array))
+    }};
+}
+
 impl PhysicalExpr for BinaryExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -299,6 +359,12 @@ impl PhysicalExpr for BinaryExpr {
         use arrow::compute::kernels::numeric::*;
 
         let lhs = self.left.evaluate(batch)?;
+
+        // Optimize for short-circuiting `Operator::And` or `Operator::Or` operations and return early.
+        if check_short_circuit(&lhs, &self.op) {
+            return Ok(lhs);
+        }
+
         let rhs = self.right.evaluate(batch)?;
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
@@ -571,6 +637,32 @@ impl PhysicalExpr for BinaryExpr {
             _ => Ok(ExprProperties::new_unknown()),
         }
     }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn write_child(
+            f: &mut std::fmt::Formatter,
+            expr: &dyn PhysicalExpr,
+            precedence: u8,
+        ) -> std::fmt::Result {
+            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+                let p = child.op.precedence();
+                if p == 0 || p < precedence {
+                    write!(f, "(")?;
+                    child.fmt_sql(f)?;
+                    write!(f, ")")
+                } else {
+                    child.fmt_sql(f)
+                }
+            } else {
+                expr.fmt_sql(f)
+            }
+        }
+
+        let precedence = self.op.precedence();
+        write_child(f, self.left.as_ref(), precedence)?;
+        write!(f, " {} ", self.op)?;
+        write_child(f, self.right.as_ref(), precedence)
+    }
 }
 
 /// Casts dictionary array to result type for binary numerical operators. Such operators
@@ -707,10 +799,69 @@ impl BinaryExpr {
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
             StringConcat => concat_elements(left, right),
-            AtArrow | ArrowAt => {
-                unreachable!("ArrowAt and AtArrow should be rewritten to function")
+            AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
+            | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
+            | IntegerDivide => {
+                not_impl_err!(
+                    "Binary operator '{:?}' is not supported in the physical expr",
+                    self.op
+                )
             }
         }
+    }
+}
+
+/// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
+///
+/// Short-circuiting occurs when evaluating the right-hand side (rhs) becomes unnecessary:
+/// - For `AND`: if ALL values in `lhs` are `false`, the expression must be `false` regardless of rhs.
+/// - For `OR`: if ALL values in `lhs` are `true`, the expression must be `true` regardless of rhs.
+///
+/// Returns `true` if short-circuiting is possible, `false` otherwise.
+///
+/// # Arguments
+/// * `arg` - The left-hand side (lhs) columnar value (array or scalar)
+/// * `op` - The logical operator (`AND` or `OR`)
+///
+/// # Implementation Notes
+/// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
+/// 2. Handles both scalar values and array values
+/// 3. For arrays, uses optimized `true_count()`/`false_count()` methods from arrow-rs.
+///    `bool_or`/`bool_and` maybe a better choice too，for detailed discussion,see:[link](https://github.com/apache/datafusion/pull/15462#discussion_r2020558418)
+fn check_short_circuit(arg: &ColumnarValue, op: &Operator) -> bool {
+    let data_type = arg.data_type();
+    match (data_type, op) {
+        (DataType::Boolean, Operator::And) => {
+            match arg {
+                ColumnarValue::Array(array) => {
+                    if let Ok(array) = as_boolean_array(&array) {
+                        return array.false_count() == array.len();
+                    }
+                }
+                ColumnarValue::Scalar(scalar) => {
+                    if let ScalarValue::Boolean(Some(value)) = scalar {
+                        return !value;
+                    }
+                }
+            }
+            false
+        }
+        (DataType::Boolean, Operator::Or) => {
+            match arg {
+                ColumnarValue::Array(array) => {
+                    if let Ok(array) = as_boolean_array(&array) {
+                        return array.true_count() == array.len();
+                    }
+                }
+                ColumnarValue::Scalar(scalar) => {
+                    if let ScalarValue::Boolean(Some(value)) = scalar {
+                        return *value;
+                    }
+                }
+            }
+            false
+        }
+        _ => false,
     }
 }
 
@@ -770,6 +921,7 @@ mod tests {
     use crate::expressions::{col, lit, try_cast, Column, Literal};
 
     use datafusion_common::plan_datafusion_err;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
@@ -933,9 +1085,9 @@ mod tests {
             DataType::UInt32,
             vec![1u32, 2u32],
             Operator::Plus,
-            Int32Array,
-            DataType::Int32,
-            [2i32, 4i32],
+            Int64Array,
+            DataType::Int64,
+            [2i64, 4i64],
         );
         test_coercion!(
             Int32Array,
@@ -4671,5 +4823,108 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+
+        // Test basic binary expressions
+        let simple_expr = binary_expr(
+            col("a", &schema)?,
+            Operator::Plus,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let display_string = simple_expr.to_string();
+        assert_eq!(display_string, "a@0 + b@1");
+        let sql_string = fmt_sql(&simple_expr).to_string();
+        assert_eq!(sql_string, "a + b");
+
+        // Test nested expressions with different operator precedence
+        let nested_expr = binary_expr(
+            Arc::new(binary_expr(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("b", &schema)?,
+                &schema,
+            )?),
+            Operator::Multiply,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let display_string = nested_expr.to_string();
+        assert_eq!(display_string, "(a@0 + b@1) * b@1");
+        let sql_string = fmt_sql(&nested_expr).to_string();
+        assert_eq!(sql_string, "(a + b) * b");
+
+        // Test nested expressions with same operator precedence
+        let nested_same_prec = binary_expr(
+            Arc::new(binary_expr(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("b", &schema)?,
+                &schema,
+            )?),
+            Operator::Plus,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let display_string = nested_same_prec.to_string();
+        assert_eq!(display_string, "a@0 + b@1 + b@1");
+        let sql_string = fmt_sql(&nested_same_prec).to_string();
+        assert_eq!(sql_string, "a + b + b");
+
+        // Test with literals
+        let lit_expr = binary_expr(
+            col("a", &schema)?,
+            Operator::Eq,
+            lit(ScalarValue::Int32(Some(42))),
+            &schema,
+        )?;
+        let display_string = lit_expr.to_string();
+        assert_eq!(display_string, "a@0 = 42");
+        let sql_string = fmt_sql(&lit_expr).to_string();
+        assert_eq!(sql_string, "a = 42");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_short_circuit() {
+        use crate::planner::logical2physical;
+        use datafusion_expr::col as logical_col;
+        use datafusion_expr::lit;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let a_array = Int32Array::from(vec![1, 3, 4, 5, 6]);
+        let b_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(a_array), Arc::new(b_array)],
+        )
+        .unwrap();
+
+        // op: AND left: all false
+        let left_expr = logical2physical(&logical_col("a").eq(lit(2)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(check_short_circuit(&left_value, &Operator::And));
+        // op: AND left: not all false
+        let left_expr = logical2physical(&logical_col("a").eq(lit(3)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(!check_short_circuit(&left_value, &Operator::And));
+        // op: OR left: all true
+        let left_expr = logical2physical(&logical_col("a").gt(lit(0)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(check_short_circuit(&left_value, &Operator::Or));
+        // op: OR left: not all true
+        let left_expr = logical2physical(&logical_col("a").gt(lit(2)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(!check_short_circuit(&left_value, &Operator::Or));
     }
 }

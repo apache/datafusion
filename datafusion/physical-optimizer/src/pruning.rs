@@ -312,13 +312,13 @@ pub trait PruningStatistics {
 /// * `true`: there MAY be rows that pass the predicate, **KEEPS** the container
 ///
 /// * `NULL`: there MAY be rows that pass the predicate, **KEEPS** the container
-///           Note that rewritten predicate can evaluate to NULL when some of
-///           the min/max values are not known. *Note that this is different than
-///           the SQL filter semantics where `NULL` means the row is filtered
-///           out.*
+///   Note that rewritten predicate can evaluate to NULL when some of
+///   the min/max values are not known. *Note that this is different than
+///   the SQL filter semantics where `NULL` means the row is filtered
+///   out.*
 ///
 /// * `false`: there are no rows that could possibly match the predicate,
-///            **PRUNES** the container
+///   **PRUNES** the container
 ///
 /// For example, given a column `x`, the `x_min`, `x_max`, `x_null_count`, and
 /// `x_row_count` represent the minimum and maximum values, the null count of
@@ -1884,8 +1884,9 @@ mod tests {
     use std::ops::{Not, Rem};
 
     use super::*;
-    use datafusion_common::assert_batches_eq;
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_expr::{col, lit};
+    use insta::assert_snapshot;
 
     use arrow::array::Decimal128Array;
     use arrow::{
@@ -2466,18 +2467,16 @@ mod tests {
 
         let batch =
             build_statistics_record_batch(&statistics, &required_columns).unwrap();
-        let expected = [
-            "+--------+--------+--------+--------+",
-            "| s1_min | s2_max | s3_max | s3_min |",
-            "+--------+--------+--------+--------+",
-            "|        | 20     | q      | a      |",
-            "|        |        |        |        |",
-            "| 9      |        | r      |        |",
-            "|        |        |        |        |",
-            "+--------+--------+--------+--------+",
-        ];
-
-        assert_batches_eq!(expected, &[batch]);
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +--------+--------+--------+--------+
+        | s1_min | s2_max | s3_max | s3_min |
+        +--------+--------+--------+--------+
+        |        | 20     | q      | a      |
+        |        |        |        |        |
+        | 9      |        | r      |        |
+        |        |        |        |        |
+        +--------+--------+--------+--------+
+        ");
     }
 
     #[test]
@@ -2505,15 +2504,14 @@ mod tests {
 
         let batch =
             build_statistics_record_batch(&statistics, &required_columns).unwrap();
-        let expected = [
-            "+-------------------------------+",
-            "| s1_min                        |",
-            "+-------------------------------+",
-            "| 1970-01-01T00:00:00.000000010 |",
-            "+-------------------------------+",
-        ];
 
-        assert_batches_eq!(expected, &[batch]);
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +-------------------------------+
+        | s1_min                        |
+        +-------------------------------+
+        | 1970-01-01T00:00:00.000000010 |
+        +-------------------------------+
+        ");
     }
 
     #[test]
@@ -2551,15 +2549,13 @@ mod tests {
 
         let batch =
             build_statistics_record_batch(&statistics, &required_columns).unwrap();
-        let expected = [
-            "+--------+",
-            "| s1_min |",
-            "+--------+",
-            "|        |",
-            "+--------+",
-        ];
-
-        assert_batches_eq!(expected, &[batch]);
+        assert_snapshot!(batches_to_string(&[batch]), @r"
+        +--------+
+        | s1_min |
+        +--------+
+        |        |
+        +--------+
+        ");
     }
 
     #[test]
