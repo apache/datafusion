@@ -360,22 +360,15 @@ impl PhysicalExpr for BinaryExpr {
 
         let lhs = self.left.evaluate(batch)?;
 
-        // Delay evaluating RHS unless we really need it
-        let rhs_lazy = || self.right.evaluate(batch);
-
-        // Optimize for short-circuiting `Operator::And` or `Operator::Or` operations and return early.
-        if let Some(result) = get_short_circuit_result(&lhs, &self.op, None) {
-            return Ok(result);
+        // Check if we can apply short-circuit evaluation
+        match check_short_circuit(&lhs, &self.op) {
+            ShortCircuitStrategy::None => (),
+            ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
+            ShortCircuitStrategy::ReturnRight => return self.right.evaluate(batch),
         }
 
-        // Only evaluate RHS if short-circuit evaluation doesn't apply
-        let rhs = rhs_lazy()?;
-
-        // Check for short-circuit cases that need RHS value
-        if let Some(result) = get_short_circuit_result(&lhs, &self.op, Some(rhs.clone()))
-        {
-            return Ok(result);
-        }
+        // If no short-circuit applies, evaluate the right-hand side
+        let rhs = self.right.evaluate(batch)?;
 
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
@@ -822,6 +815,12 @@ impl BinaryExpr {
     }
 }
 
+enum ShortCircuitStrategy {
+    None,
+    ReturnLeft,
+    ReturnRight,
+}
+
 /// Returns `Some(ColumnarValue)` if short-circuit evaluation applies:
 /// - For `AND`:
 ///    - if LHS is all false => short-circuit → return LHS
@@ -839,14 +838,10 @@ impl BinaryExpr {
 /// 2. Handles both scalar values and array values
 /// 3. For arrays, uses optimized `true_count()`/`false_count()` methods from arrow-rs.
 ///    `bool_or`/`bool_and` maybe a better choice too，for detailed discussion,see:[link](https://github.com/apache/datafusion/pull/15462#discussion_r2020558418)
-fn get_short_circuit_result(
-    lhs: &ColumnarValue,
-    op: &Operator,
-    rhs: Option<ColumnarValue>, // we pass RHS only if needed
-) -> Option<ColumnarValue> {
+fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrategy {
     // Only apply short-circuiting for logical operators And/Or.
     if !matches!(op, Operator::And | Operator::Or) {
-        return None;
+        return ShortCircuitStrategy::None;
     }
 
     let data_type = lhs.data_type();
@@ -854,24 +849,24 @@ fn get_short_circuit_result(
         (DataType::Boolean, Operator::And) => {
             match lhs {
                 ColumnarValue::Array(array) => {
+                    // For AND, only short-circuit if ALL values are false and there are NO nulls
                     if let Ok(array) = as_boolean_array(&array) {
-                        // For AND, only short-circuit if ALL values are false and there are NO nulls
                         if array.false_count() == array.len() && array.null_count() == 0 {
-                            return Some(lhs.clone()); // all false → result is false
+                            return ShortCircuitStrategy::ReturnLeft;
                         }
                         // Only short-circuit to RHS if ALL values are true and there are NO nulls
                         if array.true_count() == array.len() && array.null_count() == 0 {
-                            return rhs; // all true → just return RHS
+                            return ShortCircuitStrategy::ReturnRight;
                         }
                     }
                 }
                 ColumnarValue::Scalar(scalar) => {
                     if let ScalarValue::Boolean(Some(value)) = scalar {
                         if !value {
-                            return Some(lhs.clone()); // false → result is false
+                            return ShortCircuitStrategy::ReturnLeft;
                         }
-                        if *value && rhs.is_some() {
-                            return rhs; // true → just return RHS
+                        if *value {
+                            return ShortCircuitStrategy::ReturnRight;
                         }
                     }
                 }
@@ -880,10 +875,10 @@ fn get_short_circuit_result(
         (DataType::Boolean, Operator::Or) => {
             match lhs {
                 ColumnarValue::Array(array) => {
+                    // For OR, only short-circuit if ALL values are true and there are NO nulls
                     if let Ok(array) = as_boolean_array(&array) {
-                        // For OR, only short-circuit if ALL values are true and there are NO nulls
                         if array.true_count() == array.len() && array.null_count() == 0 {
-                            return Some(lhs.clone()); // all true → result is true
+                            return ShortCircuitStrategy::ReturnLeft;
                         }
 
                         // Only short-circuit to RHS if ALL values are false and there are NO nulls
@@ -891,17 +886,17 @@ fn get_short_circuit_result(
                             && array.null_count() == 0
                             && rhs.is_some()
                         {
-                            return rhs; // all false → just return RHS
+                            return ShortCircuitStrategy::ReturnRight;
                         }
                     }
                 }
                 ColumnarValue::Scalar(scalar) => {
                     if let ScalarValue::Boolean(Some(value)) = scalar {
                         if *value {
-                            return Some(lhs.clone()); // true → result is true
+                            return ShortCircuitStrategy::ReturnLeft;
                         }
-                        if !value && rhs.is_some() {
-                            return rhs; // false → just return RHS
+                        if !value {
+                            return ShortCircuitStrategy::ReturnRight;
                         }
                     }
                 }
@@ -909,7 +904,7 @@ fn get_short_circuit_result(
         }
         _ => {}
     }
-    None
+    ShortCircuitStrategy::None
 }
 
 fn concat_elements(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<ArrayRef> {
