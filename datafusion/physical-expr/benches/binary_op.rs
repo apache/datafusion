@@ -156,7 +156,7 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
         create_record_batch::<false>(schema.clone(), &b_values, &c_values).unwrap();
 
     // Create a specific batch for the all_false OR scenario
-    // We extract only the "all_false" case from the AND test data to test OR with all falses
+    // Extract this BEFORE consuming any vectors
     let all_false_batch = batches_and
         .iter()
         .find(|(name, _)| name == "all_false")
@@ -219,7 +219,8 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     }
     // Each scenario when the test operator is `or`
     {
-        for (name, batch) in batches_or {
+        // Use .into_iter() explicitly to show we're consuming the vector
+        for (name, batch) in batches_or.into_iter() {
             c.bench_function(&format!("short_circuit/or/{}", name), |b| {
                 b.iter(|| expr_or.evaluate(black_box(&batch)).unwrap())
             });
