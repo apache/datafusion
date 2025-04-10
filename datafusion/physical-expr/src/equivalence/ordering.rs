@@ -312,7 +312,7 @@ impl OrderingEquivalenceClass {
 /// Convert the `OrderingEquivalenceClass` into an iterator of LexOrderings
 impl IntoIterator for OrderingEquivalenceClass {
     type Item = LexOrdering;
-    type IntoIter = IntoIter<LexOrdering>;
+    type IntoIter = IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.orderings.into_iter()

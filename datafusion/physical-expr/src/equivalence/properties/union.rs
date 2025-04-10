@@ -55,23 +55,15 @@ fn calculate_union_binary(
             // Find matching constant expression in RHS
             rhs.constants()
                 .iter()
-                .find(|rhs_const| rhs_const.expr().eq(lhs_const.expr()))
+                .find(|rhs_const| rhs_const.expr.eq(&lhs_const.expr))
                 .map(|rhs_const| {
-                    let mut const_expr = ConstExpr::new(Arc::clone(lhs_const.expr()));
-
-                    // If both sides have matching constant values, preserve the value and set across_partitions=true
-                    if let (
-                        AcrossPartitions::Uniform(Some(lhs_val)),
-                        AcrossPartitions::Uniform(Some(rhs_val)),
-                    ) = (lhs_const.across_partitions(), rhs_const.across_partitions())
-                    {
-                        if lhs_val == rhs_val {
-                            const_expr = const_expr.with_across_partitions(
-                                AcrossPartitions::Uniform(Some(lhs_val)),
-                            )
-                        }
+                    let const_expr = lhs_const.clone();
+                    // If both sides have matching constant values, preserve the value:
+                    if lhs_const.across_partitions() == rhs_const.across_partitions() {
+                        const_expr
+                    } else {
+                        const_expr.with_across_partitions(AcrossPartitions::Heterogeneous)
                     }
-                    const_expr
                 })
         })
         .collect::<Vec<_>>();
@@ -301,8 +293,8 @@ fn advance_if_matches_constant(
     constants: &[ConstExpr],
 ) -> Option<PhysicalSortExpr> {
     let expr = iter.peek()?;
-    let const_expr = constants.iter().find(|c| expr.expr.eq(c.expr()))?;
-    let found_expr = PhysicalSortExpr::new(Arc::clone(const_expr.expr()), expr.options);
+    let const_expr = constants.iter().find(|c| expr.expr.eq(&c.expr))?;
+    let found_expr = PhysicalSortExpr::new(Arc::clone(&const_expr.expr), expr.options);
     iter.next();
     Some(found_expr)
 }

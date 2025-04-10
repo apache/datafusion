@@ -58,7 +58,7 @@ use indexmap::{IndexMap, IndexSet};
 #[derive(Debug, Clone)]
 pub struct ConstExpr {
     /// The expression that is known to be constant (e.g. a `Column`)
-    expr: Arc<dyn PhysicalExpr>,
+    pub(crate) expr: Arc<dyn PhysicalExpr>,
     /// Does the constant have the same value across all partitions? See
     /// struct docs for more details
     across_partitions: AcrossPartitions,
@@ -114,10 +114,6 @@ impl ConstExpr {
 
     pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
         &self.expr
-    }
-
-    pub fn owned_expr(self) -> Arc<dyn PhysicalExpr> {
-        self.expr
     }
 
     pub fn map<F>(&self, f: F) -> Option<Self>
@@ -207,63 +203,59 @@ pub struct EquivalenceClass {
 }
 
 impl EquivalenceClass {
-    /// Create a new empty equivalence class
+    /// Create a new empty equivalence class.
     pub fn new_empty() -> Self {
         Self {
             exprs: IndexSet::new(),
         }
     }
 
-    // Create a new equivalence class from a pre-existing `Vec`
+    // Create a new equivalence class from a pre-existing `Vec`.
     pub fn new(exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
         Self {
             exprs: exprs.into_iter().collect(),
         }
     }
 
-    /// Return the inner vector of expressions
-    pub fn into_vec(self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.exprs.into_iter().collect()
-    }
-
     /// Return the "canonical" expression for this class (the first element)
-    /// if any
+    /// if non-empty.
     fn canonical_expr(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.exprs.iter().next().cloned()
     }
 
     /// Insert the expression into this class, meaning it is known to be equal to
-    /// all other expressions in this class
+    /// all other expressions in this class.
     pub fn push(&mut self, expr: Arc<dyn PhysicalExpr>) {
         self.exprs.insert(expr);
     }
 
-    /// Inserts all the expressions from other into this class
+    /// Inserts all the expressions from other into this class.
     pub fn extend(&mut self, other: Self) {
         self.exprs.extend(other.exprs);
     }
 
-    /// Returns true if this equivalence class contains t expression
+    /// Returns true if this equivalence class contains the given expression.
     pub fn contains(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         self.exprs.contains(expr)
     }
 
-    /// Returns true if this equivalence class has any entries in common with `other`
+    /// Returns true if this equivalence class has any entries in common with
+    /// `other`.
     pub fn contains_any(&self, other: &Self) -> bool {
-        self.exprs.iter().any(|e| other.contains(e))
+        self.exprs.intersection(&other.exprs).next().is_some()
     }
 
-    /// return the number of items in this class
+    /// Returns the number of items in this equivalence class.
     pub fn len(&self) -> usize {
         self.exprs.len()
     }
 
-    /// return true if this class is empty
+    /// Returns whether this equivalence class is empty.
     pub fn is_empty(&self) -> bool {
         self.exprs.is_empty()
     }
 
-    /// Iterate over all elements in this class, in some arbitrary order
+    /// Iterate over all elements in this class (in some arbitrary order).
     pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn PhysicalExpr>> {
         self.exprs.iter()
     }
@@ -281,9 +273,24 @@ impl EquivalenceClass {
     }
 }
 
+impl IntoIterator for EquivalenceClass {
+    type Item = Arc<dyn PhysicalExpr>;
+    type IntoIter = <IndexSet<Self::Item> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.exprs.into_iter()
+    }
+}
+
 impl Display for EquivalenceClass {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "[{}]", format_physical_expr_list(&self.exprs))
+    }
+}
+
+impl From<EquivalenceClass> for Vec<Arc<dyn PhysicalExpr>> {
+    fn from(cls: EquivalenceClass) -> Self {
+        cls.exprs.into_iter().collect()
     }
 }
 
@@ -662,7 +669,7 @@ impl EquivalenceGroup {
 
 impl IntoIterator for EquivalenceGroup {
     type Item = EquivalenceClass;
-    type IntoIter = IntoIter<EquivalenceClass>;
+    type IntoIter = IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.classes.into_iter()

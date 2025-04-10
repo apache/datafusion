@@ -457,7 +457,7 @@ impl FromIterator<PhysicalSortExpr> for LexOrdering {
 
 impl IntoIterator for LexOrdering {
     type Item = PhysicalSortExpr;
-    type IntoIter = IntoIter<PhysicalSortExpr>;
+    type IntoIter = IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.inner.into_iter()

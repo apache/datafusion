@@ -99,7 +99,7 @@ impl Default for Constraints {
 
 impl IntoIterator for Constraints {
     type Item = Constraint;
-    type IntoIter = IntoIter<Constraint>;
+    type IntoIter = IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.inner.into_iter()

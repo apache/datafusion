@@ -137,7 +137,8 @@ pub struct EquivalenceProperties {
     eq_group: EquivalenceGroup,
     /// Equivalent sort expressions
     oeq_class: OrderingEquivalenceClass,
-    /// Expressions whose values are constant
+    /// Expressions whose values are constant. These expressions are in
+    /// normalized form (w.r.t. the equivalence group).
     ///
     /// TODO: We do not need to track constants separately, they can be tracked
     ///       inside `eq_group` as `Literal` expressions.
@@ -319,8 +320,7 @@ impl EquivalenceProperties {
             .into_iter()
             .filter_map(|c| {
                 let across_partitions = c.across_partitions();
-                let expr = c.owned_expr();
-                let normalized_expr = self.eq_group.normalize_expr(expr);
+                let normalized_expr = self.eq_group.normalize_expr(c.expr);
                 (!const_exprs_contains(&self.constants, &normalized_expr)).then(|| {
                     let const_expr = ConstExpr::from(normalized_expr);
                     const_expr.with_across_partitions(across_partitions)
@@ -351,7 +351,7 @@ impl EquivalenceProperties {
             .eq_group
             .iter()
             .find(|class| class.contains(&normalized_expr))
-            .map(|class| class.clone().into_vec())
+            .map(|class| class.clone().into())
             .unwrap_or_else(|| vec![Arc::clone(&normalized_expr)]);
 
         let mut new_orderings = vec![];
@@ -1257,7 +1257,7 @@ impl EquivalenceProperties {
                         AcrossPartitions::Uniform { .. }
                     )
             })
-            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(const_expr.expr())))
+            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(&const_expr.expr)))
             .collect::<Vec<_>>();
         is_constant_recurse(&normalized_constants, normalized_expr)
     }
@@ -1307,7 +1307,7 @@ impl EquivalenceProperties {
         }
 
         for const_expr in self.constants.iter() {
-            if normalized_expr.eq(const_expr.expr()) {
+            if normalized_expr.eq(&const_expr.expr) {
                 return const_expr.across_partitions();
             }
         }
@@ -1365,11 +1365,9 @@ impl EquivalenceProperties {
         let new_constants = self
             .constants
             .into_iter()
-            .map(|const_expr| {
-                let across_partitions = const_expr.across_partitions();
-                let new_const_expr = with_new_schema(const_expr.owned_expr(), &schema)?;
-                Ok(ConstExpr::new(new_const_expr)
-                    .with_across_partitions(across_partitions))
+            .map(|mut const_expr| {
+                const_expr.expr = with_new_schema(const_expr.expr, &schema)?;
+                Ok(const_expr)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -1390,7 +1388,6 @@ impl EquivalenceProperties {
         let mut eq_classes = vec![];
         for eq_class in self.eq_group {
             let new_eq_exprs = eq_class
-                .into_vec()
                 .into_iter()
                 .map(|expr| with_new_schema(expr, &schema))
                 .collect::<Result<_>>()?;
