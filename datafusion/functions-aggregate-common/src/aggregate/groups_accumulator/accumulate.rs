@@ -19,11 +19,19 @@
 //!
 //! [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 
+use std::collections::VecDeque;
+use std::fmt::{self, Debug};
+use std::marker::PhantomData;
+
 use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowPrimitiveType;
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
+
+use crate::aggregate::groups_accumulator::{
+    BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
+};
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -50,7 +58,7 @@ use datafusion_expr_common::groups_accumulator::EmitTo;
 ///
 /// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 #[derive(Debug)]
-pub struct NullState {
+pub struct NullState<V: SeenValues, O: GroupIndexOperations> {
     /// Have we seen any non-filtered input values for `group_index`?
     ///
     /// If `seen_values[i]` is true, have seen at least one non null
@@ -58,19 +66,17 @@ pub struct NullState {
     ///
     /// If `seen_values[i]` is false, have not seen any values that
     /// pass the filter yet for group `i`
-    seen_values: BooleanBufferBuilder,
+    seen_values: V,
+
+    /// phantom data for required type `<O>`
+    _phantom: PhantomData<O>,
 }
 
-impl Default for NullState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl NullState {
+impl<V: SeenValues, O: GroupIndexOperations> NullState<V, O> {
     pub fn new() -> Self {
         Self {
-            seen_values: BooleanBufferBuilder::new(0),
+            seen_values: V::default(),
+            _phantom: PhantomData {},
         }
     }
 
@@ -105,15 +111,19 @@ impl NullState {
         mut value_fn: F,
     ) where
         T: ArrowPrimitiveType + Send,
-        F: FnMut(usize, T::Native) + Send,
+        F: FnMut(u32, u64, T::Native) + Send,
     {
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
-        let seen_values =
-            initialize_builder(&mut self.seen_values, total_num_groups, false);
-        accumulate(group_indices, values, opt_filter, |group_index, value| {
-            seen_values.set_bit(group_index, true);
-            value_fn(group_index, value);
+        self.seen_values.resize(total_num_groups, false);
+
+        let seen_values = &mut self.seen_values;
+        accumulate(group_indices, values, opt_filter, |packed_index, value| {
+            let packed_index = packed_index as u64;
+            let block_id = O::get_block_id(packed_index);
+            let block_offset = O::get_block_offset(packed_index);
+            seen_values.set_bit(block_id, block_offset, true);
+            value_fn(block_id, block_offset, value);
         });
     }
 
@@ -135,26 +145,29 @@ impl NullState {
         total_num_groups: usize,
         mut value_fn: F,
     ) where
-        F: FnMut(usize, bool) + Send,
+        F: FnMut(u32, u64, bool) + Send,
     {
         let data = values.values();
         assert_eq!(data.len(), group_indices.len());
 
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
-        let seen_values =
-            initialize_builder(&mut self.seen_values, total_num_groups, false);
+        self.seen_values.resize(total_num_groups, false);
 
         // These could be made more performant by iterating in chunks of 64 bits at a time
+        let seen_values = &mut self.seen_values;
         match (values.null_count() > 0, opt_filter) {
             // no nulls, no filter,
             (false, None) => {
                 // if we have previously seen nulls, ensure the null
                 // buffer is big enough (start everything at valid)
                 group_indices.iter().zip(data.iter()).for_each(
-                    |(&group_index, new_value)| {
-                        seen_values.set_bit(group_index, true);
-                        value_fn(group_index, new_value)
+                    |(&packed_index, new_value)| {
+                        let packed_index = packed_index as u64;
+                        let block_id = O::get_block_id(packed_index);
+                        let block_offset = O::get_block_offset(packed_index);
+                        seen_values.set_bit(block_id, block_offset, true);
+                        value_fn(block_id, block_offset, new_value)
                     },
                 )
             }
@@ -165,10 +178,13 @@ impl NullState {
                     .iter()
                     .zip(data.iter())
                     .zip(nulls.iter())
-                    .for_each(|((&group_index, new_value), is_valid)| {
+                    .for_each(|((&packed_index, new_value), is_valid)| {
                         if is_valid {
-                            seen_values.set_bit(group_index, true);
-                            value_fn(group_index, new_value);
+                            let packed_index = packed_index as u64;
+                            let block_id = O::get_block_id(packed_index);
+                            let block_offset = O::get_block_offset(packed_index);
+                            seen_values.set_bit(block_id, block_offset, true);
+                            value_fn(block_id, block_offset, new_value);
                         }
                     })
             }
@@ -180,10 +196,13 @@ impl NullState {
                     .iter()
                     .zip(data.iter())
                     .zip(filter.iter())
-                    .for_each(|((&group_index, new_value), filter_value)| {
+                    .for_each(|((&packed_index, new_value), filter_value)| {
                         if let Some(true) = filter_value {
-                            seen_values.set_bit(group_index, true);
-                            value_fn(group_index, new_value);
+                            let packed_index = packed_index as u64;
+                            let block_id = O::get_block_id(packed_index);
+                            let block_offset = O::get_block_offset(packed_index);
+                            seen_values.set_bit(block_id, block_offset, true);
+                            value_fn(block_id, block_offset, new_value);
                         }
                     })
             }
@@ -194,11 +213,14 @@ impl NullState {
                     .iter()
                     .zip(group_indices.iter())
                     .zip(values.iter())
-                    .for_each(|((filter_value, &group_index), new_value)| {
+                    .for_each(|((filter_value, &packed_index), new_value)| {
                         if let Some(true) = filter_value {
                             if let Some(new_value) = new_value {
-                                seen_values.set_bit(group_index, true);
-                                value_fn(group_index, new_value)
+                                let packed_index = packed_index as u64;
+                                let block_id = O::get_block_id(packed_index);
+                                let block_offset = O::get_block_offset(packed_index);
+                                seen_values.set_bit(block_id, block_offset, true);
+                                value_fn(block_id, block_offset, new_value);
                             }
                         }
                     })
@@ -212,7 +234,55 @@ impl NullState {
     ///
     /// resets the internal state appropriately
     pub fn build(&mut self, emit_to: EmitTo) -> NullBuffer {
-        let nulls: BooleanBuffer = self.seen_values.finish();
+        self.seen_values.emit(emit_to)
+    }
+}
+
+/// Seen values
+pub trait SeenValues: Default + Debug + Send {
+    fn resize(&mut self, total_num_groups: usize, default_value: bool);
+
+    fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool);
+
+    fn emit(&mut self, emit_to: EmitTo) -> NullBuffer;
+
+    fn capacity(&self) -> usize;
+}
+
+#[derive(Debug)]
+pub struct FlatSeenValues {
+    /// Have we seen any non-filtered input values for `group_index`?
+    ///
+    /// If `seen_values[i]` is true, have seen at least one non null
+    /// value for group `i`
+    ///
+    /// If `seen_values[i]` is false, have not seen any values that
+    /// pass the filter yet for group `i`
+    builder: BooleanBufferBuilder,
+}
+
+impl Default for FlatSeenValues {
+    fn default() -> Self {
+        Self {
+            builder: BooleanBufferBuilder::new(0),
+        }
+    }
+}
+
+impl SeenValues for FlatSeenValues {
+    fn resize(&mut self, total_num_groups: usize, default_value: bool) {
+        if self.builder.len() < total_num_groups {
+            let new_groups = total_num_groups - self.builder.len();
+            self.builder.append_n(new_groups, default_value);
+        }
+    }
+
+    fn set_bit(&mut self, _block_id: u32, block_offset: u64, value: bool) {
+        self.builder.set_bit(block_offset as usize, value);
+    }
+
+    fn emit(&mut self, emit_to: EmitTo) -> NullBuffer {
+        let nulls = self.builder.finish();
 
         let nulls = match emit_to {
             EmitTo::All => nulls,
@@ -224,15 +294,122 @@ impl NullState {
                 let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
                 // reset the existing seen buffer
                 for seen in nulls.iter().skip(n) {
-                    self.seen_values.append(seen);
+                    self.builder.append(seen);
                 }
                 first_n_null
             }
-            EmitTo::NextBlock(_) => todo!(),
+            EmitTo::NextBlock(_) => {
+                unreachable!("not support block emit in flat seen values")
+            }
         };
         NullBuffer::new(nulls)
     }
+
+    fn capacity(&self) -> usize {
+        self.builder.capacity()
+    }
 }
+
+#[derive(Debug, Default)]
+pub struct BlockedSeenValues {
+    /// Have we seen any non-filtered input values for `group_index`?
+    ///
+    /// If `seen_values[i]` is true, have seen at least one non null
+    /// value for group `i`
+    ///
+    /// If `seen_values[i]` is false, have not seen any values that
+    /// pass the filter yet for group `i`
+    blocked_builders: VecDeque<BooleanBufferBuilder>,
+
+    block_size: usize,
+}
+
+impl SeenValues for BlockedSeenValues {
+    fn resize(&mut self, total_num_groups: usize, default_value: bool) {
+        let block_size = self.block_size;
+        let blocked_builder = &mut self.blocked_builders;
+
+        // For resize, we need to:
+        //   1. Ensure the blks are enough first
+        //   2. and then ensure slots in blks are enough
+        let (mut cur_blk_idx, exist_slots) = if blocked_builder.len() > 0 {
+            let cur_blk_idx = blocked_builder.len() - 1;
+            let exist_slots = (blocked_builder.len() - 1) * block_size
+                + blocked_builder.back().unwrap().len();
+
+            (cur_blk_idx, exist_slots)
+        } else {
+            (0, 0)
+        };
+
+        // No new groups, don't need to expand, just return
+        if exist_slots >= total_num_groups {
+            return;
+        }
+
+        // 1. Ensure blks are enough
+        let exist_blks = blocked_builder.len();
+        let new_blks = ((total_num_groups + block_size - 1) / block_size) - exist_blks;
+        if new_blks > 0 {
+            for _ in 0..new_blks {
+                blocked_builder.push_back(BooleanBufferBuilder::new(block_size));
+            }
+        }
+
+        // 2. Ensure slots are enough
+        let mut new_slots = total_num_groups - exist_slots;
+
+        // 2.1 Only fill current blk if it may be already enough
+        let cur_blk_rest_slots = block_size - blocked_builder[cur_blk_idx].len();
+        if cur_blk_rest_slots >= new_slots {
+            blocked_builder[cur_blk_idx].append_n(new_slots, default_value);
+            return;
+        }
+
+        // 2.2 Fill current blk to full
+        blocked_builder[cur_blk_idx].append_n(cur_blk_rest_slots, default_value);
+        new_slots -= cur_blk_rest_slots;
+
+        // 2.3 Fill complete blks
+        let complete_blks = new_slots / block_size;
+        for _ in 0..complete_blks {
+            cur_blk_idx += 1;
+            blocked_builder[cur_blk_idx].append_n(block_size, default_value);
+        }
+
+        // 2.4 Fill last blk if needed
+        let rest_slots = new_slots % block_size;
+        if rest_slots > 0 {
+            blocked_builder
+                .back_mut()
+                .unwrap()
+                .append_n(rest_slots, default_value);
+        }
+    }
+
+    fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool) {
+        self.blocked_builders[block_id as usize].set_bit(block_offset as usize, value);
+    }
+
+    fn emit(&mut self, emit_to: EmitTo) -> NullBuffer {
+        assert!(matches!(emit_to, EmitTo::NextBlock(_)));
+
+        let mut block = self.blocked_builders.pop_front().expect("");
+        let nulls = block.finish();
+
+        NullBuffer::new(nulls)
+    }
+
+    fn capacity(&self) -> usize {
+        self.blocked_builders
+            .iter()
+            .map(|builder| builder.capacity())
+            .sum()
+    }
+}
+
+pub type FlatNullState = NullState<FlatSeenValues, FlatGroupIndexOperations>;
+pub type BlockedNullState = NullState<BlockedSeenValues, BlockedGroupIndexOperations>;
 
 /// Invokes `value_fn(group_index, value)` for each non null, non
 /// filtered value of `value`,
@@ -798,15 +975,15 @@ mod test {
             total_num_groups: usize,
         ) {
             let mut accumulated_values = vec![];
-            let mut null_state = NullState::new();
+            let mut null_state = FlatNullState::new();
 
             null_state.accumulate(
                 group_indices,
                 values,
                 opt_filter,
                 total_num_groups,
-                |group_index, value| {
-                    accumulated_values.push((group_index, value));
+                |_, group_index, value| {
+                    accumulated_values.push((group_index as usize, value));
                 },
             );
 
@@ -842,7 +1019,7 @@ mod test {
 
             assert_eq!(accumulated_values, expected_values,
                        "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
-            let seen_values = null_state.seen_values.finish_cloned();
+            let seen_values = null_state.seen_values.builder.finish_cloned();
             mock.validate_seen_values(&seen_values);
 
             // Validate the final buffer (one value per group)
@@ -914,15 +1091,15 @@ mod test {
             total_num_groups: usize,
         ) {
             let mut accumulated_values = vec![];
-            let mut null_state = NullState::new();
+            let mut null_state = FlatNullState::new();
 
             null_state.accumulate_boolean(
                 group_indices,
                 values,
                 opt_filter,
                 total_num_groups,
-                |group_index, value| {
-                    accumulated_values.push((group_index, value));
+                |_, group_index, value| {
+                    accumulated_values.push((group_index as usize, value));
                 },
             );
 
@@ -959,7 +1136,7 @@ mod test {
             assert_eq!(accumulated_values, expected_values,
                        "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
 
-            let seen_values = null_state.seen_values.finish_cloned();
+            let seen_values = null_state.seen_values.builder.finish_cloned();
             mock.validate_seen_values(&seen_values);
 
             // Validate the final buffer (one value per group)

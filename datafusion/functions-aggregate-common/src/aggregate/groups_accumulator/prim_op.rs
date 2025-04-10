@@ -26,7 +26,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
-use super::accumulate::NullState;
+use super::accumulate::FlatNullState;
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -53,7 +53,7 @@ where
     starting_value: T::Native,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: FlatNullState,
 
     /// Function that computes the primitive result
     prim_fn: F,
@@ -68,7 +68,7 @@ where
         Self {
             values: vec![],
             data_type: data_type.clone(),
-            null_state: NullState::new(),
+            null_state: FlatNullState::new(),
             starting_value: T::default_value(),
             prim_fn,
         }
@@ -105,8 +105,8 @@ where
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
-                let value = &mut self.values[group_index];
+            |_, group_index, new_value| {
+                let value = &mut self.values[group_index as usize];
                 (self.prim_fn)(value, new_value);
             },
         );

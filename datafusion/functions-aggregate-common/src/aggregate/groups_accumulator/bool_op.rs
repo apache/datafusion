@@ -23,7 +23,7 @@ use arrow::buffer::BooleanBuffer;
 use datafusion_common::Result;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
-use super::accumulate::NullState;
+use super::accumulate::FlatNullState;
 
 /// An accumulator that implements a single operation over a
 /// [`BooleanArray`] where the accumulated state is also boolean (such
@@ -43,7 +43,7 @@ where
     values: BooleanBufferBuilder,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: FlatNullState,
 
     /// Function that computes the output
     bool_fn: F,
@@ -60,7 +60,7 @@ where
     pub fn new(bool_fn: F, identity: bool) -> Self {
         Self {
             values: BooleanBufferBuilder::new(0),
-            null_state: NullState::new(),
+            null_state: FlatNullState::new(),
             bool_fn,
             identity,
         }
@@ -94,7 +94,8 @@ where
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
+            |_, group_index, new_value| {
+                let group_index = group_index as usize;
                 let current_value = self.values.get_bit(group_index);
                 let value = (self.bool_fn)(current_value, new_value);
                 self.values.set_bit(group_index, value);

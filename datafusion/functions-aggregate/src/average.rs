@@ -40,7 +40,7 @@ use datafusion_expr::{
     ReversedUDAF, Signature,
 };
 
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::FlatNullState;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
 };
@@ -533,7 +533,7 @@ where
     sums: Vec<T::Native>,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: FlatNullState,
 
     /// Function that computes the final average (value / count)
     avg_fn: F,
@@ -555,7 +555,7 @@ where
             sum_data_type: sum_data_type.clone(),
             counts: vec![],
             sums: vec![],
-            null_state: NullState::new(),
+            null_state: FlatNullState::new(),
             avg_fn,
         }
     }
@@ -584,7 +584,8 @@ where
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
+            |_, group_index, new_value| {
+                let group_index = group_index as usize;
                 let sum = &mut self.sums[group_index];
                 *sum = sum.add_wrapping(new_value);
 
@@ -667,8 +668,8 @@ where
             partial_counts,
             opt_filter,
             total_num_groups,
-            |group_index, partial_count| {
-                self.counts[group_index] += partial_count;
+            |_, group_index, partial_count| {
+                self.counts[group_index as usize] += partial_count;
             },
         );
 
@@ -679,8 +680,8 @@ where
             partial_sums,
             opt_filter,
             total_num_groups,
-            |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
-                let sum = &mut self.sums[group_index];
+            |_, group_index, new_value: <T as ArrowPrimitiveType>::Native| {
+                let sum = &mut self.sums[group_index as usize];
                 *sum = sum.add_wrapping(new_value);
             },
         );
