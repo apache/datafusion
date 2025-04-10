@@ -117,11 +117,40 @@ impl DynamicFilterPhysicalExpr {
         }
     }
 
+    fn remap_children(
+        children: &[Arc<dyn PhysicalExpr>],
+        remapped_children: Option<&Vec<Arc<dyn PhysicalExpr>>>,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if let Some(remapped_children) = remapped_children {
+            // Remap the children to the new children
+            // of the expression.
+            expr.transform_up(|child| {
+                // Check if this is any of our original children
+                if let Some(pos) =
+                    children.iter().position(|c| c.as_ref() == child.as_ref())
+                {
+                    // If so, remap it to the current children
+                    // of the expression.
+                    let new_child = Arc::clone(&remapped_children[pos]);
+                    Ok(Transformed::yes(new_child))
+                } else {
+                    // Otherwise, just return the expression
+                    Ok(Transformed::no(child))
+                }
+            })
+            .data()
+        } else {
+            // If we don't have any remapped children, just return the expression
+            Ok(Arc::clone(&expr))
+        }
+    }
+
     /// Get the current expression.
     /// This will return the current expression with any children
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        let current = self
+        let inner = self
             .inner
             .read()
             .map_err(|_| {
@@ -130,30 +159,9 @@ impl DynamicFilterPhysicalExpr {
                 )
             })?
             .clone();
-        if let Some(remapped_children) = &self.remapped_children {
-            // Remap children to the current children
-            // of the expression.
-            current
-                .transform_up(|expr| {
-                    // Check if this is any of our original children
-                    if let Some(pos) = self
-                        .children
-                        .iter()
-                        .position(|c| c.as_ref() == expr.as_ref())
-                    {
-                        // If so, remap it to the current children
-                        // of the expression.
-                        let new_child = Arc::clone(&remapped_children[pos]);
-                        Ok(Transformed::yes(new_child))
-                    } else {
-                        // Otherwise, just return the expression
-                        Ok(Transformed::no(expr))
-                    }
-                })
-                .data()
-        } else {
-            Ok(current)
-        }
+        let inner =
+            Self::remap_children(&self.children, self.remapped_children.as_ref(), inner)?;
+        Ok(inner)
     }
 
     /// Update the current expression.
@@ -169,6 +177,12 @@ impl DynamicFilterPhysicalExpr {
                 "Failed to acquire write lock for inner".to_string(),
             )
         })?;
+        // Remap the children of the new expression to match the original children
+        let new_expr = Self::remap_children(
+            &self.children,
+            self.remapped_children.as_ref(),
+            new_expr,
+        )?;
         *current = new_expr;
         Ok(())
     }
@@ -312,12 +326,15 @@ mod test {
         // Take an initial snapshot
         let snap = dynamic_filter.snapshot().unwrap().unwrap();
         insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Gt, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
+        let snap_string = snap.to_string();
         // Remap the children to the file schema
         let dynamic_filter =
             reassign_predicate_columns(dynamic_filter, &file_schema, false).unwrap();
         // Take a snapshot after remapping, the children in the snapshot should be remapped to the file schema
-        let snap = dynamic_filter.snapshot().unwrap().unwrap();
-        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Gt, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
+        let new_snap = dynamic_filter.snapshot().unwrap().unwrap();
+        insta::assert_snapshot!(format!("{new_snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Gt, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
+        // The original snapshot should not have changed
+        assert_eq!(snap.to_string(), snap_string);
     }
 
     #[test]
