@@ -818,11 +818,13 @@ impl BinaryExpr {
 }
 
 enum ShortCircuitStrategy {
-    None,
     ReturnLeft,
     ReturnRight,
+    None,
 }
-
+/// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
+///
+/// Short-circuiting occurs under these circumstances:
 /// - For `AND`:
 ///    - if LHS is all false => short-circuit → return LHS
 ///    - if LHS is all true  => short-circuit → return RHS
@@ -958,6 +960,7 @@ pub fn similar_to(
 mod tests {
     use super::*;
     use crate::expressions::{col, lit, try_cast, Column, Literal};
+    use datafusion_expr::lit as expr_lit;
 
     use datafusion_common::plan_datafusion_err;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -4951,7 +4954,7 @@ mod tests {
         .unwrap();
 
         // op: AND left: all false
-        let left_expr = logical2physical(&logical_col("a").eq(lit(2)), &schema);
+        let left_expr = logical2physical(&logical_col("a").eq(expr_lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
             check_short_circuit(&left_value, &Operator::And),
@@ -4959,7 +4962,7 @@ mod tests {
         ));
 
         // op: AND left: not all false
-        let left_expr = logical2physical(&logical_col("a").eq(lit(3)), &schema);
+        let left_expr = logical2physical(&logical_col("a").eq(expr_lit(3)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
             check_short_circuit(&left_value, &Operator::And),
@@ -4967,7 +4970,7 @@ mod tests {
         ));
 
         // op: OR left: all true
-        let left_expr = logical2physical(&logical_col("a").gt(lit(0)), &schema);
+        let left_expr = logical2physical(&logical_col("a").gt(expr_lit(0)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
             check_short_circuit(&left_value, &Operator::Or),
@@ -4975,7 +4978,8 @@ mod tests {
         ));
 
         // op: OR left: not all true
-        let left_expr = logical2physical(&logical_col("a").gt(lit(2)), &schema);
+        let left_expr: Arc<dyn PhysicalExpr> =
+            logical2physical(&logical_col("a").gt(expr_lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
             check_short_circuit(&left_value, &Operator::Or),
