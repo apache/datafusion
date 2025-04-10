@@ -46,12 +46,12 @@ use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::stream::{StreamExt, TryStreamExt};
-use tokio::task::JoinSet;
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -281,7 +281,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// [`spawn`]: tokio::task::spawn
     /// [cancellation benchmark]: https://github.com/apache/datafusion/blob/main/benchmarks/README.md#cancellation
-    /// [`JoinSet`]: tokio::task::JoinSet
+    /// [`JoinSet`]: datafusion_common_runtime::JoinSet
     /// [`SpawnedTask`]: datafusion_common_runtime::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
     /// [`Poll::Pending`]: std::task::Poll::Pending

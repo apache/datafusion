@@ -33,7 +33,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::CardinalityEffect;
-use crate::joins::utils::{ColumnIndex, JoinFilter};
+use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -445,11 +445,6 @@ pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
         Ok(Some(new_projection))
     }
 }
-
-/// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
-/// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
 
 pub struct JoinData {
     pub projected_left_child: ProjectionExec,

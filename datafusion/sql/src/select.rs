@@ -16,9 +16,11 @@
 // under the License.
 
 use std::collections::HashSet;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
@@ -27,7 +29,7 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -44,8 +46,8 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
-    WildcardAdditionalOptions, WindowType,
+    visit_expressions_mut, Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr,
+    OrderBy, SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -54,7 +56,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn select_to_plan(
         &self,
         mut select: Select,
-        order_by: Vec<OrderByExpr>,
+        query_order_by: Option<OrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // Check for unsupported syntax first
@@ -91,6 +93,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             empty_from,
             planner_context,
         )?;
+
+        let order_by =
+            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
 
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs)?;
@@ -643,6 +648,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
+                let object_name = match object_name {
+                    SelectItemQualifiedWildcardKind::ObjectName(object_name) => {
+                        object_name
+                    }
+                    SelectItemQualifiedWildcardKind::Expr(_) => {
+                        return plan_err!(
+                            "Qualified wildcard with expression not supported"
+                        )
+                    }
+                };
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 let planned_options = self.plan_wildcard_options(
                     plan,
@@ -744,11 +759,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// # Arguments
     ///
     /// * `input`           - The input plan that will be aggregated. The grouping, aggregate, and
-    ///                       "having" expressions must all be resolvable from this plan.
+    ///   "having" expressions must all be resolvable from this plan.
     /// * `select_exprs`    - The projection expressions from the SELECT clause.
     /// * `having_expr_opt` - Optional HAVING clause.
     /// * `group_by_exprs`  - Grouping expressions from the GROUP BY clause. These can be column
-    ///                       references or more complex expressions.
+    ///   references or more complex expressions.
     /// * `aggr_exprs`      - Aggregate expressions, such as `SUM(a)` or `COUNT(1)`.
     ///
     /// # Return
@@ -757,9 +772,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///
     /// * `plan`                   - A [LogicalPlan::Aggregate] plan for the newly created aggregate.
     /// * `select_exprs_post_aggr` - The projection expressions rewritten to reference columns from
-    ///                              the aggregate
+    ///   the aggregate
     /// * `having_expr_post_aggr`  - The "having" expression rewritten to reference a column from
-    ///                              the aggregate
+    ///   the aggregate
     fn aggregate(
         &self,
         input: &LogicalPlan,
@@ -877,29 +892,42 @@ fn match_window_definitions(
     named_windows: &[NamedWindowDefinition],
 ) -> Result<()> {
     for proj in projection.iter_mut() {
-        if let SelectItem::ExprWithAlias {
-            expr: SQLExpr::Function(f),
-            alias: _,
-        }
-        | SelectItem::UnnamedExpr(SQLExpr::Function(f)) = proj
+        if let SelectItem::ExprWithAlias { expr, alias: _ }
+        | SelectItem::UnnamedExpr(expr) = proj
         {
-            for NamedWindowDefinition(window_ident, window_expr) in named_windows.iter() {
-                if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                    if ident.eq(window_ident) {
-                        f.over = Some(match window_expr {
-                            NamedWindowExpr::NamedWindow(ident) => {
-                                WindowType::NamedWindow(ident.clone())
+            let mut err = None;
+            visit_expressions_mut(expr, |expr| {
+                if let SQLExpr::Function(f) = expr {
+                    if let Some(WindowType::NamedWindow(_)) = &f.over {
+                        for NamedWindowDefinition(window_ident, window_expr) in
+                            named_windows
+                        {
+                            if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                                if ident.eq(window_ident) {
+                                    f.over = Some(match window_expr {
+                                        NamedWindowExpr::NamedWindow(ident) => {
+                                            WindowType::NamedWindow(ident.clone())
+                                        }
+                                        NamedWindowExpr::WindowSpec(spec) => {
+                                            WindowType::WindowSpec(spec.clone())
+                                        }
+                                    })
+                                }
                             }
-                            NamedWindowExpr::WindowSpec(spec) => {
-                                WindowType::WindowSpec(spec.clone())
-                            }
-                        })
+                        }
+                        // All named windows must be defined with a WindowSpec.
+                        if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                            err = Some(DataFusionError::Plan(format!(
+                                "The window {ident} is not defined!"
+                            )));
+                            return ControlFlow::Break(());
+                        }
                     }
                 }
-            }
-            // All named windows must be defined with a WindowSpec.
-            if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                return plan_err!("The window {ident} is not defined!");
+                ControlFlow::Continue(())
+            });
+            if let Some(err) = err {
+                return Err(err);
             }
         }
     }

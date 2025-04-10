@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-statement count 0
-create table t(a int) as values (1);
+statement ok
+create table t(a int, b string) as values (1, 'a'), (2, NULL), (NULL, 'c');
 
 # test between simplification
 query TT
@@ -30,5 +30,38 @@ physical_plan
 02)--FilterExec: a@0 = 3
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
-statement count 0
+# test regex exprs
+query TT
+explain select b from t where b ~ '.*'
+----
+logical_plan
+01)Filter: t.b IS NOT NULL
+02)--TableScan: t projection=[b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: b@0 IS NOT NULL
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select b from t where b !~ '.*'
+----
+logical_plan
+01)Filter: t.b = Utf8("")
+02)--TableScan: t projection=[b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: b@0 = 
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query T
+select b from t where b ~ '.*'
+----
+a
+c
+
+query T
+select b from t where b !~ '.*'
+----
+
+statement ok
 drop table t;

@@ -113,6 +113,7 @@ mod tests {
     };
     use arrow::datatypes::{Field, Schema, SchemaRef};
     use arrow::util::pretty::pretty_format_batches;
+    use insta::assert_snapshot;
     use std::sync::Arc;
 
     #[test]
@@ -180,15 +181,15 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        let expected = r#"
+
+        assert_snapshot!(actual, @r#"
 +----------+--------------+
 | trace_id | timestamp_ms |
 +----------+--------------+
 | 1        | 1            |
 +----------+--------------+
         "#
-        .trim();
-        assert_eq!(actual, expected);
+        );
 
         Ok(())
     }
@@ -205,15 +206,15 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        let expected = r#"
+
+        assert_snapshot!(actual, @r#"
 +----------+--------------+
 | trace_id | timestamp_ms |
 +----------+--------------+
 | 1        | 1            |
 +----------+--------------+
         "#
-        .trim();
-        assert_eq!(actual, expected);
+        );
 
         Ok(())
     }
@@ -230,15 +231,14 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 +----------+--------------+
 | trace_id | timestamp_ms |
 +----------+--------------+
 | 2        | 2            |
 +----------+--------------+
         "#
-        .trim();
-        assert_eq!(actual, expected);
+        );
 
         Ok(())
     }
@@ -255,15 +255,14 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 +----------+--------------+
 | trace_id | timestamp_ms |
 +----------+--------------+
 | 1        | 1            |
 +----------+--------------+
         "#
-        .trim();
-        assert_eq!(actual, expected);
+        );
 
         Ok(())
     }
@@ -280,15 +279,14 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 +----------+--------------+
 | trace_id | timestamp_ms |
 +----------+--------------+
 | 1        | 2            |
 +----------+--------------+
         "#
-        .trim();
-        assert_eq!(actual, expected);
+        );
 
         Ok(())
     }
@@ -305,15 +303,14 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 +----------+--------------+
 | trace_id | timestamp_ms |
 +----------+--------------+
 | 1        | 1            |
 +----------+--------------+
         "#
-        .trim();
-        assert_eq!(actual, expected);
+        );
 
         Ok(())
     }
@@ -330,15 +327,14 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 +----------+--------------+
 | trace_id | timestamp_ms |
 +----------+--------------+
 | 2        | 2            |
 +----------+--------------+
         "#
-        .trim();
-        assert_eq!(actual, expected);
+        );
 
         Ok(())
     }
@@ -355,15 +351,14 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 +----------+--------------+
 | trace_id | timestamp_ms |
 +----------+--------------+
 | 1        | 1            |
 +----------+--------------+
         "#
-        .trim();
-        assert_eq!(actual, expected);
+        );
 
         Ok(())
     }
@@ -380,15 +375,14 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 +----------+--------------+
 | trace_id | timestamp_ms |
 +----------+--------------+
 | 1        | 2            |
 +----------+--------------+
         "#
-        .trim();
-        assert_eq!(actual, expected);
+        );
 
         Ok(())
     }
@@ -406,7 +400,7 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        let expected = r#"
+        assert_snapshot!(actual, @r#"
 +----------+--------------+
 | trace_id | timestamp_ms |
 +----------+--------------+
@@ -414,8 +408,7 @@ mod tests {
 | 1        | 1            |
 +----------+--------------+
         "#
-        .trim();
-        assert_eq!(actual, expected);
+        );
 
         Ok(())
     }

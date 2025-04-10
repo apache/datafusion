@@ -30,7 +30,7 @@ use datafusion_expr::{
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
-    NullTreatment, ObjectName, OrderByExpr, WindowType,
+    NullTreatment, ObjectName, OrderByExpr, Spanned, WindowType,
 };
 
 /// Suggest a valid function based on an invalid input function name
@@ -216,13 +216,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // it shouldn't have ordering requirement as function argument
         // required ordering should be defined in OVER clause.
         let is_function_window = over.is_some();
-        let sql_parser_span = name.0[0].span;
+        let sql_parser_span = name.0[0].span();
         let name = if name.0.len() > 1 {
             // DF doesn't handle compound identifiers
             // (e.g. "foo.bar") for function names yet
             name.to_string()
         } else {
-            crate::utils::normalize_ident(name.0[0].clone())
+            match name.0[0].as_ident() {
+                Some(ident) => crate::utils::normalize_ident(ident.clone()),
+                None => {
+                    return plan_err!(
+                        "Expected an identifier in function name, but found {:?}",
+                        name.0[0]
+                    )
+                }
+            }
         };
 
         if name.eq("make_map") {

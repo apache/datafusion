@@ -33,7 +33,7 @@ use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
@@ -359,6 +359,12 @@ impl PhysicalExpr for BinaryExpr {
         use arrow::compute::kernels::numeric::*;
 
         let lhs = self.left.evaluate(batch)?;
+
+        // Optimize for short-circuiting `Operator::And` or `Operator::Or` operations and return early.
+        if check_short_circuit(&lhs, &self.op) {
+            return Ok(lhs);
+        }
+
         let rhs = self.right.evaluate(batch)?;
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
@@ -793,10 +799,69 @@ impl BinaryExpr {
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
             StringConcat => concat_elements(left, right),
-            AtArrow | ArrowAt => {
-                unreachable!("ArrowAt and AtArrow should be rewritten to function")
+            AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
+            | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
+            | IntegerDivide => {
+                not_impl_err!(
+                    "Binary operator '{:?}' is not supported in the physical expr",
+                    self.op
+                )
             }
         }
+    }
+}
+
+/// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
+///
+/// Short-circuiting occurs when evaluating the right-hand side (rhs) becomes unnecessary:
+/// - For `AND`: if ALL values in `lhs` are `false`, the expression must be `false` regardless of rhs.
+/// - For `OR`: if ALL values in `lhs` are `true`, the expression must be `true` regardless of rhs.
+///
+/// Returns `true` if short-circuiting is possible, `false` otherwise.
+///
+/// # Arguments
+/// * `arg` - The left-hand side (lhs) columnar value (array or scalar)
+/// * `op` - The logical operator (`AND` or `OR`)
+///
+/// # Implementation Notes
+/// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
+/// 2. Handles both scalar values and array values
+/// 3. For arrays, uses optimized `true_count()`/`false_count()` methods from arrow-rs.
+///    `bool_or`/`bool_and` maybe a better choice too，for detailed discussion,see:[link](https://github.com/apache/datafusion/pull/15462#discussion_r2020558418)
+fn check_short_circuit(arg: &ColumnarValue, op: &Operator) -> bool {
+    let data_type = arg.data_type();
+    match (data_type, op) {
+        (DataType::Boolean, Operator::And) => {
+            match arg {
+                ColumnarValue::Array(array) => {
+                    if let Ok(array) = as_boolean_array(&array) {
+                        return array.false_count() == array.len();
+                    }
+                }
+                ColumnarValue::Scalar(scalar) => {
+                    if let ScalarValue::Boolean(Some(value)) = scalar {
+                        return !value;
+                    }
+                }
+            }
+            false
+        }
+        (DataType::Boolean, Operator::Or) => {
+            match arg {
+                ColumnarValue::Array(array) => {
+                    if let Ok(array) = as_boolean_array(&array) {
+                        return array.true_count() == array.len();
+                    }
+                }
+                ColumnarValue::Scalar(scalar) => {
+                    if let ScalarValue::Boolean(Some(value)) = scalar {
+                        return *value;
+                    }
+                }
+            }
+            false
+        }
+        _ => false,
     }
 }
 
@@ -1020,9 +1085,9 @@ mod tests {
             DataType::UInt32,
             vec![1u32, 2u32],
             Operator::Plus,
-            Int32Array,
-            DataType::Int32,
-            [2i32, 4i32],
+            Int64Array,
+            DataType::Int64,
+            [2i64, 4i64],
         );
         test_coercion!(
             Int32Array,
@@ -4826,5 +4891,40 @@ mod tests {
         assert_eq!(sql_string, "a = 42");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_check_short_circuit() {
+        use crate::planner::logical2physical;
+        use datafusion_expr::col as logical_col;
+        use datafusion_expr::lit;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let a_array = Int32Array::from(vec![1, 3, 4, 5, 6]);
+        let b_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(a_array), Arc::new(b_array)],
+        )
+        .unwrap();
+
+        // op: AND left: all false
+        let left_expr = logical2physical(&logical_col("a").eq(lit(2)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(check_short_circuit(&left_value, &Operator::And));
+        // op: AND left: not all false
+        let left_expr = logical2physical(&logical_col("a").eq(lit(3)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(!check_short_circuit(&left_value, &Operator::And));
+        // op: OR left: all true
+        let left_expr = logical2physical(&logical_col("a").gt(lit(0)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(check_short_circuit(&left_value, &Operator::Or));
+        // op: OR left: not all true
+        let left_expr = logical2physical(&logical_col("a").gt(lit(2)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(!check_short_circuit(&left_value, &Operator::Or));
     }
 }

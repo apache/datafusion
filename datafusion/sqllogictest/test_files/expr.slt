@@ -1648,6 +1648,56 @@ true
 true
 true
 
+#### Other binary operators
+
+# ArrowAt for strings
+query error
+select 'foo' <@ 'bar'
+
+# AtArrow for strings
+query error
+select 'foo' @> 'bar'
+
+# AtAt for strings
+query error
+select 'foo' @@ 'bar'
+
+# Arrow for arrays
+query error
+select make_array(1,2,3) -> 2
+
+# LongArrow for arrays
+query error
+select make_array(1,2,3) ->> 2
+
+# HashArrow for structs
+query error
+select struct(1,2,3) #> 0
+
+# HashLongArrow for structs
+query error
+select struct(1,2,3) #>> 0
+
+# HashMinus for structs
+query error
+select struct(1,2,3) #- 0
+
+# AtQuestion for JSON/structs
+query error
+select struct(1,2,3) @? 'a.b.c'
+
+# Question for JSON/structs
+query error
+select struct(1,2,3) ? 'a.b.c'
+
+# QuestionPipe for JSON/structs
+query error
+select struct(1,2,3) ?| array['a','b','c']
+
+# QuestionAnd for JSON/structs
+query error
+select struct(1,2,3) ?& array['a','b','c']
+
 #### binary_mathematical_operator_with_null_lt
 
 # 1. Integer and NULL

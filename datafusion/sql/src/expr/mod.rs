@@ -22,7 +22,7 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, DataType as SQLDataType,
     DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry,
-    StructField, Subscript, TrimWhereField, Value,
+    StructField, Subscript, TrimWhereField, Value, ValueWithSpan,
 };
 
 use datafusion_common::{
@@ -211,7 +211,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         //       more context.
         match sql {
             SQLExpr::Value(value) => {
-                self.parse_value(value, planner_context.prepare_param_data_types())
+                self.parse_value(value.into(), planner_context.prepare_param_data_types())
             }
             SQLExpr::Extract { field, expr, .. } => {
                 let mut extract_args = vec![
@@ -253,12 +253,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             SQLExpr::Case {
                 operand,
                 conditions,
-                results,
                 else_result,
             } => self.sql_case_identifier_to_expr(
                 operand,
                 conditions,
-                results,
                 else_result,
                 schema,
                 planner_context,
@@ -292,7 +290,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast(Cast::new(
-                Box::new(lit(value)),
+                Box::new(lit(value.into_string().unwrap())),
                 self.convert_data_type(&data_type)?,
             ))),
 
@@ -544,9 +542,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                 )?),
                 match *time_zone {
-                    SQLExpr::Value(Value::SingleQuotedString(s)) => {
-                        DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into()))
-                    }
+                    SQLExpr::Value(ValueWithSpan {
+                        value: Value::SingleQuotedString(s),
+                        span: _,
+                    }) => DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
                     _ => {
                         return not_impl_err!(
                             "Unsupported ast node in sqltorel: {time_zone:?}"
@@ -1062,10 +1061,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         Subscript::Index { index } => {
                             // index can be a name, in which case it is a named field access
                             match index {
-                                SQLExpr::Value(
-                                    Value::SingleQuotedString(s)
-                                    | Value::DoubleQuotedString(s),
-                                ) => Ok(Some(GetFieldAccess::NamedStructField {
+                                SQLExpr::Value(ValueWithSpan {
+                                    value:
+                                        Value::SingleQuotedString(s)
+                                        | Value::DoubleQuotedString(s),
+                                    span: _,
+                                }) => Ok(Some(GetFieldAccess::NamedStructField {
                                     name: ScalarValue::from(s),
                                 })),
                                 SQLExpr::JsonAccess { .. } => {
@@ -1128,9 +1129,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                 }
                 AccessExpr::Dot(expr) => match expr {
-                    SQLExpr::Value(
-                        Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-                    ) => Ok(Some(GetFieldAccess::NamedStructField {
+                    SQLExpr::Value(ValueWithSpan {
+                        value: Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+                        span    : _
+                    }) => Ok(Some(GetFieldAccess::NamedStructField {
                         name: ScalarValue::from(s),
                     })),
                     _ => {
