@@ -622,8 +622,7 @@ fn remove_corresponding_sort_from_sub_plan(
         let fetch = plan.fetch();
         let plan = if let Some(ordering) = plan.output_ordering() {
             Arc::new(
-                SortPreservingMergeExec::new(ordering.to_vec(), plan)
-                    .with_fetch(fetch),
+                SortPreservingMergeExec::new(ordering.to_vec(), plan).with_fetch(fetch),
             ) as _
         } else {
             Arc::new(CoalescePartitionsExec::new(plan)) as _

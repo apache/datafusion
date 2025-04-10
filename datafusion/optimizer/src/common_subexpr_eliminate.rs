@@ -35,7 +35,7 @@ use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
 use datafusion_expr::tree_node::replace_sort_expressions;
-use datafusion_expr::{col, BinaryExpr, Case, Expr, Operator};
+use datafusion_expr::{col, BinaryExpr, Case, Expr, GroupingSet, Operator};
 
 const CSE_PREFIX: &str = "__common_expr";
 
@@ -225,6 +225,10 @@ impl CommonSubexprEliminate {
         aggregate: Aggregate,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        if matches!(aggregate.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
+            return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate.clone())));
+        }
+
         let Aggregate {
             group_expr,
             aggr_expr,
