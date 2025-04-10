@@ -830,85 +830,79 @@ impl BinaryExpr {
 ///    - if LHS is all true  => short-circuit → return LHS
 ///    - if LHS is all false => short-circuit → return RHS
 /// # Arguments
-/// * `arg` - The left-hand side (lhs) columnar value (array or scalar)
+/// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
 /// * `op` - The logical operator (`AND` or `OR`)
 /// * `rhs` - The right-hand side (rhs) columnar value (array or scalar)
 ///
 /// # Implementation Notes
-/// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
+/// 1. Only works with Boolean-typed arguments (other types automatically return `None`)
 /// 2. Handles both scalar values and array values
 /// 3. For arrays, uses optimized `true_count()`/`false_count()` methods from arrow-rs.
-///    `bool_or`/`bool_and` maybe a better choice too，for detailed discussion,see:[link](https://github.com/apache/datafusion/pull/15462#discussion_r2020558418)
 fn get_short_circuit_result(
     lhs: &ColumnarValue,
     op: &Operator,
     rhs: Option<ColumnarValue>, // we pass RHS only if needed
 ) -> Option<ColumnarValue> {
-    // Only apply short-circuiting for logical operators And/Or.
-    if !matches!(op, Operator::And | Operator::Or) {
+    // Early return if not a logical operator or not a Boolean data type
+    if !matches!(op, Operator::And | Operator::Or) || lhs.data_type() != DataType::Boolean
+    {
         return None;
     }
 
-    let data_type = lhs.data_type();
-    match (data_type, op) {
-        (DataType::Boolean, Operator::And) => {
-            match lhs {
-                ColumnarValue::Array(array) => {
-                    if let Ok(array) = as_boolean_array(&array) {
-                        // For AND, only short-circuit if ALL values are false and there are NO nulls
-                        if array.false_count() == array.len() && array.null_count() == 0 {
-                            return Some(lhs.clone()); // all false → result is false
-                        }
-                        // Only short-circuit to RHS if ALL values are true and there are NO nulls
-                        if array.true_count() == array.len() && array.null_count() == 0 {
-                            return rhs; // all true → just return RHS
-                        }
-                    }
+    match lhs {
+        ColumnarValue::Array(array) => {
+            if let Ok(bool_array) = as_boolean_array(array) {
+                // Skip short-circuit if there are nulls
+                let null_count = bool_array.null_count();
+                if null_count > 0 {
+                    return None;
                 }
-                ColumnarValue::Scalar(scalar) => {
-                    if let ScalarValue::Boolean(Some(value)) = scalar {
-                        if !value {
-                            return Some(lhs.clone()); // false → result is false
+
+                let len = bool_array.len();
+                match op {
+                    Operator::And => {
+                        // For AND: check if all values are false
+                        let false_count = bool_array.false_count();
+                        if false_count == len {
+                            return Some(lhs.clone());
                         }
-                        if *value && rhs.is_some() {
-                            return rhs; // true → just return RHS
+
+                        // For AND: if all values are true and RHS exists,
+                        // we can short-circuit directly to RHS
+                        if false_count == 0 && rhs.is_some() {
+                            return rhs;
                         }
                     }
+                    Operator::Or => {
+                        // For OR: check if all values are true
+                        let true_count = bool_array.true_count();
+                        if true_count == len {
+                            return Some(lhs.clone());
+                        }
+
+                        // For OR: if all values are false and RHS exists,
+                        // we can short-circuit directly to RHS
+                        if true_count == 0 && rhs.is_some() {
+                            return rhs;
+                        }
+                    }
+                    _ => unreachable!(),
                 }
             }
         }
-        (DataType::Boolean, Operator::Or) => {
-            match lhs {
-                ColumnarValue::Array(array) => {
-                    if let Ok(array) = as_boolean_array(&array) {
-                        // For OR, only short-circuit if ALL values are true and there are NO nulls
-                        if array.true_count() == array.len() && array.null_count() == 0 {
-                            return Some(lhs.clone()); // all true → result is true
-                        }
-
-                        // Only short-circuit to RHS if ALL values are false and there are NO nulls
-                        if array.false_count() == array.len()
-                            && array.null_count() == 0
-                            && rhs.is_some()
-                        {
-                            return rhs; // all false → just return RHS
-                        }
-                    }
-                }
-                ColumnarValue::Scalar(scalar) => {
-                    if let ScalarValue::Boolean(Some(value)) = scalar {
-                        if *value {
-                            return Some(lhs.clone()); // true → result is true
-                        }
-                        if !value && rhs.is_some() {
-                            return rhs; // false → just return RHS
-                        }
-                    }
-                }
+        ColumnarValue::Scalar(ScalarValue::Boolean(Some(value))) => {
+            // Handle scalar values with a more direct pattern match
+            match (op, *value) {
+                (Operator::And, false) => return Some(lhs.clone()),
+                (Operator::And, true) if rhs.is_some() => return rhs,
+                (Operator::Or, true) => return Some(lhs.clone()),
+                (Operator::Or, false) if rhs.is_some() => return rhs,
+                _ => {}
             }
         }
         _ => {}
     }
+
     None
 }
 
