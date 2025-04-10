@@ -54,7 +54,6 @@ use datafusion_physical_expr::{
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_common::stats::Precision;
-use datafusion_datasource::add_row_stats;
 use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -1230,7 +1229,7 @@ async fn get_files_with_limit(
                     file_stats.num_rows
                 } else {
                     // For subsequent files, accumulate the counts
-                    add_row_stats(num_rows, file_stats.num_rows)
+                    num_rows.add(&file_stats.num_rows)
                 };
             }
         }
