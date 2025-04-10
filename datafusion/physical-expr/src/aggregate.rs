@@ -18,10 +18,10 @@
 pub(crate) mod groups_accumulator {
     #[allow(unused_imports)]
     pub(crate) mod accumulate {
-        pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+        pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::FlatNullState;
     }
     pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
-        accumulate::NullState, GroupsAccumulatorAdapter,
+        accumulate::FlatNullState, GroupsAccumulatorAdapter,
     };
 }
 pub(crate) mod stats {

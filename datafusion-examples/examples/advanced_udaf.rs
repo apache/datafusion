@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{Field, Schema};
-use datafusion::physical_expr::NullState;
+use datafusion::physical_expr::FlatNullState;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use std::{any::Any, sync::Arc};
 
@@ -217,7 +217,7 @@ struct GeometricMeanGroupsAccumulator {
     prods: Vec<f64>,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: FlatNullState,
 }
 
 impl GeometricMeanGroupsAccumulator {
@@ -227,7 +227,7 @@ impl GeometricMeanGroupsAccumulator {
             return_data_type: DataType::Float64,
             counts: vec![],
             prods: vec![],
-            null_state: NullState::new(),
+            null_state: FlatNullState::new(),
         }
     }
 }

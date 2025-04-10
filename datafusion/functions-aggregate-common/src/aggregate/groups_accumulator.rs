@@ -23,6 +23,7 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
+use std::fmt::Debug;
 use std::mem::{size_of, size_of_val};
 
 use arrow::array::new_empty_array;
@@ -512,7 +513,7 @@ pub(crate) fn slice_and_maybe_filter(
 ///   - High 32 bits represent `block_id`
 ///   - Low 32 bits represent `block_offset`
 ///
-pub trait GroupIndexOperations {
+pub trait GroupIndexOperations: Debug {
     fn pack_index(block_id: u32, block_offset: u64) -> u64;
 
     fn get_block_id(packed_index: u64) -> u32;
@@ -520,6 +521,7 @@ pub trait GroupIndexOperations {
     fn get_block_offset(packed_index: u64) -> u64;
 }
 
+#[derive(Debug)]
 pub struct BlockedGroupIndexOperations;
 
 impl GroupIndexOperations for BlockedGroupIndexOperations {
@@ -536,6 +538,7 @@ impl GroupIndexOperations for BlockedGroupIndexOperations {
     }
 }
 
+#[derive(Debug)]
 pub struct FlatGroupIndexOperations;
 
 impl GroupIndexOperations for FlatGroupIndexOperations {
