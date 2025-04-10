@@ -22,12 +22,12 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+use datafusion_functions::unicode::substr_index;
 use rand::distributions::{Alphanumeric, Uniform};
 use rand::prelude::Distribution;
 use rand::Rng;
-
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
-use datafusion_functions::unicode::substr_index;
 
 struct Filter<Dist, Test> {
     dist: Dist,
@@ -89,8 +89,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         let strings = ColumnarValue::Array(Arc::new(strings) as ArrayRef);
         let delimiters = ColumnarValue::Array(Arc::new(delimiters) as ArrayRef);
         let counts = ColumnarValue::Array(Arc::new(counts) as ArrayRef);
-
         let args = vec![strings, delimiters, counts];
+        let config_options = ConfigOptions::default_singleton_arc();
+
         b.iter(|| {
             black_box(
                 substr_index()
@@ -98,6 +99,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         number_rows: batch_len,
                         return_type: &DataType::Utf8,
+                        config_options,
                     })
                     .expect("substr_index should work on valid values"),
             )

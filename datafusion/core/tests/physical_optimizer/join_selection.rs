@@ -228,7 +228,7 @@ async fn test_join_with_swap() {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize(join, ConfigOptions::default_singleton())
         .unwrap();
 
     let swapping_projection = optimized_join
@@ -282,7 +282,7 @@ async fn test_left_join_no_swap() {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize(join, ConfigOptions::default_singleton())
         .unwrap();
 
     let swapped_join = optimized_join
@@ -324,7 +324,7 @@ async fn test_join_with_swap_semi() {
         let original_schema = join.schema();
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize(Arc::new(join), ConfigOptions::default_singleton())
             .unwrap();
 
         let swapped_join = optimized_join
@@ -354,7 +354,7 @@ macro_rules! assert_optimized {
 
         let plan = Arc::new($PLAN);
         let optimized = JoinSelection::new()
-            .optimize(plan.clone(), &ConfigOptions::new())
+            .optimize(plan.clone(), ConfigOptions::default_singleton())
             .unwrap();
 
         let plan_string = displayable(optimized.as_ref()).indent(true).to_string();
@@ -446,7 +446,7 @@ async fn test_join_no_swap() {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize(join, ConfigOptions::default_singleton())
         .unwrap();
 
     let swapped_join = optimized_join
@@ -487,7 +487,7 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize(join, ConfigOptions::default_singleton())
         .unwrap();
 
     let swapping_projection = optimized_join
@@ -558,7 +558,7 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     let optimized_join = JoinSelection::new()
         .optimize(
             Arc::<NestedLoopJoinExec>::clone(&join),
-            &ConfigOptions::new(),
+            ConfigOptions::default_singleton(),
         )
         .unwrap();
 
@@ -809,7 +809,7 @@ fn check_join_partition_mode(
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize(join, ConfigOptions::default_singleton())
         .unwrap();
 
     if !is_swapped {
@@ -1445,7 +1445,8 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         false,
     )?) as _;
 
-    let optimized_join_plan = hash_join_swap_subrule(join, &ConfigOptions::new())?;
+    let optimized_join_plan =
+        hash_join_swap_subrule(join, ConfigOptions::default_singleton())?;
 
     // If swap did happen
     let projection_added = optimized_join_plan.as_any().is::<ProjectionExec>();

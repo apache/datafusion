@@ -89,7 +89,7 @@ use crate::{
 /// # // Note: crate mock ParquetSource, as ParquetSource is not in the datasource crate
 /// # struct ParquetSource {
 /// #    projected_statistics: Option<Statistics>
-/// # };
+/// # }
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Arc<dyn FileOpener> { unimplemented!() }
 /// #  fn as_any(&self) -> &dyn Any { self  }
@@ -1481,6 +1481,7 @@ mod tests {
         compute::SortOptions,
     };
 
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_batches_eq, DFSchema};
     use datafusion_expr::{execution_props::ExecutionProps, SortExpr};
@@ -1491,6 +1492,7 @@ mod tests {
         e: &SortExpr,
         input_dfschema: &DFSchema,
         execution_props: &ExecutionProps,
+        config_options: &Arc<ConfigOptions>,
     ) -> Result<PhysicalSortExpr> {
         let SortExpr {
             expr,
@@ -1498,7 +1500,12 @@ mod tests {
             nulls_first,
         } = e;
         Ok(PhysicalSortExpr {
-            expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+            expr: create_physical_expr(
+                expr,
+                input_dfschema,
+                execution_props,
+                config_options,
+            )?,
             options: SortOptions {
                 descending: !asc,
                 nulls_first: *nulls_first,
@@ -2029,6 +2036,7 @@ mod tests {
                             &expr,
                             &DFSchema::try_from(table_schema.as_ref().clone())?,
                             &ExecutionProps::default(),
+                            ConfigOptions::default_singleton_arc(),
                         )
                     })
                     .collect::<Result<Vec<_>>>()?,
@@ -2343,12 +2351,16 @@ mod tests {
 
         // Setup sort expression
         let exec_props = ExecutionProps::new();
+        let config_options = ConfigOptions::default_singleton_arc();
         let df_schema = DFSchema::try_from_qualified_schema("test", schema.as_ref())?;
         let sort_expr = vec![col("value").sort(true, false)];
 
         let physical_sort_exprs: Vec<_> = sort_expr
             .iter()
-            .map(|expr| create_physical_sort_expr(expr, &df_schema, &exec_props).unwrap())
+            .map(|expr| {
+                create_physical_sort_expr(expr, &df_schema, &exec_props, config_options)
+                    .unwrap()
+            })
             .collect();
 
         let sort_ordering = LexOrdering::from(physical_sort_exprs);

@@ -20,6 +20,7 @@ extern crate criterion;
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
 use arrow::util::bench_util::create_primitive_array;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
 use std::sync::Arc;
@@ -30,6 +31,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     let i32_array = Arc::new(create_primitive_array::<Int32Type>(size, 0.2));
     let batch_len = i32_array.len();
     let i32_args = vec![ColumnarValue::Array(i32_array)];
+    let config_options = ConfigOptions::default_singleton_arc();
+
     c.bench_function(&format!("to_hex i32 array: {}", size), |b| {
         b.iter(|| {
             let args_cloned = i32_args.clone();
@@ -38,6 +41,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args_cloned,
                     number_rows: batch_len,
                     return_type: &DataType::Utf8,
+                    config_options,
                 })
                 .unwrap(),
             )
@@ -54,6 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args_cloned,
                     number_rows: batch_len,
                     return_type: &DataType::Utf8,
+                    config_options,
                 })
                 .unwrap(),
             )

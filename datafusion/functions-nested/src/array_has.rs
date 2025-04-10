@@ -595,6 +595,7 @@ fn general_array_has_all_and_any_kernel(
 #[cfg(test)]
 mod tests {
     use arrow::array::create_array;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::utils::SingleRowListArrayBuilder;
     use datafusion_expr::{
         col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult, Expr,
@@ -615,7 +616,10 @@ mod tests {
         let needle = col("c");
 
         let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::new(
+            &props,
+            ConfigOptions::default_singleton_arc(),
+        );
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -639,7 +643,10 @@ mod tests {
         let needle = col("c");
 
         let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::new(
+            &props,
+            ConfigOptions::default_singleton_arc(),
+        );
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -663,7 +670,10 @@ mod tests {
         let needle = col("c2");
 
         let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::new(
+            &props,
+            ConfigOptions::default_singleton_arc(),
+        );
 
         let Ok(ExprSimplifyResult::Original(args)) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)

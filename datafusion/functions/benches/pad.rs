@@ -21,6 +21,7 @@ use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::{lpad, rpad};
 use rand::distributions::{Distribution, Uniform};
@@ -96,6 +97,8 @@ fn create_args<O: OffsetSizeTrait>(
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let config_options = ConfigOptions::default_singleton_arc();
+
     for size in [1024, 2048] {
         let mut group = c.benchmark_group("lpad function");
 
@@ -108,6 +111,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             number_rows: size,
                             return_type: &DataType::Utf8,
+                            config_options,
                         })
                         .unwrap(),
                 )
@@ -123,6 +127,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             number_rows: size,
                             return_type: &DataType::LargeUtf8,
+                            config_options,
                         })
                         .unwrap(),
                 )
@@ -138,6 +143,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             number_rows: size,
                             return_type: &DataType::Utf8,
+                            config_options,
                         })
                         .unwrap(),
                 )
@@ -157,6 +163,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             number_rows: size,
                             return_type: &DataType::Utf8,
+                            config_options,
                         })
                         .unwrap(),
                 )
@@ -172,6 +179,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             number_rows: size,
                             return_type: &DataType::LargeUtf8,
+                            config_options,
                         })
                         .unwrap(),
                 )
@@ -188,6 +196,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             number_rows: size,
                             return_type: &DataType::Utf8,
+                            config_options,
                         })
                         .unwrap(),
                 )

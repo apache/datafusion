@@ -158,6 +158,7 @@ pub mod test {
                 scalar_arguments: &scalar_arguments_refs,
                 nullables: &nullables
             });
+            let config_options = datafusion_common::config::ConfigOptions::default_singleton();
 
             match expected {
                 Ok(expected) => {
@@ -165,7 +166,7 @@ pub mod test {
                     let (return_type, _nullable) = return_info.unwrap().into_parts();
                     assert_eq!(return_type, $EXPECTED_DATA_TYPE);
 
-                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type});
+                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type, config_options});
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
                     let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
@@ -189,7 +190,7 @@ pub mod test {
                         let (return_type, _nullable) = return_info.unwrap().into_parts();
 
                         // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
-                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type}) {
+                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type, config_options}) {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => {
                                 assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));

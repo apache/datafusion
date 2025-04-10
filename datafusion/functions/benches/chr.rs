@@ -24,6 +24,7 @@ use datafusion_functions::string::chr;
 use rand::Rng;
 
 use arrow::datatypes::DataType;
+use datafusion_common::config::ConfigOptions;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -44,6 +45,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     };
     let input = Arc::new(input);
     let args = vec![ColumnarValue::Array(input)];
+    let config_options = ConfigOptions::default_singleton_arc();
+
     c.bench_function("chr", |b| {
         b.iter(|| {
             black_box(
@@ -52,6 +55,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         number_rows: size,
                         return_type: &DataType::Utf8,
+                        config_options,
                     })
                     .unwrap(),
             )

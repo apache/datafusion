@@ -19,6 +19,7 @@ use crate::fuzz_cases::equivalence::utils::{
     create_random_schema, generate_table_for_eq_properties, is_table_same_after_sort,
     TestScalarUDF,
 };
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::expressions::{col, BinaryExpr};
@@ -47,6 +48,7 @@ fn test_find_longest_permutation_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
+            &Arc::clone(ConfigOptions::default_singleton_arc()),
         )?) as PhysicalExprRef;
 
         let a_plus_b = Arc::new(BinaryExpr::new(

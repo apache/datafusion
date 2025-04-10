@@ -20,6 +20,7 @@ extern crate criterion;
 use arrow::datatypes::DataType;
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::core::nullif;
@@ -27,6 +28,8 @@ use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let nullif = nullif();
+    let config_options = ConfigOptions::default_singleton_arc();
+
     for size in [1024, 4096, 8192] {
         let array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, 32));
         let args = vec![
@@ -41,6 +44,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             number_rows: size,
                             return_type: &DataType::Utf8,
+                            config_options,
                         })
                         .unwrap(),
                 )

@@ -23,6 +23,7 @@ use criterion::{
     black_box, criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup,
     Criterion, SamplingMode,
 };
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string;
@@ -136,6 +137,8 @@ fn run_with_string_type<M: Measurement>(
     string_type: StringArrayType,
 ) {
     let args = create_args(size, characters, trimmed, remaining_len, string_type);
+    let config_options = ConfigOptions::default_singleton();
+
     group.bench_function(
         format!(
             "{string_type} [size={size}, len_before={len}, len_after={remaining_len}]",
@@ -147,6 +150,7 @@ fn run_with_string_type<M: Measurement>(
                     args: args_cloned,
                     number_rows: size,
                     return_type: &DataType::Utf8,
+                    config_options,
                 }))
             })
         },

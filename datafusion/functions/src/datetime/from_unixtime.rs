@@ -163,6 +163,7 @@ mod test {
     use crate::datetime::from_unixtime::FromUnixtimeFunc;
     use arrow::datatypes::DataType;
     use arrow::datatypes::TimeUnit::Second;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Int64;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -174,6 +175,7 @@ mod test {
             args: vec![ColumnarValue::Scalar(Int64(Some(1729900800)))],
             number_rows: 1,
             return_type: &DataType::Timestamp(Second, None),
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 
@@ -199,6 +201,7 @@ mod test {
                 Second,
                 Some(Arc::from("America/New_York")),
             ),
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 

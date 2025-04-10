@@ -71,8 +71,10 @@ async fn main() {
 
     // deserialize proto back to execution plan
     let runtime = ctx.runtime_env();
+    let state = ctx.state();
+    let config_options = state.config_options();
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx, runtime.deref(), &composed_codec)
+        .try_into_physical_plan(&ctx, config_options, runtime.deref(), &composed_codec)
         .expect("from proto");
 
     // assert that the original and deserialized execution plans are equal

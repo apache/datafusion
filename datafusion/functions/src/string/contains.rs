@@ -152,6 +152,7 @@ mod test {
     use super::ContainsFunc;
     use arrow::array::{BooleanArray, StringArray};
     use arrow::datatypes::DataType;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
@@ -169,6 +170,7 @@ mod test {
             args: vec![array, scalar],
             number_rows: 2,
             return_type: &DataType::Boolean,
+            config_options: ConfigOptions::default_singleton(),
         };
 
         let actual = udf.invoke_with_args(args).unwrap();

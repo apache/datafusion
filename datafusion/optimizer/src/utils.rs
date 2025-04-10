@@ -23,6 +23,7 @@ use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use arrow::array::{new_null_array, Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
@@ -74,6 +75,7 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
 pub fn is_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<bool> {
     if matches!(predicate, Expr::Column(_)) {
         return Ok(true);
@@ -82,7 +84,11 @@ pub fn is_restrict_null_predicate<'a>(
     // If result is single `true`, return false;
     // If result is single `NULL` or `false`, return true;
     Ok(
-        match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
+        match evaluate_expr_with_null_column(
+            predicate,
+            join_cols_of_predicate,
+            config_options,
+        )? {
             ColumnarValue::Array(array) => {
                 if array.len() == 1 {
                     let boolean_array = as_boolean_array(&array)?;
@@ -106,13 +112,14 @@ pub fn is_restrict_null_predicate<'a>(
 pub fn evaluates_to_null<'a>(
     predicate: Expr,
     null_columns: impl IntoIterator<Item = &'a Column>,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<bool> {
     if matches!(predicate, Expr::Column(_)) {
         return Ok(true);
     }
 
     Ok(
-        match evaluate_expr_with_null_column(predicate, null_columns)? {
+        match evaluate_expr_with_null_column(predicate, null_columns, config_options)? {
             ColumnarValue::Array(_) => false,
             ColumnarValue::Scalar(scalar) => scalar.is_null(),
         },
@@ -122,6 +129,7 @@ pub fn evaluates_to_null<'a>(
 fn evaluate_expr_with_null_column<'a>(
     predicate: Expr,
     null_columns: impl IntoIterator<Item = &'a Column>,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<ColumnarValue> {
     static DUMMY_COL_NAME: &str = "?";
     let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
@@ -138,8 +146,13 @@ fn evaluate_expr_with_null_column<'a>(
 
     let replaced_predicate = replace_col(predicate, &join_cols_to_replace)?;
     let coerced_predicate = coerce(replaced_predicate, &input_schema)?;
-    create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?
-        .evaluate(&input_batch)
+    create_physical_expr(
+        &coerced_predicate,
+        &input_schema,
+        &execution_props,
+        config_options,
+    )?
+    .evaluate(&input_batch)
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
@@ -239,8 +252,12 @@ mod tests {
         let column_a = Column::from_name("a");
         for (predicate, expected) in test_cases {
             let join_cols_of_predicate = std::iter::once(&column_a);
-            let actual =
-                is_restrict_null_predicate(predicate.clone(), join_cols_of_predicate)?;
+            let config_options = ConfigOptions::default_singleton_arc();
+            let actual = is_restrict_null_predicate(
+                predicate.clone(),
+                join_cols_of_predicate,
+                config_options,
+            )?;
             assert_eq!(actual, expected, "{}", predicate);
         }
 

@@ -376,6 +376,7 @@ mod tests {
     use crate::utils::test::test_function;
     use arrow::array::{Array, LargeStringArray, StringViewArray};
     use arrow::array::{ArrayRef, StringArray};
+    use datafusion_common::config::ConfigOptions;
     use DataType::*;
 
     #[test]
@@ -473,6 +474,7 @@ mod tests {
             args: vec![c0, c1, c2, c3, c4],
             number_rows: 3,
             return_type: &Utf8,
+            config_options: ConfigOptions::default_singleton(),
         };
 
         let result = ConcatFunc::new().invoke_with_args(args)?;

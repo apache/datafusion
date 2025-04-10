@@ -19,6 +19,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string::concat;
@@ -35,6 +36,8 @@ fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let config_options = ConfigOptions::default_singleton_arc();
+
     for size in [1024, 4096, 8192] {
         let args = create_args(size, 32);
         let mut group = c.benchmark_group("concat function");
@@ -47,6 +50,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args_cloned,
                             number_rows: size,
                             return_type: &DataType::Utf8,
+                            config_options,
                         })
                         .unwrap(),
                 )

@@ -22,6 +22,7 @@ use arrow::{
     datatypes::DataType,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::gcd;
@@ -41,6 +42,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let array_a = ColumnarValue::Array(generate_i64_array(n_rows));
     let array_b = ColumnarValue::Array(generate_i64_array(n_rows));
     let udf = gcd();
+    let config_options = ConfigOptions::default_singleton_arc();
 
     c.bench_function("gcd both array", |b| {
         b.iter(|| {
@@ -49,6 +51,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: vec![array_a.clone(), array_b.clone()],
                     number_rows: 0,
                     return_type: &DataType::Int64,
+                    config_options,
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -65,6 +68,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: vec![array_a.clone(), scalar_b.clone()],
                     number_rows: 0,
                     return_type: &DataType::Int64,
+                    config_options,
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -81,6 +85,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: vec![scalar_a.clone(), scalar_b.clone()],
                     number_rows: 0,
                     return_type: &DataType::Int64,
+                    config_options,
                 })
                 .expect("date_bin should work on valid values"),
             )

@@ -188,6 +188,7 @@ fn is_log(func: &ScalarUDF) -> bool {
 mod tests {
     use arrow::array::Float64Array;
     use datafusion_common::cast::{as_float64_array, as_int64_array};
+    use datafusion_common::config::ConfigOptions;
 
     use super::*;
 
@@ -204,6 +205,7 @@ mod tests {
             ],
             number_rows: 4,
             return_type: &DataType::Float64,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)
@@ -234,6 +236,7 @@ mod tests {
             ],
             number_rows: 4,
             return_type: &DataType::Int64,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)

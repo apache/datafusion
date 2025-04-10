@@ -27,6 +27,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion_common::alias::AliasGenerator;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -100,7 +101,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 let mut cur_input = filter.input.as_ref().clone();
                 for (subquery, alias) in subqueries {
                     if let Some((optimized_subquery, expr_check_map)) =
-                        build_join(&subquery, &cur_input, &alias)?
+                        build_join(&subquery, &cur_input, &alias, config.options())?
                     {
                         if !expr_check_map.is_empty() {
                             rewrite_expr = rewrite_expr
@@ -154,7 +155,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueries {
                     if let Some((optimized_subquery, expr_check_map)) =
-                        build_join(&subquery, &cur_input, &alias)?
+                        build_join(&subquery, &cur_input, &alias, config.options())?
                     {
                         cur_input = optimized_subquery;
                         if !expr_check_map.is_empty() {
@@ -296,9 +297,11 @@ fn build_join(
     subquery: &Subquery,
     filter_input: &LogicalPlan,
     subquery_alias: &str,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<Option<(LogicalPlan, HashMap<String, Expr>)>> {
     let subquery_plan = subquery.subquery.as_ref();
-    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+    let mut pull_up =
+        PullUpCorrelatedExpr::new(config_options).with_need_handle_count_bug(true);
     let new_plan = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);
@@ -349,7 +352,7 @@ fn build_join(
     let mut computation_project_expr = HashMap::new();
     if let Some(expr_map) = collected_count_expr_map {
         for (name, result) in expr_map {
-            if evaluates_to_null(result.clone(), result.column_refs())? {
+            if evaluates_to_null(result.clone(), result.column_refs(), config_options)? {
                 // If expr always returns null when column is null, skip processing
                 continue;
             }

@@ -257,6 +257,7 @@ mod tests {
     use arrow::array::{Float32Array, Float64Array, Int64Array};
     use arrow::compute::SortOptions;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
@@ -273,6 +274,7 @@ mod tests {
             ],
             number_rows: 4,
             return_type: &DataType::Float64,
+            config_options: ConfigOptions::default_singleton(),
         };
         let _ = LogFunc::new().invoke_with_args(args);
     }
@@ -285,6 +287,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Float64,
+            config_options: ConfigOptions::default_singleton(),
         };
 
         let result = LogFunc::new().invoke_with_args(args);
@@ -299,6 +302,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Float32,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -326,6 +330,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Float64,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -354,6 +359,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Float32,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -382,6 +388,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Float64,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -411,6 +418,7 @@ mod tests {
             ],
             number_rows: 4,
             return_type: &DataType::Float64,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -443,6 +451,7 @@ mod tests {
             ],
             number_rows: 4,
             return_type: &DataType::Float32,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -478,6 +487,7 @@ mod tests {
             ],
             number_rows: 4,
             return_type: &DataType::Float64,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -513,6 +523,7 @@ mod tests {
             ],
             number_rows: 4,
             return_type: &DataType::Float32,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -538,9 +549,10 @@ mod tests {
     // Test log() simplification errors
     fn test_log_simplify_errors() {
         let props = ExecutionProps::new();
+        let config_options = ConfigOptions::default_singleton_arc();
         let schema =
             Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new()).unwrap());
-        let context = SimplifyContext::new(&props).with_schema(schema);
+        let context = SimplifyContext::new(&props, config_options).with_schema(schema);
         // Expect 0 args to error
         let _ = LogFunc::new().simplify(vec![], &context).unwrap_err();
         // Expect 3 args to error
@@ -553,9 +565,10 @@ mod tests {
     // Test that non-simplifiable log() expressions are unchanged after simplification
     fn test_log_simplify_original() {
         let props = ExecutionProps::new();
+        let config_options = ConfigOptions::default_singleton_arc();
         let schema =
             Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new()).unwrap());
-        let context = SimplifyContext::new(&props).with_schema(schema);
+        let context = SimplifyContext::new(&props, config_options).with_schema(schema);
         // One argument with no simplifications
         let result = LogFunc::new().simplify(vec![lit(2)], &context).unwrap();
         let ExprSimplifyResult::Original(args) = result else {
