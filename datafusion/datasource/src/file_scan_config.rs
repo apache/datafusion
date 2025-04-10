@@ -655,7 +655,7 @@ impl FileScanConfig {
         }
     }
 
-    fn projected_stats(&self) -> Statistics {
+    pub fn projected_stats(&self) -> Statistics {
         let statistics = self.file_source.statistics().unwrap();
 
         let table_cols_stats = self
@@ -679,7 +679,7 @@ impl FileScanConfig {
         }
     }
 
-    fn projected_schema(&self) -> Arc<Schema> {
+    pub fn projected_schema(&self) -> Arc<Schema> {
         let table_fields: Vec<_> = self
             .projection_indices()
             .into_iter()
@@ -699,7 +699,7 @@ impl FileScanConfig {
         ))
     }
 
-    fn projected_constraints(&self) -> Constraints {
+    pub fn projected_constraints(&self) -> Constraints {
         let indexes = self.projection_indices();
 
         self.constraints
