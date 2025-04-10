@@ -58,7 +58,7 @@ base64 = "0.22.1"
 half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
-libc = "0.2.170"
+libc = "0.2.171"
 log = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
@@ -73,4 +73,5 @@ web-time = "1.1.0"
 
 [dev-dependencies]
 chrono = { workspace = true }
+insta = { workspace = true }
 rand = { workspace = true }

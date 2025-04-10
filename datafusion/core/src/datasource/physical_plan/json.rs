@@ -36,11 +36,10 @@ mod tests {
     use crate::prelude::{CsvReadOptions, NdJsonReadOptions, SessionContext};
     use crate::test::partitioned_file_groups;
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_common::Result;
-    use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::PartitionedFile;
     use datafusion_datasource_json::JsonFormat;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::object_store::ObjectStoreUrl;
@@ -49,6 +48,10 @@ mod tests {
     use arrow::array::Array;
     use arrow::datatypes::SchemaRef;
     use arrow::datatypes::{Field, SchemaBuilder};
+    use datafusion_datasource::file_groups::FileGroup;
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_datasource::source::DataSourceExec;
+    use insta::assert_snapshot;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
@@ -62,7 +65,7 @@ mod tests {
         state: &SessionState,
         file_compression_type: FileCompressionType,
         work_dir: &Path,
-    ) -> (ObjectStoreUrl, Vec<Vec<PartitionedFile>>, SchemaRef) {
+    ) -> (ObjectStoreUrl, Vec<FileGroup>, SchemaRef) {
         let store_url = ObjectStoreUrl::local_filesystem();
         let store = state.runtime_env().object_store(&store_url).unwrap();
 
@@ -79,6 +82,7 @@ mod tests {
         let meta = file_groups
             .first()
             .unwrap()
+            .files()
             .first()
             .unwrap()
             .clone()
@@ -113,6 +117,7 @@ mod tests {
         let path = file_groups
             .first()
             .unwrap()
+            .files()
             .first()
             .unwrap()
             .object_meta
@@ -134,19 +139,17 @@ mod tests {
         let frame = ctx.read_json(path, read_options).await.unwrap();
         let results = frame.collect().await.unwrap();
 
-        assert_batches_eq!(
-            &[
-                "+-----+------------------+---------------+------+",
-                "| a   | b                | c             | d    |",
-                "+-----+------------------+---------------+------+",
-                "| 1   | [2.0, 1.3, -6.1] | [false, true] | 4    |",
-                "| -10 | [2.0, 1.3, -6.1] | [true, true]  | 4    |",
-                "| 2   | [2.0, , -6.1]    | [false, ]     | text |",
-                "|     |                  |               |      |",
-                "+-----+------------------+---------------+------+",
-            ],
-            &results
-        );
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&results), @r###"
+            +-----+------------------+---------------+------+
+            | a   | b                | c             | d    |
+            +-----+------------------+---------------+------+
+            | 1   | [2.0, 1.3, -6.1] | [false, true] | 4    |
+            | -10 | [2.0, 1.3, -6.1] | [true, true]  | 4    |
+            | 2   | [2.0, , -6.1]    | [false, ]     | text |
+            |     |                  |               |      |
+            +-----+------------------+---------------+------+
+        "###);}
+
         Ok(())
     }
 
@@ -167,7 +170,7 @@ mod tests {
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
-        use datafusion_datasource::file_scan_config::FileScanConfig;
+
         use futures::StreamExt;
 
         let tmp_dir = TempDir::new()?;
@@ -175,11 +178,12 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_limit(Some(3))
-            .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.build();
+            .with_file_compression_type(file_compression_type.to_owned())
+            .build();
+        let exec = DataSourceExec::from_data_source(conf);
 
         // TODO: this is not where schema inference should be tested
 
@@ -231,7 +235,7 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         use arrow::datatypes::DataType;
-        use datafusion_datasource::file_scan_config::FileScanConfig;
+
         use futures::StreamExt;
 
         let session_ctx = SessionContext::new();
@@ -249,11 +253,12 @@ mod tests {
         let missing_field_idx = file_schema.fields.len() - 1;
 
         let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_limit(Some(3))
-            .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.build();
+            .with_file_compression_type(file_compression_type.to_owned())
+            .build();
+        let exec = DataSourceExec::from_data_source(conf);
 
         let mut it = exec.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
@@ -281,7 +286,6 @@ mod tests {
     async fn nd_json_exec_file_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        use datafusion_datasource::file_scan_config::FileScanConfig;
         use futures::StreamExt;
 
         let session_ctx = SessionContext::new();
@@ -292,11 +296,12 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_projection(Some(vec![0, 2]))
-            .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.build();
+            .with_file_compression_type(file_compression_type.to_owned())
+            .build();
+        let exec = DataSourceExec::from_data_source(conf);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
 
@@ -329,7 +334,6 @@ mod tests {
     async fn nd_json_exec_file_mixed_order_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        use datafusion_datasource::file_scan_config::FileScanConfig;
         use futures::StreamExt;
 
         let session_ctx = SessionContext::new();
@@ -340,11 +344,12 @@ mod tests {
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_projection(Some(vec![3, 0, 2]))
-            .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.build();
+            .with_file_compression_type(file_compression_type.to_owned())
+            .build();
+        let exec = DataSourceExec::from_data_source(conf);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 3);
 
@@ -537,6 +542,7 @@ mod tests {
     async fn test_json_with_repartitioning(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        use datafusion_common::assert_batches_sorted_eq;
         use datafusion_execution::config::SessionConfig;
 
         let config = SessionConfig::new()
@@ -560,6 +566,7 @@ mod tests {
         let path = file_groups
             .first()
             .unwrap()
+            .files()
             .first()
             .unwrap()
             .object_meta

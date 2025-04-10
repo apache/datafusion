@@ -92,10 +92,12 @@ impl DisplayAs for CoalescePartitionsExec {
                 }
                 None => write!(f, "CoalescePartitionsExec"),
             },
-            DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
-            }
+            DisplayFormatType::TreeRender => match self.fetch {
+                Some(fetch) => {
+                    write!(f, "limit: {fetch}")
+                }
+                None => write!(f, ""),
+            },
         }
     }
 }

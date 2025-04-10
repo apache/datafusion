@@ -20,7 +20,7 @@
 use std::sync::Arc;
 use std::{any::Any, borrow::Cow};
 
-use crate::datasource::TableProvider;
+use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, Constraints};
@@ -133,7 +133,7 @@ fn preserves_table_type() {
 
         async fn scan(
             &self,
-            _: &dyn datafusion_catalog::Session,
+            _: &dyn crate::Session,
             _: Option<&Vec<usize>>,
             _: &[Expr],
             _: Option<usize>,

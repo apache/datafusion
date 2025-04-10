@@ -25,6 +25,9 @@ use abi_stable::{
     sabi_types::VersionStrings,
     StableAbi,
 };
+use catalog::create_catalog_provider;
+
+use crate::catalog_provider::FFI_CatalogProvider;
 
 use super::{table_provider::FFI_TableProvider, udf::FFI_ScalarUDF};
 use arrow::array::RecordBatch;
@@ -34,11 +37,13 @@ use datafusion::{
     common::record_batch,
 };
 use sync_provider::create_sync_table_provider;
-use udf_udaf_udwf::create_ffi_abs_func;
+use udf_udaf_udwf::{create_ffi_abs_func, create_ffi_random_func};
 
 mod async_provider;
+pub mod catalog;
 mod sync_provider;
 mod udf_udaf_udwf;
+pub mod utils;
 
 #[repr(C)]
 #[derive(StableAbi)]
@@ -47,11 +52,16 @@ mod udf_udaf_udwf;
 /// both the module loading program and library that implements the
 /// module.
 pub struct ForeignLibraryModule {
+    /// Construct an opinionated catalog provider
+    pub create_catalog: extern "C" fn() -> FFI_CatalogProvider,
+
     /// Constructs the table provider
     pub create_table: extern "C" fn(synchronous: bool) -> FFI_TableProvider,
 
     /// Create a scalar UDF
     pub create_scalar_udf: extern "C" fn() -> FFI_ScalarUDF,
+
+    pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -95,8 +105,10 @@ extern "C" fn construct_table_provider(synchronous: bool) -> FFI_TableProvider {
 /// This defines the entry point for using the module.
 pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
     ForeignLibraryModule {
+        create_catalog: create_catalog_provider,
         create_table: construct_table_provider,
         create_scalar_udf: create_ffi_abs_func,
+        create_nullary_udf: create_ffi_random_func,
         version: super::version,
     }
     .leak_into_prefix()

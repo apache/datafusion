@@ -313,7 +313,7 @@ impl PostgreSqlDialect {
         }
 
         Ok(ast::Expr::Function(Function {
-            name: ObjectName(vec![Ident {
+            name: ObjectName::from(vec![Ident {
                 value: func_name.to_string(),
                 quote_style: None,
                 span: Span::empty(),
@@ -421,11 +421,11 @@ impl Dialect for MySqlDialect {
     }
 
     fn int64_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName(vec![Ident::new("SIGNED")]), vec![])
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
     }
 
     fn int32_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName(vec![Ident::new("SIGNED")]), vec![])
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
     }
 
     fn timestamp_cast_dtype(
@@ -898,8 +898,8 @@ impl CustomDialectBuilder {
         self
     }
 
-    pub fn with_unnest_as_table_factor(mut self, _unnest_as_table_factor: bool) -> Self {
-        self.unnest_as_table_factor = _unnest_as_table_factor;
+    pub fn with_unnest_as_table_factor(mut self, unnest_as_table_factor: bool) -> Self {
+        self.unnest_as_table_factor = unnest_as_table_factor;
         self
     }
 }

@@ -18,10 +18,9 @@
 //! [`MemoryCatalogProvider`], [`MemoryCatalogProviderList`]: In-memory
 //! implementations of [`CatalogProviderList`] and [`CatalogProvider`].
 
-use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
-use async_trait::async_trait;
+use crate::{CatalogProvider, CatalogProviderList, SchemaProvider};
 use dashmap::DashMap;
-use datafusion_common::{exec_err, DataFusionError};
+use datafusion_common::exec_err;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -132,69 +131,5 @@ impl CatalogProvider for MemoryCatalogProvider {
         } else {
             Ok(None)
         }
-    }
-}
-
-/// Simple in-memory implementation of a schema.
-#[derive(Debug)]
-pub struct MemorySchemaProvider {
-    tables: DashMap<String, Arc<dyn TableProvider>>,
-}
-
-impl MemorySchemaProvider {
-    /// Instantiates a new MemorySchemaProvider with an empty collection of tables.
-    pub fn new() -> Self {
-        Self {
-            tables: DashMap::new(),
-        }
-    }
-}
-
-impl Default for MemorySchemaProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl SchemaProvider for MemorySchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn table_names(&self) -> Vec<String> {
-        self.tables
-            .iter()
-            .map(|table| table.key().clone())
-            .collect()
-    }
-
-    async fn table(
-        &self,
-        name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
-        Ok(self.tables.get(name).map(|table| Arc::clone(table.value())))
-    }
-
-    fn register_table(
-        &self,
-        name: String,
-        table: Arc<dyn TableProvider>,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
-        if self.table_exist(name.as_str()) {
-            return exec_err!("The table {name} already exists");
-        }
-        Ok(self.tables.insert(name, table))
-    }
-
-    fn deregister_table(
-        &self,
-        name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
-        Ok(self.tables.remove(name).map(|(_, table)| table))
-    }
-
-    fn table_exist(&self, name: &str) -> bool {
-        self.tables.contains_key(name)
     }
 }

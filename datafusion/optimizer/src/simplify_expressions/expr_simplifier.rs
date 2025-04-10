@@ -1758,7 +1758,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // try_cast/cast(expr as data_type) op literal
             Expr::BinaryExpr(BinaryExpr { left, op, right })
                 if is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
-                    info, &left, &right,
+                    info, &left, op, &right,
                 ) && op.supports_propagation() =>
             {
                 unwrap_cast_in_comparison_for_binary(info, left, right, op)?
@@ -1768,7 +1768,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // try_cast/cast(expr as data_type) op_swap literal
             Expr::BinaryExpr(BinaryExpr { left, op, right })
                 if is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
-                    info, &right, &left,
+                    info, &right, op, &left,
                 ) && op.supports_propagation()
                     && op.swap().is_some() =>
             {
@@ -4306,6 +4306,10 @@ mod tests {
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int16)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("dummy - not implemented")
         }
     }
 

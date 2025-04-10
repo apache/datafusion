@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -52,6 +53,12 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// To create `PhysicalExpr` from  `Expr`, see
 /// * [`SessionContext::create_physical_expr`]: A high level API
 /// * [`create_physical_expr`]: A low level API
+///
+/// # Formatting `PhysicalExpr` as strings
+/// There are three ways to format `PhysicalExpr` as a string:
+/// * [`Debug`]: Standard Rust debugging format (e.g. `Constant { value: ... }`)
+/// * [`Display`]: Detailed SQL-like format that shows expression structure (e.g. (`Utf8 ("foobar")`). This is often used for debugging and tests
+/// * [`Self::fmt_sql`]: SQL-like human readable format (e.g. ('foobar')`), See also [`sql_fmt`]
 ///
 /// [`SessionContext::create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.create_physical_expr
 /// [`PhysicalPlanner`]: https://docs.rs/datafusion/latest/datafusion/physical_planner/trait.PhysicalPlanner.html
@@ -266,6 +273,16 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties::new_unknown())
     }
+
+    /// Format this `PhysicalExpr` in nice human readable "SQL" format
+    ///
+    /// Specifically, this format is designed to be readable by humans, at the
+    /// expense of details. Use `Display` or `Debug` for more detailed
+    /// representation.
+    ///
+    /// See the [`fmt_sql`] function for an example of printing `PhysicalExpr`s as SQL.
+    ///
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result;
 }
 
 /// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
@@ -363,7 +380,7 @@ where
         I: Iterator + Clone,
         I::Item: Display,
     {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             let mut iter = self.0.clone();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
@@ -378,4 +395,54 @@ where
     }
 
     DisplayWrapper(exprs.into_iter())
+}
+
+/// Prints a [`PhysicalExpr`] in a SQL-like format
+///
+/// # Example
+/// ```
+/// # // The boiler plate needed to create a `PhysicalExpr` for the example
+/// # use std::any::Any;
+/// # use std::fmt::Formatter;
+/// # use std::sync::Arc;
+/// # use arrow::array::RecordBatch;
+/// # use arrow::datatypes::{DataType, Schema};
+/// # use datafusion_common::Result;
+/// # use datafusion_expr_common::columnar_value::ColumnarValue;
+/// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
+/// # #[derive(Debug, Hash, PartialOrd, PartialEq)]
+/// # struct MyExpr {};
+/// # impl PhysicalExpr for MyExpr {fn as_any(&self) -> &dyn Any { unimplemented!() }
+/// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
+/// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
+/// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
+/// # fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>{ unimplemented!() }
+/// # fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
+/// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }
+/// # }
+/// # impl std::fmt::Display for MyExpr {fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { unimplemented!() } }
+/// # impl DynEq for MyExpr {fn dyn_eq(&self, other: &dyn Any) -> bool { unimplemented!() } }
+/// # fn make_physical_expr() -> Arc<dyn PhysicalExpr> { Arc::new(MyExpr{}) }
+/// let expr: Arc<dyn PhysicalExpr> = make_physical_expr();
+/// // wrap the expression in `sql_fmt` which can be used with
+/// // `format!`, `to_string()`, etc
+/// let expr_as_sql = fmt_sql(expr.as_ref());
+/// assert_eq!(
+///   "The SQL: CASE a > b THEN 1 ELSE 0 END",
+///   format!("The SQL: {expr_as_sql}")
+/// );
+/// ```
+pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
+    struct Wrapper<'a> {
+        expr: &'a dyn PhysicalExpr,
+    }
+
+    impl Display for Wrapper<'_> {
+        fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+            self.expr.fmt_sql(f)?;
+            Ok(())
+        }
+    }
+
+    Wrapper { expr }
 }

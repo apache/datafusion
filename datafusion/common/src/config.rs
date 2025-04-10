@@ -149,9 +149,17 @@ macro_rules! config_namespace {
                             // $(#[allow(deprecated)])?
                             {
                                 $(let value = $transform(value);)? // Apply transformation if specified
-                                $(log::warn!($warn);)? // Log warning if specified
                                 #[allow(deprecated)]
-                                self.$field_name.set(rem, value.as_ref())
+                                let ret = self.$field_name.set(rem, value.as_ref());
+
+                                $(if !$warn.is_empty() {
+                                    let default: $field_type = $default;
+                                    #[allow(deprecated)]
+                                    if default != self.$field_name {
+                                        log::warn!($warn);
+                                    }
+                                })? // Log warning if specified, and the value is not the default
+                                ret
                             }
                         },
                     )*
@@ -251,6 +259,11 @@ config_namespace! {
         /// specified. The Arrow type system does not have a notion of maximum
         /// string length and thus DataFusion can not enforce such limits.
         pub support_varchar_with_length: bool, default = true
+
+       /// If true, `VARCHAR` is mapped to `Utf8View` during SQL planning.
+       /// If false, `VARCHAR` is mapped to `Utf8`  during SQL planning.
+       /// Default is false.
+        pub map_varchar_to_utf8view: bool, default = false
 
         /// When set to true, the source locations relative to the original SQL
         /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected
@@ -1994,8 +2007,8 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::config::{
-        ConfigEntry, ConfigExtension, ConfigFileType, ExtensionOptions, Extensions,
-        TableOptions,
+        ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
+        Extensions, TableOptions,
     };
 
     #[derive(Default, Debug, Clone)]
@@ -2078,6 +2091,37 @@ mod tests {
         assert_eq!(table_config.csv.escape.unwrap() as char, '"');
         table_config.set("format.escape", "\'").unwrap();
         assert_eq!(table_config.csv.escape.unwrap() as char, '\'');
+    }
+
+    #[test]
+    fn warning_only_not_default() {
+        use std::sync::atomic::AtomicUsize;
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        use log::{Level, LevelFilter, Metadata, Record};
+        struct SimpleLogger;
+        impl log::Log for SimpleLogger {
+            fn enabled(&self, metadata: &Metadata) -> bool {
+                metadata.level() <= Level::Info
+            }
+
+            fn log(&self, record: &Record) {
+                if self.enabled(record.metadata()) {
+                    COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            fn flush(&self) {}
+        }
+        log::set_logger(&SimpleLogger).unwrap();
+        log::set_max_level(LevelFilter::Info);
+        let mut sql_parser_options = crate::config::SqlParserOptions::default();
+        sql_parser_options
+            .set("enable_options_value_normalization", "false")
+            .unwrap();
+        assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 0);
+        sql_parser_options
+            .set("enable_options_value_normalization", "true")
+            .unwrap();
+        assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[cfg(feature = "parquet")]

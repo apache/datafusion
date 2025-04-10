@@ -175,6 +175,11 @@ impl PhysicalExpr for NotExpr {
             _ => internal_err!("NotExpr can only operate on Boolean datatypes"),
         }
     }
+
+    fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NOT ")?;
+        self.arg.fmt_sql(f)
+    }
 }
 
 /// Creates a unary expression NOT
@@ -190,6 +195,7 @@ mod tests {
     use crate::expressions::{col, Column};
 
     use arrow::{array::BooleanArray, datatypes::*};
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
     fn neg_op() -> Result<()> {
@@ -318,6 +324,21 @@ mod tests {
                 Interval::make_unbounded(&DataType::Float64)?
             )?])
             .is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = schema();
+
+        let expr = not(col("a", &schema)?)?;
+
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "NOT a@0");
+
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "NOT a");
 
         Ok(())
     }

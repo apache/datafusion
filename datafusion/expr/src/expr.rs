@@ -64,6 +64,15 @@ use sqlparser::ast::{
 ///
 /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
 ///
+/// # Printing Expressions
+///
+/// You can print `Expr`s using the the `Debug` trait, `Display` trait, or
+/// [`Self::human_display`]. See the [examples](#examples-displaying-exprs) below.
+///
+/// If you need  SQL to pass to other systems, consider using [`Unparser`].
+///
+/// [`Unparser`]: https://docs.rs/datafusion/latest/datafusion/sql/unparser/struct.Unparser.html
+///
 /// # Schema Access
 ///
 /// See [`ExprSchemable::get_type`] to access the [`DataType`] and nullability
@@ -76,9 +85,9 @@ use sqlparser::ast::{
 /// `Expr` and [`TreeNode::transform`] can be used to rewrite an expression. See
 /// the examples below and [`TreeNode`] for more information.
 ///
-/// # Examples
+/// # Examples: Creating and Using `Expr`s
 ///
-/// ## Column references and literals
+/// ## Column References and Literals
 ///
 /// [`Expr::Column`] refer to the values of columns and are often created with
 /// the [`col`] function. For example to create an expression `c1` referring to
@@ -103,6 +112,7 @@ use sqlparser::ast::{
 /// # use datafusion_expr::{lit, col, Expr};
 /// // All literals are strongly typed in DataFusion. To make an `i64` 42:
 /// let expr = lit(42i64);
+/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
 /// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
 /// // To make a (typed) NULL:
 /// let expr = Expr::Literal(ScalarValue::Int64(None));
@@ -171,7 +181,51 @@ use sqlparser::ast::{
 /// ]);
 /// ```
 ///
-/// # Visiting and Rewriting `Expr`s
+/// # Examples: Displaying `Exprs`
+///
+/// There are three ways to print an `Expr` depending on the usecase.
+///
+/// ## Use `Debug` trait
+///
+/// Following Rust conventions, the `Debug` implementation prints out the
+/// internal structure of the expression, which is useful for debugging.
+///
+/// ```
+/// # use datafusion_expr::{lit, col};
+/// let expr = col("c1") + lit(42);
+/// assert_eq!(format!("{expr:?}"), "BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: \"c1\" }), op: Plus, right: Literal(Int32(42)) })");
+/// ```
+///
+/// ## Use the `Display` trait  (detailed expression)
+///
+/// The `Display` implementation prints out the expression in a SQL-like form,
+/// but has additional details such as the data type of literals. This is useful
+/// for understanding the expression in more detail and is used for the low level
+/// [`ExplainFormat::Indent`] explain plan format.
+///
+/// [`ExplainFormat::Indent`]: crate::logical_plan::ExplainFormat::Indent
+///
+/// ```
+/// # use datafusion_expr::{lit, col};
+/// let expr = col("c1") + lit(42);
+/// assert_eq!(format!("{expr}"), "c1 + Int32(42)");
+/// ```
+///
+/// ## Use [`Self::human_display`] (human readable)
+///
+/// [`Self::human_display`]  prints out the expression in a SQL-like form, optimized
+/// for human consumption by end users. It is used for the
+/// [`ExplainFormat::Tree`] explain plan format.
+///
+/// [`ExplainFormat::Tree`]: crate::logical_plan::ExplainFormat::Tree
+///
+///```
+/// # use datafusion_expr::{lit, col};
+/// let expr = col("c1") + lit(42);
+/// assert_eq!(format!("{}", expr.human_display()), "c1 + 42");
+/// ```
+///
+/// # Examples: Visiting and Rewriting `Expr`s
 ///
 /// Here is an example that finds all literals in an `Expr` tree:
 /// ```
@@ -391,11 +445,34 @@ impl Unnest {
 }
 
 /// Alias expression
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
     pub name: String,
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+}
+
+impl Hash for Alias {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.relation.hash(state);
+        self.name.hash(state);
+    }
+}
+
+impl PartialOrd for Alias {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let cmp = self.expr.partial_cmp(&other.expr);
+        let Some(std::cmp::Ordering::Equal) = cmp else {
+            return cmp;
+        };
+        let cmp = self.relation.partial_cmp(&other.relation);
+        let Some(std::cmp::Ordering::Equal) = cmp else {
+            return cmp;
+        };
+        self.name.partial_cmp(&other.name)
+    }
 }
 
 impl Alias {
@@ -409,7 +486,16 @@ impl Alias {
             expr: Box::new(expr),
             relation: relation.map(|r| r.into()),
             name: name.into(),
+            metadata: None,
         }
+    }
+
+    pub fn with_metadata(
+        mut self,
+        metadata: Option<std::collections::HashMap<String, String>>,
+    ) -> Self {
+        self.metadata = metadata;
+        self
     }
 }
 
@@ -1115,6 +1201,31 @@ impl Expr {
         SchemaDisplay(self)
     }
 
+    /// Human readable display formatting for this expression.
+    ///
+    /// This function is primarily used in printing the explain tree output,
+    /// (e.g. `EXPLAIN FORMAT TREE <query>`), providing a readable format to
+    /// show how expressions are used in physical and logical plans. See the
+    /// [`Expr`] for other ways to format expressions
+    ///
+    /// Note this format is intended for human consumption rather than SQL for
+    /// other systems. If you need  SQL to pass to other systems, consider using
+    /// [`Unparser`].
+    ///
+    /// [`Unparser`]: https://docs.rs/datafusion/latest/datafusion/sql/unparser/struct.Unparser.html
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::{col, lit};
+    /// let expr = col("foo") + lit(42);
+    /// // For EXPLAIN output:
+    /// // "foo + 42"
+    /// println!("{}", expr.human_display());
+    /// ```
+    pub fn human_display(&self) -> impl Display + '_ {
+        SqlDisplay(self)
+    }
+
     /// Returns the qualifier and the schema name of this expression.
     ///
     /// Used when the expression forms the output field of a certain plan.
@@ -1278,6 +1389,27 @@ impl Expr {
         Expr::Alias(Alias::new(self, None::<&str>, name.into()))
     }
 
+    /// Return `self AS name` alias expression with metadata
+    ///
+    /// The metadata will be attached to the Arrow Schema field when the expression
+    /// is converted to a field via `Expr.to_field()`.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// use std::collections::HashMap;
+    /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let expr = col("foo").alias_with_metadata("bar", Some(metadata));
+    /// ```
+    ///
+    pub fn alias_with_metadata(
+        self,
+        name: impl Into<String>,
+        metadata: Option<std::collections::HashMap<String, String>>,
+    ) -> Expr {
+        Expr::Alias(Alias::new(self, None::<&str>, name.into()).with_metadata(metadata))
+    }
+
     /// Return `self AS name` alias expression with a specific qualifier
     pub fn alias_qualified(
         self,
@@ -1285,6 +1417,28 @@ impl Expr {
         name: impl Into<String>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, relation, name.into()))
+    }
+
+    /// Return `self AS name` alias expression with a specific qualifier and metadata
+    ///
+    /// The metadata will be attached to the Arrow Schema field when the expression
+    /// is converted to a field via `Expr.to_field()`.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// use std::collections::HashMap;
+    /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let expr = col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
+    /// ```
+    ///
+    pub fn alias_qualified_with_metadata(
+        self,
+        relation: Option<impl Into<TableReference>>,
+        name: impl Into<String>,
+        metadata: Option<std::collections::HashMap<String, String>>,
+    ) -> Expr {
+        Expr::Alias(Alias::new(self, relation, name.into()).with_metadata(metadata))
     }
 
     /// Remove an alias from an expression if one exists.
@@ -1738,11 +1892,13 @@ impl NormalizeEq for Expr {
                     expr: self_expr,
                     relation: self_relation,
                     name: self_name,
+                    ..
                 }),
                 Expr::Alias(Alias {
                     expr: other_expr,
                     relation: other_relation,
                     name: other_name,
+                    ..
                 }),
             ) => {
                 self_name == other_name
@@ -2088,6 +2244,7 @@ impl HashNode for Expr {
                 expr: _expr,
                 relation,
                 name,
+                ..
             }) => {
                 relation.hash(state);
                 name.hash(state);
@@ -2518,6 +2675,187 @@ impl Display for SchemaDisplay<'_> {
     }
 }
 
+/// A helper struct for displaying an `Expr` as an SQL-like string.
+struct SqlDisplay<'a>(&'a Expr);
+
+impl Display for SqlDisplay<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Expr::Literal(scalar) => scalar.fmt(f),
+            Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
+            Expr::Between(Between {
+                expr,
+                negated,
+                low,
+                high,
+            }) => {
+                if *negated {
+                    write!(
+                        f,
+                        "{} NOT BETWEEN {} AND {}",
+                        SqlDisplay(expr),
+                        SqlDisplay(low),
+                        SqlDisplay(high),
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{} BETWEEN {} AND {}",
+                        SqlDisplay(expr),
+                        SqlDisplay(low),
+                        SqlDisplay(high),
+                    )
+                }
+            }
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
+            }
+            Expr::Case(Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            }) => {
+                write!(f, "CASE ")?;
+
+                if let Some(e) = expr {
+                    write!(f, "{} ", SqlDisplay(e))?;
+                }
+
+                for (when, then) in when_then_expr {
+                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then),)?;
+                }
+
+                if let Some(e) = else_expr {
+                    write!(f, "ELSE {} ", SqlDisplay(e))?;
+                }
+
+                write!(f, "END")
+            }
+            Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
+                write!(f, "{}", SqlDisplay(expr))
+            }
+            Expr::InList(InList {
+                expr,
+                list,
+                negated,
+            }) => {
+                write!(
+                    f,
+                    "{}{} IN {}",
+                    SqlDisplay(expr),
+                    if *negated { " NOT" } else { "" },
+                    ExprListDisplay::comma_separated(list.as_slice())
+                )
+            }
+            Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
+                write!(
+                    f,
+                    "ROLLUP ({})",
+                    ExprListDisplay::comma_separated(exprs.as_slice())
+                )
+            }
+            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+                write!(f, "GROUPING SETS (")?;
+                for exprs in lists_of_exprs.iter() {
+                    write!(
+                        f,
+                        "({})",
+                        ExprListDisplay::comma_separated(exprs.as_slice())
+                    )?;
+                }
+                write!(f, ")")
+            }
+            Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
+                write!(
+                    f,
+                    "ROLLUP ({})",
+                    ExprListDisplay::comma_separated(exprs.as_slice())
+                )
+            }
+            Expr::IsNull(expr) => write!(f, "{} IS NULL", SqlDisplay(expr)),
+            Expr::IsNotNull(expr) => {
+                write!(f, "{} IS NOT NULL", SqlDisplay(expr))
+            }
+            Expr::IsUnknown(expr) => {
+                write!(f, "{} IS UNKNOWN", SqlDisplay(expr))
+            }
+            Expr::IsNotUnknown(expr) => {
+                write!(f, "{} IS NOT UNKNOWN", SqlDisplay(expr))
+            }
+            Expr::IsTrue(expr) => write!(f, "{} IS TRUE", SqlDisplay(expr)),
+            Expr::IsFalse(expr) => write!(f, "{} IS FALSE", SqlDisplay(expr)),
+            Expr::IsNotTrue(expr) => {
+                write!(f, "{} IS NOT TRUE", SqlDisplay(expr))
+            }
+            Expr::IsNotFalse(expr) => {
+                write!(f, "{} IS NOT FALSE", SqlDisplay(expr))
+            }
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            }) => {
+                write!(
+                    f,
+                    "{} {}{} {}",
+                    SqlDisplay(expr),
+                    if *negated { "NOT " } else { "" },
+                    if *case_insensitive { "ILIKE" } else { "LIKE" },
+                    SqlDisplay(pattern),
+                )?;
+
+                if let Some(char) = escape_char {
+                    write!(f, " CHAR '{char}'")?;
+                }
+
+                Ok(())
+            }
+            Expr::Negative(expr) => write!(f, "(- {})", SqlDisplay(expr)),
+            Expr::Not(expr) => write!(f, "NOT {}", SqlDisplay(expr)),
+            Expr::Unnest(Unnest { expr }) => {
+                write!(f, "UNNEST({})", SqlDisplay(expr))
+            }
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                ..
+            }) => {
+                write!(
+                    f,
+                    "{} {} {}",
+                    SqlDisplay(expr),
+                    if *negated {
+                        "NOT SIMILAR TO"
+                    } else {
+                        "SIMILAR TO"
+                    },
+                    SqlDisplay(pattern),
+                )?;
+                if let Some(char) = escape_char {
+                    write!(f, " CHAR '{char}'")?;
+                }
+
+                Ok(())
+            }
+            Expr::AggregateFunction(AggregateFunction { func, params }) => {
+                match func.human_display(params) {
+                    Ok(name) => {
+                        write!(f, "{name}")
+                    }
+                    Err(e) => {
+                        write!(f, "got error from schema_name {}", e)
+                    }
+                }
+            }
+            _ => write!(f, "{}", self.0),
+        }
+    }
+}
+
 /// Get schema_name for Vector of expressions
 ///
 /// Internal usage. Please call `schema_name_from_exprs` instead
@@ -2527,6 +2865,38 @@ pub(crate) fn schema_name_from_exprs_comma_separated_without_space(
     exprs: &[Expr],
 ) -> Result<String, fmt::Error> {
     schema_name_from_exprs_inner(exprs, ",")
+}
+
+/// Formats a list of `&Expr` with a custom separator using SQL display format
+pub struct ExprListDisplay<'a> {
+    exprs: &'a [Expr],
+    sep: &'a str,
+}
+
+impl<'a> ExprListDisplay<'a> {
+    /// Create a new display struct with the given expressions and separator
+    pub fn new(exprs: &'a [Expr], sep: &'a str) -> Self {
+        Self { exprs, sep }
+    }
+
+    /// Create a new display struct with comma-space separator
+    pub fn comma_separated(exprs: &'a [Expr]) -> Self {
+        Self::new(exprs, ", ")
+    }
+}
+
+impl Display for ExprListDisplay<'_> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let mut first = true;
+        for expr in self.exprs {
+            if !first {
+                write!(f, "{}", self.sep)?;
+            }
+            write!(f, "{}", SqlDisplay(expr))?;
+            first = false;
+        }
+        Ok(())
+    }
 }
 
 /// Get schema_name for Vector of expressions

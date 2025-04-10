@@ -27,7 +27,8 @@ use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{exec_err, Result};
+use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 
 use futures::stream::BoxStream;
@@ -35,7 +36,6 @@ use futures::{Future, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::task::JoinSet;
 
 /// Creates a stream from a collection of producing tasks, routing panics to the stream.
 ///
@@ -128,7 +128,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
                             // the JoinSet were aborted, which in turn
                             // would imply that the receiver has been
                             // dropped and this code is not running
-                            return Some(internal_err!("Non Panic Task error: {e}"));
+                            return Some(exec_err!("Non Panic Task error: {e}"));
                         }
                     }
                 }

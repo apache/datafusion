@@ -316,7 +316,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "TableScan: test";
+        let expected = "Projection: a, b, c\n  TableScan: test";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -406,7 +406,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "TableScan: test";
+        let expected = "Projection: a, b, c\n  TableScan: test";
         assert_together_optimized_plan(plan, expected, true)
     }
 
