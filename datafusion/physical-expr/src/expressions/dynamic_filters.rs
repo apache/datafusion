@@ -178,6 +178,9 @@ impl DynamicFilterPhysicalExpr {
             )
         })?;
         // Remap the children of the new expression to match the original children
+        // We still do this again in `current()` but doing it preventively here
+        // reduces the work needed in some cases if `current()` is called multiple times
+        // and the same externally facing `PhysicalExpr` is used for both `with_new_children` and `update()`.`
         let new_expr = Self::remap_children(
             &self.children,
             self.remapped_children.as_ref(),
@@ -310,31 +313,105 @@ mod test {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]));
-        let file_schema = Arc::new(Schema::new(vec![
-            Field::new("b", DataType::Int32, false),
-            Field::new("a", DataType::Int32, false),
-        ]));
         let expr = Arc::new(BinaryExpr::new(
             col("a", &table_schema).unwrap(),
-            datafusion_expr::Operator::Gt,
+            datafusion_expr::Operator::Eq,
             lit(42) as Arc<dyn PhysicalExpr>,
         ));
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![col("a", &table_schema).unwrap()],
             expr as Arc<dyn PhysicalExpr>,
         ));
-        // Take an initial snapshot
-        let snap = dynamic_filter.snapshot().unwrap().unwrap();
-        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Gt, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
-        let snap_string = snap.to_string();
-        // Remap the children to the file schema
-        let dynamic_filter =
-            reassign_predicate_columns(dynamic_filter, &file_schema, false).unwrap();
-        // Take a snapshot after remapping, the children in the snapshot should be remapped to the file schema
-        let new_snap = dynamic_filter.snapshot().unwrap().unwrap();
-        insta::assert_snapshot!(format!("{new_snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Gt, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
-        // The original snapshot should not have changed
-        assert_eq!(snap.to_string(), snap_string);
+        // Simulate two `ParquetSource` files with different filter schemas
+        // Both of these should hit the same inner `PhysicalExpr` even after `update()` is called
+        // and be able to remap children independently.
+        let filter_schema_1 = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let filter_schema_2 = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+        // Each ParquetExec calls `with_new_children` on the DynamicFilterPhysicalExpr
+        // and remaps the children to the file schema.
+        let dynamic_filter_1 = reassign_predicate_columns(
+            Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
+            &filter_schema_1,
+            false,
+        )
+        .unwrap();
+        let snap = dynamic_filter_1.snapshot().unwrap().unwrap();
+        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Eq, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
+        let dynamic_filter_2 = reassign_predicate_columns(
+            Arc::clone(&dynamic_filter) as Arc<dyn PhysicalExpr>,
+            &filter_schema_2,
+            false,
+        )
+        .unwrap();
+        let snap = dynamic_filter_2.snapshot().unwrap().unwrap();
+        insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Eq, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
+        // Both filters allow evaluating the same expression
+        let batch_1 = RecordBatch::try_new(
+            Arc::clone(&filter_schema_1),
+            vec![
+                // a
+                ScalarValue::Int32(Some(42)).to_array_of_size(1).unwrap(),
+                // b
+                ScalarValue::Int32(Some(43)).to_array_of_size(1).unwrap(),
+            ],
+        )
+        .unwrap();
+        let batch_2 = RecordBatch::try_new(
+            Arc::clone(&filter_schema_2),
+            vec![
+                // b
+                ScalarValue::Int32(Some(43)).to_array_of_size(1).unwrap(),
+                // a
+                ScalarValue::Int32(Some(42)).to_array_of_size(1).unwrap(),
+            ],
+        )
+        .unwrap();
+        // Evaluate the expression on both batches
+        let result_1 = dynamic_filter_1.evaluate(&batch_1).unwrap();
+        let result_2 = dynamic_filter_2.evaluate(&batch_2).unwrap();
+        // Check that the results are the same
+        let ColumnarValue::Array(arr_1) = result_1 else {
+            panic!("Expected ColumnarValue::Array");
+        };
+        let ColumnarValue::Array(arr_2) = result_2 else {
+            panic!("Expected ColumnarValue::Array");
+        };
+        assert!(arr_1.eq(&arr_2));
+        let expected = ScalarValue::Boolean(Some(true))
+            .to_array_of_size(1)
+            .unwrap();
+        assert!(arr_1.eq(&expected));
+        // Now lets update the expression
+        // Note that we update the *original* expression and that should be reflected in both the derived expressions
+        let new_expr = Arc::new(BinaryExpr::new(
+            col("a", &table_schema).unwrap(),
+            datafusion_expr::Operator::Gt,
+            lit(43) as Arc<dyn PhysicalExpr>,
+        ));
+        dynamic_filter
+            .update(Arc::clone(&new_expr) as Arc<dyn PhysicalExpr>)
+            .expect("Failed to update expression");
+        // Now we should be able to evaluate the new expression on both batches
+        let result_1 = dynamic_filter_1.evaluate(&batch_1).unwrap();
+        let result_2 = dynamic_filter_2.evaluate(&batch_2).unwrap();
+        // Check that the results are the same
+        let ColumnarValue::Array(arr_1) = result_1 else {
+            panic!("Expected ColumnarValue::Array");
+        };
+        let ColumnarValue::Array(arr_2) = result_2 else {
+            panic!("Expected ColumnarValue::Array");
+        };
+        assert!(arr_1.eq(&arr_2));
+        let expected = ScalarValue::Boolean(Some(false))
+            .to_array_of_size(1)
+            .unwrap();
+        assert!(arr_1.eq(&expected));
     }
 
     #[test]
