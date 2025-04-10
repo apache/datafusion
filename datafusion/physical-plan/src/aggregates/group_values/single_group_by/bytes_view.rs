@@ -117,6 +117,9 @@ impl GroupValues for GroupValuesBytesView {
 
                 emit_group_values
             }
+            EmitTo::NextBlock(_) => {
+                unreachable!("this group values still not support blocked groups")
+            }
         };
 
         Ok(vec![group_values])

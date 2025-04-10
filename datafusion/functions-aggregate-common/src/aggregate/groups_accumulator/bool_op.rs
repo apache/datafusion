@@ -117,6 +117,9 @@ where
                 }
                 first_n
             }
+            EmitTo::NextBlock(_) => {
+                unreachable!("this accumulator still not support blocked groups")
+            }
         };
 
         let nulls = self.null_state.build(emit_to);

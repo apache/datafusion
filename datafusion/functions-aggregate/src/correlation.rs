@@ -448,6 +448,9 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let n = match emit_to {
             EmitTo::All => self.count.len(),
             EmitTo::First(n) => n,
+            EmitTo::NextBlock(_) => {
+                unreachable!("this accumulator still not support blocked groups")
+            }
         };
 
         let mut values = Vec::with_capacity(n);
@@ -501,6 +504,9 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let n = match emit_to {
             EmitTo::All => self.count.len(),
             EmitTo::First(n) => n,
+            EmitTo::NextBlock(_) => {
+                unreachable!("this accumulator still not support blocked groups")
+            }
         };
 
         Ok(vec![

@@ -115,10 +115,13 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
     pub fn new(data_type: DataType) -> Self {
         assert!(PrimitiveArray::<T>::is_compatible(&data_type));
+        let mut values = VecDeque::new();
+        values.push_back(Vec::new());
+
         Self {
             data_type,
             map: HashTable::with_capacity(128),
-            values: VecDeque::new(),
+            values,
             null_group: None,
             random_state: Default::default(),
             block_size: None,
