@@ -15,12 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::{
+    arrow_wrappers::{WrappedArray, WrappedSchema},
+    df_result, rresult, rresult_return,
+    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
+    volatility::FFI_Volatility,
+};
 use abi_stable::std_types::ROption;
 use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
 };
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::{
     array::ArrayRef,
     error::ArrowError,
@@ -43,13 +49,6 @@ use return_type_args::{
     FFI_ReturnTypeArgs, ForeignReturnTypeArgs, ForeignReturnTypeArgsOwned,
 };
 use std::{ffi::c_void, sync::Arc};
-
-use crate::{
-    arrow_wrappers::{WrappedArray, WrappedSchema},
-    df_result, rresult, rresult_return,
-    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
-    volatility::FFI_Volatility,
-};
 
 pub mod return_info;
 pub mod return_type_args;
@@ -106,6 +105,12 @@ pub struct FFI_ScalarUDF {
         arg_types: RVec<WrappedSchema>,
     ) -> RResult<RVec<WrappedSchema>, RString>,
 
+    /// See [`ScalarUDFImpl`] for details on output_field
+    pub output_field: unsafe extern "C" fn(
+        &Self,
+        input_schema: WrappedSchema,
+    ) -> ROption<WrappedSchema>,
+
     /// Used to create a clone on the provider of the udf. This should
     /// only need to be called by the receiver of the udf.
     pub clone: unsafe extern "C" fn(udf: &Self) -> Self,
@@ -123,6 +128,13 @@ unsafe impl Sync for FFI_ScalarUDF {}
 
 pub struct ScalarUDFPrivateData {
     pub udf: Arc<ScalarUDF>,
+}
+
+impl FFI_ScalarUDF {
+    pub fn inner(&self) -> &Arc<ScalarUDF> {
+        let private_data = self.private_data as *const ScalarUDFPrivateData;
+        unsafe { &(*private_data).udf }
+    }
 }
 
 unsafe extern "C" fn return_type_fn_wrapper(
@@ -171,6 +183,23 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
     let return_types = rresult_return!(data_types_with_scalar_udf(&arg_types, udf));
 
     rresult!(vec_datatype_to_rvec_wrapped(&return_types))
+}
+
+unsafe extern "C" fn output_field_fn_wrapper(
+    udf: &FFI_ScalarUDF,
+    input_schema: WrappedSchema,
+) -> ROption<WrappedSchema> {
+    let udf = udf.inner();
+
+    let input_schema: SchemaRef = input_schema.into();
+    let output_field = udf
+        .as_ref()
+        .inner()
+        .output_field(&input_schema)
+        .and_then(|field| FFI_ArrowSchema::try_from(field).ok())
+        .map(WrappedSchema);
+
+    output_field.into()
 }
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
@@ -264,6 +293,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             return_type: return_type_fn_wrapper,
             return_type_from_args: return_type_from_args_fn_wrapper,
             coerce_types: coerce_types_fn_wrapper,
+            output_field: output_field_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -409,6 +439,19 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             let result_types = df_result!((self.udf.coerce_types)(&self.udf, arg_types))?;
             Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
         }
+    }
+
+    fn output_field(&self, input_schema: &Schema) -> Option<Field> {
+        let input_schema: WrappedSchema = Arc::new(input_schema.clone()).into();
+        let output_field = unsafe { (self.udf.output_field)(&self.udf, input_schema) };
+
+        output_field
+            .map(|field| {
+                (&field.0)
+                    .try_into()
+                    .unwrap_or_else(|_| Field::new("item", DataType::Null, true))
+            })
+            .into()
     }
 }
 
