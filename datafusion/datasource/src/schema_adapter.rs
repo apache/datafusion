@@ -298,6 +298,24 @@ pub struct SchemaMapping {
     field_mappings: Vec<Option<usize>>,
 }
 
+impl SchemaMapping {
+    /// Creates a new SchemaMapping instance
+    ///
+    /// # Arguments
+    ///
+    /// * `projected_table_schema` - The schema expected for query results
+    /// * `field_mappings` - Mapping from field index in projected_table_schema to index in file schema
+    pub fn new(
+        projected_table_schema: SchemaRef,
+        field_mappings: Vec<Option<usize>>,
+    ) -> Self {
+        Self {
+            projected_table_schema,
+            field_mappings,
+        }
+    }
+}
+
 impl SchemaMapper for SchemaMapping {
     /// Adapts a `RecordBatch` to match the `projected_table_schema` using the stored mapping and
     /// conversions.
