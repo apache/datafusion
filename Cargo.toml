@@ -213,20 +213,3 @@ used_underscore_binding = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
-
-## Temporary arrow-rs patch until 55 is released
-## https://github.com/apache/arrow-rs/pull/7391
-
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
-arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
-arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
-arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "9322547590ab32efeff8c0486e4a3a2cb5887a26" }
