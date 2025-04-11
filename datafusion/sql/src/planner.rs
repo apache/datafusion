@@ -54,6 +54,8 @@ pub struct ParserOptions {
     pub collect_spans: bool,
     /// Whether `VARCHAR` is mapped to `Utf8View` during SQL planning.
     pub map_varchar_to_utf8view: bool,
+    /// Whether to parse literal bytes as `FixedSizeBinary` type
+    pub parse_hex_as_fixed_size_binary: bool,
 }
 
 impl ParserOptions {
@@ -75,6 +77,7 @@ impl ParserOptions {
             map_varchar_to_utf8view: false,
             enable_options_value_normalization: false,
             collect_spans: false,
+            parse_hex_as_fixed_size_binary: false,
         }
     }
 
@@ -147,6 +150,7 @@ impl From<&SqlParserOptions> for ParserOptions {
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
+            parse_hex_as_fixed_size_binary: options.parse_hex_as_fixed_size_binary,
         }
     }
 }
