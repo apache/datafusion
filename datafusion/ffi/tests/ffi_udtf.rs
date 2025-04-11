@@ -65,36 +65,4 @@ mod tests {
 
         Ok(())
     }
-
-    /// This test validates nullary input UDFs
-    #[tokio::test]
-    async fn test_nullary_scalar_udf() -> Result<()> {
-        let module = get_module()?;
-
-        let ffi_abs_func =
-            module
-                .create_nullary_udf()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External table provider failed to implement create_scalar_udf"
-                        .to_string(),
-                ))?();
-        let foreign_abs_func: ForeignScalarUDF = (&ffi_abs_func).try_into()?;
-
-        let udf: ScalarUDF = foreign_abs_func.into();
-
-        let ctx = SessionContext::default();
-        let df = ctx.read_batch(create_record_batch(-5, 5))?;
-
-        let df = df.with_column("time_now", udf.call(vec![]))?;
-
-        let result = df.collect().await?;
-
-        assert!(result.len() == 1);
-        assert_eq!(
-            result[0].column_by_name("time_now").unwrap().data_type(),
-            &DataType::Float64
-        );
-
-        Ok(())
-    }
 }
