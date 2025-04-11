@@ -1104,9 +1104,9 @@ dependencies = [
 
 [[package]]
 name = "blake3"
-version = "1.8.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34a796731680be7931955498a16a10b2270c7762963d5d570fdbfe02dcbf314f"
+checksum = "389a099b34312839e16420d499a9cad9650541715937ffbdd40d36f49e77eeb3"
 dependencies = [
  "arrayref",
  "arrayvec",
@@ -1433,9 +1433,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.34"
+version = "4.5.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e958897981290da2a852763fe9cdb89cd36977a5d729023127095fa94d95e2ff"
+checksum = "d8aa86934b44c19c50f87cc2790e19f54f7a67aedb64101c2e1a2e5ecfb73944"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1443,9 +1443,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.34"
+version = "4.5.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83b0f35019843db2160b5bb19ae09b4e6411ac33fc6a712003c33e03090e2489"
+checksum = "2414dbb2dd0695280da6ea9261e327479e9d37b0630f6b53ba2a11c60c679fd9"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1627,7 +1627,7 @@ dependencies = [
  "anes",
  "cast",
  "ciborium",
- "clap 4.5.34",
+ "clap 4.5.35",
  "criterion-plot",
  "futures",
  "is-terminal",
@@ -1658,9 +1658,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.14"
+version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06ba6d68e24814cb8de6bb986db8222d3a027d15872cabc0d18817bc3c0e4471"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -1941,7 +1941,7 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-credential-types",
- "clap 4.5.34",
+ "clap 4.5.35",
  "ctor",
  "datafusion",
  "dirs",
@@ -2406,6 +2406,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.5",
  "indexmap 2.8.0",
+ "insta",
  "itertools 0.14.0",
  "log",
  "paste",
@@ -2572,7 +2573,7 @@ dependencies = [
  "bigdecimal",
  "bytes",
  "chrono",
- "clap 4.5.34",
+ "clap 4.5.35",
  "datafusion",
  "env_logger",
  "futures",
@@ -3915,9 +3916,9 @@ checksum = "8355be11b20d696c8f18f6cc018c4e372165b1fa8126cef092399c9951984ffa"
 
 [[package]]
 name = "libmimalloc-sys"
-version = "0.1.40"
+version = "0.1.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07d0e07885d6a754b9c7993f2625187ad694ee985d60f23355ff0e7077261502"
+checksum = "ec9d6fac27761dabcd4ee73571cdb06b7022dc99089acbe5435691edffaac0f4"
 dependencies = [
  "cc",
  "libc",
@@ -3942,7 +3943,7 @@ checksum = "5297962ef19edda4ce33aaa484386e0a5b3d7f2f4e037cbeee00503ef6b29d33"
 dependencies = [
  "anstream",
  "anstyle",
- "clap 4.5.34",
+ "clap 4.5.35",
  "escape8259",
 ]
 
@@ -4048,9 +4049,9 @@ dependencies = [
 
 [[package]]
 name = "mimalloc"
-version = "0.1.44"
+version = "0.1.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99585191385958383e13f6b822e6b6d8d9cf928e7d286ceb092da92b43c87bc1"
+checksum = "995942f432bbb4822a7e9c3faa87a695185b0d09273ba85f097b54f4e458f2af"
 dependencies = [
  "libmimalloc-sys",
 ]
