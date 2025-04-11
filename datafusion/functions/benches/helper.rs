@@ -17,7 +17,7 @@
 
 use arrow::array::{StringArray, StringViewArray};
 use datafusion_expr::ColumnarValue;
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::sync::Arc;
 

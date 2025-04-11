@@ -87,19 +87,19 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.17", default-features = false }
-arrow = { version = "54.3.1", features = [
+arrow = { git = "https://github.com/paleolimbot/arrow-rs.git", branch = "type-extension-maybe", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "54.3.0", default-features = false }
-arrow-flight = { version = "54.3.1", features = [
+arrow-buffer = { git = "https://github.com/paleolimbot/arrow-rs.git", branch = "type-extension-maybe", default-features = false }
+arrow-flight = { git = "https://github.com/paleolimbot/arrow-rs.git", branch = "type-extension-maybe", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "54.3.0", default-features = false, features = [
+arrow-ipc = { git = "https://github.com/paleolimbot/arrow-rs.git", branch = "type-extension-maybe", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "54.3.0", default-features = false }
-arrow-schema = { version = "54.3.0", default-features = false }
+arrow-ord = { git = "https://github.com/paleolimbot/arrow-rs.git", branch = "type-extension-maybe", default-features = false }
+arrow-schema = { git = "https://github.com/paleolimbot/arrow-rs.git", branch = "type-extension-maybe", default-features = false }
 async-trait = "0.1.88"
 bigdecimal = "0.4.8"
 bytes = "1.10"
@@ -147,9 +147,9 @@ hashbrown = { version = "0.14.5", features = ["raw"] }
 indexmap = "2.8.0"
 itertools = "0.14"
 log = "^0.4"
-object_store = { version = "0.11.0", default-features = false }
+object_store = { version = "0.12.0", default-features = false, features = ["fs"] }
 parking_lot = "0.12"
-parquet = { version = "54.3.1", default-features = false, features = [
+parquet = { git = "https://github.com/paleolimbot/arrow-rs.git", branch = "type-extension-maybe", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -159,7 +159,7 @@ pbjson-types = "0.7"
 # Should match arrow-flight's version of prost.
 insta = { version = "1.41.1", features = ["glob", "filters"] }
 prost = "0.13.1"
-rand = "0.8.5"
+rand = { version = "0.9", features = ["std_rng"] }
 recursive = "0.1.1"
 regex = "1.8"
 rstest = "0.24.0"

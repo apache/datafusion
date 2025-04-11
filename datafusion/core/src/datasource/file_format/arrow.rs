@@ -442,7 +442,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };
@@ -485,7 +485,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };

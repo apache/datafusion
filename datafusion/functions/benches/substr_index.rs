@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rand::distributions::{Alphanumeric, Uniform};
+use rand::distr::{Alphanumeric, Uniform};
 use rand::prelude::Distribution;
 use rand::Rng;
 
@@ -51,7 +51,7 @@ where
 
 fn data() -> (StringArray, StringArray, Int64Array) {
     let dist = Filter {
-        dist: Uniform::new(-4, 5),
+        dist: Uniform::new(-4, 5).unwrap(),
         test: |x: &i64| x != &0,
     };
     let mut rng = rand::thread_rng();

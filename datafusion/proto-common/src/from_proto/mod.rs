@@ -918,7 +918,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             metadata_size_hint: value
                 .metadata_size_hint_opt
                 .map(|opt| match opt {
-                    protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => Some(v as usize),
+                    protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => Some(v),
                 })
                 .unwrap_or(None),
             pushdown_filters: value.pushdown_filters,
