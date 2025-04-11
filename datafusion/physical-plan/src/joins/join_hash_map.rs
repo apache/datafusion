@@ -168,6 +168,9 @@ pub trait JoinHashMapType {
     /// Returns a reference to the next.
     fn get_list(&self) -> &Self::NextType;
 
+    // Whether values in the hashmap are unique
+    fn is_unique(&self) -> bool;
+
     /// Updates hashmap from iterator of row indices & row hashes pairs.
     fn update_from_iter<'a>(
         &mut self,
@@ -261,13 +264,26 @@ pub trait JoinHashMapType {
         limit: usize,
         offset: JoinHashMapOffset,
     ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
-        let mut input_indices = vec![];
-        let mut match_indices = vec![];
-
-        let mut remaining_output = limit;
+        let mut input_indices = Vec::with_capacity(limit);
+        let mut match_indices = Vec::with_capacity(limit);
 
         let hash_map: &HashTable<(u64, u64)> = self.get_map();
         let next_chain = self.get_list();
+        // Check if hashmap consists of unique values
+        // If so, we can skip the chain traversal
+        if self.is_unique() {
+            for (row_idx, &hash_value) in hash_values.iter().enumerate() {
+                if let Some((_, index)) =
+                    hash_map.find(hash_value, |(hash, _)| hash_value == *hash)
+                {
+                    input_indices.push(row_idx as u32);
+                    match_indices.push(index - 1);
+                }
+            }
+            return (input_indices, match_indices, None);
+        }
+
+        let mut remaining_output = limit;
 
         // Calculate initial `hash_values` index before iterating
         let to_skip = match offset {
@@ -295,6 +311,7 @@ pub trait JoinHashMapType {
         };
 
         let mut row_idx = to_skip;
+
         for hash_value in &hash_values[to_skip..] {
             if let Some((_, index)) =
                 hash_map.find(*hash_value, |(hash, _)| *hash_value == *hash)
@@ -337,6 +354,11 @@ impl JoinHashMapType for JoinHashMap {
     /// Get a reference to the next.
     fn get_list(&self) -> &Self::NextType {
         &self.next
+    }
+
+    // /// Check if the values in the hashmap are unique.
+    fn is_unique(&self) -> bool {
+        self.map.len() == self.next.len()
     }
 }
 
