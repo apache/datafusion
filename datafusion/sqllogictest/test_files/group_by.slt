@@ -2232,7 +2232,7 @@ physical_plan
 03)----StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
 query III
-SELECT a, b, LAST_VALUE(c order by c) as last_c
+SELECT a, b, LAST_VALUE(c) as last_c
   FROM annotated_data_infinite2
   GROUP BY a, b
 ----
@@ -2712,8 +2712,8 @@ CREATE TABLE last_null (
           val INT,
           o int
         ) as VALUES
-          (0, NULL, 9),
           (0, 1, 1),
+          (0, NULL, 9),
           (1, 1, 1);
 
 query II rowsort
@@ -2727,6 +2727,14 @@ select k, last_value(val order by o) respect NULLS from last_null group by k;
 ----
 0 NULL
 1 1
+
+query II rowsort
+select k, last_value(val) IGNORE NULLS from last_null group by k;
+----
+0 1
+1 1
+
+
 
 
 query TT
@@ -3798,7 +3806,7 @@ ORDER BY x;
 2 2
 
 query II
-SELECT y, LAST_VALUE(x order by x desc)
+SELECT y, LAST_VALUE(x)
 FROM FOO
 GROUP BY y
 ORDER BY y;

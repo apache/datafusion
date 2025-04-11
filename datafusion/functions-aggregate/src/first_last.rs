@@ -389,7 +389,7 @@ where
             return true;
         }
 
-        !self.input_requirement_satisfied
+        !(self.input_requirement_satisfied && self.pick_first_in_group)
     }
 
     fn should_update_state(
@@ -398,6 +398,10 @@ where
         new_ordering_values: &[ScalarValue],
     ) -> Result<bool> {
         if !self.is_sets.get_bit(group_idx) {
+            return Ok(true);
+        }
+
+        if self.input_requirement_satisfied && !self.pick_first_in_group {
             return Ok(true);
         }
 
@@ -574,7 +578,9 @@ where
 
             let is_valid = self.min_of_each_group_buf.1.get_bit(group_idx);
 
-            if !is_valid {
+            if !is_valid
+                || (self.input_requirement_satisfied && !self.pick_first_in_group)
+            {
                 self.min_of_each_group_buf.1.set_bit(group_idx, true);
                 self.min_of_each_group_buf.0[group_idx] = idx_in_val;
             } else {
