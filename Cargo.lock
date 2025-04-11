@@ -2163,6 +2163,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "datafusion",
+ "datafusion-ffi",
  "datafusion-proto",
  "env_logger",
  "futures",
@@ -2237,6 +2238,7 @@ version = "46.0.1"
 dependencies = [
  "abi_stable",
  "arrow",
+ "arrow-schema",
  "async-ffi",
  "async-trait",
  "datafusion",
