@@ -40,6 +40,7 @@ pub mod cast;
 pub mod config;
 pub mod cse;
 pub mod diagnostic;
+pub mod diagnostic_utils;
 pub mod display;
 pub mod error;
 pub mod file_options;
