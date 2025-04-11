@@ -513,7 +513,7 @@ impl EquivalenceProperties {
             return true;
         };
         let length = normalized_ordering.len();
-        self.compute_common_sort_prefix_length(&normalized_ordering) == length
+        self.common_sort_prefix_length(normalized_ordering) == length
     }
 
     /// Checks whether the given sort requirements are satisfied by any of the
@@ -565,27 +565,25 @@ impl EquivalenceProperties {
             // From the analysis above, we know that `[a ASC]` is satisfied. Then,
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
-            eq_properties = eq_properties
-                .with_constants(std::iter::once(ConstExpr::from(element.expr)));
+            let const_expr = ConstExpr::from(element.expr);
+            eq_properties = eq_properties.with_constants(std::iter::once(const_expr));
         }
         true
     }
 
     /// Returns the number of consecutive sort expressions (starting from the
     /// left) that are satisfied by the existing ordering.
-    fn compute_common_sort_prefix_length(
-        &self,
-        normalized_ordering: &LexOrdering,
-    ) -> usize {
+    fn common_sort_prefix_length(&self, normalized_ordering: LexOrdering) -> usize {
+        let full_length = normalized_ordering.len();
         // Check whether the given ordering is satisfied by constraints:
-        if self.satisfied_by_constraints_ordering(normalized_ordering) {
+        if self.satisfied_by_constraints_ordering(&normalized_ordering) {
             // If constraints satisfy all sort expressions, return the full
             // length:
-            return normalized_ordering.len();
+            return full_length;
         }
         let schema = self.schema();
         let mut eq_properties = self.clone();
-        for (idx, element) in normalized_ordering.iter().enumerate() {
+        for (idx, element) in normalized_ordering.into_iter().enumerate() {
             // Check whether given ordering is satisfied:
             let ExprProperties {
                 sort_properties, ..
@@ -596,7 +594,7 @@ impl EquivalenceProperties {
                         expr: Arc::clone(&element.expr),
                         options,
                     };
-                    sort_expr.satisfy_expr(element, schema)
+                    sort_expr.satisfy_expr(&element, schema)
                 }
                 // Singleton expressions satisfies any ordering.
                 SortProperties::Singleton => true,
@@ -619,12 +617,12 @@ impl EquivalenceProperties {
             // From the analysis above, we know that `[a ASC]` is satisfied. Then,
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
-            let const_expr = ConstExpr::from(Arc::clone(&element.expr));
+            let const_expr = ConstExpr::from(element.expr);
             eq_properties = eq_properties.with_constants(std::iter::once(const_expr));
         }
 
-        // All sort expressions are satisfied:
-        normalized_ordering.len()
+        // All sort expressions are satisfied, return full length:
+        full_length
     }
 
     /// Determines the longest normalized prefix of `ordering` satisfied by the
@@ -639,12 +637,13 @@ impl EquivalenceProperties {
             // If the ordering vanishes after normalization, it is satisfied:
             return (vec![], true);
         };
-        let prefix_len = self.compute_common_sort_prefix_length(&normalized_ordering);
-        if prefix_len == normalized_ordering.len() {
-            (normalized_ordering.take(), true)
-        } else {
-            (normalized_ordering[..prefix_len].to_vec(), false)
+        let prefix_len = self.common_sort_prefix_length(normalized_ordering.clone());
+        let flag = prefix_len == normalized_ordering.len();
+        let mut sort_exprs = normalized_ordering.take();
+        if !flag {
+            sort_exprs.truncate(prefix_len);
         }
+        (sort_exprs, flag)
     }
 
     /// Checks if the sort expressions are satisfied by any of the table
