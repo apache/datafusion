@@ -98,9 +98,7 @@ impl PhysicalExpr for NegativeExpr {
                 let result = neg_wrapping(array.as_ref())?;
                 Ok(ColumnarValue::Array(result))
             }
-            ColumnarValue::Scalar(scalar) => {
-                Ok(ColumnarValue::Scalar(scalar.negate()?))
-            }
+            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(scalar.negate()?)),
         }
     }
 
@@ -152,10 +150,9 @@ impl PhysicalExpr for NegativeExpr {
                 e.offset().negate()?,
                 !e.positive_tail(),
             ),
-            Gaussian(g) => Distribution::new_gaussian(
-                g.mean().negate()?,
-                g.variance().clone(),
-            ),
+            Gaussian(g) => {
+                Distribution::new_gaussian(g.mean().negate()?, g.variance().clone())
+            }
             Bernoulli(_) => {
                 internal_err!("NegativeExpr cannot operate on Boolean datatypes")
             }

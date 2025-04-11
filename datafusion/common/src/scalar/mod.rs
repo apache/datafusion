@@ -6339,11 +6339,13 @@ mod tests {
         assert_eq!(ScalarValue::Int32(Some(-12)), value.negate()?);
         let value = ScalarValue::Int32(None);
         assert_eq!(ScalarValue::Int32(None), value.negate()?);
+        let value = ScalarValue::Boolean(Some(false));
+        assert_eq!(ScalarValue::Boolean(Some(true)), value.negate()?);
 
         // negative test
         let value = ScalarValue::UInt8(Some(12));
         assert!(value.negate().is_err());
-        let value = ScalarValue::Boolean(None);
+        let value = ScalarValue::Binary(None);
         assert!(value.negate().is_err());
         Ok(())
     }
