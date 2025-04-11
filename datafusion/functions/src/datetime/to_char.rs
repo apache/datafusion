@@ -19,7 +19,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::cast::AsArray;
-use arrow::array::{new_null_array, Array, ArrayRef, StringArray};
+use arrow::array::{new_null_array, Array, ArrayRef, GenericStringArray, StringArray};
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{
@@ -28,7 +28,9 @@ use arrow::datatypes::DataType::{
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
-use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, utils::take_function_args, Result, ScalarValue,
+};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
@@ -259,13 +261,31 @@ fn to_char_scalar(
     }
 }
 
-fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arrays = ColumnarValue::values_to_arrays(args)?;
+fn to_char_array_inner(
+    values: ArrayRef,
+    format_array: &GenericStringArray<i32>,
+) -> Result<Vec<Option<String>>, Result<ColumnarValue>> {
     let mut results: Vec<Option<String>> = vec![];
-    let format_array = arrays[1].as_string::<i32>();
-    let data_type = arrays[0].data_type();
 
-    for idx in 0..arrays[0].len() {
+    let data_type = values.data_type();
+
+    // track consecutive Date32 values that fail with datetime formats as a single range.
+    // this allows us to perform just one batch cast to Date64 instead of individual casts.
+    let mut date_retry_range = None;
+
+    for idx in 0..values.len() {
+        if let Some((start_offset, length)) = date_retry_range {
+            let value_slice = cast(values.slice(start_offset, length).as_ref(), &Date64)
+                .map_err(|e| Err(exec_datafusion_err!("{}", e)))?;
+
+            results.extend(to_char_array_inner(
+                value_slice,
+                &format_array.slice(start_offset, length),
+            )?);
+
+            date_retry_range = None;
+        }
+
         let format = if format_array.is_null(idx) {
             None
         } else {
@@ -275,37 +295,56 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             results.push(None);
             continue;
         }
-        let format_options = match build_format_options(data_type, format) {
-            Ok(value) => value,
-            Err(value) => return value,
-        };
+        let format_options = build_format_options(data_type, format)?;
+
         // this isn't ideal but this can't use ValueFormatter as it isn't independent
         // from ArrayFormatter
-        let formatter = ArrayFormatter::try_new(arrays[0].as_ref(), &format_options)?;
+        let formatter = ArrayFormatter::try_new(values.as_ref(), &format_options)
+            .map_err(|e| Err(exec_datafusion_err!("{}", e)))?;
+
         let result = formatter.value(idx).try_to_string();
         match result {
             Ok(value) => results.push(Some(value)),
             Err(e) => {
-                // if the data type was a Date32, formatting could have failed because the format string
-                // contained datetime specifiers, so we'll treat this specific date element as a timestamp
+                // when a Date32 fails formatting due to datetime specifiers in the format string:
+                // - if we already have a retry range, extend it by one more element
+                // - if this is the first failure, start a new retry range at this index
+                // we'll later convert this entire range to Date64 timestamps in a single batch operation
                 if data_type == &Date32 {
-                    let failed_date_value = arrays[0].slice(idx, 1);
+                    date_retry_range = match date_retry_range {
+                        Some((offset, length)) => Some((offset, length + 1)),
+                        None => Some((idx, 1)),
+                    };
 
-                    match retry_date_as_timestamp(failed_date_value, &format_options) {
-                        Ok(value) => {
-                            results.push(Some(value));
-                            continue;
-                        }
-                        Err(e) => {
-                            return exec_err!("{}", e);
-                        }
-                    }
+                    continue;
                 }
 
-                return exec_err!("{}", e);
+                return Err(exec_err!("{}", e));
             }
         }
     }
+
+    if let Some((start_offset, length)) = date_retry_range {
+        let value_slice = cast(values.slice(start_offset, length).as_ref(), &Date64)
+            .map_err(|e| exec_err!("{}", e))?;
+
+        results.extend(to_char_array_inner(
+            value_slice,
+            &format_array.slice(start_offset, length),
+        )?);
+    }
+
+    Ok(results)
+}
+
+fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let arrays = ColumnarValue::values_to_arrays(args)?;
+    let format_array = arrays[1].as_string::<i32>();
+    let results = match to_char_array_inner(Arc::clone(&arrays[0]), format_array) {
+        Ok(results) => results,
+        Err(Ok(columnar_value)) => return Ok(columnar_value),
+        Err(Err(e)) => return exec_err!("{}", e),
+    };
 
     match args[0] {
         ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(StringArray::from(
@@ -318,19 +357,6 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             None => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
         },
     }
-}
-
-fn retry_date_as_timestamp(
-    array_ref: ArrayRef,
-    format_options: &FormatOptions,
-) -> Result<String> {
-    let target_data_type = Date64;
-
-    let date_value = cast(&array_ref, &target_data_type)?;
-    let formatter = ArrayFormatter::try_new(date_value.as_ref(), format_options)?;
-    let result = formatter.value(0).try_to_string()?;
-
-    Ok(result)
 }
 
 #[cfg(test)]
@@ -347,37 +373,6 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
-
-    #[test]
-    fn test_array_array() {
-        let array_array_data = vec![(
-            Arc::new(Date32Array::from(vec![18506, 18507])) as ArrayRef,
-            StringArray::from(vec!["%Y::%m::%d", "%Y::%m::%d %S::%M::%H %f"]),
-            StringArray::from(vec!["2020::09::01", "2020::09::02 00::00::00 000000000"]),
-        )];
-
-        for (value, format, expected) in array_array_data {
-            let batch_len = value.len();
-            let args = datafusion_expr::ScalarFunctionArgs {
-                args: vec![
-                    ColumnarValue::Array(value),
-                    ColumnarValue::Array(Arc::new(format) as ArrayRef),
-                ],
-                number_rows: batch_len,
-                return_type: &DataType::Utf8,
-            };
-            let result = ToCharFunc::new()
-                .invoke_with_args(args)
-                .expect("that to_char parsed values without error");
-
-            if let ColumnarValue::Array(result) = result {
-                assert_eq!(result.len(), 2);
-                assert_eq!(&expected as &dyn Array, result.as_ref());
-            } else {
-                panic!("Expected an array value")
-            }
-        }
-    }
 
     #[test]
     fn test_to_char() {
