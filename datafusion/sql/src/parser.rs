@@ -288,7 +288,7 @@ pub struct DFParser<'a> {
 }
 
 /// Same as `sqlparser`
-const DEFAULT_RECURSION_LIMIT: usize = 50;
+const DEFAULT_RECURSION_LIMIT: usize = 100;
 const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
 
 /// Builder for [`DFParser`]
