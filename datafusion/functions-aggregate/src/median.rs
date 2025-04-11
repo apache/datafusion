@@ -393,7 +393,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         // Emit values
-        let emit_group_values = emit_to.take_needed(&mut self.group_values);
+        let emit_group_values = emit_to.take_needed_rows(&mut self.group_values);
 
         // Build offsets
         let mut offsets = Vec::with_capacity(self.group_values.len() + 1);
@@ -432,7 +432,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         // Emit values
-        let emit_group_values = emit_to.take_needed(&mut self.group_values);
+        let emit_group_values = emit_to.take_needed_rows(&mut self.group_values);
 
         // Calculate median for each group
         let mut evaluate_result_builder =

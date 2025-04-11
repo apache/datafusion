@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{Field, Schema};
-use datafusion::physical_expr::NullState;
+use datafusion::physical_expr::FlatNullState;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use std::{any::Any, sync::Arc};
 
@@ -217,7 +217,7 @@ struct GeometricMeanGroupsAccumulator {
     prods: Vec<f64>,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: FlatNullState,
 }
 
 impl GeometricMeanGroupsAccumulator {
@@ -227,7 +227,7 @@ impl GeometricMeanGroupsAccumulator {
             return_data_type: DataType::Float64,
             counts: vec![],
             prods: vec![],
-            null_state: NullState::new(),
+            null_state: FlatNullState::new(),
         }
     }
 }
@@ -307,8 +307,8 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
 
     /// Generate output, as specified by `emit_to` and update the intermediate state
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed(&mut self.counts);
-        let prods = emit_to.take_needed(&mut self.prods);
+        let counts = emit_to.take_needed_rows(&mut self.counts);
+        let prods = emit_to.take_needed_rows(&mut self.prods);
         let nulls = self.null_state.build(emit_to);
 
         assert_eq!(nulls.len(), prods.len());
@@ -346,10 +346,10 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         let nulls = self.null_state.build(emit_to);
         let nulls = Some(nulls);
 
-        let counts = emit_to.take_needed(&mut self.counts);
+        let counts = emit_to.take_needed_rows(&mut self.counts);
         let counts = UInt32Array::new(counts.into(), nulls.clone()); // zero copy
 
-        let prods = emit_to.take_needed(&mut self.prods);
+        let prods = emit_to.take_needed_rows(&mut self.prods);
         let prods = PrimitiveArray::<Float64Type>::new(prods.into(), nulls) // zero copy
             .with_data_type(self.prod_data_type.clone());
 

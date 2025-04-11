@@ -1154,6 +1154,9 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
 
                 output
             }
+            EmitTo::NextBlock(_) => {
+                unreachable!("this group values still not support blocked groups")
+            }
         };
 
         // TODO: Materialize dictionaries in group keys (#7647)

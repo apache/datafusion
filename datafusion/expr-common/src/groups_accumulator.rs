@@ -17,8 +17,10 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
+use std::collections::VecDeque;
+
 use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy)]
@@ -31,15 +33,40 @@ pub enum EmitTo {
     /// For example, if `n=10`, group_index `0, 1, ... 9` are emitted
     /// and group indexes `10, 11, 12, ...` become `0, 1, 2, ...`.
     First(usize),
+    /// Emit next block in the blocked managed groups
+    ///
+    /// The flag's meaning:
+    ///   - `true` represents new groups still will be added,
+    ///     and we need to shift the values down.
+    ///   - `false` represents no new groups will be added again,
+    ///     and we don't need to shift the values down.
+    NextBlock(bool),
 }
 
 impl EmitTo {
+    /// Remove and return `needed values` from `values`.
+    pub fn take_needed<T>(
+        &self,
+        values: &mut VecDeque<Vec<T>>,
+        is_blocked_groups: bool,
+    ) -> Vec<T> {
+        if is_blocked_groups {
+            self.take_needed_block(values)
+        } else {
+            assert_eq!(values.len(), 1);
+            self.take_needed_rows(values.back_mut().unwrap())
+        }
+    }
+
     /// Removes the number of rows from `v` required to emit the right
     /// number of rows, returning a `Vec` with elements taken, and the
     /// remaining values in `v`.
     ///
     /// This avoids copying if Self::All
-    pub fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
+    ///
+    /// NOTICE: only support emit strategies: `Self::All` and `Self::First`
+    ///
+    pub fn take_needed_rows<T>(&self, v: &mut Vec<T>) -> Vec<T> {
         match self {
             Self::All => {
                 // Take the entire vector, leave new (empty) vector
@@ -52,7 +79,22 @@ impl EmitTo {
                 std::mem::swap(v, &mut t);
                 t
             }
+            Self::NextBlock(_) => unreachable!("don't support take block in take_needed"),
         }
+    }
+
+    /// Removes one block required to emit and return it
+    ///
+    /// NOTICE: only support emit strategy `Self::NextBlock`
+    ///
+    fn take_needed_block<T>(&self, blocks: &mut VecDeque<Vec<T>>) -> Vec<T> {
+        assert!(
+            matches!(self, Self::NextBlock(_)),
+            "only support take block in take_needed_block"
+        );
+        blocks
+            .pop_front()
+            .expect("should not call emit for empty blocks")
     }
 }
 
@@ -250,4 +292,30 @@ pub trait GroupsAccumulator: Send {
     /// This function is called once per batch, so it should be `O(n)` to
     /// compute, not `O(num_groups)`
     fn size(&self) -> usize;
+
+    /// Returns `true` if this accumulator supports blocked groups.
+    fn supports_blocked_groups(&self) -> bool {
+        false
+    }
+
+    /// Alter the block size in the accumulator
+    ///
+    /// If the target block size is `None`, it will use a single big
+    /// block(can think it a `Vec`) to manage the state.
+    ///
+    /// If the target block size` is `Some(blk_size)`, it will try to
+    /// set the block size to `blk_size`, and the try will only success
+    /// when the accumulator has supported blocked mode.
+    ///
+    /// NOTICE: After altering block size, all data in previous will be cleared.
+    ///
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        if block_size.is_some() {
+            return Err(DataFusionError::NotImplemented(
+                "this accumulator doesn't support blocked mode yet".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 }
