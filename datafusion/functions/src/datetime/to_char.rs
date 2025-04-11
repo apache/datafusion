@@ -249,8 +249,8 @@ fn to_char_scalar(
             ))
         }
     } else {
-        // if the format attempt is with a Date32, it's possible the attempt failed because
-        // the format string contained time-specifiers, so we'll retry casting as Date64
+        // if the data type was a Date32, formatting could have failed because the format string
+        // contained datetime specifiers, so we'll retry by casting the date array as a timestamp array
         if data_type == &Date32 {
             return to_char_scalar(expression.clone().cast_to(&Date64, None)?, format);
         }
@@ -286,8 +286,8 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match result {
             Ok(value) => results.push(Some(value)),
             Err(e) => {
-                // if the format attempt is with a Date32, it's possible the attempt failed because
-                // the format string contained time-specifiers, so we'll retry the specific failed Date32 as a Date64
+                // if the data type was a Date32, formatting could have failed because the format string
+                // contained datetime specifiers, so we'll treat this specific date element as a timestamp
                 if data_type == &Date32 {
                     let failed_date_value = arrays[0].slice(idx, 1);
 
