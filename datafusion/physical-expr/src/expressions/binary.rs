@@ -365,7 +365,8 @@ impl PhysicalExpr for BinaryExpr {
         match check_short_circuit(&lhs, &self.op) {
             ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
             ShortCircuitStrategy::ReturnRight => {
-                return Ok(self.right.evaluate(batch)?)
+                let rhs = self.right.evaluate(batch)?;
+                return Ok(rhs);
             }
             ShortCircuitStrategy::None => {} // Continue if no short-circuit applies.
         }
