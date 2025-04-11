@@ -45,6 +45,7 @@ pub use crate::execution_plan::{
     execute_stream_partitioned, get_plan_string, with_new_children_if_necessary,
     ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
+pub use crate::filter_pushdown::FilterPushdownResult;
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
@@ -67,6 +68,7 @@ pub mod empty;
 pub mod execution_plan;
 pub mod explain;
 pub mod filter;
+pub mod filter_pushdown;
 pub mod joins;
 pub mod limit;
 pub mod memory;

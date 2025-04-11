@@ -27,10 +27,11 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{try_pushdown_filters_to_input, CardinalityEffect};
 use crate::projection::{make_with_child, ProjectionExec};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::{DisplayFormatType, ExecutionPlan, FilterPushdownResult, Partitioning};
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
@@ -235,6 +236,15 @@ impl ExecutionPlan for CoalescePartitionsExec {
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),
         }))
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        parent_filters: &[datafusion_physical_expr::PhysicalExprRef],
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        try_pushdown_filters_to_input(plan, &self.input, parent_filters, config)
     }
 }
 

@@ -17,7 +17,7 @@
 
 //! Table source
 
-use crate::{Expr, LogicalPlan};
+use crate::{Expr, FilterPushdown, LogicalPlan};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Constraints, Result};
@@ -33,22 +33,7 @@ use std::{any::Any, borrow::Cow};
 /// omitted.
 ///
 /// [`TableProvider::scan`]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html#tymethod.scan
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TableProviderFilterPushDown {
-    /// The filter cannot be used by the provider and will not be pushed down.
-    Unsupported,
-    /// The filter can be used, but the provider might still return some tuples
-    /// that do not pass the filter.
-    ///
-    /// In this case, DataFusion applies an additional `Filter` operation
-    /// after the scan to ensure all rows are filtered correctly.
-    Inexact,
-    /// The provider **guarantees** that it will omit **only** tuples which
-    /// pass the filter.
-    ///
-    /// In this case, DataFusion will not apply additional filtering.
-    Exact,
-}
+pub type TableProviderFilterPushDown = FilterPushdown;
 
 /// Indicates the type of this table for metadata/catalog purposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

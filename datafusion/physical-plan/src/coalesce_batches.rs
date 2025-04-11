@@ -23,18 +23,21 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
+use super::{
+    DisplayAs, ExecutionPlanProperties, FilterPushdownResult, PlanProperties, Statistics,
+};
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{try_pushdown_filters_to_input, CardinalityEffect};
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -211,6 +214,15 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        parent_filters: &[datafusion_physical_expr::PhysicalExprRef],
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        try_pushdown_filters_to_input(plan, &self.input, parent_filters, config)
     }
 }
 

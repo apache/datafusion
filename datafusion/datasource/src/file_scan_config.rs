@@ -31,20 +31,22 @@ use arrow::{
     buffer::Buffer,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
 };
-use datafusion_common::{exec_err, ColumnStatistics, Constraints, Result, Statistics};
+use datafusion_common::{
+    config::ConfigOptions, exec_err, ColumnStatistics, Constraints, Result, Statistics,
+};
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
 use datafusion_physical_expr::{
     expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
-    PhysicalSortExpr,
+    PhysicalExprRef, PhysicalSortExpr,
 };
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     metrics::ExecutionPlanMetricsSet,
     projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
-    DisplayAs, DisplayFormatType, ExecutionPlan,
+    DisplayAs, DisplayFormatType, ExecutionPlan, FilterPushdownResult,
 };
 use log::{debug, warn};
 
@@ -586,6 +588,33 @@ impl DataSource for FileScanConfig {
                     .build(),
             ) as _
         }))
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        parent_filters: &[PhysicalExprRef],
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
+        match self
+            .file_source
+            .try_pushdown_filters(parent_filters, config)?
+        {
+            FilterPushdownResult::NotPushed => Ok(FilterPushdownResult::NotPushed),
+            FilterPushdownResult::Pushed {
+                updated: inner,
+                support,
+            } => {
+                let new_self = Arc::new(
+                    FileScanConfigBuilder::from(self.clone())
+                        .with_source(inner)
+                        .build(),
+                );
+                Ok(FilterPushdownResult::Pushed {
+                    updated: new_self,
+                    support,
+                })
+            }
+        }
     }
 }
 

@@ -48,6 +48,7 @@ pub mod expr;
 pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
+mod filter_pushdown;
 pub mod function;
 pub mod select_expr;
 pub mod groups_accumulator {
@@ -90,6 +91,7 @@ pub use expr::{
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
+pub use filter_pushdown::FilterPushdown;
 pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,

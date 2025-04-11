@@ -26,10 +26,12 @@ use super::{
 };
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
+use crate::filter_pushdown::FilterPushdown;
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
     ProjectionExec,
 };
+use crate::FilterPushdownResult;
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
@@ -39,6 +41,7 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
@@ -48,10 +51,10 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AcrossPartitions, AnalysisContext, ConstExpr,
-    ExprBoundaries, PhysicalExpr,
+    analyze, conjunction, split_conjunction, AcrossPartitions, AnalysisContext,
+    ConstExpr, ExprBoundaries, PhysicalExpr, PhysicalExprRef,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -432,6 +435,77 @@ impl ExecutionPlan for FilterExec {
             }
         }
         try_embed_projection(projection, self)
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        _plan: &Arc<dyn ExecutionPlan>,
+        parent_filters: &[PhysicalExprRef],
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // filters are in terms of the output columns of this plan
+        let mut all_filters = parent_filters.to_vec();
+        all_filters.push(Arc::clone(&self.predicate));
+        let all_filters = if self.projection.is_some() {
+            let input_schema = self.input.schema();
+            all_filters
+                .into_iter()
+                .map(|f| reassign_predicate_columns(f, &input_schema, false))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            all_filters
+        };
+        let (new_predicate, new_input) =
+            match self
+                .input
+                .try_pushdown_filters(&self.input, &all_filters, config)?
+            {
+                FilterPushdownResult::NotPushed => {
+                    if parent_filters.is_empty() {
+                        return Ok(FilterPushdownResult::NotPushed);
+                    }
+                    (conjunction(all_filters), Arc::clone(&self.input))
+                }
+                FilterPushdownResult::Pushed {
+                    updated: inner,
+                    support,
+                } => {
+                    // Split out the filters that the child plan handled and the ones it did not
+                    let unhandled_filters = all_filters
+                        .into_iter()
+                        .zip(support)
+                        .filter_map(|(f, s)| if s.is_exact() { None } else { Some(f) })
+                        .collect::<Vec<_>>();
+                    // If there are no unhandled filters and we have no projection, return the inner plan
+                    if unhandled_filters.is_empty() && self.projection.is_none() {
+                        return Ok(FilterPushdownResult::Pushed {
+                            updated: inner,
+                            support: vec![FilterPushdown::Exact; parent_filters.len()],
+                        });
+                    }
+                    let new_predicate = conjunction(unhandled_filters);
+                    (new_predicate, inner)
+                }
+            };
+
+        let cache = Self::compute_properties(
+            &self.input,
+            &new_predicate,
+            self.default_selectivity,
+            self.projection.as_ref(),
+        )?;
+        let new_self = Self {
+            predicate: new_predicate,
+            input: new_input,
+            metrics: self.metrics.clone(),
+            default_selectivity: self.default_selectivity,
+            cache,
+            projection: self.projection.clone(),
+        };
+        Ok(FilterPushdownResult::Pushed {
+            updated: Arc::new(new_self),
+            support: vec![FilterPushdown::Exact; parent_filters.len()],
+        })
     }
 }
 

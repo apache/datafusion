@@ -27,9 +27,10 @@ use std::{any::Any, vec};
 use super::common::SharedMemoryReservation;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
-    DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    DisplayAs, ExecutionPlanProperties, FilterPushdownResult, RecordBatchStream,
+    SendableRecordBatchStream,
 };
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{try_pushdown_filters_to_input, CardinalityEffect};
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
@@ -43,6 +44,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -722,6 +724,15 @@ impl ExecutionPlan for RepartitionExec {
             new_projection,
             new_partitioning,
         )?)))
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        parent_filters: &[datafusion_physical_expr::PhysicalExprRef],
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        try_pushdown_filters_to_input(plan, &self.input, parent_filters, config)
     }
 }
 
