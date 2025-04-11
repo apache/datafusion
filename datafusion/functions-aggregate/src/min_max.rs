@@ -21,15 +21,16 @@
 mod min_max_bytes;
 
 use arrow::array::{
-    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
-    LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+    Date64Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, Float16Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
 };
 use arrow::compute;
 use arrow::datatypes::{
@@ -610,8 +611,55 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 min_binary_view
             )
         }
+        DataType::Struct(_) => min_max_batch_struct(values, Ordering::Greater)?,
         _ => min_max_batch!(values, min),
     })
+}
+
+fn min_max_batch_struct(array: &ArrayRef, ordering: Ordering) -> Result<ScalarValue> {
+    if array.len() == array.null_count() {
+        return ScalarValue::try_from(array.data_type());
+    }
+    let mut extreme = ScalarValue::try_from_array(array, 0)?;
+    for i in 1..array.len() {
+        let current = ScalarValue::try_from_array(array, i)?;
+        if current.is_null() {
+            continue;
+        }
+        if extreme.is_null() {
+            extreme = current;
+            continue;
+        }
+        match extreme.partial_cmp(&current) {
+            Some(cmp) => {
+                if cmp == ordering {
+                    extreme = current;
+                }
+            }
+            None => {
+                return internal_err!("Comparison error while computing min/max");
+            }
+        }
+    }
+    Ok(extreme)
+}
+
+macro_rules! min_max_struct {
+    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
+        if $VALUE.is_null() {
+            Ok($DELTA.clone())
+        } else if $DELTA.is_null() {
+            Ok($VALUE.clone())
+        } else {
+            match $VALUE.partial_cmp(&$DELTA) {
+                Some(choose_min_max!($OP)) => Ok($DELTA.clone()),
+                Some(_) => Ok($VALUE.clone()),
+                None => {
+                    internal_err!("Comparison error while computing min/max")
+                }
+            }
+        }
+    }};
 }
 
 /// dynamically-typed max(array) -> ScalarValue
@@ -653,6 +701,7 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 max_binary
             )
         }
+        DataType::Struct(_) => min_max_batch_struct(values, Ordering::Less)?,
         _ => min_max_batch!(values, max),
     })
 }
@@ -922,6 +971,13 @@ macro_rules! min_max {
                 ScalarValue::DurationNanosecond(rhs),
             ) => {
                 typed_min_max!(lhs, rhs, DurationNanosecond, $OP)
+            }
+
+            (
+                lhs @ ScalarValue::Struct(_),
+                rhs @ ScalarValue::Struct(_),
+            ) => {
+                min_max_struct!(lhs, rhs, $OP)?
             }
             e => {
                 return internal_err!(

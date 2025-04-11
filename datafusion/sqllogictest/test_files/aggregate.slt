@@ -6752,3 +6752,29 @@ select c2, count(*) from test WHERE 1 = 1 group by c2;
 5 1
 6 1
 
+
+# Min/Max struct
+query ?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a', c2 AS 'b') AS c FROM t)
+----
+{a: 1, b: 2} {a: 10, b: 11}
+
+# Min/Max struct with NULL
+query ?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT CASE WHEN c1 % 2 == 0 THEN STRUCT(c1 AS 'a', c2 AS 'b') ELSE NULL END AS c FROM t)
+----
+{a: 2, b: 3} {a: 10, b: 11}
+
+# Min/Max struct with two recordbatch
+query ?? rowsort
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(1 as 'a', 2 as 'b') AS c UNION SELECT STRUCT(3 as 'a', 4 as 'b') AS c )
+----
+{a: 1, b: 2} {a: 3, b: 4}
+
+# Min/Max struct empty
+query ?? rowsort
+SELECT MIN(c), MAX(c) FROM (SELECT * FROM (SELECT STRUCT(1 as 'a', 2 as 'b') AS c) LIMIT 0)
+----
+NULL NULL
