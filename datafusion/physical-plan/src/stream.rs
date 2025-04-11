@@ -26,6 +26,7 @@ use super::metrics::BaselineMetrics;
 use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
 
+use arrow::array::RecordBatchOptions;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::{exec_err, Result};
 use datafusion_common_runtime::JoinSet;
@@ -362,6 +363,8 @@ pin_project! {
 
         #[pin]
         stream: S,
+
+        transform_schema: bool,
     }
 }
 
@@ -389,7 +392,19 @@ impl<S> RecordBatchStreamAdapter<S> {
     /// // ...
     /// ```
     pub fn new(schema: SchemaRef, stream: S) -> Self {
-        Self { schema, stream }
+        Self {
+            schema,
+            stream,
+            transform_schema: false,
+        }
+    }
+
+    pub fn new_with_transform_schema(schema: SchemaRef, stream: S) -> Self {
+        Self {
+            schema,
+            stream,
+            transform_schema: true,
+        }
     }
 }
 
@@ -408,7 +423,25 @@ where
     type Item = Result<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.project().stream.poll_next(cx)
+        let this = self.project();
+        let transform_schema = *this.transform_schema;
+        let schema = Arc::clone(this.schema);
+        let ret = this.stream.poll_next(cx);
+        if transform_schema {
+            if let Poll::Ready(Some(Ok(batch))) = ret {
+                let options =
+                    RecordBatchOptions::default().with_row_count(Some(batch.num_rows()));
+                return Poll::Ready(Some(
+                    RecordBatch::try_new_with_options(
+                        schema,
+                        batch.columns().to_vec(),
+                        &options,
+                    )
+                    .map_err(|e| datafusion_common::DataFusionError::ArrowError(e, None)),
+                ));
+            }
+        }
+        ret
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
