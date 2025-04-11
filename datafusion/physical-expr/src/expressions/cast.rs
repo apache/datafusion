@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::physical_expr::PhysicalExpr;
 
 use arrow::compute::{can_cast_types, CastOptions};
-use arrow::datatypes::{DataType, DataType::*, Schema};
+use arrow::datatypes::{DataType, DataType::*, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result};
@@ -142,6 +142,10 @@ impl PhysicalExpr for CastExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
         value.cast_to(&self.cast_type, Some(&self.cast_options))
+    }
+
+    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
+        self.expr.output_field(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

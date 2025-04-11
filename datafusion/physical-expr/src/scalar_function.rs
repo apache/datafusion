@@ -30,6 +30,7 @@
 //! to a function that supports f64, it is coerced to f64.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -38,7 +39,7 @@ use crate::expressions::Literal;
 use crate::PhysicalExpr;
 
 use arrow::array::{Array, RecordBatch};
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
@@ -48,13 +49,35 @@ use datafusion_expr::{
 };
 
 /// Physical expression of a scalar function
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Eq, PartialEq)]
 pub struct ScalarFunctionExpr {
     fun: Arc<ScalarUDF>,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
     nullable: bool,
+    metadata: HashMap<String, String>,
+}
+
+impl Hash for ScalarFunctionExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Sort keys for deterministic hashing
+        let mut keys: Vec<&String> = self.metadata.keys().collect();
+        keys.sort();
+
+        for key in keys {
+            key.hash(state);
+            if let Some(value) = self.metadata.get(key) {
+                value.hash(state);
+            }
+        }
+
+        self.fun.hash(state);
+        self.name.hash(state);
+        self.args.hash(state);
+        self.return_type.hash(state);
+        self.nullable.hash(state);
+    }
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -75,6 +98,7 @@ impl ScalarFunctionExpr {
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
+        metadata: HashMap<String, String>,
     ) -> Self {
         Self {
             fun,
@@ -82,6 +106,7 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             nullable: true,
+            metadata,
         }
     }
 
@@ -125,6 +150,7 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             nullable,
+            metadata: HashMap::new(),
         })
     }
 
@@ -185,6 +211,16 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
+        let arg_fields_owned = self
+            .args
+            .iter()
+            .map(|e| e.output_field(batch.schema_ref()))
+            .collect::<Result<Vec<_>>>()?;
+        let arg_fields = arg_fields_owned
+            .iter()
+            .map(|opt_map| opt_map.as_ref())
+            .collect::<Vec<_>>();
+
         let input_empty = args.is_empty();
         let input_all_scalar = args
             .iter()
@@ -193,6 +229,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // evaluate the function
         let output = self.fun.invoke_with_args(ScalarFunctionArgs {
             args,
+            arg_fields,
             number_rows: batch.num_rows(),
             return_type: &self.return_type,
         })?;
@@ -214,6 +251,10 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(output)
     }
 
+    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
+        Ok(self.fun.as_ref().inner().output_field(input_schema))
+    }
+
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         self.args.iter().collect()
     }
@@ -228,6 +269,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 Arc::clone(&self.fun),
                 children,
                 self.return_type().clone(),
+                self.metadata.clone(),
             )
             .with_nullable(self.nullable),
         ))

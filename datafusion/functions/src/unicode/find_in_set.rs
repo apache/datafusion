@@ -471,8 +471,10 @@ mod tests {
                     })
                     .unwrap_or(1);
                 let return_type = fis.return_type(&type_array)?;
+                let arg_fields = vec![None; args.len()];
                 let result = fis.invoke_with_args(ScalarFunctionArgs {
                     args,
+                    arg_fields,
                     number_rows: cardinality,
                     return_type: &return_type,
                 });

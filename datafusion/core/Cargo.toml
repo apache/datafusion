@@ -95,7 +95,7 @@ extended_tests = []
 [dependencies]
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
-arrow-schema = { workspace = true }
+arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 bzip2 = { version = "0.5.2", optional = true }

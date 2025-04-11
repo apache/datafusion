@@ -366,6 +366,7 @@ pub fn parse_physical_expr(
                     scalar_fun_def,
                     args,
                     convert_required!(e.return_type)?,
+                    std::collections::hash_map::HashMap::new(),
                 )
                 .with_nullable(e.nullable),
             )
