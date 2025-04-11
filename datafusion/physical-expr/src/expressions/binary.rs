@@ -836,60 +836,74 @@ enum ShortCircuitStrategy {
 /// 2. Handles both scalar values and array values
 /// 3. For arrays, uses optimized bit counting techniques for boolean arrays
 fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrategy {
-    // Only apply short-circuiting for logical operators And/Or.
+    // Quick reject for non-logical operators
     if !matches!(op, Operator::And | Operator::Or) {
         return ShortCircuitStrategy::None;
     }
 
-    let is_and = matches!(op, Operator::And);
-
-    // Early return for non-boolean types
+    // Non-boolean types can't be short-circuited
     if lhs.data_type() != DataType::Boolean {
         return ShortCircuitStrategy::None;
     }
 
+    // For AND operations, we prioritize detecting all-false cases
+    // For OR operations, we prioritize detecting all-true cases
+    let is_and = matches!(op, Operator::And);
+
     match lhs {
         ColumnarValue::Array(array) => {
-            if let Ok(array) = as_boolean_array(&array) {
-                // For both operations, check if we have nulls
-                if array.null_count() > 0 {
+            // Fast path for arrays - try to downcast to boolean array
+            if let Ok(bool_array) = as_boolean_array(&array) {
+                // Arrays with nulls can't be short-circuited
+                if bool_array.null_count() > 0 {
                     return ShortCircuitStrategy::None;
                 }
 
-                let len = array.len();
+                let len = bool_array.len();
+                if len == 0 {
+                    return ShortCircuitStrategy::None;
+                }
 
-                // Optimize evaluation order based on operator type
-                // This avoids redundant counting operations
                 if is_and {
-                    // For AND, check for all false values first (most common short-circuit case)
-                    let false_count = array.false_count();
+                    // For AND, prioritize checking for all-false (short circuit case)
+                    // Uses optimized false_count() method provided by Arrow
+                    let false_count = bool_array.false_count();
+
+                    // Short circuit if all values are false
                     if false_count == len {
-                        return ShortCircuitStrategy::ReturnLeft; // All false for AND
+                        return ShortCircuitStrategy::ReturnLeft;
                     }
 
+                    // If no false values, then all must be true
                     if false_count == 0 {
-                        // This means all true
-                        return ShortCircuitStrategy::ReturnRight; // All true for AND
+                        return ShortCircuitStrategy::ReturnRight;
                     }
                 } else {
-                    // is OR
-                    // For OR, check for all true values first (most common short-circuit case)
-                    let true_count = array.true_count();
+                    // For OR, prioritize checking for all-true (short circuit case)
+                    // Uses optimized true_count() method provided by Arrow
+                    let true_count = bool_array.true_count();
+
+                    // Short circuit if all values are true
                     if true_count == len {
-                        return ShortCircuitStrategy::ReturnLeft; // All true for OR
+                        return ShortCircuitStrategy::ReturnLeft;
                     }
 
+                    // If no true values, then all must be false
                     if true_count == 0 {
-                        // This means all false
-                        return ShortCircuitStrategy::ReturnRight; // All false for OR
+                        return ShortCircuitStrategy::ReturnRight;
                     }
                 }
             }
         }
         ColumnarValue::Scalar(scalar) => {
+            // Fast path for scalar values
             if let ScalarValue::Boolean(Some(value)) = scalar {
+                // Direct logic based on the value and operation type
                 let is_true = *value;
 
+                // Return Left for:
+                // - AND with false value
+                // - OR with true value
                 if (is_and && !is_true) || (!is_and && is_true) {
                     return ShortCircuitStrategy::ReturnLeft;
                 } else {
@@ -899,6 +913,7 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
         }
     }
 
+    // If we can't short-circuit, indicate that normal evaluation should continue
     ShortCircuitStrategy::None
 }
 
