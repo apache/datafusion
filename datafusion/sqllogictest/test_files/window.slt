@@ -5610,3 +5610,35 @@ DROP TABLE aggregate_test_100_utf8view;
 
 statement ok
 DROP TABLE aggregate_test_100
+
+# window definitions with aliases
+query II rowsort
+SELECT
+  t1.v1,
+  SUM(t1.v1) OVER W + 1
+FROM
+  generate_series(1, 5) AS t1(v1)
+WINDOW
+  w AS (ORDER BY t1.v1);
+----
+1 2
+2 4
+3 7
+4 11
+5 16
+
+# window definitions with aliases
+query II rowsort
+SELECT
+  t1.v1,
+  SUM(t1.v1) OVER w + 1
+FROM
+  generate_series(1, 5) AS t1(v1)
+WINDOW
+  W AS (ORDER BY t1.v1);
+----
+1 2
+2 4
+3 7
+4 11
+5 16
