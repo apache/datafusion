@@ -25,7 +25,7 @@ use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
@@ -327,7 +327,10 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     ///
     /// Note for implementers: this method should *not* handle recursion.
     /// Recursion is handled in [`snapshot_physical_expr`].
-    fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    fn snapshot(
+        &self,
+        remapped_schema: Option<SchemaRef>,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // By default, we return None to indicate that this PhysicalExpr does not
         // have any dynamic references or state.
         // This is a safe default behavior.
@@ -513,9 +516,10 @@ pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
 /// any dynamic references or state, it returns `None`.
 pub fn snapshot_physical_expr(
     expr: Arc<dyn PhysicalExpr>,
+    schema: Option<SchemaRef>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     expr.transform_up(|e| {
-        if let Some(snapshot) = e.snapshot()? {
+        if let Some(snapshot) = e.snapshot(schema.clone())? {
             Ok(Transformed::yes(snapshot))
         } else {
             Ok(Transformed::no(Arc::clone(&e)))
