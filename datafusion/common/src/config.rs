@@ -272,6 +272,9 @@ config_namespace! {
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
         pub recursion_limit: usize, default = 50
+
+        /// When set to true, the SQL parser will parse literal bytes as `FixedSizeBinary` type
+        pub parse_hex_as_fixed_size_binary: bool, default = false
     }
 }
 

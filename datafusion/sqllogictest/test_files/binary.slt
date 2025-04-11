@@ -151,6 +151,21 @@ query error DataFusion error: Error during planning: Cannot infer common argumen
 SELECT column1, column1 = X'0102' FROM t
 
 statement ok
+set datafusion.sql_parser.parse_hex_as_fixed_size_binary = true;
+
+query ?B
+SELECT column1, column1 = X'000102' FROM t
+----
+000102 true
+003102 false
+NULL NULL
+ff0102 false
+000102 true
+
+statement ok
+set datafusion.sql_parser.parse_hex_as_fixed_size_binary = false;
+
+statement ok
 drop table t_source
 
 statement ok

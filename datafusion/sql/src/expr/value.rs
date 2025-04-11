@@ -57,7 +57,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             Value::HexStringLiteral(s) => {
                 if let Some(v) = try_decode_hex_literal(&s) {
-                    Ok(lit(v))
+                    if self.options.parse_hex_as_fixed_size_binary {
+                        let safe_len = i32::try_from(v.len()).map_err(|_| {
+                            DataFusionError::from(ParserError(format!(
+                                "HexStringLiteral too long, length: {}",
+                                v.len(),
+                            )))
+                        })?;
+                        Ok(Expr::Literal(ScalarValue::FixedSizeBinary(
+                            safe_len,
+                            Some(v),
+                        )))
+                    } else {
+                        Ok(lit(v))
+                    }
                 } else {
                     plan_err!("Invalid HexStringLiteral '{s}'")
                 }
