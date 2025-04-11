@@ -263,10 +263,6 @@ impl TypeSignatureClass {
         self: &TypeSignatureClass,
         logical_type: &NativeType,
     ) -> bool {
-        if logical_type == &NativeType::Null {
-            return true;
-        }
-
         match self {
             TypeSignatureClass::Native(t) if t.native() == logical_type => true,
             TypeSignatureClass::Timestamp if logical_type.is_timestamp() => true,

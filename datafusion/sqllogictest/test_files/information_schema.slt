@@ -736,8 +736,11 @@ select specific_name, data_type, ordinal_position, parameter_mode, rid from info
 repeat Int64 2 IN 0
 repeat Int64 2 IN 1
 repeat Int64 2 IN 2
+repeat Int64 2 IN 3
 repeat LargeUtf8 1 IN 1
 repeat LargeUtf8 1 OUT 1
+repeat Null 1 IN 3
+repeat Null 1 OUT 3
 repeat Utf8 1 IN 0
 repeat Utf8 1 OUT 0
 repeat Utf8 1 OUT 2
