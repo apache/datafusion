@@ -36,16 +36,8 @@ use super::Column;
 /// A dynamic [`PhysicalExpr`] that can be updated by anyone with a reference to it.
 #[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
-    /// The original children of this PhysicalExpr, if any.
-    /// This is necessary because the dynamic filter may be initialized with a placeholder (e.g. `lit(true)`)
-    /// and later remapped to the actual expressions that are being filtered.
-    /// But we need to know the children (e.g. columns referenced in the expression) ahead of time to evaluate the expression correctly.
-    // columns: Vec<Arc<dyn PhysicalExpr>>,
-    // /// If any of the children were remapped / modified (e.g. to adjust for projections) we need to keep track of the new children
-    // /// so that when we update `current()` in subsequent iterations we can re-apply the replacements.
-    remapped_schema: Option<SchemaRef>,
     /// The source of dynamic filters.
-    inner: Arc<RwLock<PhysicalExprRef>>,
+    inner: PhysicalExprRef,
 
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
@@ -105,47 +97,44 @@ impl DynamicFilterPhysicalExpr {
         inner: Arc<dyn PhysicalExpr>,
     ) -> Self {
         Self {
-            // columns: children,
-            // remapped_columns: None, // Initially no remapped children
-            remapped_schema: None,
-            // remapped_filter: None,
-            inner: Arc::new(RwLock::new(inner)),
+            inner,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
     }
 
     // udpate schema
-    pub fn with_schema(
-        &self,
-        schema: SchemaRef,
-    ) -> Self {
-        Self {
-            remapped_schema: Some(schema),
-            inner: Arc::clone(&self.inner),
-            data_type: Arc::clone(&self.data_type),
-            nullable: Arc::clone(&self.nullable),
-        }
-    }
+    // pub fn with_schema(&self, schema: SchemaRef) -> Self {
+    //     Self {
+    //         remapped_schema: Some(schema),
+    //         inner: Arc::clone(&self.inner),
+    //         data_type: Arc::clone(&self.data_type),
+    //         nullable: Arc::clone(&self.nullable),
+    //     }
+    // }
 
     // get the source filter
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        let inner = self
-            .inner
-            .read()
-            .map_err(|_| {
-                datafusion_common::DataFusionError::Execution(
-                    "Failed to acquire read lock for inner".to_string(),
-                )
-            })?
-            .clone();
+        let inner = Arc::clone(&self.inner);
+
+        // let inner = self
+        //     .inner
+        //     .read()
+        //     .map_err(|_| {
+        //         datafusion_common::DataFusionError::Execution(
+        //             "Failed to acquire read lock for inner".to_string(),
+        //         )
+        //     })?
+        //     .clone();
         Ok(inner)
     }
 
     // update source filter
-    pub fn update(&self, filter: PhysicalExprRef) {
-        let mut w = self.inner.write().unwrap();
-        *w = filter;
+    // create a new one
+    pub fn update(&mut self, filter: PhysicalExprRef) {
+        self.inner = filter;
+        // let mut w = self.inner.write().unwrap();
+        // *w = filter;
     }
 }
 
@@ -165,8 +154,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         debug_assert_eq!(children.len(), 1);
         let inner = children.swap_remove(0);
-        self.update(inner);
-        Ok(self)
+        Ok(Arc::new(Self::new(inner)))
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
@@ -241,33 +229,39 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 
     // snapshot with given schema based on the source filter.
     // only evalute is expected to be called after this output. no schema or source filter are updated for the snapshot.
-    fn snapshot(&self) -> Result<Option<PhysicalExprRef>> {
-        if let Some(remapped_schema) = self.remapped_schema.as_ref() {
+    fn snapshot(
+        &self,
+        remapped_schema: Option<SchemaRef>,
+    ) -> Result<Option<PhysicalExprRef>> {
+        if let Some(remapped_schema) = remapped_schema {
             let pred = self.current()?;
-            let new_pred = pred.transform_up(|expr| {
-                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                    let index = match remapped_schema.index_of(col.name()) {
-                        Ok(idx) => idx,
-                        Err(_) => return Err(datafusion_common::DataFusionError::Plan(
-                            format!("Column {} not found in schema", col.name()),
-                        )),
-                    };
-                    return Ok(Transformed::yes(Arc::new(Column::new(
-                        col.name(),
-                        index,
-                    ))));
-                } else {
-                    // If the expression is not a column, just return it
-                    return Ok(Transformed::no(expr));
-                }
-            }).data()?;
+            let new_pred = pred
+                .transform_up(|expr| {
+                    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                        let index = match remapped_schema.index_of(col.name()) {
+                            Ok(idx) => idx,
+                            Err(_) => {
+                                return Err(datafusion_common::DataFusionError::Plan(
+                                    format!("Column {} not found in schema", col.name()),
+                                ))
+                            }
+                        };
+                        return Ok(Transformed::yes(Arc::new(Column::new(
+                            col.name(),
+                            index,
+                        ))));
+                    } else {
+                        // If the expression is not a column, just return it
+                        return Ok(Transformed::no(expr));
+                    }
+                })
+                .data()?;
 
             Ok(Some(new_pred))
         } else {
             Ok(Some(self.current()?))
         }
     }
-
 }
 
 #[cfg(test)]
@@ -313,11 +307,15 @@ mod test {
         ]));
         // Each ParquetExec calls `with_new_children` on the DynamicFilterPhysicalExpr
         // and remaps the children to the file schema.
-        let dynamic_filter_1 = dynamic_filter.with_schema(Arc::clone(&filter_schema_1));
-        let snap_1 = dynamic_filter_1.snapshot().unwrap().unwrap();
+        let snap_1 = dynamic_filter
+            .snapshot(Some(Arc::clone(&filter_schema_1)))
+            .unwrap()
+            .unwrap();
         insta::assert_snapshot!(format!("{snap_1:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Eq, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
-        let dynamic_filter_2 = dynamic_filter.with_schema(Arc::clone(&filter_schema_2));
-        let  snap_2 = dynamic_filter_2.snapshot().unwrap().unwrap();
+        let snap_2 = dynamic_filter
+            .snapshot(Some(Arc::clone(&filter_schema_2)))
+            .unwrap()
+            .unwrap();
         insta::assert_snapshot!(format!("{snap_2:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Eq, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
         // Both filters allow evaluating the same expression
         let batch_1 = RecordBatch::try_new(
@@ -363,11 +361,19 @@ mod test {
             lit(43) as Arc<dyn PhysicalExpr>,
         )) as PhysicalExprRef;
 
-        dynamic_filter.with_new_children(vec![new_expr])
+        let dynamic_filter = dynamic_filter
+            .with_new_children(vec![new_expr])
             .expect("Failed to update children");
+        // dynamic_filter.update(new_expr);
 
-        let snap_1 = dynamic_filter_1.snapshot().unwrap().unwrap();
-        let snap_2 = dynamic_filter_2.snapshot().unwrap().unwrap();
+        let snap_1 = dynamic_filter
+            .snapshot(Some(Arc::clone(&filter_schema_1)))
+            .unwrap()
+            .unwrap();
+        let snap_2 = dynamic_filter
+            .snapshot(Some(Arc::clone(&filter_schema_2)))
+            .unwrap()
+            .unwrap();
 
         // Now we should be able to evaluate the new expression on both batches
         let result_1 = snap_1.evaluate(&batch_1).unwrap();
@@ -393,23 +399,24 @@ mod test {
         let dynamic_filter = DynamicFilterPhysicalExpr::new(Arc::clone(&expr));
 
         // Take a snapshot of the current expression
-        let snapshot = dynamic_filter.snapshot().unwrap().unwrap();
+        let snapshot = dynamic_filter.snapshot(None).unwrap().unwrap();
         assert_eq!(&snapshot, &expr);
 
         // Update the current expression
         let new_expr = lit(100) as Arc<dyn PhysicalExpr>;
-        // dynamic_filter.with_new_children(vec![new_expr.clone()])
-        //     .expect("Failed to update expression");
-        dynamic_filter.update(Arc::clone(&new_expr));
+        let df = Arc::new(dynamic_filter) as PhysicalExprRef;
+        let df = df
+            .with_new_children(vec![new_expr.clone()])
+            .expect("Failed to update expression");
+        // dynamic_filter.update(Arc::clone(&new_expr));
         // Take another snapshot
-        let snapshot = dynamic_filter.snapshot().unwrap().unwrap();
+        let snapshot = df.snapshot(None).unwrap().unwrap();
         assert_eq!(&snapshot, &new_expr);
     }
 
     #[test]
     fn test_dynamic_filter_physical_expr_misbehaves_data_type_nullable() {
-        let dynamic_filter =
-            DynamicFilterPhysicalExpr::new(lit(42));
+        let mut dynamic_filter = DynamicFilterPhysicalExpr::new(lit(42));
 
         // First call to data_type and nullable should set the initial values.
         let initial_data_type = dynamic_filter.data_type(&Schema::empty()).unwrap();
@@ -428,8 +435,7 @@ mod test {
         );
 
         // Now change the current expression to something else.
-        dynamic_filter
-            .update(lit(ScalarValue::Utf8(None)));
+        dynamic_filter.update(lit(ScalarValue::Utf8(None)));
         // Check that we error if we call data_type, nullable or evaluate after changing the expression.
         assert!(
             dynamic_filter.data_type(&Schema::empty()).is_err(),
@@ -441,10 +447,8 @@ mod test {
         );
         let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
 
-        let snap = dynamic_filter.snapshot().unwrap().unwrap();
+        let snap = dynamic_filter.snapshot(None).unwrap().unwrap();
         // this is changed to ok, but makes sense
-        assert!(
-            snap.evaluate(&batch).is_ok(),
-        );
+        assert!(snap.evaluate(&batch).is_ok(),);
     }
 }
