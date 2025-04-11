@@ -46,7 +46,7 @@ use datafusion_physical_plan::{
     projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
     DisplayAs, DisplayFormatType, ExecutionPlan,
 };
-use log::{debug, warn};
+use log::warn;
 
 use crate::file_groups::FileGroup;
 use crate::{
@@ -1412,6 +1412,8 @@ fn get_projected_output_ordering(
         }
 
         // Check if any file groups are not sorted
+        // Given that currently the `output_ordering` is specified by the external mechanism,
+        // So here we only do some checks and give warnings if the file groups are not sorted from the statistics perspective.
         if base_config.file_groups.iter().any(|group| {
             if group.len() <= 1 {
                 // File groups with <= 1 files are always sorted
@@ -1434,12 +1436,11 @@ fn get_projected_output_ordering(
 
             !statistics.is_sorted()
         }) {
-            debug!(
-                "Skipping specified output ordering {:?}. \
-                Some file groups couldn't be determined to be sorted: {:?}",
-                base_config.output_ordering[0], base_config.file_groups
+            warn!(
+                "The specified output ordering is {:?}. \
+                But some file groups couldn't be determined to be sorted: {:?}",
+                output_ordering, base_config.file_groups
             );
-            continue;
         }
 
         all_orderings.push(new_ordering);
