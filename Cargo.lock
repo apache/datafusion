@@ -2225,6 +2225,7 @@ name = "datafusion-expr-common"
 version = "46.0.1"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "datafusion-common",
  "indexmap 2.8.0",
  "itertools 0.14.0",

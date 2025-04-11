@@ -27,6 +27,7 @@ use arrow::{
 };
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
 /// IS NOT NULL expression
@@ -108,6 +109,17 @@ impl PhysicalExpr for IsNotNullExpr {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.arg.fmt_sql(f)?;
         write!(f, " IS NOT NULL")
+    }
+
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        let inner = children[0];
+        Ok(if inner.is_unbounded() {
+            Interval::CERTAINLY_FALSE
+        } else if inner.lower().is_null() || inner.upper().is_null() {
+            Interval::UNCERTAIN
+        } else {
+            Interval::CERTAINLY_TRUE
+        })
     }
 }
 
