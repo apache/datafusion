@@ -358,26 +358,26 @@ impl PhysicalExpr for BinaryExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         use arrow::compute::kernels::numeric::*;
 
+        // Evaluate left side first (required for all operations)
         let lhs = self.left.evaluate(batch)?;
 
-        // Check if we can apply short-circuit evaluation
+        // Fast path: short-circuit early if possible (avoids evaluating right side)
         match check_short_circuit(&lhs, &self.op) {
-            ShortCircuitStrategy::None => (),
             ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
             ShortCircuitStrategy::ReturnRight => {
-                let rhs = self.right.evaluate(batch)?;
-                return Ok(rhs);
+                return Ok(self.right.evaluate(batch)?)
             }
+            ShortCircuitStrategy::None => {}
         }
 
-        // If no short-circuit applies, evaluate the right-hand side
+        // For non-short-circuited operations, evaluate right side
         let rhs = self.right.evaluate(batch)?;
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
+        let binding = batch.schema();
+        let input_schema = binding.as_ref();
 
-        let schema = batch.schema();
-        let input_schema = schema.as_ref();
-
+        // Special case: nested types require equality check
         if left_data_type.is_nested() {
             if right_data_type != left_data_type {
                 return internal_err!("type mismatch");
@@ -385,7 +385,9 @@ impl PhysicalExpr for BinaryExpr {
             return apply_cmp_for_nested(self.op, &lhs, &rhs);
         }
 
+        // Fast path: direct operator dispatch for common operations
         match self.op {
+            // Arithmetic operators
             Operator::Plus if self.fail_on_overflow => return apply(&lhs, &rhs, add),
             Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
             Operator::Minus if self.fail_on_overflow => return apply(&lhs, &rhs, sub),
@@ -394,6 +396,8 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Multiply => return apply(&lhs, &rhs, mul_wrapping),
             Operator::Divide => return apply(&lhs, &rhs, div),
             Operator::Modulo => return apply(&lhs, &rhs, rem),
+
+            // Comparison operators
             Operator::Eq => return apply_cmp(&lhs, &rhs, eq),
             Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
             Operator::Lt => return apply_cmp(&lhs, &rhs, lt),
@@ -406,35 +410,32 @@ impl PhysicalExpr for BinaryExpr {
             Operator::ILikeMatch => return apply_cmp(&lhs, &rhs, ilike),
             Operator::NotLikeMatch => return apply_cmp(&lhs, &rhs, nlike),
             Operator::NotILikeMatch => return apply_cmp(&lhs, &rhs, nilike),
+
+            // Other operators continue to general case
             _ => {}
         }
 
+        // For remaining operators, compute result type
         let result_type = self.data_type(input_schema)?;
 
-        // Attempt to use special kernels if one input is scalar and the other is an array
-        let scalar_result = match (&lhs, &rhs) {
-            (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
-                // if left is array and right is literal(not NULL) - use scalar operations
-                if scalar.is_null() {
-                    None
-                } else {
-                    self.evaluate_array_scalar(array, scalar.clone())?.map(|r| {
-                        r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
-                    })
+        // Optimization: Handle common array-scalar pattern directly
+        if let (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) = (&lhs, &rhs)
+        {
+            if !scalar.is_null() {
+                if let Some(result) = self.evaluate_array_scalar(array, scalar.clone())? {
+                    return result
+                        .and_then(|a| to_result_type_array(&self.op, a, &result_type))
+                        .map(ColumnarValue::Array);
                 }
             }
-            (_, _) => None, // default to array implementation
-        };
-
-        if let Some(result) = scalar_result {
-            return result.map(ColumnarValue::Array);
         }
 
-        // if both arrays or both literals - extract arrays and continue execution
+        // Fall back to general case: convert to arrays and evaluate
         let (left, right) = (
             lhs.into_array(batch.num_rows())?,
             rhs.into_array(batch.num_rows())?,
         );
+
         self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
             .map(ColumnarValue::Array)
     }
