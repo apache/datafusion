@@ -26,11 +26,7 @@ use crate::function::{
     StateFieldsArgs,
 };
 use crate::select_expr::SelectExpr;
-use crate::{
-    conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
-    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
-};
+use crate::{conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery, AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ReturnFieldArgs, ScalarFunctionArgs, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility};
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
 };
@@ -386,14 +382,14 @@ pub fn unnest(expr: Expr) -> Expr {
 pub fn create_udf(
     name: &str,
     input_types: Vec<DataType>,
-    return_type: DataType,
+    return_field: Field,
     volatility: Volatility,
     fun: ScalarFunctionImplementation,
 ) -> ScalarUDF {
     ScalarUDF::from(SimpleScalarUDF::new(
         name,
         input_types,
-        return_type,
+        return_field,
         volatility,
         fun,
     ))
@@ -404,7 +400,7 @@ pub fn create_udf(
 pub struct SimpleScalarUDF {
     name: String,
     signature: Signature,
-    return_type: DataType,
+    return_field: Field,
     fun: ScalarFunctionImplementation,
 }
 
@@ -413,7 +409,7 @@ impl Debug for SimpleScalarUDF {
         f.debug_struct("SimpleScalarUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)
-            .field("return_type", &self.return_type)
+            .field("return_field", &self.return_field)
             .field("fun", &"<FUNC>")
             .finish()
     }
@@ -425,14 +421,14 @@ impl SimpleScalarUDF {
     pub fn new(
         name: impl Into<String>,
         input_types: Vec<DataType>,
-        return_type: DataType,
+        return_field: Field,
         volatility: Volatility,
         fun: ScalarFunctionImplementation,
     ) -> Self {
         Self::new_with_signature(
             name,
             Signature::exact(input_types, volatility),
-            return_type,
+            return_field,
             fun,
         )
     }
@@ -442,13 +438,13 @@ impl SimpleScalarUDF {
     pub fn new_with_signature(
         name: impl Into<String>,
         signature: Signature,
-        return_type: DataType,
+        return_field: Field,
         fun: ScalarFunctionImplementation,
     ) -> Self {
         Self {
             name: name.into(),
             signature,
-            return_type,
+            return_field,
             fun,
         }
     }
@@ -467,8 +463,8 @@ impl ScalarUDFImpl for SimpleScalarUDF {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(self.return_type.clone())
+    fn return_field(&self, _arg_types: ReturnFieldArgs) -> Result<Field> {
+        Ok(self.return_field.clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -15,17 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 
 use crate::string::common::to_lower;
 use crate::utils::utf8_to_str_type;
 use datafusion_common::types::logical_string;
 use datafusion_common::Result;
-use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
-};
+use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -81,8 +78,10 @@ impl ScalarUDFImpl for LowerFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "lower")
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type =  utf8_to_str_type(&args.arg_types[0].data_type(), "lower")?;
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

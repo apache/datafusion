@@ -165,24 +165,11 @@ impl ScalarUDF {
         self.inner.signature()
     }
 
-    /// The datatype this function returns given the input argument types.
-    /// This function is used when the input arguments are [`DataType`]s.
-    ///
-    ///  # Notes
-    ///
-    /// If a function implement [`ScalarUDFImpl::return_type_from_args`],
-    /// its [`ScalarUDFImpl::return_type`] should raise an error.
-    ///
-    /// See [`ScalarUDFImpl::return_type`] for more details.
-    pub fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(arg_types)
-    }
-
     /// Return the datatype this function returns given the input argument types.
     ///
     /// See [`ScalarUDFImpl::return_type_from_args`] for more details.
-    pub fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        self.inner.return_type_from_args(args)
+    pub fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        self.inner.return_field(args)
     }
 
     /// Do the function rewrite
@@ -313,9 +300,9 @@ pub struct ScalarFunctionArgs<'a, 'b> {
 ///
 /// See [`ScalarUDFImpl::return_type_from_args`] for more information
 #[derive(Debug)]
-pub struct ReturnTypeArgs<'a> {
+pub struct ReturnFieldArgs<'a> {
     /// The data types of the arguments to the function
-    pub arg_types: &'a [DataType],
+    pub arg_types: &'a [Field],
     /// Is argument `i` to the function a scalar (constant)
     ///
     /// If argument `i` is not a scalar, it will be None
@@ -323,52 +310,6 @@ pub struct ReturnTypeArgs<'a> {
     /// For example, if a function is called like `my_function(column_a, 5)`
     /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
     pub scalar_arguments: &'a [Option<&'a ScalarValue>],
-    /// Can argument `i` (ever) null?
-    pub nullables: &'a [bool],
-}
-
-/// Return metadata for this function.
-///
-/// See [`ScalarUDFImpl::return_type_from_args`] for more information
-#[derive(Debug)]
-pub struct ReturnInfo {
-    return_type: DataType,
-    nullable: bool,
-}
-
-impl ReturnInfo {
-    pub fn new(return_type: DataType, nullable: bool) -> Self {
-        Self {
-            return_type,
-            nullable,
-        }
-    }
-
-    pub fn new_nullable(return_type: DataType) -> Self {
-        Self {
-            return_type,
-            nullable: true,
-        }
-    }
-
-    pub fn new_non_nullable(return_type: DataType) -> Self {
-        Self {
-            return_type,
-            nullable: false,
-        }
-    }
-
-    pub fn return_type(&self) -> &DataType {
-        &self.return_type
-    }
-
-    pub fn nullable(&self) -> bool {
-        self.nullable
-    }
-
-    pub fn into_parts(self) -> (DataType, bool) {
-        (self.return_type, self.nullable)
-    }
 }
 
 /// Trait for implementing user defined scalar functions.
@@ -385,9 +326,9 @@ impl ReturnInfo {
 /// ```
 /// # use std::any::Any;
 /// # use std::sync::LazyLock;
-/// # use arrow::datatypes::DataType;
+/// # use arrow::datatypes::{DataType, Field};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, ColumnarValue, Documentation, ScalarFunctionArgs, Signature, Volatility};
+/// # use datafusion_expr::{col, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, Signature, Volatility};
 /// # use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
 /// # use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 /// /// This struct for a simple UDF that adds one to an int32
@@ -419,11 +360,11 @@ impl ReturnInfo {
 ///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "add_one" }
 ///    fn signature(&self) -> &Signature { &self.signature }
-///    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-///      if !matches!(args.get(0), Some(&DataType::Int32)) {
+///    fn return_field(&self, args: ReturnFieldArgs) -> Result<DataType> {
+///      if !matches!(args.arg_types.get(0).map(|f| f.data_type()), Some(&DataType::Int32)) {
 ///        return plan_err!("add_one only accepts Int32 arguments");
 ///      }
-///      Ok(DataType::Int32)
+///      Ok(Field::new("item", DataType::Int32, true))
 ///    }
 ///    // The actual implementation would add one to the argument
 ///    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -477,18 +418,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// types are accepted and the function's Volatility.
     fn signature(&self) -> &Signature;
 
-    /// What [`DataType`] will be returned by this function, given the types of
-    /// the arguments.
-    ///
-    /// # Notes
-    ///
-    /// If you provide an implementation for [`Self::return_type_from_args`],
-    /// DataFusion will not call `return_type` (this function). In such cases
-    /// is recommended to return [`DataFusionError::Internal`].
-    ///
-    /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
-
     /// What type will be returned by this function, given the arguments?
     ///
     /// By default, this function calls [`Self::return_type`] with the
@@ -520,10 +449,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// This function **must** consistently return the same type for the same
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        let return_type = self.return_type(args.arg_types)?;
-        Ok(ReturnInfo::new_nullable(return_type))
-    }
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field>;
 
     #[deprecated(
         since = "45.0.0",
@@ -769,12 +695,8 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.signature()
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(arg_types)
-    }
-
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        self.inner.return_type_from_args(args)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        self.inner.return_field(args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

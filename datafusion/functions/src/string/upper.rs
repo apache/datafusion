@@ -17,13 +17,10 @@
 
 use crate::string::common::to_upper;
 use crate::utils::utf8_to_str_type;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::types::logical_string;
 use datafusion_common::Result;
-use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
-};
+use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 
@@ -80,8 +77,9 @@ impl ScalarUDFImpl for UpperFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "upper")
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = utf8_to_str_type(args.arg_types[0].data_type(), "upper")?;
+        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

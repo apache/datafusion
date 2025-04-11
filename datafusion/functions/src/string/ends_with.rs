@@ -19,16 +19,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
 use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
-use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
-};
+use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -90,8 +87,9 @@ impl ScalarUDFImpl for EndsWithFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Boolean)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), DataType::Boolean, nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

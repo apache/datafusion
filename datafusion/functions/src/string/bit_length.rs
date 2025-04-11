@@ -16,17 +16,14 @@
 // under the License.
 
 use arrow::compute::kernels::length::bit_length;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
-};
+use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -82,8 +79,11 @@ impl ScalarUDFImpl for BitLengthFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_int_type(&arg_types[0], "bit_length")
+
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = utf8_to_int_type(&args.arg_types[0].data_type(), "bit_length")?;
+        Ok(Field::new("ascii", data_type, nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

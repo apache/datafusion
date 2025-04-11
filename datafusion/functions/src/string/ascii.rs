@@ -17,11 +17,11 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::error::ArrowError;
 use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignatureClass};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, TypeSignatureClass};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
@@ -86,10 +86,9 @@ impl ScalarUDFImpl for AsciiFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-
-        Ok(Int32)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new("ascii", DataType::Utf8, nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

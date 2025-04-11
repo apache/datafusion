@@ -16,17 +16,14 @@
 // under the License.
 
 use arrow::compute::kernels::length::length;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
-};
+use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -82,8 +79,9 @@ impl ScalarUDFImpl for OctetLengthFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_int_type(&arg_types[0], "octet_length")
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = utf8_to_int_type(&args.arg_types[0].data_type(), "octet_length")?;
+        Field::new(self.name(), data_type, args.arg_types[0].is_nullable())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

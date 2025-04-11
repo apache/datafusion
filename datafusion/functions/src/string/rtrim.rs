@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{ArrayRef, OffsetSizeTrait};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -25,10 +25,7 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::function::Hint;
-use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, TypeSignatureClass, Volatility,
-};
+use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility};
 use datafusion_macros::user_doc;
 
 /// Returns the longest string  with trailing characters removed. If the characters are not specified, whitespace is removed.
@@ -114,12 +111,13 @@ impl ScalarUDFImpl for RtrimFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0] == DataType::Utf8View {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = if args.arg_types[0].data_type() == &DataType::Utf8View {
             Ok(DataType::Utf8View)
         } else {
-            utf8_to_str_type(&arg_types[0], "rtrim")
-        }
+            utf8_to_str_type(args.arg_types[0].data_type(), "rtrim")
+        };
+        Ok(Field::new(self.name(), data_type?, args.arg_types[0].is_nullable()))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -19,7 +19,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
@@ -28,10 +28,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::type_coercion::binary::{
     binary_to_string_coercion, string_coercion,
 };
-use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
-};
+use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility};
 use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -91,18 +88,21 @@ impl ScalarUDFImpl for ReplaceFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if let Some(coercion_data_type) = string_coercion(&arg_types[0], &arg_types[1])
-            .and_then(|dt| string_coercion(&dt, &arg_types[2]))
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = if let Some(coercion_data_type) = string_coercion(args.arg_types[0].data_type(), &arg_types[1])
+            .and_then(|dt| string_coercion(&dt, args.arg_types[2].data_type()))
             .or_else(|| {
-                binary_to_string_coercion(&arg_types[0], &arg_types[1])
-                    .and_then(|dt| binary_to_string_coercion(&dt, &arg_types[2]))
+                binary_to_string_coercion(args.arg_types[0].data_type(), args.arg_types[1].data_type())
+                    .and_then(|dt| binary_to_string_coercion(&dt, args.arg_types[2].data_type()))
             })
         {
             utf8_to_str_type(&coercion_data_type, "replace")
         } else {
             exec_err!("Unsupported data types for replace. Expected Utf8, LargeUtf8 or Utf8View")
-        }
+        };
+
+        Ok(Field::new(self.name(), data_type?, nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

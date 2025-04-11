@@ -19,13 +19,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::GenericStringBuilder;
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Utf8;
+use arrow::datatypes::Field;
 use rand::Rng;
 use uuid::Uuid;
 
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
@@ -74,8 +74,8 @@ impl ScalarUDFImpl for UuidFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Utf8)
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), Utf8, false))
     }
 
     /// Prints random (v4) uuid values per row

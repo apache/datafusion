@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{as_largestring_array, Array};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_expr::sort_properties::ExprProperties;
 use std::any::Any;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, Volatility};
+use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, ReturnFieldArgs, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
@@ -88,10 +88,13 @@ impl ScalarUDFImpl for ConcatFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_field(&self, arg_types: ReturnFieldArgs) -> Result<Field> {
         use DataType::*;
         let mut dt = &Utf8;
-        arg_types.iter().for_each(|data_type| {
+        let mut nullable = false;
+        arg_types.arg_types.iter().for_each(|field| {
+            let data_type = field.data_type();
+            nullable |= field.is_nullable();
             if data_type == &Utf8View {
                 dt = data_type;
             }
@@ -100,7 +103,7 @@ impl ScalarUDFImpl for ConcatFunc {
             }
         });
 
-        Ok(dt.to_owned())
+        Ok(Field::new(self.name(), dt.to_owned(), nullable))
     }
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
@@ -292,14 +295,19 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     let mut contiguous_scalar = "".to_string();
 
     let return_type = {
-        let data_types: Vec<_> = args
+        let (data_types, scalar_args): (Vec<Field>, Vec<Option<&ScalarValue>>) = args
             .iter()
             .filter_map(|expr| match expr {
-                Expr::Literal(l) => Some(l.data_type()),
+                Expr::Literal(l) => {
+                    Some((Field::new("item", l.data_type(), true), Some(l)))
+                },
                 _ => None,
             })
-            .collect();
-        ConcatFunc::new().return_type(&data_types)
+            .unzip();
+        ConcatFunc::new().return_field(ReturnFieldArgs {
+            arg_types: &data_types,
+            scalar_arguments: &scalar_args,
+        })
     }?;
 
     for arg in args.clone() {
@@ -332,7 +340,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
             // Then pushing this arg to the `new_args`.
             arg => {
                 if !contiguous_scalar.is_empty() {
-                    match return_type {
+                    match return_type.data_type() {
                         DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
                         DataType::LargeUtf8 => new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar)))),
                         DataType::Utf8View => new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar)))),
@@ -346,7 +354,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     }
 
     if !contiguous_scalar.is_empty() {
-        match return_type {
+        match return_type.data_type() {
             DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
             DataType::LargeUtf8 => {
                 new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar))))

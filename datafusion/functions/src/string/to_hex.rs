@@ -20,16 +20,14 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
-use arrow::datatypes::{
-    ArrowNativeType, ArrowPrimitiveType, DataType, Int32Type, Int64Type,
-};
+use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType, Field, Int32Type, Int64Type};
 
 use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
 
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
@@ -116,15 +114,15 @@ impl ScalarUDFImpl for ToHexFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         use DataType::*;
-
-        Ok(match arg_types[0] {
+        let data_type = match args.arg_types[0].data_type() {
             Int8 | Int16 | Int32 | Int64 => Utf8,
             _ => {
                 return plan_err!("The to_hex function can only accept integers.");
             }
-        })
+        };
+        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

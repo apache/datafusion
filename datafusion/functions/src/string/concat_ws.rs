@@ -19,7 +19,7 @@ use arrow::array::{as_largestring_array, Array, StringArray};
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
 use crate::string::concat;
 use crate::string::concat::simplify_concat;
@@ -29,7 +29,7 @@ use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, Volatility};
+use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, ReturnFieldArgs, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
@@ -95,9 +95,9 @@ impl ScalarUDFImpl for ConcatWsFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-        Ok(Utf8)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), DataType::Utf8, nullable))
     }
 
     /// Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored.

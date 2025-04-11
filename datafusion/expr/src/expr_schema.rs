@@ -24,7 +24,7 @@ use crate::expr::{
 use crate::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
 };
-use crate::udf::ReturnTypeArgs;
+use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
@@ -448,15 +448,17 @@ impl ExprSchemable for Expr {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                let args = ReturnTypeArgs {
-                    arg_types: &new_data_types,
+                let arg_fields = new_data_types.into_iter().zip(nullables.into_iter())
+                    .enumerate()
+                    .map(|(idx, (data_type, nullable))| Field::new(format!("field_{}", idx), data_type, nullable))
+                    .collect::<Vec<_>>();
+                let args = ReturnFieldArgs {
+                    arg_types: &arg_fields,
                     scalar_arguments: &arguments,
-                    nullables: &nullables,
                 };
 
-                let (return_type, nullable) =
-                    func.return_type_from_args(args)?.into_parts();
-                Ok((return_type, nullable))
+                let return_field = func.return_field(args)?;
+                Ok((return_field.data_type().clone(), return_field.is_nullable()))
             }
             _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
         }

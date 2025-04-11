@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::ptr::null;
 use std::sync::Arc;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
@@ -23,12 +24,12 @@ use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{logical_int64, logical_string, NativeType};
 use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -94,8 +95,10 @@ impl ScalarUDFImpl for RepeatFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "repeat")
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = utf8_to_str_type(&args.arg_types[0].data_type(), "repeat")?;
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
