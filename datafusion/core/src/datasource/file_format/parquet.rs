@@ -331,7 +331,7 @@ mod tests {
         fn list(
             &self,
             _prefix: Option<&Path>,
-        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             Box::pin(futures::stream::once(async {
                 Err(object_store::Error::NotImplemented)
             }))
@@ -408,7 +408,7 @@ mod tests {
         )));
 
         // Use the file size as the hint so we can get the full metadata from the first fetch
-        let size_hint = meta[0].size;
+        let size_hint = meta[0].size as usize;
 
         fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
             .await
@@ -443,7 +443,7 @@ mod tests {
         )));
 
         // Use the a size hint larger than the file size to make sure we don't panic
-        let size_hint = meta[0].size + 100;
+        let size_hint = (meta[0].size + 100) as usize;
 
         fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
             .await

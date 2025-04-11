@@ -1786,13 +1786,13 @@ mod tests {
         path: &str,
         store: Arc<dyn ObjectStore>,
         batch: RecordBatch,
-    ) -> usize {
+    ) -> u64 {
         let mut writer =
             ArrowWriter::try_new(BytesMut::new().writer(), batch.schema(), None).unwrap();
         writer.write(&batch).unwrap();
         writer.flush().unwrap();
         let bytes = writer.into_inner().unwrap().into_inner().freeze();
-        let total_size = bytes.len();
+        let total_size = bytes.len() as u64;
         let path = Path::from(path);
         let payload = object_store::PutPayload::from_bytes(bytes);
         store

@@ -735,10 +735,7 @@ impl<'a> ObjectStoreFetch<'a> {
 }
 
 impl MetadataFetch for ObjectStoreFetch<'_> {
-    fn fetch(
-        &mut self,
-        range: Range<usize>,
-    ) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
         async {
             self.store
                 .get_range(&self.meta.location, range)
