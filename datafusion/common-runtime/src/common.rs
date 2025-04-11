@@ -23,8 +23,28 @@ use std::{
 
 use tokio::task::{JoinError, JoinHandle};
 
-use crate::trace_utils::{trace_block, trace_future};
+use crate::trace_utils::{trace_spawn, trace_spawn_blocking, Spawner};
 
+/// Wrapper for the global tokio functions that implements `Spawner`.
+struct GlobalSpawner;
+
+impl<T: 'static + Send> Spawner<T> for GlobalSpawner {
+    type ReturnHandle = JoinHandle<T>;
+
+    fn spawn_impl<F>(&mut self, future: F) -> Self::ReturnHandle
+    where
+        F: Future<Output = T> + Send + 'static
+    {
+        tokio::task::spawn(future)
+    }
+
+    fn spawn_blocking_impl<F>(&mut self, f: F) -> Self::ReturnHandle
+    where
+        F: FnOnce() -> T + Send + 'static
+    {
+        tokio::task::spawn_blocking(f)
+    }
+}
 /// Helper that  provides a simple API to spawn a single task and join it.
 /// Provides guarantees of aborting on `Drop` to keep it cancel-safe.
 /// Note that if the task was spawned with `spawn_blocking`, it will only be
@@ -45,7 +65,7 @@ impl<R: 'static> SpawnedTask<R> {
     {
         // Ok to use spawn here as SpawnedTask handles aborting/cancelling the task on Drop
         #[allow(clippy::disallowed_methods)]
-        let inner = tokio::task::spawn(trace_future(task));
+        let inner = trace_spawn(task, &mut GlobalSpawner);
         Self { inner }
     }
 
@@ -57,7 +77,7 @@ impl<R: 'static> SpawnedTask<R> {
     {
         // Ok to use spawn_blocking here as SpawnedTask handles aborting/cancelling the task on Drop
         #[allow(clippy::disallowed_methods)]
-        let inner = tokio::task::spawn_blocking(trace_block(task));
+        let inner = trace_spawn_blocking(task, &mut GlobalSpawner);
         Self { inner }
     }
 

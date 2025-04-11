@@ -47,26 +47,6 @@ pub trait JoinSetTracer: Send + Sync + 'static {
     ) -> Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>;
 }
 
-/// A no-op tracer that does not modify or instrument any futures or closures.
-/// This is used as a fallback if no custom tracer is set.
-struct NoopTracer;
-
-impl JoinSetTracer for NoopTracer {
-    fn trace_future(
-        &self,
-        fut: BoxFuture<'static, Box<dyn Any + Send>>,
-    ) -> BoxFuture<'static, Box<dyn Any + Send>> {
-        fut
-    }
-
-    fn trace_block(
-        &self,
-        f: Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>,
-    ) -> Box<dyn FnOnce() -> Box<dyn Any + Send> + Send> {
-        f
-    }
-}
-
 /// A custom error type for tracer injection failures.
 #[derive(Debug)]
 pub enum JoinSetTracerError {
@@ -91,15 +71,11 @@ impl Error for JoinSetTracerError {}
 /// [`trace_block`] never panic due to missing instrumentation.
 static GLOBAL_TRACER: OnceCell<&'static dyn JoinSetTracer> = OnceCell::const_new();
 
-/// A no-op tracer singleton that is returned by [`get_tracer`] if no custom
-/// tracer has been registered.
-static NOOP_TRACER: NoopTracer = NoopTracer;
-
 /// Return the currently registered tracer, or the no-op tracer if none was
 /// registered.
 #[inline]
-fn get_tracer() -> &'static dyn JoinSetTracer {
-    GLOBAL_TRACER.get().copied().unwrap_or(&NOOP_TRACER)
+fn get_tracer() -> Option<&'static dyn JoinSetTracer> {
+    GLOBAL_TRACER.get().copied()
 }
 
 /// Set the custom tracer for both futures and blocking closures.
@@ -115,23 +91,45 @@ pub fn set_join_set_tracer(
         .map_err(|_set_err| JoinSetTracerError::AlreadySet)
 }
 
-/// Optionally instruments a future with custom tracing.
+/// A trait for objects spawning futures and blocking closures.
+pub trait Spawner<Output: Send + 'static> {
+    /// Handle returned by the spawner for spawned tasks.
+    type ReturnHandle;
+
+    /// The spawner's implementation of spawning a future.
+    fn spawn_impl<F>(&mut self, future: F) -> Self::ReturnHandle
+    where
+        F: Future<Output = Output> + Send + 'static;
+
+    /// The spawner's implementation of spawning a blocking closure.
+    fn spawn_blocking_impl<F>(&mut self, f: F) -> Self::ReturnHandle
+    where
+        F: FnOnce() -> Output + Send + 'static;
+}
+
+/// Spawns and optionally instruments a future with custom tracing.
 ///
 /// If a tracer has been injected via `set_tracer`, the future's output is
 /// boxed (erasing its type), passed to the tracer, and then downcast back
-/// to the expected type. If no tracer is set, the original future is returned.
+/// to the expected type. If no tracer is set, the original future is spawned.
 ///
 /// # Type Parameters
 /// * `T` - The concrete output type of the future.
 /// * `F` - The future type.
+/// * `S` - The spawner type.
 ///
 /// # Parameters
 /// * `future` - The future to potentially instrument.
-pub fn trace_future<T, F>(future: F) -> BoxFuture<'static, T>
+/// * `spawner` - The spawner with which the closure is spawned.
+pub fn trace_spawn<F, S>(future: F, spawner: &mut S) -> S::ReturnHandle
 where
-    F: Future<Output = T> + Send + 'static,
-    T: Send + 'static,
-{
+    S: Spawner<F::Output>,
+    F: Future + Send + 'static,
+    F::Output: Send + 'static {
+    let Some(tracer) = get_tracer() else {
+        return spawner.spawn_impl(future);
+    };
+
     // Erase the future’s output type first:
     let erased_future = async move {
         let result = future.await;
@@ -140,35 +138,40 @@ where
     .boxed();
 
     // Forward through the global tracer:
-    get_tracer()
+    spawner.spawn_impl(tracer
         .trace_future(erased_future)
         // Downcast from `Box<dyn Any + Send>` back to `T`:
         .map(|any_box| {
             *any_box
-                .downcast::<T>()
+                .downcast::<F::Output>()
                 .expect("Tracer must preserve the future’s output type!")
-        })
-        .boxed()
+        }))
 }
 
-/// Optionally instruments a blocking closure with custom tracing.
+/// Spawns and optionally instruments a blocking closure with custom tracing.
 ///
 /// If a tracer has been injected via `set_tracer`, the closure is wrapped so that
 /// its return value is boxed (erasing its type), passed to the tracer, and then the
 /// result is downcast back to the original type. If no tracer is set, the closure is
-/// returned unmodified (except for being boxed).
+/// spawned unmodified.
 ///
 /// # Type Parameters
 /// * `T` - The concrete return type of the closure.
 /// * `F` - The closure type.
+/// * `S` - The spawner type.
 ///
 /// # Parameters
-/// * `f` - The blocking closure to potentially instrument.
-pub fn trace_block<T, F>(f: F) -> Box<dyn FnOnce() -> T + Send>
+/// * `f` - The blocking closure to spawn and potentially instrument.
+/// * `spawner` - The spawner with which the closure is spawned.
+pub fn trace_spawn_blocking<T, F, S>(f: F, spawner: &mut S) -> S::ReturnHandle
 where
+    S: Spawner<T>,
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
+    let Some(tracer) = get_tracer() else {
+        return spawner.spawn_blocking_impl(f);
+    };
     // Erase the closure’s return type first:
     let erased_closure = Box::new(|| {
         let result = f();
@@ -176,10 +179,10 @@ where
     });
 
     // Forward through the global tracer:
-    let traced_closure = get_tracer().trace_block(erased_closure);
+    let traced_closure = tracer.trace_block(erased_closure);
 
     // Downcast from `Box<dyn Any + Send>` back to `T`:
-    Box::new(move || {
+    spawner.spawn_blocking_impl(move || {
         let any_box = traced_closure();
         *any_box
             .downcast::<T>()
