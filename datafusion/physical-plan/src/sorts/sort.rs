@@ -323,13 +323,7 @@ impl ExternalSorter {
         }
 
         self.reserve_memory_for_merge()?;
-
-        let size = get_reserved_byte_for_record_batch(&input);
-        if self.reservation.try_grow(size).is_err() {
-            self.sort_and_spill_in_mem_batches().await?;
-            // After spilling all in-memory batches, the retry should succeed
-            self.reservation.try_grow(size)?;
-        }
+        self.reserve_memory_for_batch(&input).await?;
 
         self.in_mem_batches.push(input);
         Ok(())
@@ -767,6 +761,25 @@ impl ExternalSorter {
             if self.merge_reservation.size() != size {
                 self.merge_reservation.try_resize(size)?;
             }
+        }
+
+        Ok(())
+    }
+
+    /// Reserves memory to be able to accommodate the given batch.
+    /// If memory is scarce, tries to spill current in-memory batches to disk first.
+    async fn reserve_memory_for_batch(&mut self, input: &RecordBatch) -> Result<()> {
+        let size = get_reserved_byte_for_record_batch(input);
+
+        let result = self.reservation.try_grow(size);
+        if result.is_err() {
+            if self.in_mem_batches.is_empty() {
+                return result;
+            }
+
+            // Spill and try again.
+            self.sort_and_spill_in_mem_batches().await?;
+            self.reservation.try_grow(size)?;
         }
 
         Ok(())
