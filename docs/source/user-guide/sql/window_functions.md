@@ -160,10 +160,29 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 
 ### `cume_dist`
 
-Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).
+Relative rank of the current row: (number of rows preceding or peer with the current row) / (total rows).
 
 ```sql
 cume_dist()
+```
+
+#### Example
+
+```sql
+    --Example usage of the cume_dist window function:
+    SELECT salary,
+       cume_dist() OVER (ORDER BY salary) AS cume_dist
+    FROM employees;
+```
+
+```sql
++--------+-----------+
+| salary | cume_dist |
++--------+-----------+
+| 30000  | 0.33      |
+| 50000  | 0.67      |
+| 70000  | 1.00      |
++--------+-----------+
 ```
 
 ### `dense_rank`
@@ -272,7 +291,7 @@ lead(expression, offset, default)
 
 ### `nth_value`
 
-Returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row.
+Returns the value evaluated at the nth row of the window frame (counting from 1). Returns NULL if no such row exists.
 
 ```sql
 nth_value(expression, n)
@@ -280,5 +299,37 @@ nth_value(expression, n)
 
 #### Arguments
 
-- **expression**: The name the column of which nth value to retrieve
-- **n**: Integer. Specifies the n in nth
+- **expression**: The column from which to retrieve the nth value.
+- **n**: Integer. Specifies the row number (starting from 1) in the window frame.
+
+#### Example
+
+```sql
+-- Sample employees table:
+CREATE TABLE employees (id INT, salary INT);
+INSERT INTO employees (id, salary) VALUES
+(1, 30000),
+(2, 40000),
+(3, 50000),
+(4, 60000),
+(5, 70000);
+
+-- Example usage of nth_value:
+SELECT nth_value(salary, 2) OVER (
+  ORDER BY salary
+  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+) AS nth_value
+FROM employees;
+```
+
+```text
++-----------+
+| nth_value |
++-----------+
+| 40000     |
+| 40000     |
+| 40000     |
+| 40000     |
+| 40000     |
++-----------+
+```

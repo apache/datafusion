@@ -271,7 +271,7 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
     let offsets = haystack.value_offsets();
     // If first argument is empty list (second argument is non-null), return false
     // i.e. array_has([], non-null element) -> false
-    if values.len() == 0 {
+    if values.is_empty() {
         return Ok(Arc::new(BooleanArray::new(
             BooleanBuffer::new_unset(haystack.len()),
             None,
@@ -488,7 +488,7 @@ fn array_has_all_and_any_dispatch<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let haystack = as_generic_list_array::<O>(haystack)?;
     let needle = as_generic_list_array::<O>(needle)?;
-    if needle.values().len() == 0 {
+    if needle.values().is_empty() {
         let buffer = match comparison_type {
             ComparisonType::All => BooleanBuffer::new_set(haystack.len()),
             ComparisonType::Any => BooleanBuffer::new_unset(haystack.len()),

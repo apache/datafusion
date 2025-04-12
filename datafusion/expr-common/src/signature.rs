@@ -391,10 +391,11 @@ impl TypeSignature {
                 vec![format!("{}, ..", Self::join_types(types, "/"))]
             }
             TypeSignature::Uniform(arg_count, valid_types) => {
-                vec![std::iter::repeat(Self::join_types(valid_types, "/"))
-                    .take(*arg_count)
-                    .collect::<Vec<String>>()
-                    .join(", ")]
+                vec![
+                    std::iter::repeat_n(Self::join_types(valid_types, "/"), *arg_count)
+                        .collect::<Vec<String>>()
+                        .join(", "),
+                ]
             }
             TypeSignature::String(num) => {
                 vec![format!("String({num})")]
@@ -412,8 +413,7 @@ impl TypeSignature {
                 vec![Self::join_types(types, ", ")]
             }
             TypeSignature::Any(arg_count) => {
-                vec![std::iter::repeat("Any")
-                    .take(*arg_count)
+                vec![std::iter::repeat_n("Any", *arg_count)
                     .collect::<Vec<&str>>()
                     .join(", ")]
             }

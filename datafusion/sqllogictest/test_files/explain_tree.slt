@@ -180,7 +180,7 @@ physical_plan
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│  output_partition_count:  │
+16)│   input_partition_count:  │
 17)│             1             │
 18)│                           │
 19)│    partitioning_scheme:   │
@@ -218,7 +218,7 @@ physical_plan
 18)┌─────────────┴─────────────┐
 19)│      RepartitionExec      │
 20)│    --------------------   │
-21)│  output_partition_count:  │
+21)│   input_partition_count:  │
 22)│             4             │
 23)│                           │
 24)│    partitioning_scheme:   │
@@ -236,7 +236,7 @@ physical_plan
 36)┌─────────────┴─────────────┐
 37)│      RepartitionExec      │
 38)│    --------------------   │
-39)│  output_partition_count:  │
+39)│   input_partition_count:  │
 40)│             1             │
 41)│                           │
 42)│    partitioning_scheme:   │
@@ -311,7 +311,7 @@ physical_plan
 19)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 20)│      RepartitionExec      ││      RepartitionExec      │
 21)│    --------------------   ││    --------------------   │
-22)│  output_partition_count:  ││  output_partition_count:  │
+22)│   input_partition_count:  ││   input_partition_count:  │
 23)│             4             ││             4             │
 24)│                           ││                           │
 25)│    partitioning_scheme:   ││    partitioning_scheme:   │
@@ -320,7 +320,7 @@ physical_plan
 28)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 29)│      RepartitionExec      ││      RepartitionExec      │
 30)│    --------------------   ││    --------------------   │
-31)│  output_partition_count:  ││  output_partition_count:  │
+31)│   input_partition_count:  ││   input_partition_count:  │
 32)│             1             ││             1             │
 33)│                           ││                           │
 34)│    partitioning_scheme:   ││    partitioning_scheme:   │
@@ -386,7 +386,7 @@ physical_plan
 40)-----------------------------┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 41)-----------------------------│      RepartitionExec      ││      RepartitionExec      │
 42)-----------------------------│    --------------------   ││    --------------------   │
-43)-----------------------------│  output_partition_count:  ││  output_partition_count:  │
+43)-----------------------------│   input_partition_count:  ││   input_partition_count:  │
 44)-----------------------------│             4             ││             4             │
 45)-----------------------------│                           ││                           │
 46)-----------------------------│    partitioning_scheme:   ││    partitioning_scheme:   │
@@ -395,7 +395,7 @@ physical_plan
 49)-----------------------------┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 50)-----------------------------│      RepartitionExec      ││      RepartitionExec      │
 51)-----------------------------│    --------------------   ││    --------------------   │
-52)-----------------------------│  output_partition_count:  ││  output_partition_count:  │
+52)-----------------------------│   input_partition_count:  ││   input_partition_count:  │
 53)-----------------------------│             1             ││             1             │
 54)-----------------------------│                           ││                           │
 55)-----------------------------│    partitioning_scheme:   ││    partitioning_scheme:   │
@@ -434,7 +434,7 @@ physical_plan
 17)┌─────────────┴─────────────┐
 18)│      RepartitionExec      │
 19)│    --------------------   │
-20)│  output_partition_count:  │
+20)│   input_partition_count:  │
 21)│             1             │
 22)│                           │
 23)│    partitioning_scheme:   │
@@ -496,7 +496,7 @@ physical_plan
 41)┌─────────────┴─────────────┐
 42)│      RepartitionExec      │
 43)│    --------------------   │
-44)│  output_partition_count:  │
+44)│   input_partition_count:  │
 45)│             1             │
 46)│                           │
 47)│    partitioning_scheme:   │
@@ -530,7 +530,7 @@ physical_plan
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│  output_partition_count:  │
+16)│   input_partition_count:  │
 17)│             1             │
 18)│                           │
 19)│    partitioning_scheme:   │
@@ -566,7 +566,7 @@ physical_plan
 15)┌─────────────┴─────────────┐
 16)│      RepartitionExec      │
 17)│    --------------------   │
-18)│  output_partition_count:  │
+18)│   input_partition_count:  │
 19)│             1             │
 20)│                           │
 21)│    partitioning_scheme:   │
@@ -599,7 +599,7 @@ physical_plan
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│  output_partition_count:  │
+16)│   input_partition_count:  │
 17)│             1             │
 18)│                           │
 19)│    partitioning_scheme:   │
@@ -633,7 +633,7 @@ physical_plan
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│  output_partition_count:  │
+16)│   input_partition_count:  │
 17)│             1             │
 18)│                           │
 19)│    partitioning_scheme:   │
@@ -694,7 +694,7 @@ physical_plan
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│  output_partition_count:  │
+16)│   input_partition_count:  │
 17)│             1             │
 18)│                           │
 19)│    partitioning_scheme:   │
@@ -727,7 +727,7 @@ physical_plan
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│  output_partition_count:  │
+16)│   input_partition_count:  │
 17)│             1             │
 18)│                           │
 19)│    partitioning_scheme:   │
@@ -889,7 +889,7 @@ explain SELECT * FROM table1 ORDER BY string_col LIMIT 1;
 ----
 physical_plan
 01)┌───────────────────────────┐
-02)│          SortExec         │
+02)│       SortExec(TopK)      │
 03)│    --------------------   │
 04)│          limit: 1         │
 05)│                           │
@@ -922,7 +922,7 @@ physical_plan
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│  output_partition_count:  │
+16)│   input_partition_count:  │
 17)│             1             │
 18)│                           │
 19)│    partitioning_scheme:   │
@@ -1031,7 +1031,7 @@ physical_plan
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│  output_partition_count:  │
+16)│   input_partition_count:  │
 17)│             1             │
 18)│                           │
 19)│    partitioning_scheme:   │
@@ -1089,7 +1089,7 @@ physical_plan
 12)┌─────────────┴─────────────┐
 13)│      RepartitionExec      │
 14)│    --------------------   │
-15)│  output_partition_count:  │
+15)│   input_partition_count:  │
 16)│             1             │
 17)│                           │
 18)│    partitioning_scheme:   │
@@ -1123,7 +1123,7 @@ physical_plan
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│  output_partition_count:  │
+16)│   input_partition_count:  │
 17)│             1             │
 18)│                           │
 19)│    partitioning_scheme:   │
@@ -1209,7 +1209,7 @@ physical_plan
 22)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 23)│      RepartitionExec      ││      RepartitionExec      │
 24)│    --------------------   ││    --------------------   │
-25)│  output_partition_count:  ││  output_partition_count:  │
+25)│   input_partition_count:  ││   input_partition_count:  │
 26)│             4             ││             4             │
 27)│                           ││                           │
 28)│    partitioning_scheme:   ││    partitioning_scheme:   │
@@ -1220,7 +1220,7 @@ physical_plan
 33)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 34)│       ProjectionExec      ││      RepartitionExec      │
 35)│    --------------------   ││    --------------------   │
-36)│ CAST(table1.string_col AS ││  output_partition_count:  │
+36)│ CAST(table1.string_col AS ││   input_partition_count:  │
 37)│         Utf8View):        ││             1             │
 38)│     CAST(string_col AS    ││                           │
 39)│          Utf8View)        ││    partitioning_scheme:   │
@@ -1237,7 +1237,7 @@ physical_plan
 50)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 51)│      RepartitionExec      ││       DataSourceExec      │
 52)│    --------------------   ││    --------------------   │
-53)│  output_partition_count:  ││          files: 1         │
+53)│   input_partition_count:  ││          files: 1         │
 54)│             1             ││      format: parquet      │
 55)│                           ││                           │
 56)│    partitioning_scheme:   ││                           │
@@ -1281,7 +1281,7 @@ physical_plan
 24)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 25)│      RepartitionExec      ││      RepartitionExec      │
 26)│    --------------------   ││    --------------------   │
-27)│  output_partition_count:  ││  output_partition_count:  │
+27)│   input_partition_count:  ││   input_partition_count:  │
 28)│             4             ││             4             │
 29)│                           ││                           │
 30)│    partitioning_scheme:   ││    partitioning_scheme:   │
@@ -1292,7 +1292,7 @@ physical_plan
 35)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 36)│       ProjectionExec      ││      RepartitionExec      │
 37)│    --------------------   ││    --------------------   │
-38)│ CAST(table1.string_col AS ││  output_partition_count:  │
+38)│ CAST(table1.string_col AS ││   input_partition_count:  │
 39)│         Utf8View):        ││             1             │
 40)│     CAST(string_col AS    ││                           │
 41)│          Utf8View)        ││    partitioning_scheme:   │
@@ -1309,7 +1309,7 @@ physical_plan
 52)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 53)│      RepartitionExec      ││       DataSourceExec      │
 54)│    --------------------   ││    --------------------   │
-55)│  output_partition_count:  ││          files: 1         │
+55)│   input_partition_count:  ││          files: 1         │
 56)│             1             ││      format: parquet      │
 57)│                           ││                           │
 58)│    partitioning_scheme:   ││                           │
@@ -1356,7 +1356,7 @@ physical_plan
 27)-----------------------------┌─────────────┴─────────────┐
 28)-----------------------------│      RepartitionExec      │
 29)-----------------------------│    --------------------   │
-30)-----------------------------│  output_partition_count:  │
+30)-----------------------------│   input_partition_count:  │
 31)-----------------------------│             1             │
 32)-----------------------------│                           │
 33)-----------------------------│    partitioning_scheme:   │
@@ -1380,7 +1380,7 @@ physical_plan
 04)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 05)│       DataSourceExec      ││      RepartitionExec      │
 06)│    --------------------   ││    --------------------   │
-07)│          files: 1         ││  output_partition_count:  │
+07)│          files: 1         ││   input_partition_count:  │
 08)│        format: csv        ││             1             │
 09)│                           ││                           │
 10)│                           ││    partitioning_scheme:   │
@@ -1505,7 +1505,7 @@ physical_plan
 33)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 34)│      RepartitionExec      ││      RepartitionExec      │
 35)│    --------------------   ││    --------------------   │
-36)│  output_partition_count:  ││  output_partition_count:  │
+36)│   input_partition_count:  ││   input_partition_count:  │
 37)│             4             ││             4             │
 38)│                           ││                           │
 39)│    partitioning_scheme:   ││    partitioning_scheme:   │
@@ -1514,7 +1514,7 @@ physical_plan
 42)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 43)│      RepartitionExec      ││      RepartitionExec      │
 44)│    --------------------   ││    --------------------   │
-45)│  output_partition_count:  ││  output_partition_count:  │
+45)│   input_partition_count:  ││   input_partition_count:  │
 46)│             1             ││             1             │
 47)│                           ││                           │
 48)│    partitioning_scheme:   ││    partitioning_scheme:   │
@@ -1606,7 +1606,7 @@ physical_plan
 18)┌─────────────┴─────────────┐
 19)│      RepartitionExec      │
 20)│    --------------------   │
-21)│  output_partition_count:  │
+21)│   input_partition_count:  │
 22)│             1             │
 23)│                           │
 24)│    partitioning_scheme:   │
@@ -1648,7 +1648,7 @@ physical_plan
 19)┌─────────────┴─────────────┐
 20)│      RepartitionExec      │
 21)│    --------------------   │
-22)│  output_partition_count:  │
+22)│   input_partition_count:  │
 23)│             1             │
 24)│                           │
 25)│    partitioning_scheme:   │
@@ -1689,7 +1689,7 @@ physical_plan
 19)┌─────────────┴─────────────┐
 20)│      RepartitionExec      │
 21)│    --------------------   │
-22)│  output_partition_count:  │
+22)│   input_partition_count:  │
 23)│             1             │
 24)│                           │
 25)│    partitioning_scheme:   │
@@ -1728,7 +1728,7 @@ physical_plan
 17)┌─────────────┴─────────────┐
 18)│      RepartitionExec      │
 19)│    --------------------   │
-20)│  output_partition_count:  │
+20)│   input_partition_count:  │
 21)│             1             │
 22)│                           │
 23)│    partitioning_scheme:   │
@@ -1771,7 +1771,7 @@ physical_plan
 20)┌─────────────┴─────────────┐
 21)│      RepartitionExec      │
 22)│    --------------------   │
-23)│  output_partition_count:  │
+23)│   input_partition_count:  │
 24)│             1             │
 25)│                           │
 26)│    partitioning_scheme:   │
@@ -1815,7 +1815,7 @@ physical_plan
 19)┌─────────────┴─────────────┐
 20)│      RepartitionExec      │
 21)│    --------------------   │
-22)│  output_partition_count:  │
+22)│   input_partition_count:  │
 23)│             1             │
 24)│                           │
 25)│    partitioning_scheme:   │
@@ -1869,7 +1869,7 @@ physical_plan
 25)-----------------------------┌─────────────┴─────────────┐
 26)-----------------------------│      RepartitionExec      │
 27)-----------------------------│    --------------------   │
-28)-----------------------------│  output_partition_count:  │
+28)-----------------------------│   input_partition_count:  │
 29)-----------------------------│             1             │
 30)-----------------------------│                           │
 31)-----------------------------│    partitioning_scheme:   │
@@ -1983,7 +1983,7 @@ physical_plan
 22)┌─────────────┴─────────────┐
 23)│      RepartitionExec      │
 24)│    --------------------   │
-25)│  output_partition_count:  │
+25)│   input_partition_count:  │
 26)│             1             │
 27)│                           │
 28)│    partitioning_scheme:   │
@@ -2062,7 +2062,7 @@ physical_plan
 19)┌─────────────┴─────────────┐
 20)│      RepartitionExec      │
 21)│    --------------------   │
-22)│  output_partition_count:  │
+22)│   input_partition_count:  │
 23)│             1             │
 24)│                           │
 25)│    partitioning_scheme:   │

@@ -41,13 +41,13 @@ impl<'a> PartitionEvaluatorArgs<'a> {
     /// # Arguments
     ///
     /// * `input_exprs` - The expressions passed as arguments
-    ///     to the user-defined window function.
+    ///   to the user-defined window function.
     /// * `input_types` - The data types corresponding to the
-    ///     arguments to the user-defined window function.
+    ///   arguments to the user-defined window function.
     /// * `is_reversed` - Set to `true` if and only if the user-defined
-    ///     window function is reversible and is reversed.
+    ///   window function is reversible and is reversed.
     /// * `ignore_nulls` - Set to `true` when `IGNORE NULLS` is
-    ///     specified.
+    ///   specified.
     ///
     pub fn new(
         input_exprs: &'a [Arc<dyn PhysicalExpr>],

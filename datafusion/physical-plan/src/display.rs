@@ -657,7 +657,7 @@ impl TreeRenderVisitor<'_, '_> {
             }
         }
 
-        let halfway_point = (extra_height + 1) / 2;
+        let halfway_point = extra_height.div_ceil(2);
 
         // Render the actual node.
         for render_y in 0..=extra_height {

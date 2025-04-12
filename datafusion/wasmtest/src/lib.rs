@@ -82,7 +82,6 @@ pub fn basic_parse() {
 #[cfg(test)]
 mod test {
     use super::*;
-    use datafusion::execution::options::ParquetReadOptions;
     use datafusion::{
         arrow::{
             array::{ArrayRef, Int32Array, RecordBatch, StringArray},
@@ -98,7 +97,6 @@ mod test {
     };
     use datafusion_physical_plan::collect;
     use datafusion_sql::parser::DFParser;
-    use insta::assert_snapshot;
     use object_store::{memory::InMemory, path::Path, ObjectStore};
     use url::Url;
     use wasm_bindgen_test::wasm_bindgen_test;
@@ -240,22 +238,24 @@ mod test {
 
         let url = Url::parse("memory://").unwrap();
         session_ctx.register_object_store(&url, Arc::new(store));
-
-        let df = session_ctx
-            .read_parquet("memory:///", ParquetReadOptions::new())
+        session_ctx
+            .register_parquet("a", "memory:///a.parquet", Default::default())
             .await
             .unwrap();
 
+        let df = session_ctx.sql("SELECT * FROM a").await.unwrap();
+
         let result = df.collect().await.unwrap();
 
-        assert_snapshot!(batches_to_string(&result), @r"
-        +----+-------+
-        | id | value |
-        +----+-------+
-        | 1  | a     |
-        | 2  | b     |
-        | 3  | c     |
-        +----+-------+
-        ");
+        assert_eq!(
+            batches_to_string(&result),
+            "+----+-------+\n\
+             | id | value |\n\
+             +----+-------+\n\
+             | 1  | a     |\n\
+             | 2  | b     |\n\
+             | 3  | c     |\n\
+             +----+-------+"
+        );
     }
 }

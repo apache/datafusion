@@ -54,7 +54,6 @@ use datafusion_physical_expr::{
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_common::stats::Precision;
-use datafusion_datasource::add_row_stats;
 use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -716,9 +715,13 @@ impl ListingOptions {
 #[derive(Debug)]
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
-    /// File fields only
+    /// `file_schema` contains only the columns physically stored in the data files themselves.
+    ///     - Represents the actual fields found in files like Parquet, CSV, etc.
+    ///     - Used when reading the raw data from files
     file_schema: SchemaRef,
-    /// File fields + partition columns
+    /// `table_schema` combines `file_schema` + partition columns
+    ///     - Partition columns are derived from directory paths (not stored in files)
+    ///     - These are columns like "year=2022/month=01" in paths like `/data/year=2022/month=01/file.parquet`
     table_schema: SchemaRef,
     options: ListingOptions,
     definition: Option<String>,
@@ -875,15 +878,13 @@ impl TableProvider for ListingTable {
             filters.iter().cloned().partition(|filter| {
                 can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
             });
-        // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
-        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
 
         // We should not limit the number of partitioned files to scan if there are filters and limit
         // at the same time. This is because the limit should be applied after the filters are applied.
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
         let (mut partitioned_file_lists, statistics) = self
-            .list_files_for_scan(session_state, &partition_filters, statistic_file_limit)
+            .list_files_for_scan(state, &partition_filters, statistic_file_limit)
             .await?;
 
         // if no files need to be read, return an `EmptyExec`
@@ -899,10 +900,11 @@ impl TableProvider for ListingTable {
             .split_file_groups_by_statistics
             .then(|| {
                 output_ordering.first().map(|output_ordering| {
-                    FileScanConfig::split_groups_by_statistics(
+                    FileScanConfig::split_groups_by_statistics_with_target_partitions(
                         &self.table_schema,
                         &partitioned_file_lists,
                         output_ordering,
+                        self.options.target_partitions,
                     )
                 })
             })
@@ -942,7 +944,7 @@ impl TableProvider for ListingTable {
         self.options
             .format
             .create_physical_plan(
-                session_state,
+                state,
                 FileScanConfigBuilder::new(
                     object_store_url,
                     Arc::clone(&self.file_schema),
@@ -1022,10 +1024,8 @@ impl TableProvider for ListingTable {
         // Get the object store for the table path.
         let store = state.runtime_env().object_store(table_path)?;
 
-        // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
-        let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let file_list_stream = pruned_partition_list(
-            session_state,
+            state,
             store.as_ref(),
             table_path,
             &[],
@@ -1073,7 +1073,7 @@ impl TableProvider for ListingTable {
 
         self.options()
             .format
-            .create_writer_physical_plan(input, session_state, config, order_requirements)
+            .create_writer_physical_plan(input, state, config, order_requirements)
             .await
     }
 
@@ -1186,7 +1186,7 @@ impl ListingTable {
 /// # Arguments
 /// * `files` - A stream of `Result<PartitionedFile>` items to process
 /// * `limit` - An optional row count limit. If provided, the function will stop collecting files
-///             once the accumulated number of rows exceeds this limit
+///   once the accumulated number of rows exceeds this limit
 /// * `collect_stats` - Whether to collect and accumulate statistics from the files
 ///
 /// # Returns
@@ -1229,7 +1229,7 @@ async fn get_files_with_limit(
                     file_stats.num_rows
                 } else {
                     // For subsequent files, accumulate the counts
-                    add_row_stats(num_rows, file_stats.num_rows)
+                    num_rows.add(&file_stats.num_rows)
                 };
             }
         }

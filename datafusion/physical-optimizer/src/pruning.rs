@@ -41,6 +41,7 @@ use datafusion_common::{Column, DFSchema};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
+use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
 /// A source of runtime statistical information to [`PruningPredicate`]s.
@@ -312,13 +313,13 @@ pub trait PruningStatistics {
 /// * `true`: there MAY be rows that pass the predicate, **KEEPS** the container
 ///
 /// * `NULL`: there MAY be rows that pass the predicate, **KEEPS** the container
-///           Note that rewritten predicate can evaluate to NULL when some of
-///           the min/max values are not known. *Note that this is different than
-///           the SQL filter semantics where `NULL` means the row is filtered
-///           out.*
+///   Note that rewritten predicate can evaluate to NULL when some of
+///   the min/max values are not known. *Note that this is different than
+///   the SQL filter semantics where `NULL` means the row is filtered
+///   out.*
 ///
 /// * `false`: there are no rows that could possibly match the predicate,
-///            **PRUNES** the container
+///   **PRUNES** the container
 ///
 /// For example, given a column `x`, the `x_min`, `x_max`, `x_null_count`, and
 /// `x_row_count` represent the minimum and maximum values, the null count of
@@ -527,6 +528,9 @@ impl PruningPredicate {
     /// See the struct level documentation on [`PruningPredicate`] for more
     /// details.
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+        // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`
+        // which does not handle dynamic exprs  in general
+        let expr = snapshot_physical_expr(expr)?;
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
 
         // build predicate expression once

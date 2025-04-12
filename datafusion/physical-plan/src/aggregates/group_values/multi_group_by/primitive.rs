@@ -158,7 +158,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             (true, Some(false)) => {
                 self.nulls.append_n(rows.len(), true);
                 self.group_values
-                    .extend(iter::repeat(T::default_value()).take(rows.len()));
+                    .extend(iter::repeat_n(T::default_value(), rows.len()));
             }
 
             (false, _) => {

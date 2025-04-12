@@ -57,6 +57,9 @@ OPTIONS:
         --mem-pool-type <MEM_POOL_TYPE>
             Specify the memory pool type 'greedy' or 'fair', default to 'greedy'
 
+    -d, --disk-limit <DISK_LIMIT>
+            Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')
+
     -p, --data-path <DATA_PATH>
             Path to your data, default to current directory
 

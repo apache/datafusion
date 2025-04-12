@@ -500,3 +500,72 @@ pub(crate) fn character_length_to_sql(
         character_length_args,
     )?))
 }
+
+/// SQLite does not support timestamp/date scalars like `to_timestamp`, `from_unixtime`, `date_trunc`, etc.
+/// This remaps `from_unixtime` to `datetime(expr, 'unixepoch')`, expecting the input to be in seconds.
+/// It supports no other arguments, so if any are supplied it will return an error.
+///
+/// # Errors
+///
+/// - If the number of arguments is not 1 - the column or expression to convert.
+/// - If the scalar function cannot be converted to SQL.
+pub(crate) fn sqlite_from_unixtime_to_sql(
+    unparser: &Unparser,
+    from_unixtime_args: &[Expr],
+) -> Result<Option<ast::Expr>> {
+    if from_unixtime_args.len() != 1 {
+        return internal_err!(
+            "from_unixtime for SQLite expects 1 argument, found {}",
+            from_unixtime_args.len()
+        );
+    }
+
+    Ok(Some(unparser.scalar_function_to_sql(
+        "datetime",
+        &[
+            from_unixtime_args[0].clone(),
+            Expr::Literal(ScalarValue::Utf8(Some("unixepoch".to_string()))),
+        ],
+    )?))
+}
+
+/// SQLite does not support timestamp/date scalars like `to_timestamp`, `from_unixtime`, `date_trunc`, etc.
+/// This uses the `strftime` function to format the timestamp as a string depending on the truncation unit.
+///
+/// # Errors
+///
+/// - If the number of arguments is not 2 - truncation unit and the column or expression to convert.
+/// - If the scalar function cannot be converted to SQL.
+pub(crate) fn sqlite_date_trunc_to_sql(
+    unparser: &Unparser,
+    date_trunc_args: &[Expr],
+) -> Result<Option<ast::Expr>> {
+    if date_trunc_args.len() != 2 {
+        return internal_err!(
+            "date_trunc for SQLite expects 2 arguments, found {}",
+            date_trunc_args.len()
+        );
+    }
+
+    if let Expr::Literal(ScalarValue::Utf8(Some(unit))) = &date_trunc_args[0] {
+        let format = match unit.to_lowercase().as_str() {
+            "year" => "%Y",
+            "month" => "%Y-%m",
+            "day" => "%Y-%m-%d",
+            "hour" => "%Y-%m-%d %H",
+            "minute" => "%Y-%m-%d %H:%M",
+            "second" => "%Y-%m-%d %H:%M:%S",
+            _ => return Ok(None),
+        };
+
+        return Ok(Some(unparser.scalar_function_to_sql(
+            "strftime",
+            &[
+                Expr::Literal(ScalarValue::Utf8(Some(format.to_string()))),
+                date_trunc_args[1].clone(),
+            ],
+        )?));
+    }
+
+    Ok(None)
+}
