@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF};
+use crate::{udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF, udtf::FFI_TableFunction};
 use datafusion::{
+    catalog::TableFunctionImpl,
     functions::math::{abs::AbsFunc, random::RandomFunc},
     functions_aggregate::{stddev::Stddev, sum::Sum},
+    functions_table::generate_series::RangeFunc,
     logical_expr::{AggregateUDF, ScalarUDF},
 };
 
@@ -42,4 +44,10 @@ pub(crate) extern "C" fn create_ffi_stddev_func() -> FFI_AggregateUDF {
 pub(crate) extern "C" fn create_ffi_random_func() -> FFI_ScalarUDF {
     let udf: Arc<ScalarUDF> = Arc::new(RandomFunc::new().into());
     udf.into()
+}
+
+pub(crate) extern "C" fn create_ffi_table_func() -> FFI_TableFunction {
+    let udtf: Arc<dyn TableFunctionImpl> = Arc::new(RangeFunc {});
+
+    FFI_TableFunction::new(udtf, None)
 }

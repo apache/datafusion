@@ -27,7 +27,7 @@ use abi_stable::{
 };
 use catalog::create_catalog_provider;
 
-use crate::catalog_provider::FFI_CatalogProvider;
+use crate::{catalog_provider::FFI_CatalogProvider, udtf::FFI_TableFunction};
 
 use crate::udaf::FFI_AggregateUDF;
 
@@ -41,7 +41,7 @@ use datafusion::{
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
     create_ffi_abs_func, create_ffi_random_func, create_ffi_stddev_func,
-    create_ffi_sum_func,
+    create_ffi_sum_func, create_ffi_table_func,
 };
 
 mod async_provider;
@@ -72,6 +72,8 @@ pub struct ForeignLibraryModule {
     /// Createa  grouping UDAF using stddev
     pub create_stddev_udaf: extern "C" fn() -> FFI_AggregateUDF,
     pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
+
+    pub create_table_function: extern "C" fn() -> FFI_TableFunction,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -121,6 +123,7 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_sum_udaf: create_ffi_sum_func,
         create_stddev_udaf: create_ffi_stddev_func,
         create_nullary_udf: create_ffi_random_func,
+        create_table_function: create_ffi_table_func,
         version: super::version,
     }
     .leak_into_prefix()
