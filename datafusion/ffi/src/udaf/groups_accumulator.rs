@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ffi::c_void;
+use std::{ffi::c_void, sync::Arc};
 
 use abi_stable::{
     std_types::{ROption, RResult, RString, RVec},
@@ -101,6 +101,25 @@ impl FFI_GroupsAccumulator {
     }
 }
 
+fn process_values(values: RVec<WrappedArray>) -> Result<Vec<Arc<dyn Array>>> {
+    values
+        .into_iter()
+        .map(|v| v.try_into().map_err(DataFusionError::from))
+        .collect::<Result<Vec<ArrayRef>>>()
+}
+
+/// Convert C-typed opt_filter into the internal type.
+fn process_opt_filter(opt_filter: ROption<WrappedArray>) -> Result<Option<BooleanArray>> {
+    opt_filter
+        .into_option()
+        .map(|filter| {
+            ArrayRef::try_from(filter)
+                .map_err(DataFusionError::from)
+                .map(|arr| BooleanArray::from(arr.into_data()))
+        })
+        .transpose()
+}
+
 unsafe extern "C" fn update_batch_fn_wrapper(
     accumulator: &mut FFI_GroupsAccumulator,
     values: RVec<WrappedArray>,
@@ -109,28 +128,12 @@ unsafe extern "C" fn update_batch_fn_wrapper(
     total_num_groups: usize,
 ) -> RResult<(), RString> {
     let accumulator = accumulator.inner();
-
-    let values_arrays = values
-        .into_iter()
-        .map(|v| v.try_into().map_err(DataFusionError::from))
-        .collect::<Result<Vec<ArrayRef>>>();
-    let values_arrays = rresult_return!(values_arrays);
-
+    let values = rresult_return!(process_values(values));
     let group_indices: Vec<usize> = group_indices.into_iter().collect();
-
-    let maybe_filter = opt_filter.into_option().and_then(|filter| {
-        match ArrayRef::try_from(filter) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                log::warn!("Error during FFI array conversion. Ignoring optional filter in groups accumulator. {}", e);
-                None
-            }
-        }
-    }).map(|arr| arr.into_data());
-    let opt_filter = maybe_filter.map(BooleanArray::from);
+    let opt_filter = rresult_return!(process_opt_filter(opt_filter));
 
     rresult!(accumulator.update_batch(
-        &values_arrays,
+        &values,
         &group_indices,
         opt_filter.as_ref(),
         total_num_groups
@@ -174,27 +177,12 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
     total_num_groups: usize,
 ) -> RResult<(), RString> {
     let accumulator = accumulator.inner();
-    let values_arrays = values
-        .into_iter()
-        .map(|v| v.try_into().map_err(DataFusionError::from))
-        .collect::<Result<Vec<ArrayRef>>>();
-    let values_arrays = rresult_return!(values_arrays);
-
+    let values = rresult_return!(process_values(values));
     let group_indices: Vec<usize> = group_indices.into_iter().collect();
-
-    let maybe_filter = opt_filter.into_option().and_then(|filter| {
-        match ArrayRef::try_from(filter) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                log::warn!("Error during FFI array conversion. Ignoring optional filter in groups accumulator. {}", e);
-                None
-            }
-        }
-    }).map(|arr| arr.into_data());
-    let opt_filter = maybe_filter.map(BooleanArray::from);
+    let opt_filter = rresult_return!(process_opt_filter(opt_filter));
 
     rresult!(accumulator.merge_batch(
-        &values_arrays,
+        &values,
         &group_indices,
         opt_filter.as_ref(),
         total_num_groups
@@ -207,21 +195,8 @@ unsafe extern "C" fn convert_to_state_fn_wrapper(
     opt_filter: ROption<WrappedArray>,
 ) -> RResult<RVec<WrappedArray>, RString> {
     let accumulator = accumulator.inner();
-    let values = rresult_return!(values
-        .into_iter()
-        .map(|v| ArrayRef::try_from(v).map_err(DataFusionError::from))
-        .collect::<Result<Vec<_>>>());
-
-    let opt_filter = opt_filter.into_option().and_then(|filter| {
-        match ArrayRef::try_from(filter) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                log::warn!("Error during FFI array conversion. Ignoring optional filter in groups accumulator. {}", e);
-                None
-            }
-        }
-    }).map(|arr| arr.into_data()).map(BooleanArray::from);
-
+    let values = rresult_return!(process_values(values));
+    let opt_filter = rresult_return!(process_opt_filter(opt_filter));
     let state =
         rresult_return!(accumulator.convert_to_state(&values, opt_filter.as_ref()));
 
