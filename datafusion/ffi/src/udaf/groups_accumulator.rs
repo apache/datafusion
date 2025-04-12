@@ -51,14 +51,14 @@ pub struct FFI_GroupsAccumulator {
 
     // Evaluate and return a ScalarValues as protobuf bytes
     pub evaluate: unsafe extern "C" fn(
-        accumulator: &Self,
+        accumulator: &mut Self,
         emit_to: FFI_EmitTo,
     ) -> RResult<WrappedArray, RString>,
 
     pub size: unsafe extern "C" fn(accumulator: &Self) -> usize,
 
     pub state: unsafe extern "C" fn(
-        accumulator: &Self,
+        accumulator: &mut Self,
         emit_to: FFI_EmitTo,
     ) -> RResult<RVec<WrappedArray>, RString>,
 
@@ -95,9 +95,16 @@ pub struct GroupsAccumulatorPrivateData {
 }
 
 impl FFI_GroupsAccumulator {
-    unsafe fn inner(&self) -> &mut Box<dyn GroupsAccumulator> {
+    #[inline]
+    unsafe fn inner(&mut self) -> &mut Box<dyn GroupsAccumulator> {
         let private_data = self.private_data as *mut GroupsAccumulatorPrivateData;
         &mut (*private_data).accumulator
+    }
+
+    #[inline]
+    unsafe fn inner_ref(&self) -> &dyn GroupsAccumulator {
+        let private_data = self.private_data as *const GroupsAccumulatorPrivateData;
+        &*(*private_data).accumulator
     }
 }
 
@@ -141,7 +148,7 @@ unsafe extern "C" fn update_batch_fn_wrapper(
 }
 
 unsafe extern "C" fn evaluate_fn_wrapper(
-    accumulator: &FFI_GroupsAccumulator,
+    accumulator: &mut FFI_GroupsAccumulator,
     emit_to: FFI_EmitTo,
 ) -> RResult<WrappedArray, RString> {
     let accumulator = accumulator.inner();
@@ -152,12 +159,12 @@ unsafe extern "C" fn evaluate_fn_wrapper(
 }
 
 unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_GroupsAccumulator) -> usize {
-    let accumulator = accumulator.inner();
+    let accumulator = accumulator.inner_ref();
     accumulator.size()
 }
 
 unsafe extern "C" fn state_fn_wrapper(
-    accumulator: &FFI_GroupsAccumulator,
+    accumulator: &mut FFI_GroupsAccumulator,
     emit_to: FFI_EmitTo,
 ) -> RResult<RVec<WrappedArray>, RString> {
     let accumulator = accumulator.inner();
@@ -194,7 +201,7 @@ unsafe extern "C" fn convert_to_state_fn_wrapper(
     values: RVec<WrappedArray>,
     opt_filter: ROption<WrappedArray>,
 ) -> RResult<RVec<WrappedArray>, RString> {
-    let accumulator = accumulator.inner();
+    let accumulator = accumulator.inner_ref();
     let values = rresult_return!(process_values(values));
     let opt_filter = rresult_return!(process_opt_filter(opt_filter));
     let state =
@@ -298,7 +305,7 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         unsafe {
             let return_array = df_result!((self.accumulator.evaluate)(
-                &self.accumulator,
+                &mut self.accumulator,
                 emit_to.into()
             ))?;
 
@@ -308,8 +315,10 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         unsafe {
-            let returned_arrays =
-                df_result!((self.accumulator.state)(&self.accumulator, emit_to.into()))?;
+            let returned_arrays = df_result!((self.accumulator.state)(
+                &mut self.accumulator,
+                emit_to.into()
+            ))?;
 
             returned_arrays
                 .into_iter()
