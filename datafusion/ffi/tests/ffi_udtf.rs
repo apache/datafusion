@@ -23,14 +23,10 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{create_array, ArrayRef};
-    use arrow::datatypes::DataType;
     use datafusion::error::{DataFusionError, Result};
-    use datafusion::logical_expr::ScalarUDF;
     use datafusion::prelude::SessionContext;
 
-    use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
-    use datafusion_ffi::udf::ForeignScalarUDF;
     use datafusion_ffi::udtf::ForeignTableFunction;
 
     /// This test validates that we can load an external module and use a scalar
