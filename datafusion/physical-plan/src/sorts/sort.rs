@@ -459,7 +459,6 @@ impl ExternalSorter {
 
         let sorted_stream =
             self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
-        debug!("SPM stream is constructed");
 
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
@@ -567,8 +566,6 @@ impl ExternalSorter {
             .with_reservation(self.merge_reservation.new_empty())
             .build()?;
 
-        debug!("Combining spilled files");
-
         // ==== Write to a single merged spill file ====
         let merged_spill_file = self.write_stream_to_spill_file(spm_stream).await?;
 
@@ -607,7 +604,9 @@ impl ExternalSorter {
         // Edge cases
         // ──────────────────────────────────────────────────────────────────────
         if self.finished_spill_files.is_empty() {
-            return internal_err!("No spilled files to merge");
+            return internal_err!(
+                "No spilled files to merge at the beginning of multi-pass merge"
+            );
         }
         if self.finished_spill_files.len() == 1 {
             return self
@@ -619,7 +618,7 @@ impl ExternalSorter {
         // Merge spilled files in multiple pass
         // ──────────────────────────────────────────────────────────────────────
         let spill_files = std::mem::take(&mut self.finished_spill_files);
-        let spill_files = self.merge_spill_files_multipass(spill_files).await?;
+        let spill_files = self.merge_spill_files_multi_pass(spill_files).await?;
 
         // ──────────────────────────────────────────────────────────────────────
         // Finally, <= max merge degree spilled files are left, merge them into a
@@ -632,7 +631,9 @@ impl ExternalSorter {
 
         // Edge cases
         if partially_sorted_streams.is_empty() {
-            return internal_err!("No spilled files to merge");
+            return internal_err!(
+                "No spilled files to merge at the final stage of multi-pass merge"
+            );
         }
         if partially_sorted_streams.len() == 1 {
             return Ok(partially_sorted_streams.into_iter().next().unwrap());
@@ -657,7 +658,7 @@ impl ExternalSorter {
     }
 
     /// Iteratively merges and re-spills files until the number of spill files is ≤ MAX_SPILL_MERGE_DEGREE
-    async fn merge_spill_files_multipass(
+    async fn merge_spill_files_multi_pass(
         &mut self,
         mut spill_files_cur_pass: Vec<RefCountedTempFile>,
     ) -> Result<Vec<RefCountedTempFile>> {
@@ -676,6 +677,8 @@ impl ExternalSorter {
             let log_base = Self::MAX_SPILL_MERGE_DEGREE as f64;
             let num_files = spill_files_cur_pass.len() as f64;
             let num_passes = num_files.log(log_base).ceil() as usize;
+            // For the example above, when num_passes=3, `next_pass_merge_degree`
+            // would be 4^(3-1) = 16 for pass 1, and 4^(2-1) = 4 for pass 2
             let next_pass_merge_degree = log_base.powi((num_passes - 1) as i32);
 
             // Distribute spill files into `next_pass_merge_degree` groups as evenly as possible.
@@ -810,11 +813,6 @@ impl ExternalSorter {
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation);
         }
-
-        debug!(
-            "ExternalSorter partial merge degree: {}",
-            self.in_mem_batches.len() // each batch will be converted to a stream later
-        );
 
         let streams = std::mem::take(&mut self.in_mem_batches)
             .into_iter()
