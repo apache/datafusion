@@ -36,6 +36,7 @@ use crate::{
     df_result, rresult, rresult_return,
 };
 
+/// A stable struct for sharing [`GroupsAccumulator`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
