@@ -1327,7 +1327,7 @@ mod tests {
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::RecordBatchStream;
@@ -1547,6 +1547,62 @@ mod tests {
             task_ctx.runtime_env().memory_pool.reserved(),
             0,
             "The sort should have returned all memory used back to the memory manager"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_reservation_error() -> Result<()> {
+        // Pick a memory limit and sort_spill_reservation that make the first batch reservation fail.
+        // These values assume that the ExternalSorter will reserve 800 bytes for the first batch.
+        let expected_batch_reservation = 800;
+        let merge_reservation: usize = 0; // Set to 0 for simplicity
+        let memory_limit: usize = expected_batch_reservation + merge_reservation - 1; // Just short of what we need
+
+        let session_config =
+            SessionConfig::new().with_sort_spill_reservation_bytes(merge_reservation);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime),
+        );
+
+        let plan = test::scan_partitioned(1);
+
+        // Read the first record batch to assert that our memory limit and sort_spill_reservation
+        // settings trigger the test scenario.
+        {
+            let mut stream = plan.execute(0, Arc::clone(&task_ctx))?;
+            let first_batch = stream.next().await.unwrap()?;
+            let batch_reservation = get_reserved_byte_for_record_batch(&first_batch);
+
+            assert_eq!(batch_reservation, expected_batch_reservation);
+            assert!(memory_limit < (merge_reservation + batch_reservation));
+        }
+
+        let sort_exec = Arc::new(SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: col("i", &plan.schema())?,
+                options: SortOptions::default(),
+            }]),
+            plan,
+        ));
+
+        let result = collect(
+            Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&task_ctx),
+        )
+        .await;
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::ResourcesExhausted(_)),
+            "Assertion failed: expected a ResourcesExhausted error, but got: {:?}",
+            err
         );
 
         Ok(())
