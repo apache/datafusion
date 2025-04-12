@@ -432,6 +432,17 @@ impl SessionConfig {
         self
     }
 
+    /// Set the `ExecutionOptions::sort_max_spill_merge_degree`
+    pub fn with_sort_max_spill_merge_degree(
+        mut self,
+        sort_max_spill_merge_degree: usize,
+    ) -> Self {
+        // Validation (must be >= 2) is done during execution, because there are
+        // other ways to configure this option.
+        self.options.execution.sort_max_spill_merge_degree = sort_max_spill_merge_degree;
+        self
+    }
+
     /// Enables or disables the enforcement of batch size in joins
     pub fn with_enforce_batch_size_in_joins(
         mut self,

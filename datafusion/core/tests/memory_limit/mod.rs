@@ -54,6 +54,7 @@ use datafusion_physical_plan::collect as collect_batches;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use rand::Rng;
+use rstest::rstest;
 use test_utils::AccessLogGenerator;
 
 use async_trait::async_trait;
@@ -611,6 +612,104 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
     // that the total disk usage tracked by the disk manager is zero
     let current_disk_usage = ctx.runtime_env().disk_manager.used_disk_space();
     assert_eq!(current_disk_usage, 0);
+
+    Ok(())
+}
+
+// Test configuration `sort_max_spill_merge_degree` in external sorting
+// -------------------------------------------------------------------
+
+// Ensure invalid config value of `sort_max_spill_merge_degree` returns error
+#[rstest]
+#[case(0)]
+#[case(1)]
+#[tokio::test]
+async fn test_invalid_sort_max_spill_merge_degree(
+    #[case] sort_max_spill_merge_degree: usize,
+) -> Result<()> {
+    let config = SessionConfig::new()
+        .with_sort_max_spill_merge_degree(sort_max_spill_merge_degree);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(20 * 1024 * 1024)))
+        .build_arc()
+        .unwrap();
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+    let df = ctx
+        .sql("select * from generate_series(1, 10000000) as t1(v1) order by v1")
+        .await
+        .unwrap();
+
+    let err = df.collect().await.unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "sort_max_spill_merge_degree must be >= 2 in order to continue external sorting"
+    );
+    Ok(())
+}
+
+// Create a `SessionContext` with a 1MB memory pool, and provided max merge degree.
+//
+// In order to let test case run faster and efficient, a memory pool with 1MB is used.
+// To let queries succeed under such a small memory limit, related configs should be
+// changed as follows.
+fn create_ctx_with_1mb_mem_pool(
+    sort_max_spill_merge_degree: usize,
+) -> Result<SessionContext> {
+    let config = SessionConfig::new()
+        .with_sort_max_spill_merge_degree(sort_max_spill_merge_degree)
+        .with_sort_spill_reservation_bytes(64 * 1024) // 64KB
+        .with_sort_in_place_threshold_bytes(0)
+        .with_batch_size(128) // To reduce test memory usage
+        .with_target_partitions(1);
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(1024 * 1024))) // 1MB memory limit
+        .build_arc()
+        .unwrap();
+
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+
+    Ok(ctx)
+}
+
+// Test different values of `sort_max_spill_merge_degree`.
+// The test setup and query will spill over 10 temporary files, the max merge degree is
+// varied to cover different number of passes in multi-pass spill merge.
+#[rstest]
+#[case(2)]
+#[case(3)]
+#[case(4)]
+#[case(7)]
+#[case(32)]
+#[case(310104)]
+#[tokio::test]
+async fn test_fuzz_sort_max_spill_merge_degree(
+    #[case] sort_max_spill_merge_degree: usize,
+) -> Result<()> {
+    let ctx = create_ctx_with_1mb_mem_pool(sort_max_spill_merge_degree)?;
+
+    let dataset_size = 1000000;
+    let sql = format!(
+        "select * from generate_series(1, {}) as t1(v1) order by v1",
+        dataset_size
+    );
+    let df = ctx.sql(&sql).await.unwrap();
+
+    let plan = df.create_physical_plan().await.unwrap();
+
+    let task_ctx = ctx.task_ctx();
+
+    // Ensure the query succeeds
+    let batches = collect_batches(Arc::clone(&plan), task_ctx)
+        .await
+        .expect("Query execution failed");
+
+    // Quick check. More extensive tests will be covered in sort fuzz tests.
+    let result_size = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+    assert_eq!(result_size, dataset_size);
+
+    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
+    assert!(spill_count > 10);
 
     Ok(())
 }

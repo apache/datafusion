@@ -43,17 +43,25 @@ const KB: usize = 1 << 10;
 #[cfg_attr(tarpaulin, ignore)]
 async fn test_sort_10k_mem() {
     for (batch_size, should_spill) in [(5, false), (20000, true), (500000, true)] {
-        let (input, collected) = SortTest::new()
-            .with_int32_batches(batch_size)
-            .with_sort_columns(vec!["x"])
-            .with_pool_size(10 * KB)
-            .with_should_spill(should_spill)
-            .run()
-            .await;
+        for sort_max_spill_merge_degree in [2, 5, 20, 1024] {
+            if batch_size > 20000 && sort_max_spill_merge_degree < 16 {
+                // takes too long to complete, skip it
+                continue;
+            }
 
-        let expected = partitions_to_sorted_vec(&input);
-        let actual = batches_to_vec(&collected);
-        assert_eq!(expected, actual, "failure in @ batch_size {batch_size:?}");
+            let (input, collected) = SortTest::new()
+                .with_int32_batches(batch_size)
+                .with_sort_columns(vec!["x"])
+                .with_pool_size(10 * KB)
+                .with_should_spill(should_spill)
+                .with_sort_max_spill_merge_degree(sort_max_spill_merge_degree)
+                .run()
+                .await;
+
+            let expected = partitions_to_sorted_vec(&input);
+            let actual = batches_to_vec(&collected);
+            assert_eq!(expected, actual, "failure in @ batch_size {batch_size:?}");
+        }
     }
 }
 
@@ -118,39 +126,43 @@ async fn test_sort_strings_100k_mem() {
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
 async fn test_sort_multi_columns_100k_mem() {
+    fn record_batch_to_vec(b: &RecordBatch) -> Vec<(i32, String)> {
+        let mut rows: Vec<_> = Vec::new();
+        let i32_array = as_int32_array(b.column(0)).unwrap();
+        let string_array = as_string_array(b.column(1));
+        for i in 0..b.num_rows() {
+            let str = string_array.value(i).to_string();
+            let i32 = i32_array.value(i);
+            rows.push((i32, str));
+        }
+        rows
+    }
+
     for (batch_size, should_spill) in
         [(5, false), (1000, false), (10000, true), (20000, true)]
     {
-        let (input, collected) = SortTest::new()
-            .with_int32_utf8_batches(batch_size)
-            .with_sort_columns(vec!["x", "y"])
-            .with_pool_size(100 * KB)
-            .with_should_spill(should_spill)
-            .run()
-            .await;
+        for sort_max_spill_merge_degree in [2, 5, 2048] {
+            let (input, collected) = SortTest::new()
+                .with_int32_utf8_batches(batch_size)
+                .with_sort_columns(vec!["x", "y"])
+                .with_pool_size(100 * KB)
+                .with_should_spill(should_spill)
+                .with_sort_max_spill_merge_degree(sort_max_spill_merge_degree)
+                .run()
+                .await;
 
-        fn record_batch_to_vec(b: &RecordBatch) -> Vec<(i32, String)> {
-            let mut rows: Vec<_> = Vec::new();
-            let i32_array = as_int32_array(b.column(0)).unwrap();
-            let string_array = as_string_array(b.column(1));
-            for i in 0..b.num_rows() {
-                let str = string_array.value(i).to_string();
-                let i32 = i32_array.value(i);
-                rows.push((i32, str));
-            }
-            rows
+            let mut input = input
+                .iter()
+                .flat_map(|p| p.iter())
+                .flat_map(record_batch_to_vec)
+                .collect::<Vec<(i32, String)>>();
+            input.sort_unstable();
+            let actual = collected
+                .iter()
+                .flat_map(record_batch_to_vec)
+                .collect::<Vec<(i32, String)>>();
+            assert_eq!(input, actual);
         }
-        let mut input = input
-            .iter()
-            .flat_map(|p| p.iter())
-            .flat_map(record_batch_to_vec)
-            .collect::<Vec<(i32, String)>>();
-        input.sort_unstable();
-        let actual = collected
-            .iter()
-            .flat_map(record_batch_to_vec)
-            .collect::<Vec<(i32, String)>>();
-        assert_eq!(input, actual);
     }
 }
 
@@ -180,11 +192,17 @@ struct SortTest {
     pool_size: Option<usize>,
     /// If true, expect the sort to spill
     should_spill: bool,
+    /// Configuration `ExecutionOptions::sort_max_spill_merge_degree` to be used
+    /// in the test case run
+    sort_max_spill_merge_degree: usize,
 }
 
 impl SortTest {
     fn new() -> Self {
-        Default::default()
+        Self {
+            sort_max_spill_merge_degree: 16, // Default::default() will be 1, which is invalid for this config
+            ..Default::default()
+        }
     }
 
     fn with_sort_columns(mut self, sort_columns: Vec<&str>) -> Self {
@@ -221,6 +239,14 @@ impl SortTest {
         self
     }
 
+    fn with_sort_max_spill_merge_degree(
+        mut self,
+        sort_max_spill_merge_degree: usize,
+    ) -> Self {
+        self.sort_max_spill_merge_degree = sort_max_spill_merge_degree;
+        self
+    }
+
     /// Sort the input using SortExec and ensure the results are
     /// correct according to `Vec::sort` both with and without spilling
     async fn run(&self) -> (Vec<Vec<RecordBatch>>, Vec<RecordBatch>) {
@@ -248,7 +274,8 @@ impl SortTest {
         let exec = MemorySourceConfig::try_new_exec(&input, schema, None).unwrap();
         let sort = Arc::new(SortExec::new(sort_ordering, exec));
 
-        let session_config = SessionConfig::new();
+        let session_config = SessionConfig::new()
+            .with_sort_max_spill_merge_degree(self.sort_max_spill_merge_degree);
         let session_ctx = if let Some(pool_size) = self.pool_size {
             // Make sure there is enough space for the initial spill
             // reservation
