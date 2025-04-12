@@ -17,37 +17,132 @@
 
 //! Tests for runtime configuration SQL interface
 
-use datafusion::prelude::*;
-use datafusion_common::Result;
+use std::sync::Arc;
+
+use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::TaskContext;
+use datafusion_physical_plan::common::collect;
 
 #[tokio::test]
-async fn test_set_memory_limit() -> Result<()> {
+async fn test_memory_limit_with_spill() {
     let ctx = SessionContext::new();
 
-    // Set memory limit to 100MB using SQL - note the quotes around the value
-    ctx.sql("SET datafusion.runtime.memory_limit = '100M'")
-        .await?
+    ctx.sql("SET datafusion.runtime.memory_limit = '1M'")
+        .await
+        .unwrap()
         .collect()
-        .await?;
+        .await
+        .unwrap();
 
-    ctx.sql("CREATE TABLE test (a INT) AS VALUES (1), (2), (3)")
-        .await?
+    ctx.sql("SET datafusion.execution.sort_spill_reservation_bytes = 0")
+        .await
+        .unwrap()
         .collect()
-        .await?;
-    let df = ctx.sql("SELECT * FROM test").await?;
-    let results = df.collect().await?;
+        .await
+        .unwrap();
 
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].num_rows(), 3);
+    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1;";
+    let df = ctx.sql(query).await.unwrap();
 
-    Ok(())
+    let plan = df.create_physical_plan().await.unwrap();
+    let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+    let stream = plan.execute(0, task_ctx).unwrap();
+
+    let _results = collect(stream).await;
+    let metrics = plan.metrics().unwrap();
+    let spill_count = metrics.spill_count().unwrap();
+    assert!(spill_count > 0, "Expected spills but none occurred");
 }
 
 #[tokio::test]
-async fn test_invalid_memory_limit() -> Result<()> {
+async fn test_no_spill_with_adequate_memory() {
     let ctx = SessionContext::new();
 
-    // Try to set an invalid memory limit - note the quotes around the value
+    ctx.sql("SET datafusion.runtime.memory_limit = '10M'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    ctx.sql("SET datafusion.execution.sort_spill_reservation_bytes = 0")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let df = ctx.sql(query).await.unwrap();
+
+    let plan = df.create_physical_plan().await.unwrap();
+    let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+    let stream = plan.execute(0, task_ctx).unwrap();
+
+    let _results = collect(stream).await;
+    let metrics = plan.metrics().unwrap();
+    let spill_count = metrics.spill_count().unwrap();
+    assert_eq!(spill_count, 0, "Expected no spills but some occurred");
+}
+
+#[tokio::test]
+async fn test_multiple_configs() {
+    let ctx = SessionContext::new();
+
+    ctx.sql("SET datafusion.runtime.memory_limit = '100M'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    ctx.sql("SET datafusion.execution.batch_size = '2048'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let result = ctx.sql(query).await.unwrap().collect().await;
+
+    assert!(result.is_ok(), "Should not fail due to memory limit");
+
+    let state = ctx.state();
+    let batch_size = state.config().options().execution.batch_size;
+    assert_eq!(batch_size, 2048);
+}
+
+#[tokio::test]
+async fn test_memory_limit_enforcement() {
+    let ctx = SessionContext::new();
+
+    ctx.sql("SET datafusion.runtime.memory_limit = '1M'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let result = ctx.sql(query).await.unwrap().collect().await;
+
+    assert!(result.is_err(), "Should fail due to memory limit");
+
+    ctx.sql("SET datafusion.runtime.memory_limit = '100M'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let result = ctx.sql(query).await.unwrap().collect().await;
+
+    assert!(result.is_ok(), "Should not fail due to memory limit");
+}
+
+#[tokio::test]
+async fn test_invalid_memory_limit() {
+    let ctx = SessionContext::new();
+
     let result = ctx
         .sql("SET datafusion.runtime.memory_limit = '100X'")
         .await;
@@ -55,11 +150,10 @@ async fn test_invalid_memory_limit() -> Result<()> {
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
     assert!(error_message.contains("Unsupported unit 'X'"));
-    Ok(())
 }
 
 #[tokio::test]
-async fn test_unknown_runtime_config() -> Result<()> {
+async fn test_unknown_runtime_config() {
     let ctx = SessionContext::new();
 
     let result = ctx
@@ -69,5 +163,4 @@ async fn test_unknown_runtime_config() -> Result<()> {
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
     assert!(error_message.contains("Unknown runtime configuration"));
-    Ok(())
 }

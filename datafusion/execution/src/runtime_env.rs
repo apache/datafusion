@@ -287,6 +287,7 @@ impl RuntimeEnvBuilder {
             object_store_registry: Arc::clone(&runtime_env.object_store_registry),
         }
     }
+
     /// Returns a list of all available runtime configurations with their current values and descriptions
     pub fn entries(&self) -> Vec<ConfigEntry> {
         // Memory pool configuration
