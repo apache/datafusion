@@ -19,8 +19,6 @@
 /// when the feature integtation-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
-    use arrow::array::Float64Array;
-    use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::{col, SessionContext};
     use datafusion_ffi::catalog_provider::ForeignCatalogProvider;
