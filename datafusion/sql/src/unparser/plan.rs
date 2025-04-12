@@ -582,6 +582,7 @@ impl Unparser<'_> {
                     }
                     _ => (&join.left, &join.right),
                 };
+                let already_projected = select.already_projected();
 
                 let left_plan =
                     match try_transform_to_simple_table_scan_with_filters(left_plan)? {
@@ -598,6 +599,13 @@ impl Unparser<'_> {
                     select,
                     relation,
                 )?;
+
+                let left_projection: Option<Vec<ast::SelectItem>> = if !already_projected
+                {
+                    Some(select.pop_projections())
+                } else {
+                    None
+                };
 
                 let right_plan =
                     match try_transform_to_simple_table_scan_with_filters(right_plan)? {
@@ -657,6 +665,13 @@ impl Unparser<'_> {
                     &mut right_relation,
                 )?;
 
+                let right_projection: Option<Vec<ast::SelectItem>> = if !already_projected
+                {
+                    Some(select.pop_projections())
+                } else {
+                    None
+                };
+
                 match join.join_type {
                     JoinType::LeftSemi
                     | JoinType::LeftAnti
@@ -702,6 +717,9 @@ impl Unparser<'_> {
                         } else {
                             select.selection(Some(exists_expr));
                         }
+                        if let Some(projection) = left_projection {
+                            select.projection(projection);
+                        }
                     }
                     JoinType::Inner
                     | JoinType::Left
@@ -719,6 +737,14 @@ impl Unparser<'_> {
                         let mut from = select.pop_from().unwrap();
                         from.push_join(ast_join);
                         select.push_from(from);
+                        if !already_projected {
+                            let projection = left_projection
+                                .unwrap()
+                                .into_iter()
+                                .chain(right_projection.unwrap().into_iter())
+                                .collect();
+                            select.projection(projection);
+                        }
                     }
                 };
 
