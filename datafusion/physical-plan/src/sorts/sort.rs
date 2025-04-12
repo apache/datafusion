@@ -212,6 +212,8 @@ struct ExternalSorter {
     /// the data will be concatenated and sorted in place rather than
     /// sort/merged.
     sort_in_place_threshold_bytes: usize,
+    /// See the doc in `ExecutionOptions::sort_max_spill_merge_degree` for more details.
+    sort_max_spill_merge_degree: usize,
 
     // ========================================================================
     // STATE BUFFERS:
@@ -258,6 +260,7 @@ impl ExternalSorter {
         batch_size: usize,
         sort_spill_reservation_bytes: usize,
         sort_in_place_threshold_bytes: usize,
+        sort_max_spill_merge_degree: usize,
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Result<Self> {
@@ -306,6 +309,7 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
+            sort_max_spill_merge_degree,
         })
     }
 
@@ -572,9 +576,6 @@ impl ExternalSorter {
         Ok(merged_spill_file)
     }
 
-    /// Maximum number of spill files to merge in a single pass
-    const MAX_SPILL_MERGE_DEGREE: usize = 8;
-
     /// Performs a multi-pass merge of spilled files to create a globally sorted stream. The merge degree is limited by memory constraints.
     /// - In each pass, existing spill files are split into groups, then sort-preserving merged, and re-spilled to a smaller number of spill files.
     /// - For each combining step, up to the maximum merge degree of spill files are merged.
@@ -673,12 +674,14 @@ impl ExternalSorter {
         // pass 1: merge 30 files into 16(4^2) files
         // pass 2: merge 16 files into 4(4^1) files
         // pass 3: now the number of spill files is <= max merge degree: merge them into a single sorted stream
-        while spill_files_cur_pass.len() > Self::MAX_SPILL_MERGE_DEGREE {
-            let log_base = Self::MAX_SPILL_MERGE_DEGREE as f64;
+        while spill_files_cur_pass.len() > self.sort_max_spill_merge_degree {
+            let log_base = self.sort_max_spill_merge_degree as f64;
             let num_files = spill_files_cur_pass.len() as f64;
             let num_passes = num_files.log(log_base).ceil() as usize;
-            // For the example above, when num_passes=3, `next_pass_merge_degree`
-            // would be 4^(3-1) = 16 for pass 1, and 4^(2-1) = 4 for pass 2
+            // For the example above:
+            // - In pass 1, there are 30 files, `num_passes` is 3, so
+            //   `next_pass_merge_degree` is 4^(3-1) = 16
+            // - In pass 2, `next_pass_merge_degree` can be calculated to 4 similarly
             let next_pass_merge_degree = log_base.powi((num_passes - 1) as i32);
 
             // Distribute spill files into `next_pass_merge_degree` groups as evenly as possible.
@@ -1342,6 +1345,7 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     execution_options.sort_spill_reservation_bytes,
                     execution_options.sort_in_place_threshold_bytes,
+                    execution_options.sort_max_spill_merge_degree,
                     &self.metrics_set,
                     context.runtime_env(),
                 )?;

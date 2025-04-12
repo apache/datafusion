@@ -337,6 +337,13 @@ config_namespace! {
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
 
+        /// When doing external sorting, the maximum number of spilled files to
+        /// read back at once. Those read files in the same merge step will be sort-
+        /// preserving-merged and re-spilled, and the step will be repeated to reduce
+        /// the number of spilled files in multiple passes, until a final sorted run
+        /// can be produced.
+        pub sort_max_spill_merge_degree: usize, default = 16
+
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: usize, default = 32
 

@@ -227,6 +227,7 @@ datafusion.execution.skip_partial_aggregation_probe_rows_threshold 100000
 datafusion.execution.skip_physical_aggregate_schema_check false
 datafusion.execution.soft_max_rows_per_output_file 50000000
 datafusion.execution.sort_in_place_threshold_bytes 1048576
+datafusion.execution.sort_max_spill_merge_degree 16
 datafusion.execution.sort_spill_reservation_bytes 10485760
 datafusion.execution.split_file_groups_by_statistics false
 datafusion.execution.target_partitions 7
@@ -326,6 +327,7 @@ datafusion.execution.skip_partial_aggregation_probe_rows_threshold 100000 Number
 datafusion.execution.skip_physical_aggregate_schema_check false When set to true, skips verifying that the schema produced by planning the input of `LogicalPlan::Aggregate` exactly matches the schema of the input plan. When set to false, if the schema does not match exactly (including nullability and metadata), a planning error will be raised. This is used to workaround bugs in the planner that are now caught by the new schema verification step.
 datafusion.execution.soft_max_rows_per_output_file 50000000 Target number of rows in output files when writing multiple. This is a soft max, so it can be exceeded slightly. There also will be one file smaller than the limit if the total number of rows written is not roughly divisible by the soft max
 datafusion.execution.sort_in_place_threshold_bytes 1048576 When sorting, below what size should data be concatenated and sorted in a single RecordBatch rather than sorted in batches and merged.
+datafusion.execution.sort_max_spill_merge_degree 16 When doing external sorting, the maximum number of spilled files to read back at once. Those read files in the same merge step will be sort- preserving-merged and re-spilled, and the step will be repeated to reduce the number of spilled files in multiple passes, until a final sorted run can be produced.
 datafusion.execution.sort_spill_reservation_bytes 10485760 Specifies the reserved memory for each spillable sort operation to facilitate an in-memory merge. When a sort operation spills to disk, the in-memory data must be sorted and merged before being written to a file. This setting reserves a specific amount of memory for that in-memory sort/merge process. Note: This setting is irrelevant if the sort operation cannot spill (i.e., if there's no `DiskManager` configured).
 datafusion.execution.split_file_groups_by_statistics false Attempt to eliminate sorts by packing & sorting files with non-overlapping statistics into the same file groups. Currently experimental
 datafusion.execution.target_partitions 7 Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system
