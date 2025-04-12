@@ -145,7 +145,8 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     match array.data_type() {
         List(_) => {
-            let (field, offsets, values, _) = as_list_array(&array)?.clone().into_parts();
+            let (field, offsets, values, nulls) =
+                as_list_array(&array)?.clone().into_parts();
 
             match field.data_type() {
                 List(_) => {
@@ -156,7 +157,7 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                         inner_field,
                         offsets,
                         inner_values,
-                        None,
+                        nulls,
                     );
 
                     Ok(Arc::new(flattened_array) as ArrayRef)
@@ -168,7 +169,7 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         }
         LargeList(_) => {
-            let (field, offsets, values, _) =
+            let (field, offsets, values, nulls) =
                 as_large_list_array(&array)?.clone().into_parts();
 
             match field.data_type() {
@@ -180,20 +181,20 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                         inner_field,
                         offsets,
                         inner_values,
-                        None,
+                        nulls,
                     );
 
                     Ok(Arc::new(flattened_array) as ArrayRef)
                 }
                 LargeList(_) => {
-                    let (inner_field, inner_offsets, inner_values, _) =
+                    let (inner_field, inner_offsets, inner_values, nulls) =
                         as_large_list_array(&values)?.clone().into_parts();
                     let offsets = get_offsets_for_flatten::<i64>(inner_offsets, offsets);
                     let flattened_array = GenericListArray::<i64>::new(
                         inner_field,
                         offsets,
                         inner_values,
-                        None,
+                        nulls,
                     );
 
                     Ok(Arc::new(flattened_array) as ArrayRef)
