@@ -7090,12 +7090,10 @@ select array_concat(column1, [7]) from arrays_values_v2;
 
 # flatten
 
-#TODO: https://github.com/apache/datafusion/issues/7142
-# follow DuckDB
-#query ?
-#select flatten(NULL);
-#----
-#NULL
+query ?
+select flatten(NULL);
+----
+NULL
 
 # flatten with scalar values #1
 query ???
