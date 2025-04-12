@@ -29,7 +29,7 @@ use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
-use arrow::compute::{cast, ilike, like, nilike, nlike};
+use arrow::compute::{cast, filter_record_batch, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
@@ -363,12 +363,18 @@ impl PhysicalExpr for BinaryExpr {
 
         // Check if we can apply short-circuit evaluation.
         match check_short_circuit(&lhs, &self.op) {
+            ShortCircuitStrategy::None => {}
             ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
             ShortCircuitStrategy::ReturnRight => {
                 let rhs = self.right.evaluate(batch)?;
                 return Ok(rhs);
             }
-            ShortCircuitStrategy::None => {} // Continue if no short-circuit applies.
+            ShortCircuitStrategy::PreSelection(selection) => {
+                // The function `evaluate_selection` was not called for filtering and calculation,
+                // as it takes into account cases where the selection contains null values.
+                let batch = filter_record_batch(batch, selection)?;
+                return self.right.evaluate(&batch);
+            }
         }
 
         let rhs = self.right.evaluate(batch)?;
@@ -813,11 +819,17 @@ impl BinaryExpr {
     }
 }
 
-enum ShortCircuitStrategy {
+enum ShortCircuitStrategy<'a> {
+    None,
     ReturnLeft,
     ReturnRight,
-    None,
+    PreSelection(&'a BooleanArray),
 }
+
+/// Based on the results calculated from the left side of the short-circuit operation,
+/// if the proportion of `true` is less than 0.2 and the current operation is an `and`,
+/// the `RecordBatch` will be filtered in advance.
+const PRE_SELECTIO_THRESHOLD: f32 = 0.2;
 
 /// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
 ///
@@ -825,6 +837,7 @@ enum ShortCircuitStrategy {
 /// - For `AND`:
 ///    - if LHS is all false => short-circuit → return LHS
 ///    - if LHS is all true  => short-circuit → return RHS
+///    - if LHS is mixed and true_count/sum_count <= [`PRE_SELECTIO_THRESHOLD`] -> pre-selection
 /// - For `OR`:
 ///    - if LHS is all true  => short-circuit → return LHS
 ///    - if LHS is all false => short-circuit → return RHS
@@ -837,7 +850,10 @@ enum ShortCircuitStrategy {
 /// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
 /// 2. Handles both scalar values and array values
 /// 3. For arrays, uses optimized bit counting techniques for boolean arrays
-fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrategy {
+fn check_short_circuit<'a>(
+    lhs: &'a ColumnarValue,
+    op: &Operator,
+) -> ShortCircuitStrategy<'a> {
     // Quick reject for non-logical operators,and quick judgment when op is and
     let is_and = match op {
         Operator::And => true,
@@ -853,7 +869,7 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
     match lhs {
         ColumnarValue::Array(array) => {
             // Fast path for arrays - try to downcast to boolean array
-            if let Ok(bool_array) = as_boolean_array(&array) {
+            if let Ok(bool_array) = as_boolean_array(array) {
                 // Arrays with nulls can't be short-circuited
                 if bool_array.null_count() > 0 {
                     return ShortCircuitStrategy::None;
@@ -864,7 +880,7 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
                     return ShortCircuitStrategy::None;
                 }
 
-                let true_count = bool_array.true_count();
+                let true_count = bool_array.values().count_set_bits();
                 if is_and {
                     // For AND, prioritize checking for all-false (short circuit case)
                     // Uses optimized false_count() method provided by Arrow
@@ -877,6 +893,11 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
                     // If no false values, then all must be true
                     if true_count == len {
                         return ShortCircuitStrategy::ReturnRight;
+                    }
+
+                    // determine if we can pre-selection
+                    if (true_count / len) as f32 <= PRE_SELECTIO_THRESHOLD {
+                        return ShortCircuitStrategy::PreSelection(bool_array);
                     }
                 } else {
                     // For OR, prioritize checking for all-true (short circuit case)
