@@ -141,9 +141,10 @@ fn generate_boolean_cases<const TEST_ALL_FALSE: bool>(
 
 /// Benchmarks AND/OR operator short-circuiting by evaluating complex regex conditions.
 ///
-/// Creates 6 test scenarios per operator:
+/// Creates 7 test scenarios per operator:
 /// 1. All values enable short-circuit (all_true/all_false)
 /// 2. 2-6 Single true/false value at different positions to measure early exit
+/// 3. Test all true or all false in AND/OR
 ///
 /// You can run this benchmark with:
 /// ```sh
