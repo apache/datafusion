@@ -208,57 +208,53 @@ impl TopK {
         let mut selected_rows = None;
 
         // If the heap doesn't have k elements yet, we can't create thresholds
-        match self.heap.max() {
-            Some(max_row) => {
-                // Get the batch that contains the max row
-                let batch_entry = match self.heap.store.get(max_row.batch_id) {
-                    Some(entry) => entry,
-                    None => return internal_err!("Invalid batch ID in TopKRow"),
-                };
+        if let Some(max_row) = self.heap.max() {
+            // Get the batch that contains the max row
+            let batch_entry = match self.heap.store.get(max_row.batch_id) {
+                Some(entry) => entry,
+                None => return internal_err!("Invalid batch ID in TopKRow"),
+            };
 
-                // Extract threshold values for each sort expression
-                let mut scalar_values = Vec::with_capacity(self.expr.len());
-                for sort_expr in self.expr.iter() {
-                    // Extract the value for this column from the max row
-                    let expr = Arc::clone(&sort_expr.expr);
-                    let value =
-                        expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
+            // Extract threshold values for each sort expression
+            let mut scalar_values = Vec::with_capacity(self.expr.len());
+            for sort_expr in self.expr.iter() {
+                // Extract the value for this column from the max row
+                let expr = Arc::clone(&sort_expr.expr);
+                let value = expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
 
-                    // Convert to scalar value - should be a single value since we're evaluating on a single row batch
-                    let scalar = Scalar::new(value.to_array(1)?);
-                    scalar_values.push(scalar);
-                }
-                // Create a filter for each sort key
-                let filter = sort_keys
-                    .iter()
-                    .zip(scalar_values.iter())
-                    .map(|(expr, scalar)| {
-                        let filter = lt(expr, scalar).expect("Should be valid filter");
-                        Ok(filter)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                // Combine the masks into a single filter
-                let filter = filter
-                    .iter()
-                    .fold(filter[0].clone(), |acc, filter| and(&acc, filter).unwrap());
-                if filter.true_count() == 0 {
-                    // No rows are less than the max row, so we can skip this batch
-                    return Ok(());
-                }
-                let filter_predicate = FilterBuilder::new(&filter);
-                let filter_predicate = if sort_keys.len() > 1 {
-                    filter_predicate.optimize().build()
-                } else {
-                    filter_predicate.build()
-                };
-                selected_rows = Some(filter);
-
-                sort_keys = sort_keys
-                    .iter()
-                    .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
-                    .collect::<Result<Vec<_>>>()?;
+                // Convert to scalar value - should be a single value since we're evaluating on a single row batch
+                let scalar = Scalar::new(value.to_array(1)?);
+                scalar_values.push(scalar);
             }
-            None => {}
+            // Create a filter for each sort key
+            let filter = sort_keys
+                .iter()
+                .zip(scalar_values.iter())
+                .map(|(expr, scalar)| {
+                    let filter = lt(expr, scalar).expect("Should be valid filter");
+                    Ok(filter)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            // Combine the masks into a single filter
+            let filter = filter
+                .iter()
+                .fold(filter[0].clone(), |acc, filter| and(&acc, filter).unwrap());
+            if filter.true_count() == 0 {
+                // No rows are less than the max row, so we can skip this batch
+                return Ok(());
+            }
+            let filter_predicate = FilterBuilder::new(&filter);
+            let filter_predicate = if sort_keys.len() > 1 {
+                filter_predicate.optimize().build()
+            } else {
+                filter_predicate.build()
+            };
+            selected_rows = Some(filter);
+
+            sort_keys = sort_keys
+                .iter()
+                .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
+                .collect::<Result<Vec<_>>>()?;
         }
 
         // reuse existing `Rows` to avoid reallocations
