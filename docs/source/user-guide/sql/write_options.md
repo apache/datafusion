@@ -17,27 +17,26 @@
   under the License.
 -->
 
-# Write Options
+# Format Options
 
-DataFusion supports customizing how data is written out to disk as a result of a `COPY` or `INSERT INTO` query. There are a few special options, file format (e.g. CSV or parquet) specific options, and parquet column specific options. Options can also in some cases be specified in multiple ways with a set order of precedence.
+DataFusion supports customizing how data is read from or written to disk as a result of a `COPY`, `INSERT INTO`, or `CREATE EXTERNAL TABLE` query. There are a few special options, file format (e.g., CSV or Parquet) specific options, and Parquet column-specific options. Options can also in some cases be specified in multiple ways with a set order of precedence.
 
 ## Specifying Options and Order of Precedence
 
-Write related options can be specified in the following ways:
+Format-related options can be specified in the following ways:
 
-- Session level config defaults
+- Session-level config defaults
 - `CREATE EXTERNAL TABLE` options
 - `COPY` option tuples
 
-For a list of supported session level config defaults see [Configuration Settings](../configs). These defaults apply to all write operations but have the lowest level of precedence.
+For a list of supported session-level config defaults, see [Configuration Settings](../configs). These defaults apply to all operations but have the lowest level of precedence.
 
-If inserting to an external table, table specific write options can be specified when the table is created using the `OPTIONS` clause:
+If creating an external table, table-specific format options can be specified when the table is created using the `OPTIONS` clause:
 
 ```sql
 CREATE EXTERNAL TABLE
   my_table(a bigint, b bigint)
   STORED AS csv
-  COMPRESSION TYPE gzip
   LOCATION '/test/location/my_csv_table/'
   OPTIONS(
     NULL_VALUE 'NAN',
@@ -46,14 +45,9 @@ CREATE EXTERNAL TABLE
   )
 ```
 
-When running `INSERT INTO my_table ...`, the options from the `CREATE TABLE` will be respected (gzip compression, special delimiter, and header row included). There will be a single output file if the output path doesn't have folder format, i.e. ending with a `\`. Note that compression, header, and delimiter settings can also be specified within the `OPTIONS` tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified the `OPTIONS` setting will be ignored. NULL_VALUE is a CSV format specific option that determines how null values should be encoded within the CSV file.
+When running `INSERT INTO my_table ...`, the options from the `CREATE TABLE` will be respected (e.g., gzip compression, special delimiter, and header row included). Note that compression, header, and delimiter settings can also be specified within the `OPTIONS` tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified, the `OPTIONS` setting will be ignored.
 
 Finally, options can be passed when running a `COPY` command.
-
-<!--
- Test the following example with:
- CREATE TABLE source_table AS VALUES ('1','2','3','4');
--->
 
 ```sql
 COPY source_table
@@ -66,11 +60,17 @@ COPY source_table
   )
 ```
 
-In this example, we write the entirety of `source_table` out to a folder of parquet files. One parquet file will be written in parallel to the folder for each partition in the query. The next option `compression` set to `snappy` indicates that unless otherwise specified all columns should use the snappy compression codec. The option `compression::col1` sets an override, so that the column `col1` in the parquet file will use `ZSTD` compression codec with compression level `5`. In general, parquet options which support column specific settings can be specified with the syntax `OPTION::COLUMN.NESTED.PATH`.
+In this example, we write the entirety of `source_table` out to a folder of Parquet files. One Parquet file will be written in parallel to the folder for each partition in the query. The next option `compression` set to `snappy` indicates that unless otherwise specified, all columns should use the snappy compression codec. The option `compression::col1` sets an override, so that the column `col1` in the Parquet file will use the ZSTD compression codec with compression level `5`. In general, Parquet options that support column-specific settings can be specified with the syntax `OPTION::COLUMN.NESTED.PATH`.
 
 ## Available Options
 
-### Execution Specific Options
+### Generic Options
+
+| Option     | Description                                                   | Default Value    |
+| ---------- | ------------------------------------------------------------- | ---------------- |
+| NULL_VALUE | Sets the string which should be used to indicate null values. | arrow-rs default |
+
+### Execution-Specific Options
 
 The following options are available when executing a `COPY` query.
 
@@ -80,17 +80,28 @@ The following options are available when executing a `COPY` query.
 
 Note: `execution.keep_partition_by_columns` flag can also be enabled through `ExecutionOptions` within `SessionConfig`.
 
-### JSON Format Specific Options
+## Format-Specific Options
 
-The following options are available when writing JSON files. Note: If any unsupported option is specified, an error will be raised and the query will fail.
+### JSON Format Options
+
+The following options are available when reading or writing JSON files. Note: If any unsupported option is specified, an error will be raised and the query will fail.
 
 | Option      | Description                                                                                                                        | Default Value |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | COMPRESSION | Sets the compression that should be applied to the entire JSON file. Supported values are GZIP, BZIP2, XZ, ZSTD, and UNCOMPRESSED. | UNCOMPRESSED  |
 
-### CSV Format Specific Options
+**Example:**
 
-The following options are available when writing CSV files. Note: if any unsupported options is specified an error will be raised and the query will fail.
+```sql
+CREATE EXTERNAL TABLE t
+STORED AS JSON
+LOCATION '/tmp/foo.json'
+OPTIONS('COMPRESSION', 'bzip');
+```
+
+### CSV Format Options
+
+The following options are available when reading or writing CSV files. Note: If any unsupported option is specified, an error will be raised and the query will fail.
 
 | Option          | Description                                                                                                                       | Default Value    |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
@@ -99,13 +110,22 @@ The following options are available when writing CSV files. Note: if any unsuppo
 | DATE_FORMAT     | Sets the format that dates should be encoded in within the CSV file                                                               | arrow-rs default |
 | DATETIME_FORMAT | Sets the format that datetimes should be encoded in within the CSV file                                                           | arrow-rs default |
 | TIME_FORMAT     | Sets the format that times should be encoded in within the CSV file                                                               | arrow-rs default |
-| RFC3339         | If true, uses RFC339 format for date and time encodings                                                                           | arrow-rs default |
+| RFC3339         | If true, uses RFC3339 format for date and time encodings                                                                          | arrow-rs default |
 | NULL_VALUE      | Sets the string which should be used to indicate null values within the CSV file.                                                 | arrow-rs default |
 | DELIMITER       | Sets the character which should be used as the column delimiter within the CSV file.                                              | arrow-rs default |
 
-### Parquet Format Specific Options
+**Example:**
 
-The following options are available when writing parquet files. If any unsupported option is specified an error will be raised and the query will fail. If a column specific option is specified for a column which does not exist, the option will be ignored without error. For default values, see: [Configuration Settings](https://datafusion.apache.org/user-guide/configs.html).
+```sql
+CREATE EXTERNAL TABLE t
+STORED AS CSV
+LOCATION '/tmp/foo.csv'
+OPTIONS('DELIMITER', '|', 'HEADER', 'true');
+```
+
+### Parquet Format Options
+
+The following options are available when reading or writing Parquet files. If any unsupported option is specified, an error will be raised and the query will fail. If a column-specific option is specified for a column that does not exist, the option will be ignored without error.
 
 | Option                       | Can be Column Specific? | Description                                                                                                                         |
 | ---------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
@@ -125,3 +145,12 @@ The following options are available when writing parquet files. If any unsupport
 | MAX_STATISTICS_SIZE          | Yes                     | Sets the maximum size in bytes that statistics can take up.                                                                         |
 | BLOOM_FILTER_FPP             | Yes                     | Sets the false positive probability (fpp) for the bloom filter. Implicitly sets BLOOM_FILTER_ENABLED to true.                       |
 | BLOOM_FILTER_NDV             | Yes                     | Sets the number of distinct values (ndv) for the bloom filter. Implicitly sets bloom_filter_enabled to true.                        |
+
+**Example:**
+
+```sql
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION '/tmp/foo.parquet'
+OPTIONS('COMPRESSION', 'snappy', 'MAX_ROW_GROUP_SIZE', '1000000');
+```
