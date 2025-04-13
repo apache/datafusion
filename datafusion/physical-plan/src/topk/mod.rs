@@ -219,24 +219,21 @@ impl TopK {
             // TODO: create a filter for each key that respects lexical ordering
             // in the form of col0 < threshold0 || col0 == threshold0 && (col1 < threshold1 || ...)
             // This could use BinaryExpr to benefit from short circuiting and early evaluation
-            let mut thresholds = Vec::with_capacity(self.expr.len());
+            // https://github.com/apache/datafusion/issues/15698
+            // Extract the value for this column from the max row
+            let expr = Arc::clone(&self.expr[0].expr);
+            let value = expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
 
-            for sort_expr in self.expr[..1].iter() {
-                // Extract the value for this column from the max row
-                let expr = Arc::clone(&sort_expr.expr);
-                let value = expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
+            // Convert to scalar value - should be a single value since we're evaluating on a single row batch
+            let threshold = Scalar::new(value.to_array(1)?);
 
-                // Convert to scalar value - should be a single value since we're evaluating on a single row batch
-                let scalar = Scalar::new(value.to_array(1)?);
-                thresholds.push(scalar);
-            }
             // Create a filter for each sort key
             let is_multi_col = self.expr.len() > 1;
             let filter = match (is_multi_col, self.expr[0].options.descending) {
-                (true, true) => gt_eq(&sort_keys[0], &thresholds[0])?,
-                (true, false) => lt_eq(&sort_keys[0], &thresholds[0])?,
-                (false, true) => gt(&sort_keys[0], &thresholds[0])?,
-                (false, false) => lt(&sort_keys[0], &thresholds[0])?,
+                (true, true) => gt_eq(&sort_keys[0], &threshold)?,
+                (true, false) => lt_eq(&sort_keys[0], &threshold)?,
+                (false, true) => gt(&sort_keys[0], &threshold)?,
+                (false, false) => lt(&sort_keys[0], &threshold)?,
             };
             if filter.true_count() == 0 {
                 // No rows are less than the max row, so we can skip this batch
