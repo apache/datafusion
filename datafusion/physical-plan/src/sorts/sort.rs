@@ -32,8 +32,9 @@ use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
 };
 use crate::projection::{make_with_child, update_expr, ProjectionExec};
-use crate::sorts::streaming_merge::StreamingMergeBuilder;
+use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
+use crate::spill::get_size::GetActualSize;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
@@ -53,7 +54,6 @@ use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{
     exec_datafusion_err, internal_datafusion_err, internal_err, Result,
 };
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
@@ -223,12 +223,12 @@ struct ExternalSorter {
 
     /// During external sorting, in-memory intermediate data will be appended to
     /// this file incrementally. Once finished, this file will be moved to [`Self::finished_spill_files`].
-    in_progress_spill_file: Option<InProgressSpillFile>,
+    in_progress_spill_file: Option<(InProgressSpillFile, usize)>,
     /// If data has previously been spilled, the locations of the spill files (in
     /// Arrow IPC format)
     /// Within the same spill file, the data might be chunked into multiple batches,
     /// and ordered by sort keys.
-    finished_spill_files: Vec<RefCountedTempFile>,
+    finished_spill_files: Vec<SortedSpillFile>,
 
     // ========================================================================
     // EXECUTION RESOURCES:
@@ -355,8 +355,6 @@ impl ExternalSorter {
         self.merge_reservation.free();
 
         if self.spilled_before() {
-            let mut streams = vec![];
-
             // Sort `in_mem_batches` and spill it first. If there are many
             // `in_mem_batches` and the memory limit is almost reached, merging
             // them with the spilled files at the same time might cause OOM.
@@ -364,18 +362,11 @@ impl ExternalSorter {
                 self.sort_and_spill_in_mem_batches().await?;
             }
 
-            for spill in self.finished_spill_files.drain(..) {
-                if !spill.path().exists() {
-                    return internal_err!("Spill file {:?} does not exist", spill.path());
-                }
-                let stream = self.spill_manager.read_spill_as_stream(spill)?;
-                streams.push(stream);
-            }
-
             let expressions: LexOrdering = self.expr.iter().cloned().collect();
 
             StreamingMergeBuilder::new()
-                .with_streams(streams)
+                .with_sorted_spill_files(std::mem::take(&mut self.finished_spill_files))
+                .with_spill_manager(self.spill_manager.clone())
                 .with_schema(Arc::clone(&self.schema))
                 .with_expressions(expressions.as_ref())
                 .with_metrics(self.metrics.baseline.clone())
@@ -421,7 +412,7 @@ impl ExternalSorter {
         // Lazily initialize the in-progress spill file
         if self.in_progress_spill_file.is_none() {
             self.in_progress_spill_file =
-                Some(self.spill_manager.create_in_progress_file("Sorting")?);
+                Some((self.spill_manager.create_in_progress_file("Sorting")?, 0));
         }
 
         Self::organize_stringview_arrays(globally_sorted_batches)?;
@@ -431,12 +422,16 @@ impl ExternalSorter {
         let batches_to_spill = std::mem::take(globally_sorted_batches);
         self.reservation.free();
 
-        let in_progress_file = self.in_progress_spill_file.as_mut().ok_or_else(|| {
-            internal_datafusion_err!("In-progress spill file should be initialized")
-        })?;
+        let (in_progress_file, max_record_batch_size) =
+            self.in_progress_spill_file.as_mut().ok_or_else(|| {
+                internal_datafusion_err!("In-progress spill file should be initialized")
+            })?;
 
         for batch in batches_to_spill {
             in_progress_file.append_batch(&batch)?;
+
+            *max_record_batch_size =
+                (*max_record_batch_size).max(batch.get_actually_used_size());
         }
 
         if !globally_sorted_batches.is_empty() {
@@ -448,14 +443,17 @@ impl ExternalSorter {
 
     /// Finishes the in-progress spill file and moves it to the finished spill files.
     async fn spill_finish(&mut self) -> Result<()> {
-        let mut in_progress_file =
+        let (mut in_progress_file, max_record_batch_memory) =
             self.in_progress_spill_file.take().ok_or_else(|| {
                 internal_datafusion_err!("Should be called after `spill_append`")
             })?;
         let spill_file = in_progress_file.finish()?;
 
         if let Some(spill_file) = spill_file {
-            self.finished_spill_files.push(spill_file);
+            self.finished_spill_files.push(SortedSpillFile {
+                file: spill_file,
+                max_record_batch_memory,
+            });
         }
 
         Ok(())

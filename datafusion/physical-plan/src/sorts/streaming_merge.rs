@@ -19,15 +19,17 @@
 //! This is an order-preserving merge.
 
 use crate::metrics::BaselineMetrics;
+use crate::sorts::multi_level_merge::MultiLevelMergeBuilder;
 use crate::sorts::{
     merge::SortPreservingMergeStream,
     stream::{FieldCursorStream, RowCursorStream},
 };
-use crate::SendableRecordBatchStream;
+use crate::{SendableRecordBatchStream, SpillManager};
 use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{internal_err, Result};
-use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::memory_pool::{human_readable_size, MemoryReservation};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 macro_rules! primitive_merge_helper {
@@ -52,8 +54,28 @@ macro_rules! merge_helper {
     }};
 }
 
+pub struct SortedSpillFile {
+    pub file: RefCountedTempFile,
+
+    /// how much memory the largest memory batch is taking
+    pub max_record_batch_memory: usize,
+}
+
+impl std::fmt::Debug for SortedSpillFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "SortedSpillFile({:?}) takes {}",
+            self.file.path(),
+            human_readable_size(self.max_record_batch_memory)
+        )
+    }
+}
+
 pub struct StreamingMergeBuilder<'a> {
     streams: Vec<SendableRecordBatchStream>,
+    sorted_spill_files: Vec<SortedSpillFile>,
+    spill_manager: Option<SpillManager>,
     schema: Option<SchemaRef>,
     expressions: &'a LexOrdering,
     metrics: Option<BaselineMetrics>,
@@ -67,6 +89,8 @@ impl Default for StreamingMergeBuilder<'_> {
     fn default() -> Self {
         Self {
             streams: vec![],
+            sorted_spill_files: vec![],
+            spill_manager: None,
             schema: None,
             expressions: LexOrdering::empty(),
             metrics: None,
@@ -88,6 +112,19 @@ impl<'a> StreamingMergeBuilder<'a> {
 
     pub fn with_streams(mut self, streams: Vec<SendableRecordBatchStream>) -> Self {
         self.streams = streams;
+        self
+    }
+
+    pub fn with_sorted_spill_files(
+        mut self,
+        sorted_spill_files: Vec<SortedSpillFile>,
+    ) -> Self {
+        self.sorted_spill_files = sorted_spill_files;
+        self
+    }
+
+    pub fn with_spill_manager(mut self, spill_manager: SpillManager) -> Self {
+        self.spill_manager = Some(spill_manager);
         self
     }
 
@@ -136,6 +173,8 @@ impl<'a> StreamingMergeBuilder<'a> {
     pub fn build(self) -> Result<SendableRecordBatchStream> {
         let Self {
             streams,
+            sorted_spill_files,
+            spill_manager,
             schema,
             metrics,
             batch_size,
@@ -144,6 +183,22 @@ impl<'a> StreamingMergeBuilder<'a> {
             expressions,
             enable_round_robin_tie_breaker,
         } = self;
+
+        if !sorted_spill_files.is_empty() && spill_manager.is_some() {
+            return Ok(MultiLevelMergeBuilder::new(
+                spill_manager.unwrap(),
+                schema.unwrap(),
+                sorted_spill_files,
+                streams,
+                expressions.clone(),
+                metrics.unwrap(),
+                batch_size.unwrap(),
+                reservation.unwrap(),
+                fetch,
+                enable_round_robin_tie_breaker,
+            )
+            .create_spillable_merge_stream());
+        }
 
         // Early return if streams or expressions are empty
         let checks = [
