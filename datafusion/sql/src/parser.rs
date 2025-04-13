@@ -1272,7 +1272,7 @@ mod tests {
         // negative case: mixed column defs and column names in `PARTITIONED BY` clause
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 int) LOCATION 'foo.csv'";
-        expect_parse_error(sql, "SQL error: ParserError(\"Expected ',' or ')' after partition definition, found: int\")");
+        expect_parse_error(sql, "SQL error: ParserError(\"Expected: ',' or ')' after partition definition, found: int at Line: 1, Column: 70\")");
 
         // positive case: additional options (one entry) can be specified
         let sql =
