@@ -94,14 +94,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 }) = *right
                                 {
                                     let left_span = match &*left {
-                                        SQLExpr::Identifier(Ident { span, .. }) => {
-                                            span.clone()
-                                        }
+                                        SQLExpr::Identifier(Ident { span, .. }) => *span,
                                         // In this case, we expect left to be
                                         // Indentifier. Just to make the code
                                         // more robust, we'll make left_span
                                         // equals to null_span otherwise.
-                                        _ => null_span.clone(),
+                                        _ => null_span,
                                     };
                                     let combined_span = Span {
                                         start: Into::into(left_span.start),
