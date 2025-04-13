@@ -269,7 +269,7 @@ impl fmt::Display for Statement {
 
 fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), DataFusionError> {
     if field.is_some() {
-        return parser_err!(format!("{name} specified more than once",))?;
+        parser_err!(format!("{name} specified more than once",))?
     }
     Ok(())
 }
