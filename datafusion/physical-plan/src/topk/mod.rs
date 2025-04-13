@@ -22,7 +22,7 @@ use arrow::{
     compute::{interleave_record_batch, FilterBuilder},
     row::{RowConverter, Rows, SortField},
 };
-use arrow_ord::cmp::lt;
+use arrow_ord::cmp::{gt_eq, lt_eq};
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
@@ -231,7 +231,10 @@ impl TopK {
                 thresholds.push(scalar);
             }
             // Create a filter for each sort key
-            let filter = lt(&sort_keys[0], &thresholds[0])?;
+            let filter = match self.expr[0].options.descending{
+                true => gt_eq(&sort_keys[0], &thresholds[0])?,
+                false => lt_eq(&sort_keys[0], &thresholds[0])?
+            };
             if filter.true_count() == 0 {
                 // No rows are less than the max row, so we can skip this batch
                 return Ok(());
