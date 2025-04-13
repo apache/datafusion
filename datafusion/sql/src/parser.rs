@@ -1266,13 +1266,13 @@ mod tests {
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int, c1) LOCATION 'foo.csv'";
         expect_parse_error(
             sql,
-            "sql parser error: Expected: a data type name, found: )",
+            "SQL error: ParserError(\"Expected: a data type name, found: ) at Line: 1, Column: 73\")",
         );
 
         // negative case: mixed column defs and column names in `PARTITIONED BY` clause
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 int) LOCATION 'foo.csv'";
-        expect_parse_error(sql, "sql parser error: Expected ',' or ')' after partition definition, found: int");
+        expect_parse_error(sql, "SQL error: ParserError(\"Expected ',' or ')' after partition definition, found: int\")");
 
         // positive case: additional options (one entry) can be specified
         let sql =
@@ -1756,9 +1756,6 @@ mod tests {
             .parse_statements()
             .unwrap_err();
 
-        assert_contains!(
-            err.to_string(),
-            "sql parser error: recursion limit exceeded"
-        );
+        assert_contains!(err.to_string(), "SQL error: RecursionLimitExceeded");
     }
 }
