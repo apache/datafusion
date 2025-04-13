@@ -231,12 +231,12 @@ impl TopK {
                 thresholds.push(scalar);
             }
             // Create a filter for each sort key
-            let is_multi_col = self.expr[0].len()> 1;
-            let filter = match (is_multi_col, self.expr[0].options.descending){
+            let is_multi_col = self.expr.len() > 1;
+            let filter = match (is_multi_col, self.expr[0].options.descending) {
                 (true, true) => gt_eq(&sort_keys[0], &thresholds[0])?,
                 (true, false) => lt_eq(&sort_keys[0], &thresholds[0])?,
                 (false, true) => gt(&sort_keys[0], &thresholds[0])?,
-                (false, false) => lt(&sort_keys[0], &thresholds[0])?
+                (false, false) => lt(&sort_keys[0], &thresholds[0])?,
             };
             if filter.true_count() == 0 {
                 // No rows are less than the max row, so we can skip this batch
