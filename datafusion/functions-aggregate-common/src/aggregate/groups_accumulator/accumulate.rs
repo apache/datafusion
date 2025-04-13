@@ -237,10 +237,66 @@ impl<V: SeenValues, O: GroupIndexOperations> NullState<V, O> {
     pub fn build(&mut self, emit_to: EmitTo) -> NullBuffer {
         self.seen_values.emit(emit_to)
     }
+
+    /// Clone and build a single [`BooleanBuffer`] from `seen_values`,
+    /// only used for testing.
+    #[cfg(test)]
+    fn build_cloned_seen_values(&self) -> BooleanBuffer {
+        if let Some(seen_values) =
+            self.seen_values.as_any().downcast_ref::<FlatSeenValues>()
+        {
+            seen_values.builder.finish_cloned()
+        } else if let Some(seen_values) = self
+            .seen_values
+            .as_any()
+            .downcast_ref::<BlockedSeenValues>()
+        {
+            let mut return_builder = BooleanBufferBuilder::new(0);
+            for builder in &seen_values.blocked_builders {
+                for idx in 0..builder.len() {
+                    return_builder.append(builder.get_bit(idx));
+                }
+            }
+            return_builder.finish()
+        } else {
+            unreachable!("unknown impl of SeenValues")
+        }
+    }
+
+    /// Emit a single [`NullBuffer`], only used for testing.
+    #[cfg(test)]
+    fn emit_all_in_once(&mut self, total_num_groups: usize) -> NullBuffer {
+        if let Some(seen_values) =
+            self.seen_values.as_any().downcast_ref::<FlatSeenValues>()
+        {
+            seen_values.emit(EmitTo::All)
+        } else if let Some(seen_values) = self
+            .seen_values
+            .as_any()
+            .downcast_ref::<BlockedSeenValues>()
+        {
+            let mut return_builder = BooleanBufferBuilder::new(0);
+            let num_blocks = seen_values.blocked_builders.len();
+            for _ in 0..num_blocks {
+                let blocked_nulls = seen_values.emit(EmitTo::NextBlock(true));
+                for bit in blocked_nulls.inner().iter() {
+                    return_builder.append(bit);
+                }
+            }
+
+            NullBuffer::new(return_builder.finish())
+        } else {
+            unreachable!("unknown impl of SeenValues")
+        }
+    }
 }
 
 /// Structure marking if accumulating groups are seen at least one
 pub trait SeenValues: Default + Debug + Send {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn resize(&mut self, total_num_groups: usize, default_value: bool);
 
     fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool);
@@ -585,6 +641,8 @@ pub fn accumulate<T, F>(
 ///     * `group_idx`: The group index for the current row
 ///     * `batch_idx`: The index of the current row in the input arrays
 ///     * `columns`: Reference to all input arrays for accessing values
+// TODO: support `blocked group index` for `accumulate_multiple`
+// (for supporting `blocked group index` for correlation group accumulator)
 pub fn accumulate_multiple<T, F>(
     group_indices: &[usize],
     value_columns: &[&PrimitiveArray<T>],
@@ -648,6 +706,8 @@ pub fn accumulate_multiple<T, F>(
 ///
 /// See [`NullState::accumulate`], for more details on other
 /// arguments.
+// TODO: support `blocked group index` for `accumulate_indices`
+// (for supporting `blocked group index` for count group accumulator)
 pub fn accumulate_indices<F>(
     group_indices: &[usize],
     nulls: Option<&NullBuffer>,
@@ -839,6 +899,9 @@ mod test {
 
         /// filter (defaults to None)
         filter: BooleanArray,
+
+        ///
+        block_size: Option<usize>,
     }
 
     impl Fixture {
