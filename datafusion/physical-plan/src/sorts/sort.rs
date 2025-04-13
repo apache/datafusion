@@ -679,7 +679,8 @@ impl ExternalSorter {
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
             self.reservation
-                .try_resize(get_reserved_byte_for_record_batch(&batch))?;
+                .try_resize(get_reserved_byte_for_record_batch(&batch))
+                .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation);
         }
