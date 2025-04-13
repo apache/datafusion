@@ -32,6 +32,7 @@ use datafusion_expr_common::groups_accumulator::EmitTo;
 use crate::aggregate::groups_accumulator::{
     BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
 };
+
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -238,7 +239,7 @@ impl<V: SeenValues, O: GroupIndexOperations> NullState<V, O> {
     }
 }
 
-/// Seen values
+/// Structure marking if accumulating groups are seen at least one
 pub trait SeenValues: Default + Debug + Send {
     fn resize(&mut self, total_num_groups: usize, default_value: bool);
 
@@ -249,15 +250,26 @@ pub trait SeenValues: Default + Debug + Send {
     fn capacity(&self) -> usize;
 }
 
+/// [`SeenValues`] for `flat groups input`
+///
+/// The `flat groups input` are organized like:
+///
+/// ```text
+///     row_0 group_index_0
+///     row_1 group_index_1
+///     row_2 group_index_2
+///     ...
+///     row_n group_index_n     
+/// ```
+///
+/// If `row_x group_index_x` is not filtered(`group_index_x` is seen)
+/// `seen_values[group_index_x]` will be set to `true`.
+///
+/// For `set_bit(block_id, block_offset, value)`, `block_id` is unused,
+/// `block_offset` will be set to `group_index`.
+///
 #[derive(Debug)]
 pub struct FlatSeenValues {
-    /// Have we seen any non-filtered input values for `group_index`?
-    ///
-    /// If `seen_values[i]` is true, have seen at least one non null
-    /// value for group `i`
-    ///
-    /// If `seen_values[i]` is false, have not seen any values that
-    /// pass the filter yet for group `i`
     builder: BooleanBufferBuilder,
 }
 
@@ -310,15 +322,24 @@ impl SeenValues for FlatSeenValues {
     }
 }
 
+/// [`SeenValues`] for `blocked groups input`
+///
+/// The `flat groups input` are organized like:
+///
+/// ```text
+///     row_0 (block_id_0, block_offset_0)
+///     row_1 (block_id_1, block_offset_1)
+///     row_2 (block_id_1, block_offset_1)
+///     ...
+///     row_n (block_id_n, block_offset_n)    
+/// ```
+///
+/// If ` row_x (block_id_x, block_offset_x)` is not filtered
+/// (`block_id_x, block_offset_x` is seen), `seen_values[block_id_x][block_offset_x]`
+/// will be set to `true`.
+///
 #[derive(Debug, Default)]
 pub struct BlockedSeenValues {
-    /// Have we seen any non-filtered input values for `group_index`?
-    ///
-    /// If `seen_values[i]` is true, have seen at least one non null
-    /// value for group `i`
-    ///
-    /// If `seen_values[i]` is false, have not seen any values that
-    /// pass the filter yet for group `i`
     blocked_builders: VecDeque<BooleanBufferBuilder>,
 
     block_size: usize,
