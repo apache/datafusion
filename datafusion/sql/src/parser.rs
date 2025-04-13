@@ -442,11 +442,11 @@ impl<'a> DFParser<'a> {
         found: TokenWithSpan,
     ) -> Result<T, DataFusionError> {
         let sql_parser_span = found.span;
-        sql_err!(parser_err!(format!("Expected {expected}, found: {found}"))?).map_err(
+        sql_err!(parser_err!(format!("Expected {expected}, found: {}",found.span.start))?).map_err(
             |e| {
                 let span = Span::try_from_sqlparser_span(sql_parser_span);
                 let mut diagnostic = Diagnostic::new_error(e.to_string(), span);
-                diagnostic.add_note(format!("Expected {expected}, found: {found}"), span);
+                diagnostic.add_note(format!("Expected {expected}, found: {}", found.span.start), span);
                 e.with_diagnostic(diagnostic)
             },
         )
