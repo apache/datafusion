@@ -51,7 +51,7 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{
-    exec_datafusion_err, internal_datafusion_err, internal_err, Result,
+    exec_datafusion_err, internal_datafusion_err, internal_err, DataFusionError, Result,
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -775,18 +775,33 @@ impl ExternalSorter {
     ) -> Result<()> {
         let size = get_reserved_byte_for_record_batch(input);
 
-        let result = self.reservation.try_grow(size);
-        if result.is_err() {
-            if self.in_mem_batches.is_empty() {
-                return result;
+        match self.reservation.try_grow(size) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                if self.in_mem_batches.is_empty() {
+                    return Err(Self::err_with_oom_context(e));
+                }
+
+                // Spill and try again.
+                self.sort_and_spill_in_mem_batches().await?;
+                self.reservation
+                    .try_grow(size)
+                    .map_err(Self::err_with_oom_context)
             }
-
-            // Spill and try again.
-            self.sort_and_spill_in_mem_batches().await?;
-            self.reservation.try_grow(size)?;
         }
+    }
 
-        Ok(())
+    /// Wraps the error with a context message suggesting settings to tweak.
+    /// This is meant to be used with DataFusionError::ResourcesExhausted only.
+    fn err_with_oom_context(e: DataFusionError) -> DataFusionError {
+        match e {
+            DataFusionError::ResourcesExhausted(_) => e.context(format!(
+                "Not enough memory to continue external sort. \
+                    Consider increasing the memory limit, or decreasing sort_spill_reservation_bytes"
+            )),
+            // This is not an OOM error, so just return it as is.
+            _ => e,
+        }
     }
 }
 
