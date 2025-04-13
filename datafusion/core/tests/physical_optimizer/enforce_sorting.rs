@@ -35,12 +35,18 @@ use datafusion_common::tree_node::{TreeNode, TransformedResult};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_expr_common::operator::Operator;
 use datafusion_expr::{JoinType, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
-use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexRequirement, PhysicalSortExpr, OrderingRequirements
+};
 use datafusion_physical_expr::{Distribution, Partitioning};
+use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -54,13 +60,8 @@ use datafusion_physical_optimizer::enforce_sorting::{EnforceSorting, PlanWithCor
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
 use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_functions_aggregate::average::avg_udaf;
-use datafusion_functions_aggregate::count::count_udaf;
-use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
-use datafusion_expr_common::operator::Operator;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 
 use rstest::rstest;
 
@@ -998,7 +999,7 @@ async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_
     let output_requirements: Arc<dyn ExecutionPlan> =
         Arc::new(OutputRequirementExec::new(
             bounded_window2,
-            Some(RequiredInputOrdering::new(LexRequirement::from(
+            Some(OrderingRequirements::new_single(LexRequirement::from(
                 LexOrdering::from(sort_exprs2),
             ))),
             Distribution::SinglePartition,

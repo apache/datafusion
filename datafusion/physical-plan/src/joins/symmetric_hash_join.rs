@@ -33,9 +33,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use crate::common::SharedMemoryReservation;
-use crate::execution_plan::{
-    boundedness_from_children, emission_type_from_children, RequiredInputOrdering,
-};
+use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
@@ -75,9 +73,8 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
-use datafusion_physical_expr::PhysicalExprRef;
-use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt};
@@ -435,14 +432,14 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         }
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![
             self.left_sort_exprs
                 .as_ref()
-                .map(|e| RequiredInputOrdering::from(e.clone())),
+                .map(|e| OrderingRequirements::from(e.clone())),
             self.right_sort_exprs
                 .as_ref()
-                .map(|e| RequiredInputOrdering::from(e.clone())),
+                .map(|e| OrderingRequirements::from(e.clone())),
         ]
     }
 

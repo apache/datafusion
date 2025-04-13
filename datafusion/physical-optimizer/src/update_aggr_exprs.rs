@@ -164,7 +164,7 @@ fn try_convert_aggregate_if_better(
             if !aggr_expr.order_sensitivity().is_beneficial() {
                 Ok(aggr_expr)
             } else if !order_bys.is_empty() {
-                if eq_properties.ordering_satisfy_requirement(&concat_slices(
+                if eq_properties.ordering_satisfy_requirement(concat_slices(
                     prefix_requirement,
                     &order_bys
                         .iter()
@@ -173,7 +173,7 @@ fn try_convert_aggregate_if_better(
                 )) {
                     // Existing ordering satisfies the aggregator requirements:
                     aggr_expr.with_beneficial_ordering(true)?.map(Arc::new)
-                } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
+                } else if eq_properties.ordering_satisfy_requirement(concat_slices(
                     prefix_requirement,
                     &order_bys
                         .iter()

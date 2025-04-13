@@ -25,7 +25,7 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
-use crate::execution_plan::{CardinalityEffect, EmissionType, RequiredInputOrdering};
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::get_field_metadata;
 use crate::windows::get_ordered_partition_by_indices;
@@ -42,13 +42,16 @@ use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Res
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    equivalence::ProjectionMapping, expressions::Column, physical_exprs_contains,
-    ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
-    PhysicalSortRequirement,
+    physical_exprs_contains, ConstExpr, EquivalenceProperties,
+};
+use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExpr};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortRequirement,
 };
 
-use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use itertools::Itertools;
 
 pub(crate) mod group_values;
@@ -390,7 +393,7 @@ pub struct AggregateExec {
     pub input_schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    required_input_ordering: Option<RequiredInputOrdering>,
+    required_input_ordering: Option<OrderingRequirements>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
     cache: PlanProperties,
@@ -498,7 +501,7 @@ impl AggregateExec {
             None
         } else {
             let reqs = LexRequirement::from(new_requirements).collapse();
-            RequiredInputOrdering::new_with_alternatives(vec![reqs], true)
+            OrderingRequirements::new(vec![reqs], true)
         };
 
         // If our aggregation has grouping sets then our base grouping exprs will
@@ -657,7 +660,7 @@ impl AggregateExec {
         }
         // ensure no ordering is required on the input
         if let Some(requirement) = self.required_input_ordering()[0].clone() {
-            return matches!(requirement, RequiredInputOrdering::Hard(_));
+            return matches!(requirement, OrderingRequirements::Hard(_));
         }
         true
     }
@@ -889,7 +892,7 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![self.required_input_ordering.clone()]
     }
 

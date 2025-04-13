@@ -170,7 +170,7 @@ fn plan_with_order_breaking_variants(
                 || !required_ordering.is_some_and(|required_ordering| {
                     node.plan
                         .equivalence_properties()
-                        .ordering_satisfy_requirement(required_ordering.lex_requirement())
+                        .ordering_satisfy_requirement(required_ordering.into_single())
                 }))
         {
             plan_with_order_breaking_variants(node)

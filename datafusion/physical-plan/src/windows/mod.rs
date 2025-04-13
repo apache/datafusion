@@ -25,7 +25,6 @@ use std::borrow::Borrow;
 use std::iter;
 use std::sync::Arc;
 
-use crate::execution_plan::RequiredInputOrdering;
 use crate::{
     expressions::PhysicalSortExpr, ExecutionPlan, ExecutionPlanProperties,
     InputOrderMode, PhysicalExpr,
@@ -46,8 +45,9 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::window::{
     SlidingAggregateWindowExpr, StandardWindowFunctionExpr,
 };
-use datafusion_physical_expr::{
-    ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
+use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, OrderingRequirements, PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -280,7 +280,7 @@ pub(crate) fn calc_requirements<
 >(
     partition_by_exprs: impl IntoIterator<Item = T>,
     orderby_sort_exprs: impl IntoIterator<Item = S>,
-) -> Option<RequiredInputOrdering> {
+) -> Option<OrderingRequirements> {
     let mut sort_reqs_with_partition = partition_by_exprs
         .into_iter()
         .map(|partition_by| {
@@ -310,7 +310,7 @@ pub(crate) fn calc_requirements<
         alternatives.push(sort_reqs.into());
     }
 
-    RequiredInputOrdering::new_with_alternatives(alternatives, false)
+    OrderingRequirements::new(alternatives, false)
 }
 
 /// This function calculates the indices such that when partition by expressions reordered with the indices
@@ -611,7 +611,7 @@ pub fn get_window_mode(
     {
         let mut req = partition_by_reqs.clone();
         req.extend(orderbys.iter().cloned().map(Into::into));
-        if req.is_empty() || partition_by_eqs.ordering_satisfy_requirement(&req) {
+        if req.is_empty() || partition_by_eqs.ordering_satisfy_requirement(req) {
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {
                 InputOrderMode::Sorted
@@ -644,10 +644,10 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use datafusion_execution::TaskContext;
-
     use datafusion_functions_aggregate::count::count_udaf;
-    use futures::FutureExt;
     use InputOrderMode::{Linear, PartiallySorted, Sorted};
+
+    use futures::FutureExt;
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);
@@ -771,7 +771,7 @@ mod tests {
                 orderbys.push(PhysicalSortExpr { expr, options });
             }
 
-            let mut expected: Option<RequiredInputOrdering> = None;
+            let mut expected: Option<OrderingRequirements> = None;
             for expected_param in expected_params.clone() {
                 let mut requirements = vec![];
                 for (col_name, reqs) in expected_param {
@@ -786,14 +786,12 @@ mod tests {
                     if let Some(alts) = expected.as_mut() {
                         alts.add_alternative(requirements.into());
                     } else {
-                        expected = Some(RequiredInputOrdering::new(requirements.into()));
+                        expected =
+                            Some(OrderingRequirements::new_single(requirements.into()));
                     }
                 }
             }
-            assert_eq!(
-                calc_requirements(partitionbys.clone(), orderbys.clone()),
-                expected
-            );
+            assert_eq!(calc_requirements(partitionbys, orderbys), expected);
         }
         Ok(())
     }

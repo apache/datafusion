@@ -38,10 +38,10 @@ use datafusion_common::ScalarValue;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::{
-    expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
+use datafusion_physical_expr::expressions::{binary, lit, BinaryExpr, Column, Literal};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
@@ -51,7 +51,7 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion_physical_plan::execution_plan::{ExecutionPlan, RequiredInputOrdering};
+use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
@@ -60,10 +60,9 @@ use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
-use datafusion_physical_plan::ExecutionPlanProperties;
-use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::{
-    get_plan_string, DisplayAs, DisplayFormatType, Statistics,
+    get_plan_string, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
+    PlanProperties, Statistics,
 };
 
 /// Models operators like BoundedWindowExec that require an input
@@ -139,8 +138,8 @@ impl ExecutionPlan for SortRequiredExec {
     }
 
     // model that it requires the output ordering of its input
-    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
-        vec![Some(RequiredInputOrdering::from(self.expr.clone()))]
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        vec![Some(OrderingRequirements::from(self.expr.clone()))]
     }
 
     fn with_new_children(

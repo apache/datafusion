@@ -600,3 +600,68 @@ impl From<Vec<PhysicalSortRequirement>> for LexOrdering {
         Self::new(value.into_iter().map(Into::into).collect())
     }
 }
+
+/// Represents a plan's input ordering requirements. Vector elements represent
+/// alternative ordering requirements in the order of preference.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OrderingRequirements {
+    /// The operator is not able to work without one of these requirements.
+    Hard(Vec<LexRequirement>),
+    /// The operator can benefit from these input orderings when available,
+    /// but can still work in the absence of any input ordering.
+    Soft(Vec<LexRequirement>),
+}
+
+impl OrderingRequirements {
+    /// Creates a new instance from the given alternatives. If an empty list of
+    /// alternatives are given, returns `None`.
+    pub fn new(alternatives: Vec<LexRequirement>, soft: bool) -> Option<Self> {
+        (!alternatives.is_empty()).then(|| {
+            if soft {
+                Self::Soft(alternatives)
+            } else {
+                Self::Hard(alternatives)
+            }
+        })
+    }
+
+    /// Creates a new instance with a single hard requirement.
+    pub fn new_single(requirement: LexRequirement) -> Self {
+        Self::Hard(vec![requirement])
+    }
+
+    /// Adds an alternative requirement to the list of alternatives.
+    pub fn add_alternative(&mut self, requirement: LexRequirement) {
+        match self {
+            Self::Hard(alts) | Self::Soft(alts) => alts.push(requirement),
+        }
+    }
+
+    /// Returns the first (i.e. most preferred) `LexRequirement` among
+    /// alternative requirements.
+    pub fn into_single(self) -> LexRequirement {
+        match self {
+            Self::Hard(mut alts) | Self::Soft(mut alts) => alts.swap_remove(0),
+        }
+    }
+
+    /// Returns a reference to the first (i.e. most preferred) `LexRequirement`
+    /// among alternative requirements.
+    pub fn first(&self) -> &LexRequirement {
+        match self {
+            Self::Hard(alts) | Self::Soft(alts) => &alts[0],
+        }
+    }
+}
+
+impl From<LexRequirement> for OrderingRequirements {
+    fn from(requirement: LexRequirement) -> Self {
+        Self::new_single(requirement)
+    }
+}
+
+impl From<LexOrdering> for OrderingRequirements {
+    fn from(ordering: LexOrdering) -> Self {
+        Self::new_single(ordering.into())
+    }
+}

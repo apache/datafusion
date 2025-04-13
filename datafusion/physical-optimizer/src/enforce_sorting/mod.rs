@@ -283,7 +283,7 @@ fn replace_with_partial_sort(
 
     let mut common_prefix_length = 0;
     while child_eq_properties
-        .ordering_satisfy_requirement(&sort_req[0..common_prefix_length + 1])
+        .ordering_satisfy_requirement(sort_req[0..common_prefix_length + 1].to_vec())
     {
         common_prefix_length += 1;
     }
@@ -496,14 +496,15 @@ pub fn ensure_sorting(
 
         if let Some(required) = required_ordering {
             let eq_properties = child.plan.equivalence_properties();
-            if !eq_properties.ordering_satisfy_requirement(required.lex_requirement()) {
+            let req = required.into_single();
+            if !eq_properties.ordering_satisfy_requirement(req.clone()) {
                 // Make sure we preserve the ordering requirements:
                 if physical_ordering.is_some() {
                     child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 }
                 child = add_sort_above(
                     child,
-                    required.lex_requirement().clone(),
+                    req,
                     plan.as_any()
                         .downcast_ref::<OutputRequirementExec>()
                         .map(|output| output.fetch())
@@ -646,7 +647,7 @@ fn adjust_window_sort_removal(
         // Satisfy the ordering requirement so that the window can run:
         let mut child_node = window_tree.children.swap_remove(0);
         if let Some(reqs) = reqs {
-            child_node = add_sort_above(child_node, reqs.lex_requirement().clone(), None);
+            child_node = add_sort_above(child_node, reqs.into_single(), None);
         }
         let child_plan = Arc::clone(&child_node.plan);
         window_tree.children.push(child_node);

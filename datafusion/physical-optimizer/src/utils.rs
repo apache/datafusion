@@ -68,7 +68,7 @@ pub fn add_sort_above_with_check<T: Clone + Default>(
     if !node
         .plan
         .equivalence_properties()
-        .ordering_satisfy_requirement(&sort_requirements)
+        .ordering_satisfy_requirement(sort_requirements.clone())
     {
         add_sort_above(node, sort_requirements, fetch)
     } else {

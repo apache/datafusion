@@ -28,7 +28,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
-use crate::execution_plan::RequiredInputOrdering;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -61,7 +60,10 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::{
+    OrderingRequirements, PhysicalSortExpr,
+};
 
 use ahash::RandomState;
 use futures::stream::Stream;
@@ -287,7 +289,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         vec![&self.input]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         let partition_bys = self

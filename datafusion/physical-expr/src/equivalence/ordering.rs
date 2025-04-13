@@ -118,7 +118,7 @@ impl OrderingEquivalenceClass {
         &mut self,
         ordering: impl IntoIterator<Item = PhysicalSortExpr>,
     ) {
-        self.add_new_orderings([ordering]);
+        self.add_new_orderings(std::iter::once(ordering));
     }
 
     /// Removes redundant orderings from this equivalence class.

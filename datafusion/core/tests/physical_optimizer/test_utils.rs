@@ -39,9 +39,11 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr::{expressions, PhysicalExpr};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::expressions::{self, col};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, OrderingRequirements, PhysicalSortExpr,
+};
 use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::{
@@ -49,7 +51,6 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
@@ -393,11 +394,11 @@ impl ExecutionPlan for RequirementsTestExec {
         self.input.properties()
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![self
             .required_input_ordering
             .as_ref()
-            .map(|ordering| RequiredInputOrdering::from(ordering.clone()))]
+            .map(|ordering| OrderingRequirements::from(ordering.clone()))]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

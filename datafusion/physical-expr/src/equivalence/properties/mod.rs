@@ -26,6 +26,7 @@ use dependency::{
 pub use joins::*;
 pub use union::*;
 
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -488,9 +489,9 @@ impl EquivalenceProperties {
     /// table). If `sort_exprs` were `[b ASC, c ASC, a ASC]`, then this function
     /// would return `[a ASC, c ASC]`. Internally, it would first normalize to
     /// `[a ASC, c ASC, a ASC]` and end up with the final result after deduplication.
-    fn normalize_sort_requirements<'a>(
+    fn normalize_sort_requirements(
         &self,
-        sort_reqs: impl IntoIterator<Item = &'a PhysicalSortRequirement>,
+        sort_reqs: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> Option<LexRequirement> {
         // Prune redundant sections in the requirement:
         let reqs = sort_reqs
@@ -518,9 +519,9 @@ impl EquivalenceProperties {
 
     /// Checks whether the given sort requirements are satisfied by any of the
     /// existing orderings.
-    pub fn ordering_satisfy_requirement<'a>(
+    pub fn ordering_satisfy_requirement(
         &self,
-        given: impl IntoIterator<Item = &'a PhysicalSortRequirement>,
+        given: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> bool {
         // First, standardize the given requirement:
         let Some(normalized_reqs) = self.normalize_sort_requirements(given) else {
@@ -658,13 +659,15 @@ impl EquivalenceProperties {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
                 let check_null = matches!(constraint, Constraint::Unique(_));
-                indices.len() <= normalized_exprs.len()
+                let normalized_size = normalized_exprs.len();
+                indices.len() <= normalized_size
                     && self.oeq_class.iter().any(|ordering| {
-                        if indices.len() > ordering.len() {
+                        let length = ordering.len();
+                        if indices.len() > length || normalized_size < length {
                             return false;
                         }
                         // Build a map of column positions in the ordering:
-                        let mut col_positions = HashMap::with_capacity(ordering.len());
+                        let mut col_positions = HashMap::with_capacity(length);
                         for (pos, req) in ordering.iter().enumerate() {
                             if let Some(col) = req.expr.as_any().downcast_ref::<Column>()
                             {
@@ -673,26 +676,23 @@ impl EquivalenceProperties {
                             }
                         }
                         // Check if all constraint indices appear in valid positions:
-                        if !indices.iter().all(|&idx| {
-                            col_positions
-                                .get(&idx)
-                                .map(|&(pos, nullable)| {
-                                    // For unique constraints, verify column is not nullable if it's first/last:
-                                    !check_null
-                                        || !nullable
-                                        || (pos != 0 && pos != ordering.len() - 1)
-                                })
-                                .unwrap_or(false)
+                        if !indices.iter().all(|idx| {
+                            col_positions.get(idx).is_some_and(|&(pos, nullable)| {
+                                // For unique constraints, verify column is not nullable if it's first/last:
+                                !check_null
+                                    || !nullable
+                                    || (pos != 0 && pos != length - 1)
+                            })
                         }) {
                             return false;
                         }
                         // Check if this ordering matches the prefix:
-                        let ordering_len = ordering.len();
-                        normalized_exprs.len() >= ordering_len
-                            && normalized_exprs[..ordering_len]
-                                .iter()
-                                .zip(ordering)
-                                .all(|(req, existing)| req == existing)
+                        normalized_exprs
+                            .iter()
+                            .zip(ordering)
+                            .all(|(given, existing)| {
+                                existing.satisfy_expr(given, &self.schema)
+                            })
                     })
             }
         })
@@ -710,13 +710,15 @@ impl EquivalenceProperties {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
                 let check_null = matches!(constraint, Constraint::Unique(_));
-                indices.len() <= normalized_reqs.len()
+                let normalized_size = normalized_reqs.len();
+                indices.len() <= normalized_size
                     && self.oeq_class.iter().any(|ordering| {
-                        if indices.len() > ordering.len() {
+                        let length = ordering.len();
+                        if indices.len() > length || normalized_size < length {
                             return false;
                         }
                         // Build a map of column positions in the ordering:
-                        let mut col_positions = HashMap::with_capacity(ordering.len());
+                        let mut col_positions = HashMap::with_capacity(length);
                         for (pos, req) in ordering.iter().enumerate() {
                             if let Some(col) = req.expr.as_any().downcast_ref::<Column>()
                             {
@@ -725,30 +727,23 @@ impl EquivalenceProperties {
                             }
                         }
                         // Check if all constraint indices appear in valid positions:
-                        if !indices.iter().all(|&idx| {
-                            col_positions
-                                .get(&idx)
-                                .map(|&(pos, nullable)| {
-                                    // For unique constraints, verify column is not nullable if it's first/last:
-                                    !check_null
-                                        || !nullable
-                                        || (pos != 0 && pos != ordering.len() - 1)
-                                })
-                                .unwrap_or(false)
+                        if !indices.iter().all(|idx| {
+                            col_positions.get(idx).is_some_and(|&(pos, nullable)| {
+                                // For unique constraints, verify column is not nullable if it's first/last:
+                                !check_null
+                                    || !nullable
+                                    || (pos != 0 && pos != length - 1)
+                            })
                         }) {
                             return false;
                         }
                         // Check if this ordering matches the prefix:
-                        let ordering_len = ordering.len();
-                        normalized_reqs.len() >= ordering_len
-                            && normalized_reqs[..ordering_len].iter().zip(ordering).all(
-                                |(req, existing)| {
-                                    req.expr.eq(&existing.expr)
-                                        && req.options.is_none_or(|req_opts| {
-                                            req_opts == existing.options
-                                        })
-                                },
-                            )
+                        normalized_reqs
+                            .iter()
+                            .zip(ordering)
+                            .all(|(given, existing)| {
+                                existing.satisfy(given, &self.schema)
+                            })
                     })
             }
         })
@@ -758,8 +753,8 @@ impl EquivalenceProperties {
     /// than the `reference` sort requirements.
     pub fn requirements_compatible(
         &self,
-        given: &LexRequirement,
-        reference: &LexRequirement,
+        given: LexRequirement,
+        reference: LexRequirement,
     ) -> bool {
         let Some(normalized_given) = self.normalize_sort_requirements(given) else {
             return true;
@@ -776,45 +771,6 @@ impl EquivalenceProperties {
                 .all(|(reference, given)| given.compatible(&reference))
     }
 
-    /// Returns the finer ordering among the requirements `lhs` and `rhs`,
-    /// breaking any ties by choosing `lhs`.
-    ///
-    /// The finer requirements are the ones that satisfy both of the given
-    /// requirements. If the requirements are incomparable, returns `None`.
-    ///
-    /// For example, the finer requirements among `[a ASC]` and `[a ASC, b ASC]`
-    /// is the latter.
-    pub fn get_finer_requirement(
-        &self,
-        lhs: &LexRequirement,
-        rhs: &LexRequirement,
-    ) -> Option<LexRequirement> {
-        let Some(mut rhs) = self.normalize_sort_requirements(rhs) else {
-            return self.normalize_sort_requirements(lhs);
-        };
-        let Some(mut lhs) = self.normalize_sort_requirements(lhs) else {
-            return Some(rhs);
-        };
-        lhs.iter_mut()
-            .zip(rhs.iter_mut())
-            .all(|(lhs, rhs)| {
-                lhs.expr.eq(&rhs.expr)
-                    && match (lhs.options, rhs.options) {
-                        (Some(lhs_opt), Some(rhs_opt)) => lhs_opt == rhs_opt,
-                        (Some(options), None) => {
-                            rhs.options = Some(options);
-                            true
-                        }
-                        (None, Some(options)) => {
-                            lhs.options = Some(options);
-                            true
-                        }
-                        (None, None) => true,
-                    }
-            })
-            .then_some(if lhs.len() >= rhs.len() { lhs } else { rhs })
-    }
-
     /// we substitute the ordering according to input expression type, this is a simplified version
     /// In this case, we just substitute when the expression satisfy the following condition:
     /// I. just have one column and is a CAST expression
@@ -826,44 +782,44 @@ impl EquivalenceProperties {
     pub fn substitute_ordering_component(
         &self,
         mapping: &ProjectionMapping,
-        sort_expr: &LexOrdering,
+        sort_expr: LexOrdering,
     ) -> Result<Vec<LexOrdering>> {
         let new_orderings = sort_expr
-            .iter()
+            .into_iter()
             .map(|sort_expr| {
-                let referring_exprs: Vec<_> = mapping
+                let referring_exprs = mapping
                     .iter()
                     .map(|(source, _target)| source)
                     .filter(|source| expr_refers(source, &sort_expr.expr))
-                    .cloned()
-                    .collect();
-                let mut res = LexOrdering::new(vec![sort_expr.clone()]);
-                // TODO: Add one-to-ones analysis for ScalarFunctions.
+                    .cloned();
+                let mut result = VecDeque::new();
+                let expr_type = sort_expr.expr.data_type(&self.schema)?;
+                // TODO: Add one-to-one analysis for ScalarFunctions.
                 for r_expr in referring_exprs {
-                    // we check whether this expression is substitutable or not
+                    // We check whether this expression is substitutable.
                     if let Some(cast_expr) = r_expr.as_any().downcast_ref::<CastExpr>() {
-                        // we need to know whether the Cast Expr matches or not
-                        let expr_type = sort_expr.expr.data_type(&self.schema)?;
+                        // For casts, we need to know whether the cast expression matches:
                         if cast_expr.expr.eq(&sort_expr.expr)
-                            && cast_expr.is_bigger_cast(expr_type)
+                            && cast_expr.is_bigger_cast(&expr_type)
                         {
-                            res.push(PhysicalSortExpr {
-                                expr: Arc::clone(&r_expr),
+                            result.push_back(PhysicalSortExpr {
+                                expr: r_expr,
                                 options: sort_expr.options,
                             });
                         }
                     }
                 }
-                Ok(res)
+                result.push_front(sort_expr);
+                Ok(result)
             })
             .collect::<Result<Vec<_>>>()?;
         // Generate all valid orderings, given substituted expressions.
-        let res = new_orderings
+        let result = new_orderings
             .into_iter()
             .multi_cartesian_product()
             .map(LexOrdering::new)
-            .collect::<Vec<_>>();
-        Ok(res)
+            .collect();
+        Ok(result)
     }
 
     /// In projection, supposed we have a input function 'A DESC B DESC' and the output shares the same expression
@@ -872,15 +828,18 @@ impl EquivalenceProperties {
     /// Since it would cause bug in dependency constructions, we should substitute the input order in order to get correct
     /// dependency map, happen in issue 8838: <https://github.com/apache/datafusion/issues/8838>
     pub fn substitute_oeq_class(&mut self, mapping: &ProjectionMapping) -> Result<()> {
-        let new_order = self
-            .oeq_class
-            .iter()
+        let oeq_class = mem::take(&mut self.oeq_class);
+        let new_orderings = oeq_class
+            .into_iter()
             .map(|order| self.substitute_ordering_component(mapping, order))
-            .collect::<Result<Vec<_>>>()?;
-        let new_order = new_order.into_iter().flatten().collect();
-        self.oeq_class = OrderingEquivalenceClass::new(new_order);
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
         Ok(())
     }
+
     /// Projects argument `expr` according to `projection_mapping`, taking
     /// equivalences into account.
     ///

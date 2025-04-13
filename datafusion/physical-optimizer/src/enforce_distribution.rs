@@ -1276,12 +1276,11 @@ pub fn ensure_distribution(
                 // Either:
                 // - Ordering requirement cannot be satisfied by preserving ordering through repartitions, or
                 // - using order preserving variant is not desirable.
+                let sort_req = required_input_ordering.into_single();
                 let ordering_satisfied = child
                     .plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(
-                        required_input_ordering.lex_requirement(),
-                    );
+                    .ordering_satisfy_requirement(sort_req.clone());
 
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
                     && child.data
@@ -1293,7 +1292,7 @@ pub fn ensure_distribution(
                         // Make sure to satisfy ordering requirement:
                         child = add_sort_above_with_check(
                             child,
-                            required_input_ordering.lex_requirement().clone(),
+                            sort_req,
                             plan.as_any()
                                 .downcast_ref::<OutputRequirementExec>()
                                 .map(|output| output.fetch())

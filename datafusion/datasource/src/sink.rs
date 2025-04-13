@@ -26,8 +26,8 @@ use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{Distribution, EquivalenceProperties, LexRequirement};
-use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
+use datafusion_physical_expr::{Distribution, EquivalenceProperties};
+use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequirements};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
@@ -182,13 +182,10 @@ impl ExecutionPlan for DataSinkExec {
         vec![Distribution::SinglePartition; self.children().len()]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // The required input ordering is set externally (e.g. by a `ListingTable`).
-        // Otherwise, there is no specific requirement (i.e. `sort_expr` is `None`).
-        vec![self
-            .sort_order
-            .as_ref()
-            .map(|req| RequiredInputOrdering::new(req.clone()))]
+        // Otherwise, there is no specific requirement (i.e. `sort_order` is `None`).
+        vec![self.sort_order.as_ref().cloned().map(Into::into)]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

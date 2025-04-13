@@ -30,8 +30,10 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{Distribution, PhysicalSortRequirement};
-use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
+use datafusion_physical_expr::Distribution;
+use datafusion_physical_expr_common::sort_expr::{
+    OrderingRequirements, PhysicalSortRequirement,
+};
 use datafusion_physical_plan::projection::{
     make_with_child, update_expr, ProjectionExec,
 };
@@ -95,7 +97,7 @@ enum RuleMode {
 #[derive(Debug)]
 pub struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
-    order_requirement: Option<RequiredInputOrdering>,
+    order_requirement: Option<OrderingRequirements>,
     dist_requirement: Distribution,
     cache: PlanProperties,
 }
@@ -103,7 +105,7 @@ pub struct OutputRequirementExec {
 impl OutputRequirementExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        requirements: Option<RequiredInputOrdering>,
+        requirements: Option<OrderingRequirements>,
         dist_requirement: Distribution,
     ) -> Self {
         let cache = Self::compute_properties(&input);
@@ -177,7 +179,7 @@ impl ExecutionPlan for OutputRequirementExec {
         vec![&self.input]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![self.order_requirement.clone()]
     }
 
@@ -215,8 +217,8 @@ impl ExecutionPlan for OutputRequirementExec {
 
         let mut updated_sort_reqs = vec![];
         // None or empty_vec can be treated in the same way.
-        if let Some(reqs) = &self.required_input_ordering()[0] {
-            for req in reqs.lex_requirement().iter() {
+        if let Some(reqs) = self.required_input_ordering().swap_remove(0) {
+            for req in reqs.into_single().iter() {
                 let Some(new_expr) = update_expr(&req.expr, projection.expr(), false)?
                 else {
                     return Ok(None);
@@ -247,7 +249,7 @@ impl ExecutionPlan for OutputRequirementExec {
             .map(|input| {
                 OutputRequirementExec::new(
                     input,
-                    Some(RequiredInputOrdering::new(updated_sort_reqs.into())),
+                    Some(OrderingRequirements::new_single(updated_sort_reqs.into())),
                     dist_req,
                 )
             })
@@ -318,13 +320,13 @@ fn require_top_ordering_helper(
         // Therefore; we check the sort expression field of the SortExec to assign the requirements.
         let req_ordering = sort_exec.expr();
         let req_dist = sort_exec.required_input_distribution()[0].clone();
-        let reqs = RequiredInputOrdering::from(req_ordering.clone());
+        let reqs = OrderingRequirements::from(req_ordering.clone());
         Ok((
             Arc::new(OutputRequirementExec::new(plan, Some(reqs), req_dist)) as _,
             true,
         ))
     } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
-        let reqs = RequiredInputOrdering::from(spm.expr().clone());
+        let reqs = OrderingRequirements::from(spm.expr().clone());
         Ok((
             Arc::new(OutputRequirementExec::new(
                 plan,
@@ -337,7 +339,7 @@ fn require_top_ordering_helper(
         && (plan.required_input_ordering()[0].is_none()
             || matches!(
                 plan.required_input_ordering()[0].clone().unwrap(),
-                RequiredInputOrdering::Soft(_)
+                OrderingRequirements::Soft(_)
             ))
     {
         // Keep searching for a `SortExec` as long as ordering is maintained,

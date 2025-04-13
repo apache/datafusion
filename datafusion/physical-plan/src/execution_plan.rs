@@ -48,8 +48,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, Constraints, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use futures::stream::{StreamExt, TryStreamExt};
 
@@ -136,7 +136,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// NOTE that checking `!is_empty()` does **not** check for a
     /// required input ordering. Instead, the correct check is that at
     /// least one entry must be `Some`
-    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![None; self.children().len()]
     }
 
@@ -1068,63 +1068,6 @@ pub enum CardinalityEffect {
     LowerEqual,
     /// The operator may produce more output rows than it receives input rows
     GreaterEqual,
-}
-
-/// Represents the plan's input ordering requirements,
-/// the elements of the vectors' represent alternative requirements
-#[derive(Debug, Clone, PartialEq)]
-pub enum RequiredInputOrdering {
-    /// The operator is not able to work without one of these requirements
-    Hard(Vec<LexRequirement>),
-    /// The operator can benefit from the ordering alternatives if provided
-    /// but if not provided it can also work.
-    Soft(Vec<LexRequirement>),
-}
-
-impl RequiredInputOrdering {
-    /// Creates a new RequiredInputOrdering instance,
-    /// empty requirements are not allowed inside this type,
-    /// if given [`None`] will be returned
-    pub fn new_with_alternatives(
-        alternatives: Vec<LexRequirement>,
-        soft: bool,
-    ) -> Option<Self> {
-        (!(alternatives.is_empty() || alternatives[0].is_empty())).then(|| {
-            if soft {
-                Self::Soft(alternatives)
-            } else {
-                Self::Hard(alternatives)
-            }
-        })
-    }
-
-    pub fn new(requirement: LexRequirement) -> Self {
-        debug_assert!(!requirement.is_empty());
-        Self::Hard(vec![requirement])
-    }
-
-    pub fn from(ordering: LexOrdering) -> Self {
-        Self::new(LexRequirement::from(ordering))
-    }
-
-    pub fn add_alternative(&mut self, requirement: LexRequirement) {
-        match self {
-            Self::Hard(alts) => alts.push(requirement),
-            Self::Soft(alts) => alts.push(requirement),
-        }
-    }
-
-    /// Returns the first (i.e. most preferred) among alternative requirements.
-    pub fn lex_requirement(&self) -> &LexRequirement {
-        match self {
-            Self::Hard(alts) => &alts[0],
-            Self::Soft(alts) => &alts[0],
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.lex_requirement().is_empty()
-    }
 }
 
 #[cfg(test)]

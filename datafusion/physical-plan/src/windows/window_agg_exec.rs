@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
-use crate::execution_plan::{EmissionType, RequiredInputOrdering};
+use crate::execution_plan::EmissionType;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -44,7 +44,9 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::{
+    OrderingRequirements, PhysicalSortExpr,
+};
 
 use futures::{ready, Stream, StreamExt};
 
@@ -216,7 +218,7 @@ impl ExecutionPlan for WindowAggExec {
         vec![true]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         if self.ordered_partition_by_indices.len() < partition_bys.len() {

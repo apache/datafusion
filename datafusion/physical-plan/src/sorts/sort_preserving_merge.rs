@@ -21,7 +21,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
-use crate::execution_plan::RequiredInputOrdering;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{make_with_child, update_expr, ProjectionExec};
@@ -34,8 +33,9 @@ use crate::{
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, OrderingRequirements, PhysicalSortExpr,
+};
 
 use log::{debug, trace};
 
@@ -241,8 +241,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![false]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
-        vec![Some(RequiredInputOrdering::from(self.expr.clone()))]
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        vec![Some(OrderingRequirements::from(self.expr.clone()))]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

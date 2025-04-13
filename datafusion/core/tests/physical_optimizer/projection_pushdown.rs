@@ -25,26 +25,27 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
-use datafusion_common::{JoinSide, JoinType, ScalarValue};
+use datafusion_common::{JoinSide, JoinType, Result, ScalarValue};
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{
     Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr::expressions::{
     binary, cast, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
 };
-use datafusion_physical_expr::ScalarFunctionExpr;
-use datafusion_physical_expr::{
-    Distribution, Partitioning, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+use datafusion_physical_expr::{Distribution, Partitioning, ScalarFunctionExpr};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
@@ -55,13 +56,10 @@ use datafusion_physical_plan::projection::{update_expr, ProjectionExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::streaming::PartitionStream;
-use datafusion_physical_plan::streaming::StreamingTableExec;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_expr_common::columnar_value::ColumnarValue;
 use itertools::Itertools;
 
 /// Mocked UDF
@@ -654,7 +652,7 @@ fn test_output_req_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
     let sort_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
         csv,
-        Some(RequiredInputOrdering::new(LexRequirement::new(vec![
+        Some(OrderingRequirements::new_single(LexRequirement::new(vec![
             PhysicalSortRequirement {
                 expr: Arc::new(Column::new("b", 1)),
                 options: Some(SortOptions::default()),
@@ -700,7 +698,7 @@ fn test_output_req_after_projection() -> Result<()> {
         ];
 
     assert_eq!(get_plan_string(&after_optimize), expected);
-    let expected_reqs = RequiredInputOrdering::new(LexRequirement::new(vec![
+    let expected_reqs = OrderingRequirements::new_single(LexRequirement::new(vec![
         PhysicalSortRequirement {
             expr: Arc::new(Column::new("b", 2)),
             options: Some(SortOptions::default()),
