@@ -776,22 +776,6 @@ pub fn accumulate_indices<F>(
     }
 }
 
-/// Ensures that `builder` contains a `BooleanBufferBuilder with at
-/// least `total_num_groups`.
-///
-/// All new entries are initialized to `default_value`
-fn initialize_builder(
-    builder: &mut BooleanBufferBuilder,
-    total_num_groups: usize,
-    default_value: bool,
-) -> &mut BooleanBufferBuilder {
-    if builder.len() < total_num_groups {
-        let new_groups = total_num_groups - builder.len();
-        builder.append_n(new_groups, default_value);
-    }
-    builder
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
