@@ -241,8 +241,8 @@ async fn test_median() {
 /// 1. Floating point numbers
 /// 1. structured types
 fn baseline_config() -> DatasetGeneratorConfig {
-    let mut rng = thread_rng();
-    let columns = get_supported_types_columns(rng.gen());
+    let mut rng = rng();
+    let columns = get_supported_types_columns(rng.random());
 
     let min_num_rows = 512;
     let max_num_rows = 1024;
@@ -692,8 +692,8 @@ async fn test_single_mode_aggregate_with_spill() -> Result<()> {
         Arc::new(StringArray::from(
             (0..1024)
                 .map(|_| -> String {
-                    thread_rng()
-                        .sample_iter::<char, _>(rand::distributions::Standard)
+                    rng()
+                        .sample_iter::<char, _>(rand::distr::StandardUniform)
                         .take(5)
                         .collect()
                 })

@@ -52,8 +52,8 @@ datafusion-expr = { workspace = true }
 datafusion-optimizer = { workspace = true, default-features = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
-wasm-bindgen = "0.2.99"
 getrandom = { version = "0.3", features = ["wasm_js"] }
+wasm-bindgen = "0.2.99"
 
 [patch.crates-io]
 # getrandom must be compiled with js feature
