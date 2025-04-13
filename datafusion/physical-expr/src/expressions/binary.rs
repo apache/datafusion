@@ -899,7 +899,7 @@ fn check_short_circuit<'a>(
                     }
 
                     // determine if we can pre-selection
-                    if (true_count / len) as f32 <= PRE_SELECTIO_THRESHOLD {
+                    if true_count as f32 / len as f32 <= PRE_SELECTIO_THRESHOLD {
                         return ShortCircuitStrategy::PreSelection(bool_array);
                     }
                 } else {
