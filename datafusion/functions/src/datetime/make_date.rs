@@ -22,13 +22,13 @@ use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::types::{Date32Type, Int32Type};
 use arrow::array::PrimitiveArray;
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Date32, Int32, Int64, UInt32, UInt64, Utf8, Utf8View};
+use arrow::datatypes::Field;
 use chrono::prelude::*;
 
 use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -102,8 +102,8 @@ impl ScalarUDFImpl for MakeDateFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Date32)
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), Date32, true))
     }
 
     fn invoke_with_args(

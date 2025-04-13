@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{utils::take_function_args, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
+use arrow::array::Array;
 
 #[user_doc(
     doc_section(label = "Other Functions"),
@@ -71,8 +72,10 @@ impl ScalarUDFImpl for ArrowTypeOfFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types[0].is_nullable();
+        Ok(Field::new(self.name(), DataType::Utf8, nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

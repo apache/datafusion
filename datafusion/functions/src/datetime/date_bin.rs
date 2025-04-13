@@ -28,15 +28,13 @@ use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::datatypes::DataType::{Null, Timestamp, Utf8};
 use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, Field, TimeUnit};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, not_impl_err, plan_err, Result, ScalarValue};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD};
 use datafusion_macros::user_doc;
 
 use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
@@ -174,17 +172,19 @@ impl ScalarUDFImpl for DateBinFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[1] {
-            Timestamp(Nanosecond, None) | Utf8 | Null => Ok(Timestamp(Nanosecond, None)),
-            Timestamp(Nanosecond, tz_opt) => Ok(Timestamp(Nanosecond, tz_opt.clone())),
-            Timestamp(Microsecond, tz_opt) => Ok(Timestamp(Microsecond, tz_opt.clone())),
-            Timestamp(Millisecond, tz_opt) => Ok(Timestamp(Millisecond, tz_opt.clone())),
-            Timestamp(Second, tz_opt) => Ok(Timestamp(Second, tz_opt.clone())),
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = match args.arg_types[1].data_type() {
+            Timestamp(Nanosecond, None) | Utf8 | Null => Timestamp(Nanosecond, None),
+            Timestamp(Nanosecond, tz_opt) => Timestamp(Nanosecond, tz_opt.clone()),
+            Timestamp(Microsecond, tz_opt) => Timestamp(Microsecond, tz_opt.clone()),
+            Timestamp(Millisecond, tz_opt) => Timestamp(Millisecond, tz_opt.clone()),
+            Timestamp(Second, tz_opt) => Timestamp(Second, tz_opt.clone()),
             _ => plan_err!(
                 "The date_bin function can only accept timestamp as the second arg."
-            ),
-        }
+            )?,
+        };
+
+        Ok(Field::new(self.name(), data_type, true))
     }
 
     fn invoke_with_args(

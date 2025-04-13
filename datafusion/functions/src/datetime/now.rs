@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Timestamp;
+use arrow::datatypes::Field;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use std::any::Any;
 
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -77,15 +77,12 @@ impl ScalarUDFImpl for NowFunc {
         &self.signature
     }
 
-    fn return_type_from_args(&self, _args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        Ok(ReturnInfo::new_non_nullable(Timestamp(
-            Nanosecond,
-            Some("+00:00".into()),
-        )))
-    }
-
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_args should be called instead")
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(
+            self.name(),
+            Timestamp(Nanosecond, Some("+00:00".into())),
+            false,
+        ))
     }
 
     fn invoke_with_args(

@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow::array::cast::AsArray;
 use arrow::array::{new_null_array, Array, ArrayRef, StringArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Time32, Time64, Timestamp, Utf8,
 };
@@ -30,9 +30,7 @@ use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 
 use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -131,8 +129,8 @@ impl ScalarUDFImpl for ToCharFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Utf8)
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), Utf8, true))
     }
 
     fn invoke_with_args(
@@ -213,10 +211,10 @@ fn _to_char_scalar(
     let array = expression.into_array(1)?;
 
     if format.is_none() {
-        if is_scalar_expression {
-            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+        return if is_scalar_expression {
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
         } else {
-            return Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())));
+            Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())))
         }
     }
 

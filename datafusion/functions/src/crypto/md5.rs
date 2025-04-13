@@ -17,16 +17,13 @@
 
 //! "crypto" DataFusion functions
 use crate::crypto::basic::md5;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
     plan_err,
     types::{logical_binary, logical_string, NativeType},
     Result,
 };
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -89,9 +86,9 @@ impl ScalarUDFImpl for Md5Func {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         use DataType::*;
-        Ok(match &arg_types[0] {
+        let data_type = match &args.arg_types[0].data_type() {
             LargeUtf8 | LargeBinary => Utf8,
             Utf8View | Utf8 | Binary | BinaryView => Utf8,
             Null => Null,
@@ -111,7 +108,10 @@ impl ScalarUDFImpl for Md5Func {
                     "The md5 function can only accept strings. Got {other}"
                 );
             }
-        })
+        };
+
+        let nullable = args.arg_types[0].is_nullable();
+        Ok(Field::new(self.name(), data_type, nullable))
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         md5(&args.args)

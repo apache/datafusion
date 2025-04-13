@@ -23,19 +23,14 @@ use arrow::array::timezone::Tz;
 use arrow::array::{Array, ArrayRef, PrimitiveBuilder};
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{
-    ArrowTimestampType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
-};
+use arrow::datatypes::{ArrowTimestampType, DataType, Field, TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType};
 use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
     exec_err, plan_err, utils::take_function_args, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 /// A UDF function that converts a timezone-aware timestamp to local time (with no offset or
@@ -355,15 +350,16 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [time_value] = take_function_args(self.name(), arg_types)?;
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let [time_value] = take_function_args(self.name(), args.arg_types)?;
 
-        match time_value {
-            Timestamp(timeunit, _) => Ok(Timestamp(*timeunit, None)),
+        let data_type = match time_value {
+            Timestamp(timeunit, _) => Timestamp(*timeunit, None),
             _ => exec_err!(
                 "The to_local_time function can only accept timestamp as the arg, got {:?}", time_value
-            )
-        }
+            )?
+        };
+        Ok(Field::new(self.name(), data_type, true))
     }
 
     fn invoke_with_args(

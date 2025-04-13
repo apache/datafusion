@@ -21,14 +21,9 @@ use std::sync::Arc;
 use crate::datetime::common::*;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{
-    ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-};
+use arrow::datatypes::{ArrowTimestampType, DataType, Field, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType};
 use datafusion_common::{exec_err, Result, ScalarType, ScalarValue};
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -294,8 +289,9 @@ impl ScalarUDFImpl for ToTimestampFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(return_type_for(&arg_types[0], Nanosecond))
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = return_type_for(args.arg_types[0].data_type(), Nanosecond);
+        Ok(Field::new(self.name(), data_type, true))
     }
 
     fn invoke_with_args(
@@ -378,8 +374,9 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(return_type_for(&arg_types[0], Second))
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = return_type_for(args.arg_types[0].data_type(), Second);
+        Ok(Field::new(self.name(), data_type, true))
     }
 
     fn invoke_with_args(
@@ -433,9 +430,11 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(return_type_for(&arg_types[0], Millisecond))
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = return_type_for(args.arg_types[0].data_type(), Millisecond);
+        Ok(Field::new(self.name(), data_type, true))
     }
+
 
     fn invoke_with_args(
         &self,
@@ -491,9 +490,11 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(return_type_for(&arg_types[0], Microsecond))
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = return_type_for(args.arg_types[0].data_type(), Microsecond);
+        Ok(Field::new(self.name(), data_type, true))
     }
+
 
     fn invoke_with_args(
         &self,
@@ -549,9 +550,11 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(return_type_for(&arg_types[0], Nanosecond))
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = return_type_for(args.arg_types[0].data_type(), Nanosecond);
+        Ok(Field::new(self.name(), data_type, true))
     }
+
 
     fn invoke_with_args(
         &self,

@@ -20,10 +20,10 @@ use arrow::array::{make_comparator, Array, BooleanArray};
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::cmp;
 use arrow::compute::SortOptions;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_doc::Documentation;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -139,8 +139,9 @@ impl ScalarUDFImpl for GreatestFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().all(|f| !f.is_nullable());
+        Ok(Field::new(self.name(), args.arg_types[0].data_type().clone(), nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

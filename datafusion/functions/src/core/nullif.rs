@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
-use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
+use arrow::datatypes::Field;
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs};
 
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
@@ -97,8 +97,8 @@ impl ScalarUDFImpl for NullIfFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].to_owned())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), args.arg_types[0].data_type().to_owned(), true))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

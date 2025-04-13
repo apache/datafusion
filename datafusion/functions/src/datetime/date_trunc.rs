@@ -30,14 +30,13 @@ use arrow::array::types::{
 };
 use arrow::array::{Array, PrimitiveArray};
 use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8, Utf8View};
+use arrow::datatypes::Field;
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD};
 use datafusion_macros::user_doc;
 
 use chrono::{
@@ -145,19 +144,21 @@ impl ScalarUDFImpl for DateTruncFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[1] {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = match &args.arg_types[1].data_type() {
             Timestamp(Nanosecond, None) | Utf8 | DataType::Date32 | Null => {
-                Ok(Timestamp(Nanosecond, None))
+                Timestamp(Nanosecond, None)
             }
-            Timestamp(Nanosecond, tz_opt) => Ok(Timestamp(Nanosecond, tz_opt.clone())),
-            Timestamp(Microsecond, tz_opt) => Ok(Timestamp(Microsecond, tz_opt.clone())),
-            Timestamp(Millisecond, tz_opt) => Ok(Timestamp(Millisecond, tz_opt.clone())),
-            Timestamp(Second, tz_opt) => Ok(Timestamp(Second, tz_opt.clone())),
+            Timestamp(Nanosecond, tz_opt) => Timestamp(Nanosecond, tz_opt.clone()),
+            Timestamp(Microsecond, tz_opt) => Timestamp(Microsecond, tz_opt.clone()),
+            Timestamp(Millisecond, tz_opt) => Timestamp(Millisecond, tz_opt.clone()),
+            Timestamp(Second, tz_opt) => Timestamp(Second, tz_opt.clone()),
             _ => plan_err!(
                 "The date_trunc function can only accept timestamp as the second arg."
-            ),
-        }
+            )?,
+        };
+
+        Ok(Field::new(self.name(), data_type, true))
     }
 
     fn invoke_with_args(

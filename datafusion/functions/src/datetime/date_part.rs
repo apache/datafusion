@@ -26,7 +26,7 @@ use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion_common::types::{logical_date, NativeType};
 
 use datafusion_common::{
@@ -36,15 +36,12 @@ use datafusion_common::{
         as_timestamp_microsecond_array, as_timestamp_millisecond_array,
         as_timestamp_nanosecond_array, as_timestamp_second_array,
     },
-    exec_err, internal_err, not_impl_err,
+    exec_err, not_impl_err,
     types::logical_string,
     utils::take_function_args,
     Result, ScalarValue,
 };
-use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
@@ -141,11 +138,7 @@ impl ScalarUDFImpl for DatePartFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_args should be called instead")
-    }
-
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
 
         field
@@ -155,9 +148,9 @@ impl ScalarUDFImpl for DatePartFunc {
                     .filter(|s| !s.is_empty())
                     .map(|part| {
                         if is_epoch(part) {
-                            ReturnInfo::new_nullable(DataType::Float64)
+                            Field::new(self.name(), DataType::Float64, true)
                         } else {
-                            ReturnInfo::new_nullable(DataType::Int32)
+                            Field::new(self.name(), DataType::Int32, true)
                         }
                     })
             })

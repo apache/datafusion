@@ -17,12 +17,9 @@
 
 //! [`VersionFunc`]: Implementation of the `version` function.
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{utils::take_function_args, Result, ScalarValue};
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 
@@ -71,9 +68,9 @@ impl ScalarUDFImpl for VersionFunc {
         &self.signature
     }
 
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        let [] = take_function_args(self.name(), args)?;
-        Ok(DataType::Utf8)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let [] = take_function_args(self.name(), args.arg_types)?;
+        Ok(Field::new(self.name(), DataType::Utf8, false))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

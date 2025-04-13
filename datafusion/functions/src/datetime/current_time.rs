@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Time64;
+use arrow::datatypes::Field;
 use arrow::datatypes::TimeUnit::Nanosecond;
-use std::any::Any;
-
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
+use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
@@ -74,8 +74,8 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Time64(Nanosecond))
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), Time64(Nanosecond), true))
     }
 
     fn invoke_with_args(

@@ -16,15 +16,13 @@
 // under the License.
 
 use crate::datetime::common::*;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::*;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
 use datafusion_common::error::DataFusionError;
 use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 
@@ -126,8 +124,8 @@ impl ScalarUDFImpl for ToDateFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Date32)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), Date32, true))
     }
 
     fn invoke_with_args(

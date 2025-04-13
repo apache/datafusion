@@ -17,14 +17,15 @@
 
 use std::any::Any;
 
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
+use arrow::datatypes::Field;
 use chrono::{Datelike, NaiveDate};
 
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -77,8 +78,8 @@ impl ScalarUDFImpl for CurrentDateFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Date32)
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), Date32, true))
     }
 
     fn invoke_with_args(

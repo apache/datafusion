@@ -17,14 +17,14 @@
 
 //! "crypto" DataFusion functions
 use super::basic::{sha512, utf8_or_binary_to_binary_type};
-use arrow::datatypes::DataType;
+use arrow::datatypes::Field;
 use datafusion_common::{
     types::{logical_binary, logical_string, NativeType},
     Result,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -88,10 +88,12 @@ impl ScalarUDFImpl for SHA512Func {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_or_binary_to_binary_type(&arg_types[0], self.name())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types[0].is_nullable();
+        let data_type =
+            utf8_or_binary_to_binary_type(args.arg_types[0].data_type(), self.name())?;
+        Ok(Field::new(self.name(), data_type, nullable))
     }
-
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         sha512(&args.args)
     }
