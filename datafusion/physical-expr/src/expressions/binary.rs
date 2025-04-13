@@ -29,7 +29,9 @@ use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
-use arrow::compute::{cast, filter_record_batch, ilike, like, nilike, nlike};
+use arrow::compute::{
+    cast, filter_record_batch, ilike, like, nilike, nlike, SlicesIterator,
+};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
@@ -373,7 +375,8 @@ impl PhysicalExpr for BinaryExpr {
                 // The function `evaluate_selection` was not called for filtering and calculation,
                 // as it takes into account cases where the selection contains null values.
                 let batch = filter_record_batch(batch, selection)?;
-                return self.right.evaluate(&batch);
+                let right_ret = self.right.evaluate(&batch)?;
+                return pre_selection_scatter(selection, right_ret);
             }
         }
 
@@ -932,6 +935,51 @@ fn check_short_circuit<'a>(
 
     // If we can't short-circuit, indicate that normal evaluation should continue
     ShortCircuitStrategy::None
+}
+
+/// FIXME: Perhaps it would be better to modify `left_result` directly without creating a copy?
+/// In practice, `left_result` should have only one owner, so making changes should be safe.
+/// However, this is difficult to achieve under the immutable constraints of [`Arc`] and [`BooleanArray`].
+fn pre_selection_scatter(
+    left_result: &BooleanArray,
+    right_result: ColumnarValue,
+) -> Result<ColumnarValue> {
+    let right_array = if let ColumnarValue::Array(array) = right_result {
+        array
+    } else {
+        return Ok(right_result);
+    };
+    let right_boolean_array = right_array.as_boolean();
+    let result_len = left_result.len();
+
+    // keep track of how much is filled
+    let mut filled = 0;
+    // keep track of current position we have in right boolean array
+    let mut right_array_pos = 0;
+
+    let mut result_array_builder = BooleanArray::builder(result_len);
+    SlicesIterator::new(left_result).for_each(|(start, end)| {
+        // the gap needs to be filled with false
+        if start > filled {
+            (filled..start).for_each(|_| result_array_builder.append_value(false));
+        }
+        // fill with right_result values
+        let len = end - start;
+        right_boolean_array
+            .slice(right_array_pos, len)
+            .iter()
+            .for_each(|v| result_array_builder.append_option(v));
+
+        right_array_pos += len;
+        filled = end;
+    });
+    // the remaining part is falsy
+    if filled < result_len {
+        (filled..result_len).for_each(|_| result_array_builder.append_value(false));
+    }
+    let boolean_result = result_array_builder.finish();
+
+    Ok(ColumnarValue::Array(Arc::new(boolean_result)))
 }
 
 fn concat_elements(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<ArrayRef> {
@@ -4992,10 +5040,18 @@ mod tests {
         // op: AND left: not all false
         let left_expr = logical2physical(&logical_col("a").eq(expr_lit(3)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(matches!(
-            check_short_circuit(&left_value, &Operator::And),
-            ShortCircuitStrategy::None
-        ));
+        let ColumnarValue::Array(array) = &left_value else {
+            panic!("Expected ColumnarValue::Array");
+        };
+        let ShortCircuitStrategy::PreSelection(value) =
+            check_short_circuit(&left_value, &Operator::And)
+        else {
+            panic!("Expected ShortCircuitStrategy::PreSelection");
+        };
+        let expected_boolean_arr: Vec<_> =
+            as_boolean_array(array).unwrap().iter().collect();
+        let boolean_arr: Vec<_> = value.iter().collect();
+        assert_eq!(expected_boolean_arr, boolean_arr);
 
         // op: OR left: all true
         let left_expr = logical2physical(&logical_col("a").gt(expr_lit(0)), &schema);
