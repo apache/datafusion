@@ -39,7 +39,6 @@ use datafusion_common::{
     config_datafusion_err, config_err, internal_err, plan_err, project_schema,
     Constraints, DataFusionError, Result, SchemaExt, ToDFSchema,
 };
-use datafusion_datasource::add_row_stats;
 use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -1211,7 +1210,7 @@ async fn get_files_with_limit(
                     file_stats.num_rows
                 } else {
                     // For subsequent files, accumulate the counts
-                    add_row_stats(num_rows, file_stats.num_rows)
+                    num_rows.add(&file_stats.num_rows)
                 };
             }
         }
