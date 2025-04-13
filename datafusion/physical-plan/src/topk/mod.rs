@@ -237,6 +237,9 @@ impl TopK {
             };
             if filter.true_count() == 0 {
                 // No rows are less than the max row, so we can skip this batch
+                // Early completion is still possible, as last row might be greater
+                self.attempt_early_completion(&batch)?;
+
                 return Ok(());
             }
             let filter_predicate = FilterBuilder::new(&filter);
