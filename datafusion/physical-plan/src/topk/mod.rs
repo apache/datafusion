@@ -19,7 +19,7 @@
 
 use arrow::{
     array::Scalar,
-    compute::{and, interleave_record_batch, FilterBuilder},
+    compute::{interleave_record_batch, FilterBuilder},
     row::{RowConverter, Rows, SortField},
 };
 use arrow_ord::cmp::lt;
@@ -216,29 +216,22 @@ impl TopK {
             };
 
             // Extract threshold values for each sort expression
-            let mut scalar_values = Vec::with_capacity(self.expr.len());
-            for sort_expr in self.expr.iter() {
+            // TODO: create a filter for each key that respects lexical ordering
+            // in the form of col0 < threshold0 || col0 == threshold0 && (col1 < threshold1 || ...)
+            // This could use BinaryExpr to benefit from short circuiting and early evaluation
+            let mut thresholds = Vec::with_capacity(self.expr.len());
+
+            for sort_expr in self.expr[..1].iter() {
                 // Extract the value for this column from the max row
                 let expr = Arc::clone(&sort_expr.expr);
                 let value = expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
 
                 // Convert to scalar value - should be a single value since we're evaluating on a single row batch
                 let scalar = Scalar::new(value.to_array(1)?);
-                scalar_values.push(scalar);
+                thresholds.push(scalar);
             }
             // Create a filter for each sort key
-            let filter = sort_keys
-                .iter()
-                .zip(scalar_values.iter())
-                .map(|(expr, scalar)| {
-                    let filter = lt(expr, scalar).expect("Should be valid filter");
-                    Ok(filter)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            // Combine the masks into a single filter
-            let filter = filter
-                .iter()
-                .fold(filter[0].clone(), |acc, filter| and(&acc, filter).unwrap());
+            let filter = lt(&sort_keys[0], &thresholds[0])?;
             if filter.true_count() == 0 {
                 // No rows are less than the max row, so we can skip this batch
                 return Ok(());
