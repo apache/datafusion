@@ -15,15 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use crate::fuzz_cases::aggregation_fuzzer::{
     AggregationFuzzerBuilder, DatasetGeneratorConfig, QueryBuilder,
 };
+use std::any::Any;
+use std::fmt::{Debug, Formatter};
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 use arrow::array::{
     types::Int64Type, Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch,
-    StringArray,
+    StringArray, UInt64Array,
 };
 use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::DataType;
@@ -40,23 +43,30 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::HashMap;
+use datafusion_common::{DataFusionError, HashMap};
 use datafusion_common_runtime::JoinSet;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::{col, lit, Column};
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::InputOrderMode;
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, InputOrderMode, PlanProperties,
+};
+use futures::{Stream, StreamExt};
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
+use super::record_batch_generator::get_supported_types_columns;
+use datafusion_datasource::source::DataSource;
+use datafusion_execution::memory_pool::units::MB;
 use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-use datafusion_execution::TaskContext;
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
+use datafusion_functions_aggregate::array_agg::array_agg_udaf;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::MetricValue;
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use rand::rngs::StdRng;
 use rand::{random, thread_rng, Rng, SeedableRng};
-
-use super::record_batch_generator::get_supported_types_columns;
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]
@@ -640,6 +650,8 @@ fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<Aggregate
         } else if !expect_spill && spill_count > 0 {
             panic!("Expected no spill but found SpillCount metric with value greater than 0.");
         }
+
+        println!("SpillCount = {}", spill_count);
     } else {
         panic!("No metrics returned from the operator; cannot verify spilling.");
     }
@@ -750,6 +762,229 @@ async fn test_single_mode_aggregate_with_spill() -> Result<()> {
     .await?;
 
     assert_spill_count_metric(true, single_aggregate);
+
+    Ok(())
+}
+
+/// A Mock ExecutionPlan that can be used for writing tests of other
+/// ExecutionPlans
+pub struct StreamExec {
+    /// the results to send back
+    stream: Mutex<Option<SendableRecordBatchStream>>,
+    /// if true (the default), sends data using a separate task to ensure the
+    /// batches are not available without this stream yielding first
+    use_task: bool,
+    cache: PlanProperties,
+}
+
+impl Debug for StreamExec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "StreamExec")
+    }
+}
+
+impl StreamExec {
+    /// Create a new `MockExec` with a single partition that returns
+    /// the specified `Results`s.
+    ///
+    /// By default, the batches are not produced immediately (the
+    /// caller has to actually yield and another task must run) to
+    /// ensure any poll loops are correct. This behavior can be
+    /// changed with `with_use_task`
+    pub fn new(stream: SendableRecordBatchStream) -> Self {
+        let cache = Self::compute_properties(stream.schema());
+        Self {
+            stream: Mutex::new(Some(stream)),
+            use_task: true,
+            cache,
+        }
+    }
+
+    /// If `use_task` is true (the default) then the batches are sent
+    /// back using a separate task to ensure the underlying stream is
+    /// not immediately ready
+    pub fn with_use_task(mut self, use_task: bool) -> Self {
+        self.use_task = use_task;
+        self
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
+    }
+}
+
+impl DisplayAs for StreamExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "StreamExec:")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for StreamExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        unimplemented!()
+    }
+
+    /// Returns a stream which yields data
+    fn execute(
+        &self,
+        partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        assert_eq!(partition, 0);
+
+        let stream = self.stream.lock().unwrap().take();
+
+        stream.ok_or(DataFusionError::Internal(
+            "Stream already consumed".to_string(),
+        ))
+    }
+}
+
+
+#[tokio::test]
+async fn test_low_cardinality() -> Result<()> {
+    let record_batch_size = 8192;
+    let two_mb = 2 * MB as usize;
+    let task_ctx = {
+        let memory_pool = Arc::new(FairSpillPool::new(two_mb));
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
+    };
+    run_test_low_cardinality(task_ctx, 100).await
+}
+
+async fn run_test_low_cardinality(
+    task_ctx: TaskContext,
+    number_of_record_batches: usize,
+) -> Result<()> {
+    let scan_schema = Arc::new(Schema::new(vec![
+        Field::new("col_0", DataType::UInt64, true),
+        Field::new("col_1", DataType::Utf8, true),
+    ]));
+
+    let group_by = PhysicalGroupBy::new_single(vec![(
+        Arc::new(Column::new("col_0", 0)),
+        "col_0".to_string(),
+    )]);
+
+    let aggregate_expressions = vec![Arc::new(
+        AggregateExprBuilder::new(
+            array_agg_udaf(),
+            vec![col("col_1", &scan_schema).unwrap()],
+        )
+        .schema(Arc::clone(&scan_schema))
+        .alias("array_agg(col_1)")
+        .build()?,
+    )];
+
+    let record_batch_size = task_ctx.session_config().batch_size() as u64;
+
+
+    let schema = Arc::clone(&scan_schema);
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter((0..number_of_record_batches as u64).map(move |index| {
+                let string_array = if index == number_of_record_batches as u64 / 2 {
+                    // Simulate a large record batch in a middle of the stream
+                    Arc::new(StringArray::from_iter_values(
+                        (0..record_batch_size).map(|_| "b".repeat(24)),
+                    ))
+                } else {
+                    Arc::new(StringArray::from_iter_values(
+                        (0..record_batch_size).map(|_| "a".repeat(8)),
+                    ))
+                };
+
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        // Grouping key
+                        Arc::new(UInt64Array::from_iter_values(
+                            (index * record_batch_size)
+                                ..(index * record_batch_size) + record_batch_size,
+                        )),
+                        // Grouping value
+                        string_array,
+                    ],
+                )
+                .map_err(|err| err.into())
+            })),
+        ))));
+
+    let aggregate_exec = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        group_by.clone(),
+        aggregate_expressions.clone(),
+        vec![None; aggregate_expressions.len()],
+        plan,
+        Arc::clone(&scan_schema),
+    )?);
+    let aggregate_final = Arc::new(AggregateExec::try_new(
+        AggregateMode::Final,
+        group_by,
+        aggregate_expressions.clone(),
+        vec![None; aggregate_expressions.len()],
+        aggregate_exec,
+        Arc::clone(&scan_schema),
+    )?);
+
+    let task_ctx = Arc::new(task_ctx);
+
+    let mut result = aggregate_final.execute(0, task_ctx)?;
+
+    let mut number_of_groups = 0;
+
+    while let Some(batch) = result.next().await {
+        let batch = batch?;
+        number_of_groups += batch.num_rows();
+    }
+
+    assert_eq!(number_of_groups, number_of_record_batches * record_batch_size as usize);
+
+    assert_spill_count_metric(true, aggregate_final);
 
     Ok(())
 }
