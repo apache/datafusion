@@ -524,9 +524,9 @@ impl ExternalSorter {
     /// the result to spill files.
     async fn sort_and_spill_in_mem_batches(&mut self) -> Result<()> {
         if self.in_mem_batches.is_empty() {
-            // The spill code assumes that we have batches in memory. If we don't,
-            // we should exit early to not break that assumption.
-            return Ok(());
+            return internal_err!(
+                "in_mem_batches must not be empty when attempting to sort and spill"
+            );
         }
 
         // Release the memory reserved for merge back to the pool so
