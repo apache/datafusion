@@ -18,9 +18,11 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
-    compute::interleave,
+    array::Scalar,
+    compute::{and, interleave, FilterBuilder},
     row::{RowConverter, Rows, SortField},
 };
+use arrow_ord::cmp::lt;
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
@@ -29,8 +31,8 @@ use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::Result;
 use datafusion_common::{internal_datafusion_err, HashMap};
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
@@ -193,7 +195,7 @@ impl TopK {
         let baseline = self.metrics.baseline.clone();
         let _timer = baseline.elapsed_compute().timer();
 
-        let sort_keys: Vec<ArrayRef> = self
+        let mut sort_keys: Vec<ArrayRef> = self
             .expr
             .iter()
             .map(|expr| {
@@ -202,24 +204,93 @@ impl TopK {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        // selected indices
+        let mut selected_rows = None;
+
+        // If the heap doesn't have k elements yet, we can't create thresholds
+        match self.heap.max() {
+            Some(max_row) => {
+                // Get the batch that contains the max row
+                let batch_entry = match self.heap.store.get(max_row.batch_id) {
+                    Some(entry) => entry,
+                    None => return internal_err!("Invalid batch ID in TopKRow"),
+                };
+
+                // Extract threshold values for each sort expression
+                let mut scalar_values = Vec::with_capacity(self.expr.len());
+                for sort_expr in self.expr.iter() {
+                    // Extract the value for this column from the max row
+                    let expr = Arc::clone(&sort_expr.expr);
+                    let value =
+                        expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
+
+                    // Convert to scalar value - should be a single value since we're evaluating on a single row batch
+                    let scalar = Scalar::new(value.to_array(1)?);
+                    scalar_values.push(scalar);
+                }
+                // Create a filter for each sort key
+                let filter = sort_keys
+                    .iter()
+                    .zip(scalar_values.iter())
+                    .map(|(expr, scalar)| {
+                        let filter = lt(expr, scalar).expect("Should be valid filter");
+                        Ok(filter)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                // Combine the masks into a single filter
+                let filter = filter
+                    .iter()
+                    .fold(filter[0].clone(), |acc, filter| and(&acc, filter).unwrap());
+                let filter_predicate = FilterBuilder::new(&filter);
+                let filter_predicate = if sort_keys.len() > 1 {
+                    filter_predicate.optimize().build()
+                } else {
+                    filter_predicate.build()
+                };
+                selected_rows = Some(filter);
+
+                sort_keys = sort_keys
+                    .iter()
+                    .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
+                    .collect::<Result<Vec<_>>>()?;
+            }
+            None => {}
+        }
+
         // reuse existing `Rows` to avoid reallocations
         let rows = &mut self.scratch_rows;
         rows.clear();
         self.row_converter.append(rows, &sort_keys)?;
 
-        // TODO make this algorithmically better?:
-        // Idea: filter out rows >= self.heap.max() early (before passing to `RowConverter`)
-        //       this avoids some work and also might be better vectorizable.
         let mut batch_entry = self.heap.register_batch(batch.clone());
-        for (index, row) in rows.iter().enumerate() {
-            match self.heap.max() {
-                // heap has k items, and the new row is greater than the
-                // current max in the heap ==> it is not a new topk
-                Some(max_row) if row.as_ref() >= max_row.row() => {}
-                // don't yet have k items or new item is lower than the currently k low values
-                None | Some(_) => {
-                    self.heap.add(&mut batch_entry, row, index);
-                    self.metrics.row_replacements.add(1);
+
+        match selected_rows {
+            Some(filter) => {
+                for (index, row) in filter.values().set_indices().zip(rows.iter()) {
+                    match self.heap.max() {
+                        // heap has k items, and the new row is greater than the
+                        // current max in the heap ==> it is not a new topk
+                        Some(max_row) if row.as_ref() >= max_row.row() => {}
+                        // don't yet have k items or new item is lower than the currently k low values
+                        None | Some(_) => {
+                            self.heap.add(&mut batch_entry, row, index);
+                            self.metrics.row_replacements.add(1);
+                        }
+                    }
+                }
+            }
+            None => {
+                for (index, row) in rows.iter().enumerate() {
+                    match self.heap.max() {
+                        // heap has k items, and the new row is greater than the
+                        // current max in the heap ==> it is not a new topk
+                        Some(max_row) if row.as_ref() >= max_row.row() => {}
+                        // don't yet have k items or new item is lower than the currently k low values
+                        None | Some(_) => {
+                            self.heap.add(&mut batch_entry, row, index);
+                            self.metrics.row_replacements.add(1);
+                        }
+                    }
                 }
             }
         }
