@@ -20,10 +20,8 @@
 //! This parser implements DataFusion specific statements such as
 //! `CREATE EXTERNAL TABLE`
 
-use std::collections::VecDeque;
-use std::fmt;
 use datafusion_common::DataFusionError;
-use datafusion_common::{Diagnostic, Span, sql_err};
+use datafusion_common::{sql_err, Diagnostic, Span};
 use sqlparser::ast::{ExprWithAlias, OrderByOptions};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
@@ -35,6 +33,8 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer, Word},
 };
+use std::collections::VecDeque;
+use std::fmt;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -269,9 +269,7 @@ impl fmt::Display for Statement {
 
 fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), DataFusionError> {
     if field.is_some() {
-        return parser_err!(format!(
-            "{name} specified more than once",
-        ))?;
+        return parser_err!(format!("{name} specified more than once",))?;
     }
     Ok(())
 }
@@ -360,8 +358,9 @@ impl<'a> DFParserBuilder<'a> {
     pub fn build(self) -> Result<DFParser<'a>, DataFusionError> {
         let mut tokenizer = Tokenizer::new(self.dialect, self.sql);
         // Convert TokenizerError -> ParserError
-        let tokens = tokenizer.tokenize_with_location()
-        .map_err(|e| ParserError::TokenizerError(e.to_string()))?; 
+        let tokens = tokenizer
+            .tokenize_with_location()
+            .map_err(|e| ParserError::TokenizerError(e.to_string()))?;
 
         Ok(DFParser {
             parser: Parser::new(self.dialect)
@@ -443,15 +442,14 @@ impl<'a> DFParser<'a> {
         found: TokenWithSpan,
     ) -> Result<T, DataFusionError> {
         let sql_parser_span = found.span;
-        sql_err!(
-            parser_err!(format!("Expected {expected}, found: {found}"))?
+        sql_err!(parser_err!(format!("Expected {expected}, found: {found}"))?).map_err(
+            |e| {
+                let span = Span::try_from_sqlparser_span(sql_parser_span);
+                let mut diagnostic = Diagnostic::new_error(e.to_string(), span);
+                diagnostic.add_note(format!("Expected {expected}, found: {found}"), span);
+                e.with_diagnostic(diagnostic)
+            },
         )
-        .map_err(|e| {
-            let span = Span::try_from_sqlparser_span(sql_parser_span);
-            let mut diagnostic= Diagnostic::new_error(e.to_string(), span);
-            diagnostic.add_note(format!("Expected {expected}, found: {found}"), span); 
-            e.with_diagnostic(diagnostic)
-        })
     }
 
     /// Parse a new expression
@@ -573,17 +571,13 @@ impl<'a> DFParser<'a> {
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
-                    return parser_err!(format!(
-                        "Unexpected token {token}"
-                    ))?;
+                    return parser_err!(format!("Unexpected token {token}"))?;
                 }
             }
         }
 
         let Some(target) = builder.target else {
-            return parser_err!(
-                format!("Missing TO clause in COPY statement")
-            )?;
+            return parser_err!(format!("Missing TO clause in COPY statement"))?;
         };
 
         Ok(Statement::CopyTo(CopyToStatement {
@@ -671,8 +665,7 @@ impl<'a> DFParser<'a> {
             Token::Word(w) => Ok(w.value),
             Token::SingleQuotedString(w) => Ok(w),
             Token::DoubleQuotedString(w) => Ok(w),
-            _ => self
-                .expected("an explain format such as TREE", next_token),
+            _ => self.expected("an explain format such as TREE", next_token),
         }?;
         Ok(Some(format))
     }
