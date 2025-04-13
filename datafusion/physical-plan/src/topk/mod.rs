@@ -241,6 +241,10 @@ impl TopK {
                 let filter = filter
                     .iter()
                     .fold(filter[0].clone(), |acc, filter| and(&acc, filter).unwrap());
+                if filter.true_count() == 0 {
+                    // No rows are less than the max row, so we can skip this batch
+                    return Ok(());
+                }
                 let filter_predicate = FilterBuilder::new(&filter);
                 let filter_predicate = if sort_keys.len() > 1 {
                     filter_predicate.optimize().build()
@@ -264,6 +268,8 @@ impl TopK {
 
         let mut batch_entry = self.heap.register_batch(batch.clone());
 
+        let mut replacements = 0;
+
         match selected_rows {
             Some(filter) => {
                 for (index, row) in filter.values().set_indices().zip(rows.iter()) {
@@ -274,7 +280,7 @@ impl TopK {
                         // don't yet have k items or new item is lower than the currently k low values
                         None | Some(_) => {
                             self.heap.add(&mut batch_entry, row, index);
-                            self.metrics.row_replacements.add(1);
+                            replacements += 1;
                         }
                     }
                 }
@@ -288,12 +294,14 @@ impl TopK {
                         // don't yet have k items or new item is lower than the currently k low values
                         None | Some(_) => {
                             self.heap.add(&mut batch_entry, row, index);
-                            self.metrics.row_replacements.add(1);
+                            replacements += 1;
                         }
                     }
                 }
             }
         }
+
+        self.metrics.row_replacements.add(replacements);
         self.heap.insert_batch_entry(batch_entry);
 
         // conserve memory
@@ -306,7 +314,6 @@ impl TopK {
         // subsequent batches are guaranteed to be greater (by byte order, after row conversion) than the top K,
         // which means the top K won't change and the computation can be finished early.
         self.attempt_early_completion(&batch)?;
-
         Ok(())
     }
 
