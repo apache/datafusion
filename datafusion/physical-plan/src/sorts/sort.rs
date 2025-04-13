@@ -760,7 +760,9 @@ impl ExternalSorter {
         if self.runtime.disk_manager.tmp_files_enabled() {
             let size = self.sort_spill_reservation_bytes;
             if self.merge_reservation.size() != size {
-                self.merge_reservation.try_resize(size)?;
+                self.merge_reservation
+                    .try_resize(size)
+                    .map_err(Self::err_with_oom_context)?;
             }
         }
 
