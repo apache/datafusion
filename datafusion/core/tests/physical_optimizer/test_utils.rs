@@ -261,10 +261,6 @@ pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> 
     Arc::new(UnionExec::new(input))
 }
 
-pub fn limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    global_limit_exec(local_limit_exec(input))
-}
-
 pub fn local_limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     Arc::new(LocalLimitExec::new(input, 100))
 }

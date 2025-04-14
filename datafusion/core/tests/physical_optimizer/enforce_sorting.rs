@@ -21,9 +21,9 @@ use crate::physical_optimizer::test_utils::{
     aggregate_exec, bounded_window_exec, bounded_window_exec_with_partition,
     check_integrity, coalesce_batches_exec, coalesce_partitions_exec, create_test_schema,
     create_test_schema2, create_test_schema3, filter_exec, global_limit_exec,
-    hash_join_exec, limit_exec, local_limit_exec, memory_exec, parquet_exec,
-    projection_exec, repartition_exec, sort_exec, sort_exec_with_fetch, sort_expr,
-    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec,
+    hash_join_exec, local_limit_exec, memory_exec, parquet_exec, projection_exec,
+    repartition_exec, sort_exec, sort_exec_with_fetch, sort_expr, sort_expr_options,
+    sort_merge_join_exec, sort_preserving_merge_exec,
     sort_preserving_merge_exec_with_fetch, spr_repartition_exec, stream_exec_ordered,
     union_exec, RequirementsTestExec,
 };
@@ -232,7 +232,7 @@ async fn test_do_not_remove_sort_with_limit() -> Result<()> {
     ]
     .into();
     let sort = sort_exec(ordering.clone(), source1);
-    let limit = limit_exec(sort);
+    let limit = local_limit_exec(sort);
     let parquet_sort_exprs = [sort_expr("nullable_col", &schema)];
     let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs);
     let union = union_exec(vec![source2, limit]);
@@ -244,10 +244,9 @@ async fn test_do_not_remove_sort_with_limit() -> Result<()> {
         "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
         "    UnionExec",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
-        "      GlobalLimitExec: skip=0, fetch=100",
-        "        LocalLimitExec: fetch=100",
-        "          SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+        "      LocalLimitExec: fetch=100",
+        "        SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
     ];
     // We should keep the bottom `SortExec`.
     let expected_optimized = [
@@ -256,10 +255,9 @@ async fn test_do_not_remove_sort_with_limit() -> Result<()> {
         "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
         "      UnionExec",
         "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC], file_type=parquet",
-        "        GlobalLimitExec: skip=0, fetch=100",
-        "          LocalLimitExec: fetch=100",
-        "            SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "              DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
+        "        LocalLimitExec: fetch=100",
+        "          SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
+        "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
