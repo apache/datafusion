@@ -109,8 +109,7 @@ impl EmitTo {
 pub trait GroupsAccumulator: Send {
     /// Called with metadata about the groups that will be processed.
     ///
-    /// This will be called before there are any groups. it can be called either after [`Self::state`], [`Self::evaluate`] consumed all the data or
-    /// right after initialization.
+    /// This will be called either right after initialization or after [`Self::state`], [`Self::evaluate`] consumed all the groups.
     ///
     /// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
     fn register_metadata(&mut self, _metadata: &GroupsAccumulatorMetadata) -> Result<()> {
