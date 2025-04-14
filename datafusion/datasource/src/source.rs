@@ -29,6 +29,7 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 
+use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -52,6 +53,7 @@ pub trait DataSource: Send + Sync + Debug {
         context: Arc<TaskContext>,
     ) -> datafusion_common::Result<SendableRecordBatchStream>;
     fn as_any(&self) -> &dyn Any;
+    /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 
     /// Return a copy of this DataSource with a new partitioning scheme
@@ -103,7 +105,7 @@ impl DisplayAs for DataSourceExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "DataSourceExec: ")?;
             }
-            DisplayFormatType::TreeRender => write!(f, "")?,
+            DisplayFormatType::TreeRender => {}
         }
         self.data_source.fmt_as(t, f)
     }
@@ -193,6 +195,10 @@ impl ExecutionPlan for DataSourceExec {
 }
 
 impl DataSourceExec {
+    pub fn from_data_source(data_source: impl DataSource + 'static) -> Arc<Self> {
+        Arc::new(Self::new(Arc::new(data_source)))
+    }
+
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
         let cache = Self::compute_properties(Arc::clone(&data_source));
         Self { data_source, cache }
@@ -228,5 +234,23 @@ impl DataSourceExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+    }
+
+    /// Downcast the `DataSourceExec`'s `data_source` to a specific file source
+    ///
+    /// Returns `None` if
+    /// 1. the datasource is not scanning files (`FileScanConfig`)
+    /// 2. The [`FileScanConfig::file_source`] is not of type `T`
+    pub fn downcast_to_file_source<T: 'static>(&self) -> Option<(&FileScanConfig, &T)> {
+        self.data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .and_then(|file_scan_conf| {
+                file_scan_conf
+                    .file_source()
+                    .as_any()
+                    .downcast_ref::<T>()
+                    .map(|source| (file_scan_conf, source))
+            })
     }
 }

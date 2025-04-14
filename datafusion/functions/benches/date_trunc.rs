@@ -25,7 +25,7 @@ use datafusion_common::ScalarValue;
 use rand::rngs::ThreadRng;
 use rand::Rng;
 
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_trunc;
 
 fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
@@ -46,11 +46,18 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("minute".to_string())));
         let timestamps = ColumnarValue::Array(timestamps_array);
         let udf = date_trunc();
-
+        let args = vec![precision, timestamps];
+        let return_type = &udf
+            .return_type(&args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>())
+            .unwrap();
         b.iter(|| {
             black_box(
-                udf.invoke_batch(&[precision.clone(), timestamps.clone()], batch_len)
-                    .expect("date_trunc should work on valid values"),
+                udf.invoke_with_args(ScalarFunctionArgs {
+                    args: args.clone(),
+                    number_rows: batch_len,
+                    return_type,
+                })
+                .expect("date_trunc should work on valid values"),
             )
         })
     });

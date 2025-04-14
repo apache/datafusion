@@ -33,7 +33,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::CardinalityEffect;
-use crate::joins::utils::{ColumnIndex, JoinFilter};
+use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -48,6 +48,7 @@ use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::PhysicalExprRef;
 
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use itertools::Itertools;
 use log::trace;
@@ -168,8 +169,16 @@ impl DisplayAs for ProjectionExec {
                 write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                for (i, (e, alias)) in self.expr().iter().enumerate() {
+                    let expr_sql = fmt_sql(e.as_ref());
+                    if &e.to_string() == alias {
+                        writeln!(f, "expr{i}={expr_sql}")?;
+                    } else {
+                        writeln!(f, "{alias}={expr_sql}")?;
+                    }
+                }
+
+                Ok(())
             }
         }
     }
@@ -436,11 +445,6 @@ pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
         Ok(Some(new_projection))
     }
 }
-
-/// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
-/// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
 
 pub struct JoinData {
     pub projected_left_child: ProjectionExec,

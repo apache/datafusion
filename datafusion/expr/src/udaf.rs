@@ -31,7 +31,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
     schema_name_from_exprs, schema_name_from_exprs_comma_separated_without_space,
-    schema_name_from_sorts, AggregateFunction, AggregateFunctionParams,
+    schema_name_from_sorts, AggregateFunction, AggregateFunctionParams, ExprListDisplay,
     WindowFunctionParams,
 };
 use crate::function::{
@@ -173,6 +173,13 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::schema_name`] for more details.
     pub fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
         self.inner.schema_name(params)
+    }
+
+    /// Returns a human readable expression.
+    ///
+    /// See [`Expr::human_display`] for details.
+    pub fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.human_display(params)
     }
 
     pub fn window_function_schema_name(
@@ -432,6 +439,45 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             self.name(),
             if *distinct { "DISTINCT " } else { "" },
             schema_name_from_exprs_comma_separated_without_space(args)?
+        ))?;
+
+        if let Some(null_treatment) = null_treatment {
+            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+        }
+
+        if let Some(filter) = filter {
+            schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
+        };
+
+        if let Some(order_by) = order_by {
+            schema_name.write_fmt(format_args!(
+                " ORDER BY [{}]",
+                schema_name_from_sorts(order_by)?
+            ))?;
+        };
+
+        Ok(schema_name)
+    }
+
+    /// Returns a human readable expression.
+    ///
+    /// See [`Expr::human_display`] for details.
+    fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
+        let AggregateFunctionParams {
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        } = params;
+
+        let mut schema_name = String::new();
+
+        schema_name.write_fmt(format_args!(
+            "{}({}{})",
+            self.name(),
+            if *distinct { "DISTINCT " } else { "" },
+            ExprListDisplay::comma_separated(args.as_slice())
         ))?;
 
         if let Some(null_treatment) = null_treatment {

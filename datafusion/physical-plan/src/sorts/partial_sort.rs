@@ -226,10 +226,15 @@ impl DisplayAs for PartialSortExec {
                     None => write!(f, "PartialSortExec: expr=[{}], common_prefix_length=[{common_prefix_length}]", self.expr),
                 }
             }
-            DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
-            }
+            DisplayFormatType::TreeRender => match self.fetch {
+                Some(fetch) => {
+                    writeln!(f, "{}", self.expr)?;
+                    writeln!(f, "limit={fetch}")
+                }
+                None => {
+                    writeln!(f, "{}", self.expr)
+                }
+            },
         }
     }
 }
@@ -462,10 +467,11 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
+    use datafusion_common::test_util::batches_to_string;
     use futures::FutureExt;
+    use insta::allow_duplicates;
+    use insta::assert_snapshot;
     use itertools::Itertools;
-
-    use datafusion_common::assert_batches_eq;
 
     use crate::collect;
     use crate::expressions::col;
@@ -517,20 +523,21 @@ mod tests {
 
         let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
 
-        let expected_after_sort = [
-            "+---+---+---+",
-            "| a | b | c |",
-            "+---+---+---+",
-            "| 0 | 1 | 0 |",
-            "| 0 | 1 | 1 |",
-            "| 0 | 2 | 5 |",
-            "| 1 | 2 | 4 |",
-            "| 1 | 3 | 2 |",
-            "| 1 | 3 | 3 |",
-            "+---+---+---+",
-        ];
         assert_eq!(2, result.len());
-        assert_batches_eq!(expected_after_sort, &result);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&result), @r#"
+                +---+---+---+
+                | a | b | c |
+                +---+---+---+
+                | 0 | 1 | 0 |
+                | 0 | 1 | 1 |
+                | 0 | 2 | 5 |
+                | 1 | 2 | 4 |
+                | 1 | 3 | 2 |
+                | 1 | 3 | 3 |
+                +---+---+---+
+                "#);
+        }
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
             0,
@@ -583,18 +590,19 @@ mod tests {
 
             let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
 
-            let expected_after_sort = [
-                "+---+---+---+",
-                "| a | b | c |",
-                "+---+---+---+",
-                "| 0 | 1 | 4 |",
-                "| 0 | 2 | 3 |",
-                "| 1 | 2 | 2 |",
-                "| 1 | 3 | 0 |",
-                "+---+---+---+",
-            ];
             assert_eq!(2, result.len());
-            assert_batches_eq!(expected_after_sort, &result);
+            allow_duplicates! {
+                assert_snapshot!(batches_to_string(&result), @r#"
+                    +---+---+---+
+                    | a | b | c |
+                    +---+---+---+
+                    | 0 | 1 | 4 |
+                    | 0 | 2 | 3 |
+                    | 1 | 2 | 2 |
+                    | 1 | 3 | 0 |
+                    +---+---+---+
+                    "#);
+            }
             assert_eq!(
                 task_ctx.runtime_env().memory_pool.reserved(),
                 0,
@@ -658,21 +666,22 @@ mod tests {
                 0,
                 "The sort should have returned all memory used back to the memory manager"
             );
-            let expected = [
-                "+---+---+---+",
-                "| a | b | c |",
-                "+---+---+---+",
-                "| 0 | 1 | 6 |",
-                "| 0 | 1 | 7 |",
-                "| 0 | 3 | 4 |",
-                "| 0 | 3 | 5 |",
-                "| 1 | 2 | 0 |",
-                "| 1 | 2 | 1 |",
-                "| 1 | 4 | 2 |",
-                "| 1 | 4 | 3 |",
-                "+---+---+---+",
-            ];
-            assert_batches_eq!(expected, &result);
+            allow_duplicates! {
+                assert_snapshot!(batches_to_string(&result), @r#"
+                    +---+---+---+
+                    | a | b | c |
+                    +---+---+---+
+                    | 0 | 1 | 6 |
+                    | 0 | 1 | 7 |
+                    | 0 | 3 | 4 |
+                    | 0 | 3 | 5 |
+                    | 1 | 2 | 0 |
+                    | 1 | 2 | 1 |
+                    | 1 | 4 | 2 |
+                    | 1 | 4 | 3 |
+                    +---+---+---+
+                    "#);
+            }
         }
         Ok(())
     }
@@ -995,21 +1004,6 @@ mod tests {
             2,
         ));
 
-        let expected = [
-            "+-----+------+-------+",
-            "| a   | b    | c     |",
-            "+-----+------+-------+",
-            "| 1.0 | 20.0 | 20.0  |",
-            "| 1.0 | 20.0 | 10.0  |",
-            "| 1.0 | 40.0 | 10.0  |",
-            "| 2.0 | 40.0 | 100.0 |",
-            "| 2.0 | NaN  | NaN   |",
-            "| 3.0 |      |       |",
-            "| 3.0 |      | 100.0 |",
-            "| 3.0 | NaN  | NaN   |",
-            "+-----+------+-------+",
-        ];
-
         assert_eq!(
             DataType::Float32,
             *partial_sort_exec.schema().field(0).data_type()
@@ -1028,7 +1022,20 @@ mod tests {
             task_ctx,
         )
         .await?;
-        assert_batches_eq!(expected, &result);
+        assert_snapshot!(batches_to_string(&result), @r#"
+            +-----+------+-------+
+            | a   | b    | c     |
+            +-----+------+-------+
+            | 1.0 | 20.0 | 20.0  |
+            | 1.0 | 20.0 | 10.0  |
+            | 1.0 | 40.0 | 10.0  |
+            | 2.0 | 40.0 | 100.0 |
+            | 2.0 | NaN  | NaN   |
+            | 3.0 |      |       |
+            | 3.0 |      | 100.0 |
+            | 3.0 | NaN  | NaN   |
+            +-----+------+-------+
+            "#);
         assert_eq!(result.len(), 2);
         let metrics = partial_sort_exec.metrics().unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);

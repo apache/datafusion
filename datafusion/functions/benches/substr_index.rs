@@ -20,12 +20,13 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, StringArray};
+use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::distributions::{Alphanumeric, Uniform};
 use rand::prelude::Distribution;
 use rand::Rng;
 
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::substr_index;
 
 struct Filter<Dist, Test> {
@@ -89,12 +90,15 @@ fn criterion_benchmark(c: &mut Criterion) {
         let delimiters = ColumnarValue::Array(Arc::new(delimiters) as ArrayRef);
         let counts = ColumnarValue::Array(Arc::new(counts) as ArrayRef);
 
-        let args = [strings, delimiters, counts];
+        let args = vec![strings, delimiters, counts];
         b.iter(|| {
-            #[allow(deprecated)] // TODO: invoke_with_args
             black_box(
                 substr_index()
-                    .invoke_batch(&args, batch_len)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: batch_len,
+                        return_type: &DataType::Utf8,
+                    })
                     .expect("substr_index should work on valid values"),
             )
         })

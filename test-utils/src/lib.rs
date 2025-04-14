@@ -67,10 +67,9 @@ pub fn add_empty_batches(
         .flat_map(|batch| {
             // insert 0, or 1 empty batches before and after the current batch
             let empty_batch = RecordBatch::new_empty(schema.clone());
-            std::iter::repeat(empty_batch.clone())
-                .take(rng.gen_range(0..2))
+            std::iter::repeat_n(empty_batch.clone(), rng.gen_range(0..2))
                 .chain(std::iter::once(batch))
-                .chain(std::iter::repeat(empty_batch).take(rng.gen_range(0..2)))
+                .chain(std::iter::repeat_n(empty_batch, rng.gen_range(0..2)))
         })
         .collect()
 }

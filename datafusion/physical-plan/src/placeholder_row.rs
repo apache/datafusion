@@ -113,10 +113,7 @@ impl DisplayAs for PlaceholderRowExec {
                 write!(f, "PlaceholderRowExec")
             }
 
-            DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
-            }
+            DisplayFormatType::TreeRender => Ok(()),
         }
     }
 }

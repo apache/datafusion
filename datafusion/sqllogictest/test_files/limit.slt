@@ -654,7 +654,7 @@ explain select * FROM (
 ----
 logical_plan
 01)Limit: skip=4, fetch=10
-02)--Sort: ordered_table.c DESC NULLS FIRST, fetch=14
+02)--Sort: c DESC NULLS FIRST, fetch=14
 03)----Union
 04)------Projection: CAST(ordered_table.c AS Int64) AS c
 05)--------TableScan: ordered_table projection=[c]

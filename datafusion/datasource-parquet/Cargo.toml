@@ -45,6 +45,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-session = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
@@ -52,7 +53,7 @@ object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true }
 rand = { workspace = true }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
