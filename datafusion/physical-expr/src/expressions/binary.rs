@@ -832,7 +832,7 @@ enum ShortCircuitStrategy<'a> {
 /// Based on the results calculated from the left side of the short-circuit operation,
 /// if the proportion of `true` is less than 0.2 and the current operation is an `and`,
 /// the `RecordBatch` will be filtered in advance.
-const PRE_SELECTIO_THRESHOLD: f32 = 0.2;
+const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 
 /// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
 ///
@@ -899,7 +899,7 @@ fn check_short_circuit<'a>(
                     }
 
                     // determine if we can pre-selection
-                    if true_count as f32 / len as f32 <= PRE_SELECTIO_THRESHOLD {
+                    if true_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
                         return ShortCircuitStrategy::PreSelection(bool_array);
                     }
                 } else {
@@ -937,33 +937,67 @@ fn check_short_circuit<'a>(
     ShortCircuitStrategy::None
 }
 
-/// FIXME: Perhaps it would be better to modify `left_result` directly without creating a copy?
+/// Creates a new boolean array based on the evaluation of the right expression,
+/// but only for positions where the left_result is true.
+///
+/// This function is used for short-circuit evaluation optimization of logical AND operations:
+/// - When left_result has few true values, we only evaluate the right expression for those positions
+/// - Values are copied from right_array where left_result is true
+/// - All other positions are filled with false values
+///
+/// # Parameters
+/// - `left_result` Boolean array with selection mask (typically from left side of AND)
+/// - `right_result` Result of evaluating right side of expression (only for selected positions)
+///
+/// # Returns
+/// A combined ColumnarValue with values from right_result where left_result is true
+///
+/// # Example
+///  Initial Data: [1, 2, 3, 4, 5]
+///  Left Evaluation
+///     (Condition: Equal to 2 or 3)
+///          ↓
+///  Filtered Data: [2, 3]
+///    Left Bitmap: [0, 1, 1, 0, 0]
+///          ↓
+///   Right Evaluation
+///     (Condition: Even numbers)
+///          ↓
+///  Right Data: [2]
+///    Right Bitmap: [1, 0]
+///          ↓
+///   Combine Results
+///  Final Bitmap: [0, 1, 0, 0, 0]
+///
+/// # Note
+/// Perhaps it would be better to modify `left_result` directly without creating a copy?
 /// In practice, `left_result` should have only one owner, so making changes should be safe.
 /// However, this is difficult to achieve under the immutable constraints of [`Arc`] and [`BooleanArray`].
 fn pre_selection_scatter(
     left_result: &BooleanArray,
     right_result: ColumnarValue,
 ) -> Result<ColumnarValue> {
-    let right_array = if let ColumnarValue::Array(array) = right_result {
-        array
-    } else {
-        return Ok(right_result);
+    let right_boolean_array = match &right_result {
+        ColumnarValue::Array(array) => array.as_boolean(),
+        ColumnarValue::Scalar(_) => return Ok(right_result),
     };
-    let right_boolean_array = right_array.as_boolean();
+
     let result_len = left_result.len();
 
-    // keep track of how much is filled
-    let mut filled = 0;
+    let mut result_array_builder = BooleanArray::builder(result_len);
+
     // keep track of current position we have in right boolean array
     let mut right_array_pos = 0;
 
-    let mut result_array_builder = BooleanArray::builder(result_len);
+    // keep track of how much is filled
+    let mut last_end = 0;
     SlicesIterator::new(left_result).for_each(|(start, end)| {
         // the gap needs to be filled with false
-        if start > filled {
-            (filled..start).for_each(|_| result_array_builder.append_value(false));
+        if start > last_end {
+            result_array_builder.append_n(start - last_end, false);
         }
-        // fill with right_result values
+
+        // copy values from right array for this slice
         let len = end - start;
         right_boolean_array
             .slice(right_array_pos, len)
@@ -971,11 +1005,12 @@ fn pre_selection_scatter(
             .for_each(|v| result_array_builder.append_option(v));
 
         right_array_pos += len;
-        filled = end;
+        last_end = end;
     });
-    // the remaining part is falsy
-    if filled < result_len {
-        (filled..result_len).for_each(|_| result_array_builder.append_value(false));
+
+    // Fill any remaining positions with false
+    if last_end < result_len {
+        result_array_builder.append_n(result_len - last_end, false);
     }
     let boolean_result = result_array_builder.finish();
 
