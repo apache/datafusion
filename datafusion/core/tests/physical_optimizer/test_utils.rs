@@ -311,6 +311,13 @@ pub fn sort_exec(
     sort_exec_with_fetch(ordering, None, input)
 }
 
+pub fn sort_exec_with_preserve_partitioning(
+    ordering: LexOrdering,
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(SortExec::new(ordering, input).with_preserve_partitioning(true))
+}
+
 pub fn sort_exec_with_fetch(
     ordering: LexOrdering,
     fetch: Option<usize>,

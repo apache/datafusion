@@ -17,28 +17,29 @@
 
 use std::sync::Arc;
 
+use crate::physical_optimizer::test_utils::{
+    coalesce_partitions_exec, sort_exec, sort_preserving_merge_exec,
+};
+
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::expressions::{col, lit};
+use datafusion_physical_expr::expressions::{col, lit, BinaryExpr};
 use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion_physical_plan::{get_plan_string, ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
 fn create_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -74,22 +75,6 @@ fn local_limit_exec(
     Arc::new(LocalLimitExec::new(input, fetch))
 }
 
-fn sort_exec(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-    input: Arc<dyn ExecutionPlan>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortExec::new(sort_exprs, input))
-}
-
-fn sort_preserving_merge_exec(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-    input: Arc<dyn ExecutionPlan>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
-}
-
 fn projection_exec(
     schema: SchemaRef,
     input: Arc<dyn ExecutionPlan>,
@@ -120,12 +105,6 @@ fn filter_exec(
 
 fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     Arc::new(CoalesceBatchesExec::new(input, 8192))
-}
-
-fn coalesce_partitions_exec(
-    local_limit: Arc<dyn ExecutionPlan>,
-) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalescePartitionsExec::new(local_limit))
 }
 
 fn repartition_exec(
@@ -314,14 +293,13 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
     let coalesce_batches = coalesce_batches_exec(streaming_table);
     let projection = projection_exec(Arc::clone(&schema), coalesce_batches)?;
     let repartition = repartition_exec(projection)?;
-    let sort = sort_exec(
-        vec![PhysicalSortExpr {
-            expr: col("c1", &schema)?,
-            options: SortOptions::default(),
-        }],
-        repartition,
-    );
-    let spm = sort_preserving_merge_exec(sort.output_ordering().unwrap().to_vec(), sort);
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("c1", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let sort = sort_exec(ordering.clone(), repartition);
+    let spm = sort_preserving_merge_exec(ordering, sort);
     let global_limit = global_limit_exec(spm, 0, Some(5));
 
     let initial = get_plan_string(&global_limit);

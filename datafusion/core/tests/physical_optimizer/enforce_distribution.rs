@@ -19,10 +19,10 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::physical_optimizer::test_utils::parquet_exec_with_sort;
 use crate::physical_optimizer::test_utils::{
-    check_integrity, coalesce_partitions_exec, repartition_exec, schema,
-    sort_merge_join_exec, sort_preserving_merge_exec,
+    check_integrity, coalesce_partitions_exec, parquet_exec_with_sort, repartition_exec,
+    schema, sort_exec, sort_exec_with_preserve_partitioning, sort_merge_join_exec,
+    sort_preserving_merge_exec,
 };
 
 use arrow::compute::SortOptions;
@@ -57,7 +57,6 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
@@ -312,16 +311,6 @@ fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
         Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
     ));
     Arc::new(FilterExec::try_new(predicate, input).unwrap())
-}
-
-fn sort_exec(
-    sort_exprs: LexOrdering,
-    input: Arc<dyn ExecutionPlan>,
-    preserve_partitioning: bool,
-) -> Arc<dyn ExecutionPlan> {
-    let new_sort = SortExec::new(sort_exprs, input)
-        .with_preserve_partitioning(preserve_partitioning);
-    Arc::new(new_sort)
 }
 
 fn limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
@@ -1936,7 +1925,7 @@ fn repartition_sorted_limit() -> Result<()> {
         options: SortOptions::default(),
     }]
     .into();
-    let plan = limit_exec(sort_exec(sort_key, parquet_exec(), false));
+    let plan = limit_exec(sort_exec(sort_key, parquet_exec()));
 
     let expected = &[
         "GlobalLimitExec: skip=0, fetch=100",
@@ -1962,7 +1951,7 @@ fn repartition_sorted_limit_with_filter() -> Result<()> {
     }]
     .into();
     let plan = sort_required_exec_with_req(
-        filter_exec(sort_exec(sort_key.clone(), parquet_exec(), false)),
+        filter_exec(sort_exec(sort_key.clone(), parquet_exec())),
         sort_key,
     );
 
@@ -2307,10 +2296,9 @@ fn repartition_transitively_past_sort_with_projection() -> Result<()> {
     ];
     let plan = sort_preserving_merge_exec(
         sort_key.clone(),
-        sort_exec(
+        sort_exec_with_preserve_partitioning(
             sort_key,
             projection_exec_with_alias(parquet_exec(), alias),
-            true,
         ),
     );
 
@@ -2336,7 +2324,7 @@ fn repartition_transitively_past_sort_with_filter() -> Result<()> {
         options: SortOptions::default(),
     }]
     .into();
-    let plan = sort_exec(sort_key, filter_exec(parquet_exec()), false);
+    let plan = sort_exec(sort_key, filter_exec(parquet_exec()));
 
     // Test: run EnforceDistribution, then EnforceSort.
     let expected = &[
@@ -2383,7 +2371,6 @@ fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()>
                 ("c".to_string(), "c".to_string()),
             ],
         ),
-        false,
     );
 
     // Test: run EnforceDistribution, then EnforceSort.
@@ -2650,8 +2637,8 @@ fn parallelization_sorted_limit() -> Result<()> {
         options: SortOptions::default(),
     }]
     .into();
-    let plan_parquet = limit_exec(sort_exec(sort_key.clone(), parquet_exec(), false));
-    let plan_csv = limit_exec(sort_exec(sort_key, csv_exec(), false));
+    let plan_parquet = limit_exec(sort_exec(sort_key.clone(), parquet_exec()));
+    let plan_csv = limit_exec(sort_exec(sort_key, csv_exec()));
 
     let test_config = TestConfig::default();
 
@@ -2694,12 +2681,9 @@ fn parallelization_limit_with_filter() -> Result<()> {
         options: SortOptions::default(),
     }]
     .into();
-    let plan_parquet = limit_exec(filter_exec(sort_exec(
-        sort_key.clone(),
-        parquet_exec(),
-        false,
-    )));
-    let plan_csv = limit_exec(filter_exec(sort_exec(sort_key, csv_exec(), false)));
+    let plan_parquet =
+        limit_exec(filter_exec(sort_exec(sort_key.clone(), parquet_exec())));
+    let plan_csv = limit_exec(filter_exec(sort_exec(sort_key, csv_exec())));
 
     let test_config = TestConfig::default();
 

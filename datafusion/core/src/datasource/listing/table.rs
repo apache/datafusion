@@ -1244,10 +1244,10 @@ mod tests {
     use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
-    use crate::test::object_store::{
-        ensure_head_concurrency, make_test_store_and_state, register_test_store
-    };
     use crate::test::columns;
+    use crate::test::object_store::{
+        ensure_head_concurrency, make_test_store_and_state, register_test_store,
+    };
 
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
