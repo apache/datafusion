@@ -26,16 +26,18 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanFilterPushdownResult,
-    FilterPushdownResult, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExprRef};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::filter_pushdown::{
+    FilterDescription, FilterPushdownSupport,
+};
 
 /// Common behaviors in Data Sources for both from Files and Memory.
 ///
@@ -84,14 +86,12 @@ pub trait DataSource: Send + Sync + Debug {
     /// See [`ExecutionPlan::try_pushdown_filters`] for more details.
     fn try_pushdown_filters(
         &self,
-        _filters: &[PhysicalExprRef],
+        fd: FilterDescription,
         _config: &ConfigOptions,
-    ) -> Result<DataSourceFilterPushdownResult> {
-        Ok(DataSourceFilterPushdownResult::NotPushed)
+    ) -> Result<FilterPushdownSupport<Arc<dyn DataSource>>> {
+        Ok(FilterPushdownSupport::NotSupported(fd))
     }
 }
-
-pub type DataSourceFilterPushdownResult = FilterPushdownResult<Arc<dyn DataSource>>;
 
 /// [`ExecutionPlan`] handles different file formats like JSON, CSV, AVRO, ARROW, PARQUET
 ///
@@ -207,23 +207,25 @@ impl ExecutionPlan for DataSourceExec {
 
     fn try_pushdown_filters(
         &self,
-        _plan: &Arc<dyn ExecutionPlan>,
-        parent_filters: &[PhysicalExprRef],
+        fd: FilterDescription,
         config: &ConfigOptions,
-    ) -> Result<ExecutionPlanFilterPushdownResult> {
-        match self
-            .data_source
-            .try_pushdown_filters(parent_filters, config)?
-        {
-            DataSourceFilterPushdownResult::NotPushed => {
-                Ok(ExecutionPlanFilterPushdownResult::NotPushed)
-            }
-            DataSourceFilterPushdownResult::Pushed { inner, support } => {
-                let new_self = Arc::new(DataSourceExec::new(inner));
-                Ok(ExecutionPlanFilterPushdownResult::Pushed {
-                    inner: new_self,
-                    support,
+    ) -> Result<FilterPushdownSupport<Arc<dyn ExecutionPlan>>> {
+        let mut exec = self.clone();
+        match self.data_source.try_pushdown_filters(fd, config)? {
+            FilterPushdownSupport::Supported {
+                child_filters,
+                remaining_filters,
+                op,
+            } => {
+                exec.data_source = op;
+                Ok(FilterPushdownSupport::Supported {
+                    child_filters,
+                    remaining_filters,
+                    op: Arc::new(exec),
                 })
+            }
+            FilterPushdownSupport::NotSupported(fd) => {
+                Ok(FilterPushdownSupport::NotSupported(fd))
             }
         }
     }

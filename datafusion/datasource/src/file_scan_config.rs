@@ -23,6 +23,16 @@ use std::{
     fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
 };
 
+use crate::file_groups::FileGroup;
+use crate::{
+    display::FileGroupsDisplay,
+    file::{FileSource, FileSourceFilterPushdownResult},
+    file_compression_type::FileCompressionType,
+    file_stream::FileStream,
+    source::{DataSource, DataSourceExec},
+    statistics::MinMaxStatistics,
+    PartitionedFile,
+};
 use arrow::{
     array::{
         ArrayData, ArrayRef, BufferBuilder, DictionaryArray, RecordBatch,
@@ -42,6 +52,9 @@ use datafusion_physical_expr::{
     expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
     PhysicalExprRef, PhysicalSortExpr,
 };
+use datafusion_physical_plan::filter_pushdown::{
+    FilterDescription, FilterPushdownSupport,
+};
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     metrics::ExecutionPlanMetricsSet,
@@ -49,17 +62,6 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan,
 };
 use log::{debug, warn};
-
-use crate::{
-    display::FileGroupsDisplay,
-    file::{FileSource, FileSourceFilterPushdownResult},
-    file_compression_type::FileCompressionType,
-    file_stream::FileStream,
-    source::{DataSource, DataSourceExec},
-    statistics::MinMaxStatistics,
-    PartitionedFile,
-};
-use crate::{file_groups::FileGroup, source::DataSourceFilterPushdownResult};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -589,23 +591,28 @@ impl DataSource for FileScanConfig {
 
     fn try_pushdown_filters(
         &self,
-        filters: &[PhysicalExprRef],
+        fd: FilterDescription,
         config: &ConfigOptions,
-    ) -> Result<DataSourceFilterPushdownResult> {
-        match self.file_source.try_pushdown_filters(filters, config)? {
-            FileSourceFilterPushdownResult::NotPushed => {
-                Ok(DataSourceFilterPushdownResult::NotPushed)
-            }
-            FileSourceFilterPushdownResult::Pushed { inner, support } => {
-                let new_self = Arc::new(
+    ) -> Result<FilterPushdownSupport<Arc<dyn DataSource>>> {
+        match self.file_source.try_pushdown_filters(fd, config)? {
+            FilterPushdownSupport::Supported {
+                child_filters,
+                remaining_filters,
+                op: file_source,
+            } => {
+                let new_data_source = Arc::new(
                     FileScanConfigBuilder::from(self.clone())
-                        .with_source(inner)
+                        .with_source(file_source)
                         .build(),
                 );
-                Ok(DataSourceFilterPushdownResult::Pushed {
-                    inner: new_self,
-                    support,
+                Ok(FilterPushdownSupport::Supported {
+                    child_filters,
+                    remaining_filters,
+                    op: new_data_source,
                 })
+            }
+            FilterPushdownSupport::NotSupported(fd) => {
+                Ok(FilterPushdownSupport::NotSupported(fd))
             }
         }
     }

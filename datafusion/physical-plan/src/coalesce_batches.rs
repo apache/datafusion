@@ -30,12 +30,13 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
-use crate::execution_plan::{try_pushdown_filters_to_input, CardinalityEffect};
+use crate::execution_plan::CardinalityEffect;
+use crate::filter_pushdown::{FilterDescription, FilterPushdownSupport};
+use datafusion_common::config::ConfigOptions;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -216,11 +217,16 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn try_pushdown_filters(
         &self,
-        plan: &Arc<dyn ExecutionPlan>,
-        parent_filters: &[datafusion_physical_expr::PhysicalExprRef],
-        config: &ConfigOptions,
-    ) -> Result<crate::ExecutionPlanFilterPushdownResult> {
-        try_pushdown_filters_to_input(plan, &self.input, parent_filters, config)
+        fd: FilterDescription,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownSupport<Arc<dyn ExecutionPlan>>> {
+        let child_filters = vec![fd];
+        let remaining_filters = FilterDescription::default();
+        Ok(FilterPushdownSupport::Supported {
+            child_filters,
+            remaining_filters,
+            op: Arc::new(self.clone()),
+        })
     }
 }
 

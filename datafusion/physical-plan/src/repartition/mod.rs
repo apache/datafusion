@@ -29,7 +29,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::execution_plan::{try_pushdown_filters_to_input, CardinalityEffect};
+use crate::execution_plan::CardinalityEffect;
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
@@ -53,6 +53,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use crate::filter_pushdown::{FilterDescription, FilterPushdownSupport};
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::trace;
@@ -727,11 +728,16 @@ impl ExecutionPlan for RepartitionExec {
 
     fn try_pushdown_filters(
         &self,
-        plan: &Arc<dyn ExecutionPlan>,
-        parent_filters: &[datafusion_physical_expr::PhysicalExprRef],
-        config: &ConfigOptions,
-    ) -> Result<crate::ExecutionPlanFilterPushdownResult> {
-        try_pushdown_filters_to_input(plan, &self.input, parent_filters, config)
+        fd: FilterDescription,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownSupport<Arc<dyn ExecutionPlan>>> {
+        let child_filters = vec![fd];
+        let remaining_filters = FilterDescription::default();
+        Ok(FilterPushdownSupport::Supported {
+            child_filters,
+            remaining_filters,
+            op: Arc::new(self.clone()),
+        })
     }
 }
 
