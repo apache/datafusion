@@ -17,9 +17,9 @@
 
 //! Math function: `isnan()`.
 
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, TypeSignature};
+use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, TypeSignature};
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
@@ -71,8 +71,8 @@ impl ScalarUDFImpl for IsNanFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Boolean)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), DataType::Boolean, args.arg_types[0].is_nullable()))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

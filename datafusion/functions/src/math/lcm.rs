@@ -19,17 +19,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::Int64;
 
 use arrow::error::ArrowError;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
 };
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 use super::gcd::unsigned_gcd;
@@ -75,8 +72,9 @@ impl ScalarUDFImpl for LcmFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Int64)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), Int64, nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

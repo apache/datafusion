@@ -23,17 +23,12 @@ use std::sync::Arc;
 use super::power::PowerFunc;
 
 use arrow::array::{ArrayRef, AsArray};
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
-};
+use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
+use datafusion_common::{exec_err, internal_err, plan_datafusion_err, plan_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{
-    lit, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
-    TypeSignature::*,
-};
+use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, TypeSignature::*};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
@@ -85,11 +80,12 @@ impl ScalarUDFImpl for LogFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Float32 => Ok(DataType::Float32),
-            _ => Ok(DataType::Float64),
-        }
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = match args.arg_types[0].data_type() {
+            DataType::Float32 => DataType::Float32,
+            _ => DataType::Float64,
+        };
+        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {

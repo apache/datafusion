@@ -32,13 +32,14 @@ use datafusion_common::{
 };
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
+use arrow::datatypes::Field;
 
 #[user_doc(
     doc_section(label = "Binary String Functions"),
@@ -85,10 +86,11 @@ impl ScalarUDFImpl for EncodeFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         use DataType::*;
 
-        Ok(match arg_types[0] {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match args.arg_types[0].data_type() {
             Utf8 => Utf8,
             LargeUtf8 => LargeUtf8,
             Utf8View => Utf8,
@@ -100,7 +102,9 @@ impl ScalarUDFImpl for EncodeFunc {
                     "The encode function can only accept Utf8 or Binary or Null."
                 );
             }
-        })
+        };
+
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(
@@ -178,8 +182,9 @@ impl ScalarUDFImpl for DecodeFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].to_owned())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), args.arg_types[0].data_type().to_owned(), nullable))
     }
 
     fn invoke_with_args(

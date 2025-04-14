@@ -20,11 +20,11 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::DataType::{Float32, Float64};
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
@@ -76,11 +76,12 @@ impl ScalarUDFImpl for CotFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            Float32 => Ok(Float32),
-            _ => Ok(Float64),
-        }
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = match args.arg_types[0].data_type() {
+            Float32 => Float32,
+            _ => Float64,
+        };
+        Ok(Field::new(self.name(), data_type, true))
     }
 
     fn documentation(&self) -> Option<&Documentation> {

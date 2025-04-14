@@ -22,16 +22,16 @@ use arrow::{
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
+use arrow::datatypes::Field;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -73,8 +73,12 @@ impl ScalarUDFImpl for FactorialFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Int64)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(
+            self.name(),
+            Int64,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

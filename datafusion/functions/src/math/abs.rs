@@ -24,17 +24,14 @@ use arrow::array::{
     ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
     Int32Array, Int64Array, Int8Array,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::error::ArrowError;
 use datafusion_common::{
     internal_datafusion_err, not_impl_err, utils::take_function_args, Result,
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 type MathArrayFunction = fn(&ArrayRef) -> Result<ArrayRef>;
@@ -143,30 +140,33 @@ impl ScalarUDFImpl for AbsFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            DataType::Float32 => Ok(DataType::Float32),
-            DataType::Float64 => Ok(DataType::Float64),
-            DataType::Int8 => Ok(DataType::Int8),
-            DataType::Int16 => Ok(DataType::Int16),
-            DataType::Int32 => Ok(DataType::Int32),
-            DataType::Int64 => Ok(DataType::Int64),
-            DataType::Null => Ok(DataType::Null),
-            DataType::UInt8 => Ok(DataType::UInt8),
-            DataType::UInt16 => Ok(DataType::UInt16),
-            DataType::UInt32 => Ok(DataType::UInt32),
-            DataType::UInt64 => Ok(DataType::UInt64),
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match args.arg_types[0].data_type() {
+            DataType::Float32 => DataType::Float32,
+            DataType::Float64 => DataType::Float64,
+            DataType::Int8 => DataType::Int8,
+            DataType::Int16 => DataType::Int16,
+            DataType::Int32 => DataType::Int32,
+            DataType::Int64 => DataType::Int64,
+            DataType::Null => DataType::Null,
+            DataType::UInt8 => DataType::UInt8,
+            DataType::UInt16 => DataType::UInt16,
+            DataType::UInt32 => DataType::UInt32,
+            DataType::UInt64 => DataType::UInt64,
             DataType::Decimal128(precision, scale) => {
-                Ok(DataType::Decimal128(precision, scale))
+                DataType::Decimal128(*precision, *scale)
             }
             DataType::Decimal256(precision, scale) => {
-                Ok(DataType::Decimal256(precision, scale))
+                DataType::Decimal256(*precision, *scale)
             }
             _ => not_impl_err!(
                 "Unsupported data type {} for function abs",
-                arg_types[0].to_string()
-            ),
-        }
+                args.arg_types[0].data_type().to_string()
+            )?,
+        };
+
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

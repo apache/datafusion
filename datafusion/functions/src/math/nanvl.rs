@@ -22,13 +22,10 @@ use crate::utils::make_scalar_function;
 
 use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float32, Float64};
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -81,6 +78,14 @@ impl ScalarUDFImpl for NanvlFunc {
         &self.signature
     }
 
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match args.arg_types[0].data_type() {
+            Float32 => Float32,
+            _ => Float64
+        };
+        Ok(Field::new(self.name(), data_type, nullable))
+    }
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
             Float32 => Ok(Float32),

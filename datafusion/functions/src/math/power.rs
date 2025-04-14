@@ -22,16 +22,14 @@ use std::sync::Arc;
 use super::log::LogFunc;
 
 use arrow::array::{ArrayRef, AsArray, Int64Array};
-use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
+use arrow::datatypes::{ArrowNativeTypeOp, DataType, Field, Float64Type};
 use datafusion_common::{
     arrow_datafusion_err, exec_datafusion_err, exec_err, internal_datafusion_err,
     plan_datafusion_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF, TypeSignature,
-};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
@@ -82,11 +80,13 @@ impl ScalarUDFImpl for PowerFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            DataType::Int64 => Ok(DataType::Int64),
-            _ => Ok(DataType::Float64),
-        }
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match args.arg_types[0].data_type() {
+            DataType::Int64 => DataType::Int64,
+            _ => DataType::Float64
+        };
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn aliases(&self) -> &[String] {
