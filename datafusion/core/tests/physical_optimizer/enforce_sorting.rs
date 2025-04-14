@@ -1793,7 +1793,7 @@ async fn test_remove_unnecessary_sort_window_multilayer() -> Result<()> {
     .into();
     let sort = sort_exec(ordering.clone(), source);
     // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
-    let coalesce_batches = coalesce_batches_exec(sort);
+    let coalesce_batches = coalesce_batches_exec(sort, 128);
     let window_agg = bounded_window_exec("non_nullable_col", ordering, coalesce_batches);
     let ordering2: LexOrdering = [sort_expr_options(
         "non_nullable_col",

@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    coalesce_partitions_exec, global_limit_exec, local_limit_exec,
+    coalesce_batches_exec, coalesce_partitions_exec, global_limit_exec, local_limit_exec,
     sort_exec, sort_preserving_merge_exec,
 };
 
@@ -33,7 +33,6 @@ use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -86,10 +85,6 @@ fn filter_exec(
         )),
         input,
     )?))
-}
-
-fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalesceBatchesExec::new(input, 8192))
 }
 
 fn repartition_exec(
@@ -176,7 +171,7 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
     let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
     let repartition = repartition_exec(streaming_table)?;
     let filter = filter_exec(schema, repartition)?;
-    let coalesce_batches = coalesce_batches_exec(filter);
+    let coalesce_batches = coalesce_batches_exec(filter, 8192);
     let local_limit = local_limit_exec(coalesce_batches, 5);
     let coalesce_partitions = coalesce_partitions_exec(local_limit);
     let global_limit = global_limit_exec(coalesce_partitions, 0, Some(5));
@@ -243,8 +238,8 @@ fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
 fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batches_exec_into_fetching_version(
 ) -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema)).unwrap();
-    let coalesce_batches = coalesce_batches_exec(streaming_table);
+    let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
+    let coalesce_batches = coalesce_batches_exec(streaming_table, 8192);
     let projection = projection_exec(schema, coalesce_batches)?;
     let global_limit = global_limit_exec(projection, 0, Some(5));
 
@@ -274,8 +269,8 @@ fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batc
 #[test]
 fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema)).unwrap();
-    let coalesce_batches = coalesce_batches_exec(streaming_table);
+    let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
+    let coalesce_batches = coalesce_batches_exec(streaming_table, 8192);
     let projection = projection_exec(Arc::clone(&schema), coalesce_batches)?;
     let repartition = repartition_exec(projection)?;
     let ordering: LexOrdering = [PhysicalSortExpr {

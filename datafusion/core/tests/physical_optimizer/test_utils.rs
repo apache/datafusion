@@ -303,8 +303,11 @@ pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     )
 }
 
-pub fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalesceBatchesExec::new(input, 128))
+pub fn coalesce_batches_exec(
+    input: Arc<dyn ExecutionPlan>,
+    batch_size: usize,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(CoalesceBatchesExec::new(input, batch_size))
 }
 
 pub fn sort_exec(

@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    check_integrity, coalesce_partitions_exec, sort_exec,
+    check_integrity, coalesce_batches_exec, coalesce_partitions_exec, sort_exec,
     sort_exec_with_preserve_partitioning, sort_preserving_merge_exec,
     stream_exec_ordered_with_projection,
 };
@@ -440,7 +440,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
     let filter = filter_exec(repartition_hash);
-    let coalesce_batches_exec = coalesce_batches_exec(filter);
+    let coalesce_batches_exec = coalesce_batches_exec(filter, 8192);
     let sort = sort_exec_with_preserve_partitioning(
         sort_exprs.clone().into(),
         coalesce_batches_exec,
@@ -522,10 +522,10 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
         memory_exec_sorted(&schema, sort_exprs.clone())
     };
     let repartition_rr = repartition_exec_round_robin(source);
-    let coalesce_batches_exec_1 = coalesce_batches_exec(repartition_rr);
+    let coalesce_batches_exec_1 = coalesce_batches_exec(repartition_rr, 8192);
     let repartition_hash = repartition_exec_hash(coalesce_batches_exec_1);
     let filter = filter_exec(repartition_hash);
-    let coalesce_batches_exec_2 = coalesce_batches_exec(filter);
+    let coalesce_batches_exec_2 = coalesce_batches_exec(filter, 8192);
     let sort = sort_exec_with_preserve_partitioning(
         sort_exprs.clone().into(),
         coalesce_batches_exec_2,
@@ -614,7 +614,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
     let filter = filter_exec(repartition_hash);
-    let coalesce_batches_exec = coalesce_batches_exec(filter);
+    let coalesce_batches_exec = coalesce_batches_exec(filter, 8192);
     let physical_plan = coalesce_partitions_exec(coalesce_batches_exec);
 
     // Expected inputs unbounded and bounded
@@ -685,7 +685,7 @@ async fn test_with_multiple_replacable_repartitions(
     let repartition_rr = repartition_exec_round_robin(source);
     let repartition_hash = repartition_exec_hash(repartition_rr);
     let filter = filter_exec(repartition_hash);
-    let coalesce_batches = coalesce_batches_exec(filter);
+    let coalesce_batches = coalesce_batches_exec(filter, 8192);
     let repartition_hash_2 = repartition_exec_hash(coalesce_batches);
     let sort = sort_exec_with_preserve_partitioning(
         sort_exprs.clone().into(),
@@ -1161,10 +1161,6 @@ fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     )
     .unwrap();
     Arc::new(FilterExec::try_new(predicate, input).unwrap())
-}
-
-fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalesceBatchesExec::new(input, 8192))
 }
 
 fn hash_join_exec(
