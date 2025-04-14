@@ -41,6 +41,7 @@ If your function uses a coercible signature ([`Signature::Coercible`]) and shoul
 Before:
 
 ```rust
+# /* comment out so they don't run
 pub fn new() -> Self {
     Self {
         signature: Signature::coercible(
@@ -51,11 +52,13 @@ pub fn new() -> Self {
         ),
     }
 }
+# */
 ```
 
 After:
 
 ```rust
+# /* comment out so they don't run
 use datafusion_common::types::{logical_null, NativeType};
 
 pub fn new() -> Self {
@@ -70,6 +73,7 @@ pub fn new() -> Self {
         ),
     }
 }
+# */
 ```
 
 ---
@@ -93,11 +97,11 @@ TypeSignature::Coercible(vec![Coercion::new_implicit(
 
 You can view [PR #15404] for more examples and implementation details.
 
-[`TypeSignatureClass`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/enum.TypeSignatureClass.html
-[`NativeType::Null`]: https://docs.rs/datafusion-common/latest/datafusion_common/types/enum.NativeType.html#variant.Null
-[`Signature::Coercible`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/enum.TypeSignature.html#variant.Coercible
-[`Coercion::Implicit`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/enum.Coercion.html#variant.Implicit
-[`PR #15404`]: https://github.com/apache/datafusion/pull/15404
+[`typesignatureclass`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/enum.TypeSignatureClass.html
+[`nativetype::null`]: https://docs.rs/datafusion-common/latest/datafusion_common/types/enum.NativeType.html#variant.Null
+[`signature::coercible`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/enum.TypeSignature.html#variant.Coercible
+[`coercion::implicit`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/enum.Coercion.html#variant.Implicit
+[`pr #15404`]: https://github.com/apache/datafusion/pull/15404
 
 ## DataFusion `46.0.0`
 
