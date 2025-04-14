@@ -19,7 +19,8 @@
 //! help with allocation accounting.
 
 use datafusion_common::{internal_err, Result};
-use std::{cmp::Ordering, sync::Arc};
+use std::hash::{Hash, Hasher};
+use std::{cmp::Ordering, sync::atomic, sync::Arc};
 
 mod pool;
 pub mod proxy {
@@ -146,22 +147,74 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 /// [`MemoryReservation`] in a [`MemoryPool`]. All allocations are registered to
 /// a particular `MemoryConsumer`;
 ///
+/// Each `MemoryConsumer` is identifiable by a process-unique id, and is therefor not cloneable,
+/// If you want a clone of a `MemoryConsumer`, you should look into [`MemoryConsumer::clone_with_new_id`],
+/// but note that this `MemoryConsumer` may be treated as a separate entity based on the used pool,
+/// and is only guaranteed to share the name and inner properties.
+///
 /// For help with allocation accounting, see the [`proxy`] module.
 ///
 /// [proxy]: datafusion_common::utils::proxy
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug)]
 pub struct MemoryConsumer {
     name: String,
     can_spill: bool,
+    id: usize,
+}
+
+impl PartialEq for MemoryConsumer {
+    fn eq(&self, other: &Self) -> bool {
+        let is_same_id = self.id == other.id;
+
+        #[cfg(debug_assertions)]
+        if is_same_id {
+            assert_eq!(self.name, other.name);
+            assert_eq!(self.can_spill, other.can_spill);
+        }
+
+        is_same_id
+    }
+}
+
+impl Eq for MemoryConsumer {}
+
+impl Hash for MemoryConsumer {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.name.hash(state);
+        self.can_spill.hash(state);
+    }
 }
 
 impl MemoryConsumer {
+    fn new_unique_id() -> usize {
+        static ID: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
+        ID.fetch_add(1, atomic::Ordering::Relaxed)
+    }
+
     /// Create a new empty [`MemoryConsumer`] that can be grown using [`MemoryReservation`]
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             can_spill: false,
+            id: Self::new_unique_id(),
         }
+    }
+
+    /// Returns a clone of this [`MemoryConsumer`] with a new unique id,
+    /// which can be registered with a [`MemoryPool`],
+    /// This new consumer is separate from the original.
+    pub fn clone_with_new_id(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            can_spill: self.can_spill,
+            id: Self::new_unique_id(),
+        }
+    }
+
+    /// Return the unique id of this [`MemoryConsumer`]
+    pub fn id(&self) -> usize {
+        self.id
     }
 
     /// Set whether this allocation can be spilled to disk
@@ -349,7 +402,7 @@ pub mod units {
     pub const KB: u64 = 1 << 10;
 }
 
-/// Present size in human readable form
+/// Present size in human-readable form
 pub fn human_readable_size(size: usize) -> String {
     use units::*;
 
@@ -373,6 +426,15 @@ pub fn human_readable_size(size: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_id_uniqueness() {
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..100 {
+            let consumer = MemoryConsumer::new("test");
+            assert!(ids.insert(consumer.id())); // Ensures unique insertion
+        }
+    }
 
     #[test]
     fn test_memory_pool_underflow() {
