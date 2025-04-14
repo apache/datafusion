@@ -261,12 +261,19 @@ pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> 
     Arc::new(UnionExec::new(input))
 }
 
-pub fn local_limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(LocalLimitExec::new(input, 100))
+pub fn local_limit_exec(
+    input: Arc<dyn ExecutionPlan>,
+    fetch: usize,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(LocalLimitExec::new(input, fetch))
 }
 
-pub fn global_limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(GlobalLimitExec::new(input, 0, Some(100)))
+pub fn global_limit_exec(
+    input: Arc<dyn ExecutionPlan>,
+    skip: usize,
+    fetch: Option<usize>,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(GlobalLimitExec::new(input, skip, fetch))
 }
 
 pub fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {

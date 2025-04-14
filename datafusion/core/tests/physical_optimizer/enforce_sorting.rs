@@ -232,7 +232,7 @@ async fn test_do_not_remove_sort_with_limit() -> Result<()> {
     ]
     .into();
     let sort = sort_exec(ordering.clone(), source1);
-    let limit = local_limit_exec(sort);
+    let limit = local_limit_exec(sort, 100);
     let parquet_sort_exprs = [sort_expr("nullable_col", &schema)];
     let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs);
     let union = union_exec(vec![source2, limit]);
@@ -1150,8 +1150,8 @@ async fn test_union_inputs_different_sorted_with_limit() -> Result<()> {
     .into();
     let sort1 = sort_exec(ordering1, source1.clone());
     let sort2 = sort_exec(ordering2, source1);
-    let limit = local_limit_exec(sort2);
-    let limit = global_limit_exec(limit);
+    let limit = local_limit_exec(sort2, 100);
+    let limit = global_limit_exec(limit, 0, Some(100));
     let union = union_exec(vec![sort1, limit]);
     let ordering3 = [sort_expr("nullable_col", &schema)].into();
     let physical_plan = sort_preserving_merge_exec(ordering3, union);

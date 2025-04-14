@@ -18,7 +18,8 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    coalesce_partitions_exec, sort_exec, sort_preserving_merge_exec,
+    coalesce_partitions_exec, global_limit_exec, local_limit_exec,
+    sort_exec, sort_preserving_merge_exec,
 };
 
 use arrow::compute::SortOptions;
@@ -28,14 +29,13 @@ use datafusion_common::error::Result;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{col, lit, BinaryExpr};
-use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
@@ -58,21 +58,6 @@ fn streaming_table_exec(schema: SchemaRef) -> Result<Arc<dyn ExecutionPlan>> {
         true,
         None,
     )?))
-}
-
-fn global_limit_exec(
-    input: Arc<dyn ExecutionPlan>,
-    skip: usize,
-    fetch: Option<usize>,
-) -> Arc<dyn ExecutionPlan> {
-    Arc::new(GlobalLimitExec::new(input, skip, fetch))
-}
-
-fn local_limit_exec(
-    input: Arc<dyn ExecutionPlan>,
-    fetch: usize,
-) -> Arc<dyn ExecutionPlan> {
-    Arc::new(LocalLimitExec::new(input, fetch))
 }
 
 fn projection_exec(

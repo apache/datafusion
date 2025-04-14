@@ -460,7 +460,7 @@ async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
 async fn test_global_limit_single_partition() -> Result<()> {
     let schema = create_test_schema();
     let source = memory_exec(&schema);
-    let limit = global_limit_exec(source);
+    let limit = global_limit_exec(source, 0, Some(100));
 
     assert_plan(
         limit.as_ref(),
@@ -479,7 +479,7 @@ async fn test_global_limit_single_partition() -> Result<()> {
 async fn test_global_limit_multi_partition() -> Result<()> {
     let schema = create_test_schema();
     let source = memory_exec(&schema);
-    let limit = global_limit_exec(repartition_exec(source));
+    let limit = global_limit_exec(repartition_exec(source), 0, Some(100));
 
     assert_plan(
         limit.as_ref(),
@@ -499,7 +499,7 @@ async fn test_global_limit_multi_partition() -> Result<()> {
 async fn test_local_limit() -> Result<()> {
     let schema = create_test_schema();
     let source = memory_exec(&schema);
-    let limit = local_limit_exec(source);
+    let limit = local_limit_exec(source, 100);
 
     assert_plan(
         limit.as_ref(),
