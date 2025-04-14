@@ -1459,13 +1459,14 @@ mod tests {
     }
 
     fn schema_orders(schema: &SchemaRef) -> Result<Vec<LexOrdering>> {
-        let orderings = vec![LexOrdering::new(vec![PhysicalSortExpr {
+        let orderings = vec![[PhysicalSortExpr {
             expr: col("sn", schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }])];
+        }]
+        .into()];
         Ok(orderings)
     }
 

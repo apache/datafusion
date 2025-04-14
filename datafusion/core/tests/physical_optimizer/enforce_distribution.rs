@@ -1730,10 +1730,11 @@ fn smj_join_key_ordering() -> Result<()> {
 fn merge_does_not_need_sort() -> Result<()> {
     // see https://github.com/apache/datafusion/issues/4331
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
 
     // Scan some sorted parquet files
     let exec = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
@@ -1930,10 +1931,11 @@ fn repartition_unsorted_limit() -> Result<()> {
 #[test]
 fn repartition_sorted_limit() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan = limit_exec(sort_exec(sort_key, parquet_exec(), false));
 
     let expected = &[
@@ -1954,10 +1956,11 @@ fn repartition_sorted_limit() -> Result<()> {
 #[test]
 fn repartition_sorted_limit_with_filter() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan = sort_required_exec_with_req(
         filter_exec(sort_exec(sort_key.clone(), parquet_exec(), false)),
         sort_key,
@@ -2037,10 +2040,11 @@ fn repartition_ignores_union() -> Result<()> {
 fn repartition_through_sort_preserving_merge() -> Result<()> {
     // sort preserving merge with non-sorted input
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan = sort_preserving_merge_exec(sort_key, parquet_exec());
 
     // need resort as the data was not sorted correctly
@@ -2060,10 +2064,11 @@ fn repartition_through_sort_preserving_merge() -> Result<()> {
 fn repartition_ignores_sort_preserving_merge() -> Result<()> {
     // sort preserving merge already sorted input,
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan = sort_preserving_merge_exec(
         sort_key.clone(),
         parquet_exec_multiple_sorted(vec![sort_key]),
@@ -2095,10 +2100,11 @@ fn repartition_ignores_sort_preserving_merge() -> Result<()> {
 fn repartition_ignores_sort_preserving_merge_with_union() -> Result<()> {
     // 2 sorted parquet files unioned (partitions are concatenated, sort is preserved)
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let input = union_exec(vec![parquet_exec_with_sort(vec![sort_key.clone()]); 2]);
     let plan = sort_preserving_merge_exec(sort_key, input);
 
@@ -2133,10 +2139,11 @@ fn repartition_does_not_destroy_sort() -> Result<()> {
     //  SortRequired
     //    Parquet(sorted)
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("d", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("d", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan = sort_required_exec_with_req(
         filter_exec(parquet_exec_with_sort(vec![sort_key.clone()])),
         sort_key,
@@ -2171,10 +2178,11 @@ fn repartition_does_not_destroy_sort_more_complex() -> Result<()> {
     //    Parquet(unsorted)
 
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let input1 = sort_required_exec_with_req(
         parquet_exec_with_sort(vec![sort_key.clone()]),
         sort_key,
@@ -2207,18 +2215,19 @@ fn repartition_transitively_with_projection() -> Result<()> {
     let schema = schema();
     let proj_exprs = vec![(
         Arc::new(BinaryExpr::new(
-            col("a", &schema).unwrap(),
+            col("a", &schema)?,
             Operator::Plus,
-            col("b", &schema).unwrap(),
-        )) as Arc<dyn PhysicalExpr>,
+            col("b", &schema)?,
+        )) as _,
         "sum".to_string(),
     )];
     // non sorted input
     let proj = Arc::new(ProjectionExec::try_new(proj_exprs, parquet_exec())?);
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("sum", &proj.schema()).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("sum", &proj.schema())?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan = sort_preserving_merge_exec(sort_key, proj);
 
     // Test: run EnforceDistribution, then EnforceSort.
@@ -2250,10 +2259,11 @@ fn repartition_transitively_with_projection() -> Result<()> {
 #[test]
 fn repartition_ignores_transitively_with_projection() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let alias = vec![
         ("a".to_string(), "a".to_string()),
         ("b".to_string(), "b".to_string()),
@@ -2285,10 +2295,11 @@ fn repartition_ignores_transitively_with_projection() -> Result<()> {
 #[test]
 fn repartition_transitively_past_sort_with_projection() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let alias = vec![
         ("a".to_string(), "a".to_string()),
         ("b".to_string(), "b".to_string()),
@@ -2320,10 +2331,11 @@ fn repartition_transitively_past_sort_with_projection() -> Result<()> {
 #[test]
 fn repartition_transitively_past_sort_with_filter() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan = sort_exec(sort_key, filter_exec(parquet_exec()), false);
 
     // Test: run EnforceDistribution, then EnforceSort.
@@ -2356,10 +2368,11 @@ fn repartition_transitively_past_sort_with_filter() -> Result<()> {
 #[cfg(feature = "parquet")]
 fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan = sort_exec(
         sort_key,
         projection_exec_with_alias(
@@ -2441,10 +2454,11 @@ fn parallelization_single_partition() -> Result<()> {
 #[test]
 fn parallelization_multiple_files() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
 
     let plan = filter_exec(parquet_exec_multiple_sorted(vec![sort_key.clone()]));
     let plan = sort_required_exec_with_req(plan, sort_key);
@@ -2631,10 +2645,11 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
 #[test]
 fn parallelization_sorted_limit() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan_parquet = limit_exec(sort_exec(sort_key.clone(), parquet_exec(), false));
     let plan_csv = limit_exec(sort_exec(sort_key, csv_exec(), false));
 
@@ -2674,10 +2689,11 @@ fn parallelization_sorted_limit() -> Result<()> {
 #[test]
 fn parallelization_limit_with_filter() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan_parquet = limit_exec(filter_exec(sort_exec(
         sort_key.clone(),
         parquet_exec(),
@@ -2828,10 +2844,11 @@ fn parallelization_union_inputs() -> Result<()> {
 #[test]
 fn parallelization_prior_to_sort_preserving_merge() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     // sort preserving merge already sorted input,
     let plan_parquet = sort_preserving_merge_exec(
         sort_key.clone(),
@@ -2869,10 +2886,11 @@ fn parallelization_prior_to_sort_preserving_merge() -> Result<()> {
 #[test]
 fn parallelization_sort_preserving_merge_with_union() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     // 2 sorted parquet files unioned (partitions are concatenated, sort is preserved)
     let input_parquet =
         union_exec(vec![parquet_exec_with_sort(vec![sort_key.clone()]); 2]);
@@ -2942,10 +2960,11 @@ fn parallelization_sort_preserving_merge_with_union() -> Result<()> {
 #[test]
 fn parallelization_does_not_benefit() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     //  SortRequired
     //    Parquet(sorted)
     let plan_parquet = sort_required_exec_with_req(
@@ -2987,10 +3006,11 @@ fn parallelization_does_not_benefit() -> Result<()> {
 fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> {
     // sorted input
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
 
     //Projection(a as a2, b as b2)
     let alias_pairs: Vec<(String, String)> = vec![
@@ -2999,10 +3019,11 @@ fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> 
     ];
     let proj_parquet =
         projection_exec_with_alias(parquet_exec_with_sort(vec![sort_key]), alias_pairs);
-    let sort_key_after_projection = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c2", &proj_parquet.schema()).unwrap(),
+    let sort_key_after_projection = [PhysicalSortExpr {
+        expr: col("c2", &proj_parquet.schema())?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan_parquet =
         sort_preserving_merge_exec(sort_key_after_projection, proj_parquet);
     let expected = &[
@@ -3033,10 +3054,11 @@ fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> 
 fn parallelization_ignores_transitively_with_projection_csv() -> Result<()> {
     // sorted input
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
 
     //Projection(a as a2, b as b2)
     let alias_pairs: Vec<(String, String)> = vec![
@@ -3046,10 +3068,11 @@ fn parallelization_ignores_transitively_with_projection_csv() -> Result<()> {
 
     let proj_csv =
         projection_exec_with_alias(csv_exec_with_sort(vec![sort_key]), alias_pairs);
-    let sort_key_after_projection = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c2", &proj_csv.schema()).unwrap(),
+    let sort_key_after_projection = [PhysicalSortExpr {
+        expr: col("c2", &proj_csv.schema())?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let plan_csv = sort_preserving_merge_exec(sort_key_after_projection, proj_csv);
     let expected = &[
         "SortPreservingMergeExec: [c2@1 ASC]",
@@ -3102,10 +3125,11 @@ fn remove_redundant_roundrobins() -> Result<()> {
 #[test]
 fn remove_unnecessary_spm_after_filter() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
     let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
 
@@ -3132,10 +3156,11 @@ fn remove_unnecessary_spm_after_filter() -> Result<()> {
 #[test]
 fn preserve_ordering_through_repartition() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("d", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("d", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
     let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
 
@@ -3157,10 +3182,11 @@ fn preserve_ordering_through_repartition() -> Result<()> {
 #[test]
 fn do_not_preserve_ordering_through_repartition() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
     let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
 
@@ -3196,10 +3222,11 @@ fn do_not_preserve_ordering_through_repartition() -> Result<()> {
 #[test]
 fn no_need_for_sort_after_filter() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
     let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
 
@@ -3221,16 +3248,18 @@ fn no_need_for_sort_after_filter() -> Result<()> {
 #[test]
 fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let input = parquet_exec_multiple_sorted(vec![sort_key]);
 
-    let sort_req = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema).unwrap(),
+    let sort_req = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let physical_plan = sort_preserving_merge_exec(sort_req, filter_exec(input));
 
     let test_config = TestConfig::default();
@@ -3266,10 +3295,11 @@ fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
 #[test]
 fn do_not_preserve_ordering_through_repartition3() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let input = parquet_exec_multiple_sorted(vec![sort_key]);
     let physical_plan = filter_exec(input);
 
@@ -3288,10 +3318,11 @@ fn do_not_preserve_ordering_through_repartition3() -> Result<()> {
 #[test]
 fn do_not_put_sort_when_input_is_invalid() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let input = parquet_exec();
     let physical_plan = sort_required_exec_with_req(filter_exec(input), sort_key);
     let expected = &[
@@ -3325,10 +3356,11 @@ fn do_not_put_sort_when_input_is_invalid() -> Result<()> {
 #[test]
 fn put_sort_when_input_is_valid() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema).unwrap(),
+    let sort_key: LexOrdering = [PhysicalSortExpr {
+        expr: col("a", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
     let physical_plan = sort_required_exec_with_req(filter_exec(input), sort_key);
 
@@ -3362,10 +3394,11 @@ fn put_sort_when_input_is_valid() -> Result<()> {
 #[test]
 fn do_not_add_unnecessary_hash() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let alias = vec![("a".to_string(), "a".to_string())];
     let input = parquet_exec_with_sort(vec![sort_key]);
     let physical_plan = aggregate_exec_with_alias(input, alias);
@@ -3388,10 +3421,11 @@ fn do_not_add_unnecessary_hash() -> Result<()> {
 #[test]
 fn do_not_add_unnecessary_hash2() -> Result<()> {
     let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("c", &schema).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("c", &schema)?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let alias = vec![("a".to_string(), "a".to_string())];
     let input = parquet_exec_multiple_sorted(vec![sort_key]);
     let aggregate = aggregate_exec_with_alias(input, alias.clone());

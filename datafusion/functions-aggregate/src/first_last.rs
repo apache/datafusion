@@ -1602,13 +1602,13 @@ mod tests {
             Field::new("e", DataType::Boolean, true),
         ]));
 
-        let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
+        let sort_keys = [PhysicalSortExpr {
             expr: col("c", &schema).unwrap(),
             options: SortOptions::default(),
-        }]);
+        }];
 
         let mut group_acc = FirstPrimitiveGroupsAccumulator::<Int64Type>::try_new(
-            sort_key,
+            sort_keys.into(),
             true,
             &DataType::Int64,
             &[DataType::Int64],
@@ -1696,13 +1696,13 @@ mod tests {
             Field::new("e", DataType::Boolean, true),
         ]));
 
-        let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
+        let sort_keys = [PhysicalSortExpr {
             expr: col("c", &schema).unwrap(),
             options: SortOptions::default(),
-        }]);
+        }];
 
         let mut group_acc = FirstPrimitiveGroupsAccumulator::<Int64Type>::try_new(
-            sort_key,
+            sort_keys.into(),
             true,
             &DataType::Int64,
             &[DataType::Int64],
@@ -1777,13 +1777,13 @@ mod tests {
             Field::new("e", DataType::Boolean, true),
         ]));
 
-        let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
+        let sort_keys = [PhysicalSortExpr {
             expr: col("c", &schema).unwrap(),
             options: SortOptions::default(),
-        }]);
+        }];
 
         let mut group_acc = FirstPrimitiveGroupsAccumulator::<Int64Type>::try_new(
-            sort_key,
+            sort_keys.into(),
             true,
             &DataType::Int64,
             &[DataType::Int64],

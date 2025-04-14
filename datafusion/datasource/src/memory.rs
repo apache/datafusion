@@ -831,7 +831,7 @@ mod memory_source_tests {
             Field::new("b", DataType::Int64, false),
             Field::new("c", DataType::Int64, false),
         ]));
-        let sort1 = LexOrdering::new(vec![
+        let sort1: LexOrdering = [
             PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
@@ -840,11 +840,13 @@ mod memory_source_tests {
                 expr: col("b", &schema)?,
                 options: SortOptions::default(),
             },
-        ]);
-        let sort2 = LexOrdering::new(vec![PhysicalSortExpr {
+        ]
+        .into();
+        let sort2: LexOrdering = [PhysicalSortExpr {
             expr: col("c", &schema)?,
             options: SortOptions::default(),
-        }]);
+        }]
+        .into();
         let mut expected_output_order = vec![];
         expected_output_order.extend(sort1.clone());
         expected_output_order.extend(sort2.clone());

@@ -197,7 +197,8 @@ async fn test_replace_multiple_input_repartition_1(
     let repartition = repartition_exec_hash(repartition_exec_round_robin(source));
     let sort = sort_exec(vec![sort_expr("a", &schema)], repartition, true);
 
-    let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+    let physical_plan =
+        sort_preserving_merge_exec([sort_expr("a", &schema)].into(), sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -276,8 +277,10 @@ async fn test_with_inter_children_change_only(
     let filter = filter_exec(repartition_hash2);
     let sort2 = sort_exec(vec![sort_expr_default("a", &filter.schema())], filter, true);
 
-    let physical_plan =
-        sort_preserving_merge_exec(vec![sort_expr_default("a", &sort2.schema())], sort2);
+    let physical_plan = sort_preserving_merge_exec(
+        [sort_expr_default("a", &sort2.schema())].into(),
+        sort2,
+    );
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -371,7 +374,8 @@ async fn test_replace_multiple_input_repartition_2(
     let repartition_hash = repartition_exec_hash(filter);
     let sort = sort_exec(vec![sort_expr("a", &schema)], repartition_hash, true);
 
-    let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+    let physical_plan =
+        sort_preserving_merge_exec([sort_expr("a", &schema)].into(), sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -448,7 +452,8 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
     let coalesce_batches_exec: Arc<dyn ExecutionPlan> = coalesce_batches_exec(filter);
     let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_batches_exec, true);
 
-    let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+    let physical_plan =
+        sort_preserving_merge_exec([sort_expr("a", &schema)].into(), sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -531,7 +536,8 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
     let coalesce_batches_exec_2 = coalesce_batches_exec(filter);
     let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_batches_exec_2, true);
 
-    let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+    let physical_plan =
+        sort_preserving_merge_exec([sort_expr("a", &schema)].into(), sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -692,7 +698,8 @@ async fn test_with_multiple_replacable_repartitions(
     let repartition_hash_2 = repartition_exec_hash(coalesce_batches);
     let sort = sort_exec(vec![sort_expr("a", &schema)], repartition_hash_2, true);
 
-    let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+    let physical_plan =
+        sort_preserving_merge_exec([sort_expr("a", &schema)].into(), sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -782,7 +789,7 @@ async fn test_not_replace_with_different_orderings(
     );
 
     let physical_plan =
-        sort_preserving_merge_exec(vec![sort_expr_default("c", &sort.schema())], sort);
+        sort_preserving_merge_exec([sort_expr_default("c", &sort.schema())].into(), sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -928,8 +935,10 @@ async fn test_with_lost_and_kept_ordering(
     let filter = filter_exec(repartition_hash2);
     let sort2 = sort_exec(vec![sort_expr_default("c", &filter.schema())], filter, true);
 
-    let physical_plan =
-        sort_preserving_merge_exec(vec![sort_expr_default("c", &sort2.schema())], sort2);
+    let physical_plan = sort_preserving_merge_exec(
+        [sort_expr_default("c", &sort2.schema())].into(),
+        sort2,
+    );
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [
@@ -1046,7 +1055,7 @@ async fn test_with_multiple_child_trees(
     );
 
     let physical_plan =
-        sort_preserving_merge_exec(vec![sort_expr_default("a", &sort.schema())], sort);
+        sort_preserving_merge_exec([sort_expr_default("a", &sort.schema())].into(), sort);
 
     // Expected inputs unbounded and bounded
     let expected_input_unbounded = [

@@ -243,20 +243,18 @@ pub fn filter_exec(
 }
 
 pub fn sort_preserving_merge_exec(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ordering: LexOrdering,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
+    Arc::new(SortPreservingMergeExec::new(ordering, input))
 }
 
 pub fn sort_preserving_merge_exec_with_fetch(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ordering: LexOrdering,
     input: Arc<dyn ExecutionPlan>,
     fetch: usize,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortPreservingMergeExec::new(sort_exprs, input).with_fetch(Some(fetch)))
+    Arc::new(SortPreservingMergeExec::new(ordering, input).with_fetch(Some(fetch)))
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
@@ -307,19 +305,18 @@ pub fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn Execution
 }
 
 pub fn sort_exec(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ordering: LexOrdering,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    sort_exec_with_fetch(sort_exprs, None, input)
+    sort_exec_with_fetch(ordering, None, input)
 }
 
 pub fn sort_exec_with_fetch(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ordering: LexOrdering,
     fetch: Option<usize>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortExec::new(sort_exprs, input).with_fetch(fetch))
+    Arc::new(SortExec::new(ordering, input).with_fetch(fetch))
 }
 
 pub fn projection_exec(

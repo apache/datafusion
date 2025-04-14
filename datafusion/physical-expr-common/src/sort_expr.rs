@@ -339,10 +339,10 @@ pub struct LexOrdering {
 
 impl LexOrdering {
     /// Creates a new [`LexOrdering`] from the given vector of sort expressions.
-    /// The vector must not be empty.
-    pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
-        debug_assert!(!inner.is_empty());
-        Self { inner }
+    /// If the vector is empty, returns `None`.
+    pub fn new(inner: impl IntoIterator<Item = PhysicalSortExpr>) -> Option<Self> {
+        let inner = inner.into_iter().collect::<Vec<_>>();
+        (!inner.is_empty()).then(|| Self { inner })
     }
 
     /// Appends an element to the back of the `LexOrdering`.
@@ -416,7 +416,18 @@ impl PartialOrd for LexOrdering {
 
 impl From<Vec<PhysicalSortExpr>> for LexOrdering {
     fn from(value: Vec<PhysicalSortExpr>) -> Self {
-        Self::new(value)
+        Self::new(value).unwrap()
+    }
+}
+
+impl<const N: usize> From<[PhysicalSortExpr; N]> for LexOrdering {
+    fn from(value: [PhysicalSortExpr; N]) -> Self {
+        // TODO: Replace this with a condition on the generic parameter when
+        //       Rust supports it.
+        assert!(N > 0);
+        Self {
+            inner: value.to_vec(),
+        }
     }
 }
 
@@ -451,7 +462,7 @@ impl Display for LexOrdering {
 
 impl FromIterator<PhysicalSortExpr> for LexOrdering {
     fn from_iter<T: IntoIterator<Item = PhysicalSortExpr>>(iter: T) -> Self {
-        Self::new(iter.into_iter().collect())
+        Self::new(iter).unwrap()
     }
 }
 
@@ -532,6 +543,17 @@ impl From<Vec<PhysicalSortRequirement>> for LexRequirement {
     }
 }
 
+impl<const N: usize> From<[PhysicalSortRequirement; N]> for LexRequirement {
+    fn from(value: [PhysicalSortRequirement; N]) -> Self {
+        // TODO: Replace this with a condition on the generic parameter when
+        //       Rust supports it.
+        assert!(N > 0);
+        Self {
+            inner: value.to_vec(),
+        }
+    }
+}
+
 impl Deref for LexRequirement {
     type Target = [PhysicalSortRequirement];
 
@@ -597,7 +619,7 @@ impl From<LexRequirement> for LexOrdering {
 
 impl From<Vec<PhysicalSortRequirement>> for LexOrdering {
     fn from(value: Vec<PhysicalSortRequirement>) -> Self {
-        Self::new(value.into_iter().map(Into::into).collect())
+        Self::new(value.into_iter().map(Into::into)).unwrap()
     }
 }
 

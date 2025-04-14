@@ -503,7 +503,7 @@ mod tests {
         };
 
         let partial_sort_exec = Arc::new(PartialSortExec::new(
-            LexOrdering::new(vec![
+            [
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
                     options: option_asc,
@@ -516,10 +516,11 @@ mod tests {
                     expr: col("c", &schema)?,
                     options: option_asc,
                 },
-            ]),
+            ]
+            .into(),
             Arc::clone(&source),
             2,
-        )) as Arc<dyn ExecutionPlan>;
+        ));
 
         let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
 
@@ -568,7 +569,7 @@ mod tests {
         for common_prefix_length in [1, 2] {
             let partial_sort_exec = Arc::new(
                 PartialSortExec::new(
-                    LexOrdering::new(vec![
+                    [
                         PhysicalSortExpr {
                             expr: col("a", &schema)?,
                             options: option_asc,
@@ -581,12 +582,13 @@ mod tests {
                             expr: col("c", &schema)?,
                             options: option_asc,
                         },
-                    ]),
+                    ]
+                    .into(),
                     Arc::clone(&source),
                     common_prefix_length,
                 )
                 .with_fetch(Some(4)),
-            ) as Arc<dyn ExecutionPlan>;
+            );
 
             let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
 
@@ -641,7 +643,7 @@ mod tests {
             [(1, &source_tables[0]), (2, &source_tables[1])]
         {
             let partial_sort_exec = Arc::new(PartialSortExec::new(
-                LexOrdering::new(vec![
+                [
                     PhysicalSortExpr {
                         expr: col("a", &schema)?,
                         options: option_asc,
@@ -654,7 +656,8 @@ mod tests {
                         expr: col("c", &schema)?,
                         options: option_asc,
                     },
-                ]),
+                ]
+                .into(),
                 Arc::clone(source),
                 common_prefix_length,
             ));
@@ -730,8 +733,8 @@ mod tests {
             nulls_first: false,
         };
         let schema = mem_exec.schema();
-        let partial_sort_executor = PartialSortExec::new(
-            LexOrdering::new(vec![
+        let partial_sort_exec = PartialSortExec::new(
+            [
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
                     options: option_asc,
@@ -744,17 +747,16 @@ mod tests {
                     expr: col("c", &schema)?,
                     options: option_asc,
                 },
-            ]),
+            ]
+            .into(),
             Arc::clone(&mem_exec),
             1,
         );
-        let partial_sort_exec =
-            Arc::new(partial_sort_executor.clone()) as Arc<dyn ExecutionPlan>;
         let sort_exec = Arc::new(SortExec::new(
-            partial_sort_executor.expr,
-            partial_sort_executor.input,
-        )) as Arc<dyn ExecutionPlan>;
-        let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
+            partial_sort_exec.expr.clone(),
+            Arc::clone(&partial_sort_exec.input),
+        ));
+        let result = collect(Arc::new(partial_sort_exec), Arc::clone(&task_ctx)).await?;
         assert_eq!(
             result.iter().map(|r| r.num_rows()).collect_vec(),
             [125, 125, 150]
@@ -791,8 +793,8 @@ mod tests {
             (Some(150), vec![125, 25]),
             (Some(250), vec![125, 125]),
         ] {
-            let partial_sort_executor = PartialSortExec::new(
-                LexOrdering::new(vec![
+            let partial_sort_exec = PartialSortExec::new(
+                [
                     PhysicalSortExpr {
                         expr: col("a", &schema)?,
                         options: option_asc,
@@ -805,19 +807,22 @@ mod tests {
                         expr: col("c", &schema)?,
                         options: option_asc,
                     },
-                ]),
+                ]
+                .into(),
                 Arc::clone(&mem_exec),
                 1,
             )
             .with_fetch(fetch_size);
 
-            let partial_sort_exec =
-                Arc::new(partial_sort_executor.clone()) as Arc<dyn ExecutionPlan>;
             let sort_exec = Arc::new(
-                SortExec::new(partial_sort_executor.expr, partial_sort_executor.input)
-                    .with_fetch(fetch_size),
-            ) as Arc<dyn ExecutionPlan>;
-            let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
+                SortExec::new(
+                    partial_sort_exec.expr.clone(),
+                    Arc::clone(&partial_sort_exec.input),
+                )
+                .with_fetch(fetch_size),
+            );
+            let result =
+                collect(Arc::new(partial_sort_exec), Arc::clone(&task_ctx)).await?;
             assert_eq!(
                 result.iter().map(|r| r.num_rows()).collect_vec(),
                 expected_batch_num_rows
@@ -846,8 +851,8 @@ mod tests {
             nulls_first: false,
         };
         let fetch_size = Some(250);
-        let partial_sort_executor = PartialSortExec::new(
-            LexOrdering::new(vec![
+        let partial_sort_exec = PartialSortExec::new(
+            [
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
                     options: option_asc,
@@ -856,15 +861,14 @@ mod tests {
                     expr: col("c", &schema)?,
                     options: option_asc,
                 },
-            ]),
+            ]
+            .into(),
             Arc::clone(&mem_exec),
             1,
         )
         .with_fetch(fetch_size);
 
-        let partial_sort_exec =
-            Arc::new(partial_sort_executor.clone()) as Arc<dyn ExecutionPlan>;
-        let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
+        let result = collect(Arc::new(partial_sort_exec), Arc::clone(&task_ctx)).await?;
         for rb in result {
             assert!(rb.num_rows() > 0);
         }
@@ -897,10 +901,11 @@ mod tests {
             TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
 
         let partial_sort_exec = Arc::new(PartialSortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("field_name", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             input,
             1,
         ));
@@ -986,7 +991,7 @@ mod tests {
         )?;
 
         let partial_sort_exec = Arc::new(PartialSortExec::new(
-            LexOrdering::new(vec![
+            [
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
                     options: option_asc,
@@ -999,7 +1004,8 @@ mod tests {
                     expr: col("c", &schema)?,
                     options: option_desc,
                 },
-            ]),
+            ]
+            .into(),
             TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?,
             2,
         ));
@@ -1061,10 +1067,11 @@ mod tests {
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
         let sort_exec = Arc::new(PartialSortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             blocking_exec,
             1,
         ));

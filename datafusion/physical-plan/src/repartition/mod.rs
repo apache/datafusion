@@ -1715,11 +1715,11 @@ mod test {
     }
 
     fn sort_exprs(schema: &Schema) -> LexOrdering {
-        let options = SortOptions::default();
-        LexOrdering::new(vec![PhysicalSortExpr {
+        [PhysicalSortExpr {
             expr: col("c0", schema).unwrap(),
-            options,
-        }])
+            options: SortOptions::default(),
+        }]
+        .into()
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {

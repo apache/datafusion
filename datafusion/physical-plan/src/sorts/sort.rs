@@ -1466,10 +1466,11 @@ mod tests {
         let schema = csv.schema();
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("i", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             Arc::new(CoalescePartitionsExec::new(csv)),
         ));
 
@@ -1477,7 +1478,6 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].num_rows(), 400);
-
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
             0,
@@ -1512,10 +1512,11 @@ mod tests {
         let schema = input.schema();
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("i", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
 
@@ -1548,7 +1549,6 @@ mod tests {
         let i = as_primitive_array::<Int32Type>(&columns[0])?;
         assert_eq!(i.value(0), 0);
         assert_eq!(i.value(i.len() - 1), 81);
-
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
             0,
@@ -1580,18 +1580,15 @@ mod tests {
         let schema = input.schema();
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("i", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
 
-        let result = collect(
-            Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
-            Arc::clone(&task_ctx),
-        )
-        .await?;
+        let result = collect(Arc::clone(&sort_exec) as _, Arc::clone(&task_ctx)).await?;
 
         let num_rows = result.iter().map(|batch| batch.num_rows()).sum::<usize>();
         assert_eq!(num_rows, 20000);
@@ -1680,20 +1677,18 @@ mod tests {
 
             let sort_exec = Arc::new(
                 SortExec::new(
-                    LexOrdering::new(vec![PhysicalSortExpr {
+                    [PhysicalSortExpr {
                         expr: col("i", &schema)?,
                         options: SortOptions::default(),
-                    }]),
+                    }]
+                    .into(),
                     Arc::new(CoalescePartitionsExec::new(csv)),
                 )
                 .with_fetch(fetch),
             );
 
-            let result = collect(
-                Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
-                Arc::clone(&task_ctx),
-            )
-            .await?;
+            let result =
+                collect(Arc::clone(&sort_exec) as _, Arc::clone(&task_ctx)).await?;
             assert_eq!(result.len(), 1);
 
             let metrics = sort_exec.metrics().unwrap();
@@ -1723,16 +1718,16 @@ mod tests {
         let data: ArrayRef =
             Arc::new(vec![3, 2, 1].into_iter().map(Some).collect::<UInt64Array>());
 
-        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data]).unwrap();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data])?;
         let input =
-            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
-                .unwrap();
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("field_name", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             input,
         ));
 
@@ -1741,7 +1736,7 @@ mod tests {
         let expected_data: ArrayRef =
             Arc::new(vec![1, 2, 3].into_iter().map(Some).collect::<UInt64Array>());
         let expected_batch =
-            RecordBatch::try_new(Arc::clone(&schema), vec![expected_data]).unwrap();
+            RecordBatch::try_new(Arc::clone(&schema), vec![expected_data])?;
 
         // Data is correct
         assert_eq!(&vec![expected_batch], &result);
@@ -1780,7 +1775,7 @@ mod tests {
         )?;
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![
+            [
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
                     options: SortOptions {
@@ -1795,7 +1790,8 @@ mod tests {
                         nulls_first: false,
                     },
                 },
-            ]),
+            ]
+            .into(),
             TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?,
         ));
 
@@ -1866,7 +1862,7 @@ mod tests {
         )?;
 
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![
+            [
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
                     options: SortOptions {
@@ -1881,7 +1877,8 @@ mod tests {
                         nulls_first: false,
                     },
                 },
-            ]),
+            ]
+            .into(),
             TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?,
         ));
 
@@ -1945,10 +1942,11 @@ mod tests {
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
         let sort_exec = Arc::new(SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             blocking_exec,
         ));
 
@@ -1976,10 +1974,11 @@ mod tests {
             RecordBatch::try_new_with_options(Arc::clone(&schema), vec![], &options)
                 .unwrap();
 
-        let expressions = LexOrdering::new(vec![PhysicalSortExpr {
+        let expressions = [PhysicalSortExpr {
             expr: Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
             options: SortOptions::default(),
-        }]);
+        }]
+        .into();
 
         let result = sort_batch(&batch, &expressions, None).unwrap();
         assert_eq!(result.num_rows(), 1);
@@ -1995,9 +1994,10 @@ mod tests {
             cache: SortedUnboundedExec::compute_properties(Arc::new(schema.clone())),
         };
         let mut plan = SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            [PhysicalSortExpr::new_default(Arc::new(Column::new(
                 "c1", 0,
-            )))]),
+            )))]
+            .into(),
             Arc::new(source),
         );
         plan = plan.with_fetch(Some(9));

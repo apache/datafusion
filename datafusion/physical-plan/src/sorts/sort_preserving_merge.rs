@@ -414,7 +414,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{assert_batches_eq, DataFusionError};
+    use datafusion_common::{assert_batches_eq, exec_err};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -422,8 +422,8 @@ mod tests {
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
     use futures::{FutureExt, Stream, StreamExt};
     use insta::assert_snapshot;
     use tokio::time::timeout;
@@ -450,24 +450,25 @@ mod tests {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1; row_size]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"); row_size]));
         let c: ArrayRef = Arc::new(Int64Array::from_iter(vec![0; row_size]));
-        let rb = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
+        let rb = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)])?;
 
         let rbs = (0..1024).map(|_| rb.clone()).collect::<Vec<_>>();
 
         let schema = rb.schema();
-        let sort = LexOrdering::new(vec![
+        let sort = [
             PhysicalSortExpr {
-                expr: col("b", &schema).unwrap(),
+                expr: col("b", &schema)?,
                 options: Default::default(),
             },
             PhysicalSortExpr {
-                expr: col("c", &schema).unwrap(),
+                expr: col("c", &schema)?,
                 options: Default::default(),
             },
-        ]);
+        ]
+        .into();
 
         let repartition_exec = RepartitionExec::try_new(
-            TestMemoryExec::try_new_exec(&[rbs], schema, None).unwrap(),
+            TestMemoryExec::try_new_exec(&[rbs], schema, None)?,
             Partitioning::RoundRobinBatch(2),
         )?;
         let coalesce_batches_exec =
@@ -486,7 +487,7 @@ mod tests {
     async fn test_round_robin_tie_breaker_success() -> Result<()> {
         let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
         let spm = generate_spm_for_round_robin_tie_breaker(true)?;
-        let _collected = collect(spm, task_ctx).await.unwrap();
+        let _collected = collect(spm, task_ctx).await?;
         Ok(())
     }
 
@@ -718,7 +719,7 @@ mod tests {
         context: Arc<TaskContext>,
     ) {
         let schema = partitions[0][0].schema();
-        let sort = LexOrdering::new(vec![
+        let sort = [
             PhysicalSortExpr {
                 expr: col("b", &schema).unwrap(),
                 options: Default::default(),
@@ -727,7 +728,8 @@ mod tests {
                 expr: col("c", &schema).unwrap(),
                 options: Default::default(),
             },
-        ]);
+        ]
+        .into();
         let exec = TestMemoryExec::try_new_exec(partitions, schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
@@ -775,13 +777,14 @@ mod tests {
         let csv = test::scan_partitioned(partitions);
         let schema = csv.schema();
 
-        let sort = LexOrdering::new(vec![PhysicalSortExpr {
-            expr: col("i", &schema).unwrap(),
+        let sort: LexOrdering = [PhysicalSortExpr {
+            expr: col("i", &schema)?,
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
             },
-        }]);
+        }]
+        .into();
 
         let basic =
             basic_sort(Arc::clone(&csv), sort.clone(), Arc::clone(&task_ctx)).await;
@@ -836,17 +839,18 @@ mod tests {
         let sorted = basic_sort(csv, sort, context).await;
         let split: Vec<_> = sizes.iter().map(|x| split_batch(&sorted, *x)).collect();
 
-        Ok(TestMemoryExec::try_new_exec(&split, sorted.schema(), None).unwrap())
+        TestMemoryExec::try_new_exec(&split, sorted.schema(), None).map(|e| e as _)
     }
 
     #[tokio::test]
     async fn test_partition_sort_streaming_input() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = make_partition(11).schema();
-        let sort = LexOrdering::new(vec![PhysicalSortExpr {
-            expr: col("i", &schema).unwrap(),
+        let sort: LexOrdering = [PhysicalSortExpr {
+            expr: col("i", &schema)?,
             options: Default::default(),
-        }]);
+        }]
+        .into();
 
         let input =
             sorted_partitioned_input(sort.clone(), &[10, 3, 11], Arc::clone(&task_ctx))
@@ -858,12 +862,9 @@ mod tests {
         assert_eq!(basic.num_rows(), 1200);
         assert_eq!(partition.num_rows(), 1200);
 
-        let basic = arrow::util::pretty::pretty_format_batches(&[basic])
-            .unwrap()
-            .to_string();
-        let partition = arrow::util::pretty::pretty_format_batches(&[partition])
-            .unwrap()
-            .to_string();
+        let basic = arrow::util::pretty::pretty_format_batches(&[basic])?.to_string();
+        let partition =
+            arrow::util::pretty::pretty_format_batches(&[partition])?.to_string();
 
         assert_eq!(basic, partition);
 
@@ -873,10 +874,11 @@ mod tests {
     #[tokio::test]
     async fn test_partition_sort_streaming_input_output() -> Result<()> {
         let schema = make_partition(11).schema();
-        let sort = LexOrdering::new(vec![PhysicalSortExpr {
-            expr: col("i", &schema).unwrap(),
+        let sort: LexOrdering = [PhysicalSortExpr {
+            expr: col("i", &schema)?,
             options: Default::default(),
-        }]);
+        }]
+        .into();
 
         // Test streaming with default batch size
         let task_ctx = Arc::new(TaskContext::default());
@@ -891,19 +893,14 @@ mod tests {
         let task_ctx = Arc::new(task_ctx);
 
         let merge = Arc::new(SortPreservingMergeExec::new(sort, input));
-        let merged = collect(merge, task_ctx).await.unwrap();
+        let merged = collect(merge, task_ctx).await?;
 
         assert_eq!(merged.len(), 53);
-
         assert_eq!(basic.num_rows(), 1200);
         assert_eq!(merged.iter().map(|x| x.num_rows()).sum::<usize>(), 1200);
 
-        let basic = arrow::util::pretty::pretty_format_batches(&[basic])
-            .unwrap()
-            .to_string();
-        let partition = arrow::util::pretty::pretty_format_batches(merged.as_slice())
-            .unwrap()
-            .to_string();
+        let basic = arrow::util::pretty::pretty_format_batches(&[basic])?.to_string();
+        let partition = arrow::util::pretty::pretty_format_batches(&merged)?.to_string();
 
         assert_eq!(basic, partition);
 
@@ -948,7 +945,7 @@ mod tests {
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
         let schema = b1.schema();
 
-        let sort = LexOrdering::new(vec![
+        let sort = [
             PhysicalSortExpr {
                 expr: col("b", &schema).unwrap(),
                 options: SortOptions {
@@ -963,7 +960,8 @@ mod tests {
                     nulls_first: false,
                 },
             },
-        ]);
+        ]
+        .into();
         let exec =
             TestMemoryExec::try_new_exec(&[vec![b1], vec![b2]], schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
@@ -997,13 +995,14 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
         let schema = batch.schema();
 
-        let sort = LexOrdering::new(vec![PhysicalSortExpr {
+        let sort = [PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }]);
+        }]
+        .into();
         let exec = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap();
         let merge =
             Arc::new(SortPreservingMergeExec::new(sort, exec).with_fetch(Some(2)));
@@ -1029,13 +1028,14 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
         let schema = batch.schema();
 
-        let sort = LexOrdering::new(vec![PhysicalSortExpr {
+        let sort = [PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }]);
+        }]
+        .into();
         let exec = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
@@ -1059,10 +1059,11 @@ mod tests {
     async fn test_async() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = make_partition(11).schema();
-        let sort = LexOrdering::new(vec![PhysicalSortExpr {
+        let sort: LexOrdering = [PhysicalSortExpr {
             expr: col("i", &schema).unwrap(),
             options: SortOptions::default(),
-        }]);
+        }]
+        .into();
 
         let batches =
             sorted_partitioned_input(sort.clone(), &[5, 7, 3], Arc::clone(&task_ctx))
@@ -1138,10 +1139,11 @@ mod tests {
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 
         let schema = b1.schema();
-        let sort = LexOrdering::new(vec![PhysicalSortExpr {
+        let sort = [PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),
             options: Default::default(),
-        }]);
+        }]
+        .into();
         let exec =
             TestMemoryExec::try_new_exec(&[vec![b1], vec![b2]], schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
@@ -1197,10 +1199,11 @@ mod tests {
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 2));
         let refs = blocking_exec.refs();
         let sort_preserving_merge_exec = Arc::new(SortPreservingMergeExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr {
+            [PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
-            }]),
+            }]
+            .into(),
             blocking_exec,
         ));
 
@@ -1245,13 +1248,14 @@ mod tests {
 
         let schema = partitions[0][0].schema();
 
-        let sort = LexOrdering::new(vec![PhysicalSortExpr {
+        let sort = [PhysicalSortExpr {
             expr: col("value", &schema).unwrap(),
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }]);
+        }]
+        .into();
 
         let exec = TestMemoryExec::try_new_exec(&partitions, schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
@@ -1431,9 +1435,10 @@ mod tests {
             congestion_cleared: Arc::new(Mutex::new(false)),
         };
         let spm = SortPreservingMergeExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            [PhysicalSortExpr::new_default(Arc::new(Column::new(
                 "c1", 0,
-            )))]),
+            )))]
+            .into(),
             Arc::new(source),
         );
         let spm_task = SpawnedTask::spawn(collect(Arc::new(spm), task_ctx));
@@ -1442,12 +1447,8 @@ mod tests {
         match result {
             Ok(Ok(Ok(_batches))) => Ok(()),
             Ok(Ok(Err(e))) => Err(e),
-            Ok(Err(_)) => Err(DataFusionError::Execution(
-                "SortPreservingMerge task panicked or was cancelled".to_string(),
-            )),
-            Err(_) => Err(DataFusionError::Execution(
-                "SortPreservingMerge caused a deadlock".to_string(),
-            )),
+            Ok(Err(_)) => exec_err!("SortPreservingMerge task panicked or was cancelled"),
+            Err(_) => exec_err!("SortPreservingMerge caused a deadlock"),
         }
     }
 }

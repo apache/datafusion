@@ -621,7 +621,7 @@ async fn run_window_test(
     }
 
     let concat_input_record = concat_batches(&schema, &input1)?;
-    let source_sort_keys = LexOrdering::new(vec![
+    let source_sort_keys: LexOrdering = [
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: Default::default(),
@@ -634,7 +634,8 @@ async fn run_window_test(
             expr: col("c", &schema)?,
             options: Default::default(),
         },
-    ]);
+    ]
+    .into();
     let mut exec1 = DataSourceExec::from_data_source(
         MemorySourceConfig::try_new(&[vec![concat_input_record]], schema.clone(), None)?
             .try_with_sort_information(vec![source_sort_keys.clone()])?,

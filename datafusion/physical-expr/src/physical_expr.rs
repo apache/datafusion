@@ -141,9 +141,7 @@ pub fn create_ordering(
                 }
             }
         }
-        if !sort_exprs.is_empty() {
-            all_sort_orders.push(LexOrdering::new(sort_exprs));
-        }
+        all_sort_orders.extend(LexOrdering::new(sort_exprs));
     }
     Ok(all_sort_orders)
 }

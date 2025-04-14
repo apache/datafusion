@@ -373,10 +373,8 @@ pub(crate) fn window_equivalence_properties(
             .iter()
             .map(|pb_order| sort_options_resolving_constant(Arc::clone(pb_order)))
             .multi_cartesian_product()
-            .filter(|lex| {
-                !lex.is_empty() && window_eq_properties.ordering_satisfy(lex.clone())
-            })
-            .map(LexOrdering::new)
+            .filter_map(LexOrdering::new)
+            .filter(|lex| window_eq_properties.ordering_satisfy(lex.clone()))
             .collect::<Vec<_>>();
         // If there is a partitioning, and no possible ordering cannot satisfy
         // the input plan's orderings, then we cannot further introduce any

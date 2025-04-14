@@ -2348,7 +2348,7 @@ mod tests {
     async fn test_get_finest_requirements() -> Result<()> {
         let test_schema = create_test_schema()?;
 
-        let options1 = SortOptions {
+        let options = SortOptions {
             descending: false,
             nulls_first: false,
         };
@@ -2364,44 +2364,44 @@ mod tests {
             vec![],
             vec![PhysicalSortExpr {
                 expr: Arc::clone(col_a),
-                options: options1,
+                options,
             }],
             vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_a),
-                    options: options1,
+                    options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
-                    options: options1,
+                    options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::clone(col_c),
-                    options: options1,
+                    options,
                 },
             ],
             vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_a),
-                    options: options1,
+                    options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
-                    options: options1,
+                    options,
                 },
             ],
         ];
 
-        let common_requirement = LexOrdering::new(vec![
-            PhysicalSortExpr {
+        let common_requirement = vec![
+            PhysicalSortRequirement {
                 expr: Arc::clone(col_a),
-                options: options1,
+                options: Some(options),
             },
-            PhysicalSortExpr {
+            PhysicalSortRequirement {
                 expr: Arc::clone(col_c),
-                options: options1,
+                options: Some(options),
             },
-        ]);
+        ];
         let mut aggr_exprs = order_by_exprs
             .into_iter()
             .map(|order_by_expr| {
@@ -2415,14 +2415,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let group_by = PhysicalGroupBy::new_single(vec![]);
-        let res = get_finer_aggregate_exprs_requirement(
+        let result = get_finer_aggregate_exprs_requirement(
             &mut aggr_exprs,
             &group_by,
             &eq_properties,
             &AggregateMode::Partial,
         )?;
-        let res = LexOrdering::from_iter(res.into_iter().map(Into::into));
-        assert_eq!(res, common_requirement);
+        assert_eq!(result, common_requirement);
         Ok(())
     }
 

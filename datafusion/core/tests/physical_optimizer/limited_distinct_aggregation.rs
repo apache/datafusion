@@ -30,9 +30,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::cast;
-use datafusion_physical_expr::{expressions, expressions::col, PhysicalSortExpr};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr::expressions::{self, cast, col};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode},
     collect,
@@ -236,10 +235,11 @@ async fn test_distinct_cols_different_than_group_by_cols() -> Result<()> {
 
 #[test]
 fn test_has_order_by() -> Result<()> {
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema()).unwrap(),
+    let sort_key = [PhysicalSortExpr {
+        expr: col("a", &schema())?,
         options: SortOptions::default(),
-    }]);
+    }]
+    .into();
     let source = parquet_exec_with_sort(vec![sort_key]);
     let schema = source.schema();
 

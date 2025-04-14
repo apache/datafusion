@@ -279,18 +279,18 @@ fn replace_with_partial_sort(
     // Here we're trying to find the common prefix for sorted columns that is required for the
     // sort and already satisfied by the given ordering
     let child_eq_properties = child.equivalence_properties();
-    let sort_req = LexRequirement::from(sort_plan.expr().clone());
+    let sort_exprs = sort_plan.expr().clone();
 
     let mut common_prefix_length = 0;
     while child_eq_properties
-        .ordering_satisfy_requirement(sort_req[0..common_prefix_length + 1].to_vec())
+        .ordering_satisfy(sort_exprs[0..common_prefix_length + 1].to_vec())
     {
         common_prefix_length += 1;
     }
     if common_prefix_length > 0 {
         return Ok(Arc::new(
             PartialSortExec::new(
-                LexOrdering::new(sort_plan.expr().to_vec()),
+                sort_exprs,
                 Arc::clone(sort_plan.input()),
                 common_prefix_length,
             )
@@ -573,10 +573,12 @@ fn analyze_immediate_sort_removal(
         && sort_input.output_partitioning().partition_count() > 1
     {
         // Replace the sort with a sort-preserving merge:
-        let expr = LexOrdering::new(sort_exec.expr().to_vec());
         Arc::new(
-            SortPreservingMergeExec::new(expr, Arc::clone(sort_input))
-                .with_fetch(sort_exec.fetch()),
+            SortPreservingMergeExec::new(
+                sort_exec.expr().clone(),
+                Arc::clone(sort_input),
+            )
+            .with_fetch(sort_exec.fetch()),
         ) as _
     } else {
         // Remove the sort:
@@ -795,8 +797,7 @@ fn remove_corresponding_sort_from_sub_plan(
         let fetch = plan.fetch();
         let plan = if let Some(ordering) = plan.output_ordering() {
             Arc::new(
-                SortPreservingMergeExec::new(LexOrdering::new(ordering.to_vec()), plan)
-                    .with_fetch(fetch),
+                SortPreservingMergeExec::new(ordering.clone(), plan).with_fetch(fetch),
             ) as _
         } else {
             Arc::new(CoalescePartitionsExec::new(plan)) as _

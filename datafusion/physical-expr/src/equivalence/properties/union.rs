@@ -156,10 +156,11 @@ impl UnionEquivalentOrderingBuilder {
                     AddedOrdering::No(ordering) => {
                         let mut sort_exprs = ordering.take();
                         sort_exprs.pop();
-                        if sort_exprs.is_empty() {
+                        if let Some(ordering) = LexOrdering::new(sort_exprs) {
+                            ordering
+                        } else {
                             break;
                         }
-                        LexOrdering::new(sort_exprs)
                     }
                 }
             }
@@ -255,7 +256,7 @@ impl UnionEquivalentOrderingBuilder {
             }
         }
 
-        (!augmented_ordering.is_empty()).then(|| LexOrdering::new(augmented_ordering))
+        LexOrdering::new(augmented_ordering)
     }
 
     fn build(self) -> Vec<LexOrdering> {

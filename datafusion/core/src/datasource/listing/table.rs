@@ -1244,7 +1244,10 @@ mod tests {
     use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
-    use crate::test::{columns, object_store::register_test_store};
+    use crate::test::object_store::{
+        ensure_head_concurrency, make_test_store_and_state, register_test_store
+    };
+    use crate::test::columns;
 
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
@@ -1253,10 +1256,8 @@ mod tests {
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_plan::collect;
-    use datafusion_physical_plan::ExecutionPlanProperties;
+    use datafusion_physical_plan::{collect, ExecutionPlanProperties};
 
-    use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
     use tempfile::TempDir;
     use url::Url;
 
@@ -1353,7 +1354,7 @@ mod tests {
 
         // (file_sort_order, expected_result)
         let cases = vec![
-            (vec![], Ok(vec![])),
+            (vec![], Ok(Vec::<LexOrdering>::new())),
             // sort expr, but non column
             (
                 vec![vec![
@@ -1364,15 +1365,13 @@ mod tests {
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
-                Ok(vec![LexOrdering::new(
-                        vec![PhysicalSortExpr {
+                Ok(vec![[PhysicalSortExpr {
                             expr: physical_col("string_col", &schema).unwrap(),
                             options: SortOptions {
                                 descending: false,
                                 nulls_first: false,
                             },
-                        }],
-                )
+                        }].into(),
                 ])
             ),
             // ok with two columns, different options
@@ -1381,16 +1380,14 @@ mod tests {
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
                 ]],
-                Ok(vec![LexOrdering::new(
-                        vec![
+                Ok(vec![[
                             PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
                                         .asc()
                                         .nulls_last(),
                             PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
                                         .desc()
                                         .nulls_first()
-                        ],
-                )
+                        ].into(),
                 ])
             ),
         ];

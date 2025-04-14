@@ -2181,9 +2181,10 @@ mod tests {
                 "test.parquet".to_string(),
                 1024,
             )])])
-            .with_output_ordering(vec![LexOrdering::new(vec![
-                PhysicalSortExpr::new_default(Arc::new(Column::new("date", 0))),
-            ])])
+            .with_output_ordering(vec![[PhysicalSortExpr::new_default(Arc::new(
+                Column::new("date", 0),
+            ))]
+            .into()])
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
             .with_newlines_in_values(true)
             .build();

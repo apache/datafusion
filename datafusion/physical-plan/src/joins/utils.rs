@@ -2357,7 +2357,7 @@ mod tests {
         let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];
 
         let expected = [
-            Some(LexOrdering::new(vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("a", 0)),
                     options,
@@ -2378,8 +2378,8 @@ mod tests {
                     expr: Arc::new(Column::new("y", 6)),
                     options,
                 },
-            ])),
-            Some(LexOrdering::new(vec![
+            ]),
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("z", 7)),
                     options,
@@ -2400,7 +2400,7 @@ mod tests {
                     expr: Arc::new(Column::new("d", 3)),
                     options,
                 },
-            ])),
+            ]),
         ];
 
         for (i, (maintains_input_order, probe_side)) in
@@ -2408,8 +2408,8 @@ mod tests {
         {
             assert_eq!(
                 calculate_join_output_ordering(
-                    Some(&left_ordering),
-                    Some(&right_ordering),
+                    left_ordering.as_ref(),
+                    right_ordering.as_ref(),
                     join_type,
                     &on_columns,
                     left_columns_len,

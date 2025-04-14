@@ -173,11 +173,7 @@ impl EquivalenceProperties {
         schema: SchemaRef,
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) -> Self {
-        let orderings = orderings
-            .into_iter()
-            .map(|o| o.into_iter().collect::<Vec<_>>())
-            .filter_map(|v| (!v.is_empty()).then(|| LexOrdering::new(v)))
-            .collect();
+        let orderings = orderings.into_iter().filter_map(LexOrdering::new).collect();
         Self {
             eq_group: EquivalenceGroup::empty(),
             oeq_class: OrderingEquivalenceClass::new(orderings),
@@ -222,7 +218,7 @@ impl EquivalenceProperties {
         // Prune out constant expressions:
         let mut sort_exprs = self.oeq_class().output_ordering()?.take();
         sort_exprs.retain(|item| !const_exprs_contains(&self.constants, &item.expr));
-        (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs))
+        LexOrdering::new(sort_exprs)
     }
 
     /// Returns the normalized version of the ordering equivalence class within.
@@ -418,15 +414,17 @@ impl EquivalenceProperties {
     /// is re-sorted according to the argument `ordering`. Note that constants
     /// and equivalence classes are unchanged as they are unaffected by a re-sort.
     /// If the given ordering is already satisfied, the function does nothing.
-    pub fn with_reorder(mut self, ordering: LexOrdering) -> Self {
+    pub fn with_reorder(
+        mut self,
+        ordering: impl IntoIterator<Item = PhysicalSortExpr>,
+    ) -> Self {
         // Filter out constant expressions as they don't affect ordering
         let filtered_exprs = ordering
             .into_iter()
             .filter(|expr| !self.is_expr_constant(&expr.expr))
             .collect::<Vec<_>>();
 
-        if !filtered_exprs.is_empty() {
-            let filtered_exprs = LexOrdering::new(filtered_exprs);
+        if let Some(filtered_exprs) = LexOrdering::new(filtered_exprs) {
             // Preserve valid suffixes from existing orderings:
             let oeq_class = mem::take(&mut self.oeq_class);
             let mut new_orderings = oeq_class
@@ -480,7 +478,7 @@ impl EquivalenceProperties {
             .map(|sort_expr| self.eq_group.normalize_sort_expr(sort_expr))
             .filter(|order| !self.is_normalized_expr_constant(&order.expr, false))
             .collect::<Vec<_>>();
-        (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs).collapse())
+        LexOrdering::new(sort_exprs).map(|o| o.collapse())
     }
 
     /// Normalizes the given sort requirements (i.e. `sort_reqs`) using the
@@ -825,7 +823,7 @@ impl EquivalenceProperties {
         let result = new_orderings
             .into_iter()
             .multi_cartesian_product()
-            .map(LexOrdering::new)
+            .map(Into::into)
             .collect();
         Ok(result)
     }
@@ -1009,8 +1007,7 @@ impl EquivalenceProperties {
                         generate_dependency_orderings(&relevant_deps, &dependency_map);
                     // Append `sort_expr` to the dependent orderings:
                     if dependency_orderings.is_empty() {
-                        dependency_orderings
-                            .push(LexOrdering::new(vec![sort_expr.clone()]));
+                        dependency_orderings.push([sort_expr.clone()].into());
                     } else {
                         for ordering in dependency_orderings.iter_mut() {
                             ordering.push(sort_expr.clone());
@@ -1031,7 +1028,7 @@ impl EquivalenceProperties {
                 // If prefix is empty, there is no dependency. Insert
                 // empty ordering:
                 if let Some(target) = &node.target_sort_expr {
-                    prefixes.push(LexOrdering::new(vec![target.clone()]));
+                    prefixes.push([target.clone()].into());
                 }
             } else {
                 // Append current ordering on top its dependencies:

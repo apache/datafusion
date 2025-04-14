@@ -73,6 +73,7 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
+    SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
@@ -108,8 +109,7 @@ use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
-use datafusion_proto::protobuf;
-use datafusion_proto::protobuf::PhysicalPlanNode;
+use datafusion_proto::protobuf::{self, PhysicalPlanNode};
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -653,7 +653,7 @@ fn roundtrip_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-    let sort_exprs = LexOrdering::new(vec![
+    let sort_exprs = [
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
@@ -668,7 +668,8 @@ fn roundtrip_sort() -> Result<()> {
                 nulls_first: true,
             },
         },
-    ]);
+    ]
+    .into();
     roundtrip_test(Arc::new(SortExec::new(
         sort_exprs,
         Arc::new(EmptyExec::new(schema)),
@@ -680,7 +681,7 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-    let sort_exprs = LexOrdering::new(vec![
+    let sort_exprs: LexOrdering = [
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
@@ -695,7 +696,8 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
                 nulls_first: true,
             },
         },
-    ]);
+    ]
+    .into();
 
     roundtrip_test(Arc::new(SortExec::new(
         sort_exprs.clone(),
@@ -1458,31 +1460,29 @@ fn roundtrip_sym_hash_join() -> Result<()> {
         ] {
             for left_order in &[
                 None,
-                Some(LexOrdering::new(vec![PhysicalSortExpr {
+                LexOrdering::new(vec![PhysicalSortExpr {
                     expr: Arc::new(Column::new("col", schema_left.index_of("col")?)),
                     options: Default::default(),
-                }])),
+                }]),
             ] {
                 for right_order in &[
                     None,
-                    Some(LexOrdering::new(vec![PhysicalSortExpr {
+                    LexOrdering::new(vec![PhysicalSortExpr {
                         expr: Arc::new(Column::new("col", schema_right.index_of("col")?)),
                         options: Default::default(),
-                    }])),
+                    }]),
                 ] {
-                    roundtrip_test(Arc::new(
-                        datafusion::physical_plan::joins::SymmetricHashJoinExec::try_new(
-                            Arc::new(EmptyExec::new(schema_left.clone())),
-                            Arc::new(EmptyExec::new(schema_right.clone())),
-                            on.clone(),
-                            None,
-                            join_type,
-                            false,
-                            left_order.clone(),
-                            right_order.clone(),
-                            *partition_mode,
-                        )?,
-                    ))?;
+                    roundtrip_test(Arc::new(SymmetricHashJoinExec::try_new(
+                        Arc::new(EmptyExec::new(schema_left.clone())),
+                        Arc::new(EmptyExec::new(schema_right.clone())),
+                        on.clone(),
+                        None,
+                        join_type,
+                        false,
+                        left_order.clone(),
+                        right_order.clone(),
+                        *partition_mode,
+                    )?))?;
                 }
             }
         }

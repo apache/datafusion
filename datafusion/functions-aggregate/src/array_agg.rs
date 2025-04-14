@@ -181,7 +181,7 @@ impl AggregateUDFImpl for ArrayAgg {
         OrderSensitiveArrayAggAccumulator::try_new(
             &data_type,
             &ordering_dtypes,
-            LexOrdering::new(order_bys.to_vec()),
+            LexOrdering::new(order_bys.to_vec()).unwrap(),
             acc_args.is_reversed,
         )
         .map(|acc| Box::new(acc) as _)

@@ -199,6 +199,16 @@ impl SortMergeJoinExec {
                 (left, right)
             })
             .unzip();
+        let Some(left_sort_exprs) = LexOrdering::new(left_sort_exprs) else {
+            return plan_err!(
+                "SortMergeJoinExec requires valid sort expressions for its left side"
+            );
+        };
+        let Some(right_sort_exprs) = LexOrdering::new(right_sort_exprs) else {
+            return plan_err!(
+                "SortMergeJoinExec requires valid sort expressions for its right side"
+            );
+        };
 
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
@@ -212,8 +222,8 @@ impl SortMergeJoinExec {
             join_type,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
-            left_sort_exprs: LexOrdering::new(left_sort_exprs),
-            right_sort_exprs: LexOrdering::new(right_sort_exprs),
+            left_sort_exprs,
+            right_sort_exprs,
             sort_options,
             null_equals_null,
             cache,

@@ -107,7 +107,7 @@ impl OrderingEquivalenceClass {
     ) {
         self.orderings.extend(orderings.into_iter().filter_map(|o| {
             let sort_exprs = o.into_iter().collect::<Vec<_>>();
-            (!sort_exprs.is_empty()).then(|| LexOrdering::new(sort_exprs))
+            LexOrdering::new(sort_exprs)
         }));
         // Make sure that there are no redundant orderings:
         self.remove_redundant_entries();
@@ -356,7 +356,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
     use datafusion_expr::{Operator, ScalarUDF};
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     #[test]
     fn test_ordering_satisfy() -> Result<()> {
@@ -364,11 +363,11 @@ mod tests {
             Field::new("a", DataType::Int64, true),
             Field::new("b", DataType::Int64, true),
         ]));
-        let crude = LexOrdering::new(vec![PhysicalSortExpr {
+        let crude = vec![PhysicalSortExpr {
             expr: Arc::new(Column::new("a", 0)),
             options: SortOptions::default(),
-        }]);
-        let finer = LexOrdering::new(vec![
+        }];
+        let finer = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -377,7 +376,7 @@ mod tests {
                 expr: Arc::new(Column::new("b", 1)),
                 options: SortOptions::default(),
             },
-        ]);
+        ];
         // finer ordering satisfies, crude ordering should return true
         let eq_properties_finer = EquivalenceProperties::new_with_orderings(
             Arc::clone(&input_schema),
