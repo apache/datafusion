@@ -336,7 +336,7 @@ impl MemoryExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         schema: SchemaRef,
-        orderings: &[LexOrdering],
+        orderings: Vec<LexOrdering>,
         constraints: Constraints,
         partitions: &[Vec<RecordBatch>],
     ) -> PlanProperties {
@@ -452,7 +452,7 @@ impl DataSource for MemorySourceConfig {
     fn eq_properties(&self) -> EquivalenceProperties {
         EquivalenceProperties::new_with_orderings(
             Arc::clone(&self.projected_schema),
-            self.sort_information.as_slice(),
+            self.sort_information.clone(),
         )
     }
 
@@ -697,7 +697,7 @@ impl MemorySourceConfig {
         if let Some(projection) = &self.projection {
             let base_eqp = EquivalenceProperties::new_with_orderings(
                 self.original_schema(),
-                &sort_information,
+                sort_information,
             );
             let proj_exprs = projection
                 .iter()

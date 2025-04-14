@@ -99,7 +99,7 @@ impl StreamingTableExec {
             projected_output_ordering.into_iter().collect::<Vec<_>>();
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
-            &projected_output_ordering,
+            projected_output_ordering.clone(),
             &partitions,
             infinite,
         );
@@ -146,7 +146,7 @@ impl StreamingTableExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         schema: SchemaRef,
-        orderings: &[LexOrdering],
+        orderings: Vec<LexOrdering>,
         partitions: &[Arc<dyn PartitionStream>],
         infinite: bool,
     ) -> PlanProperties {

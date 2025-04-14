@@ -66,7 +66,7 @@ impl ArrowExec {
         ) = base_config.project();
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
-            &projected_output_ordering,
+            projected_output_ordering,
             projected_constraints,
             &base_config,
         );
@@ -107,7 +107,7 @@ impl ArrowExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         schema: SchemaRef,
-        output_ordering: &[LexOrdering],
+        output_ordering: Vec<LexOrdering>,
         constraints: Constraints,
         file_scan_config: &FileScanConfig,
     ) -> PlanProperties {

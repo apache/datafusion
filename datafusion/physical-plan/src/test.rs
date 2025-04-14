@@ -210,7 +210,7 @@ impl TestMemoryExec {
     fn eq_properties(&self) -> EquivalenceProperties {
         EquivalenceProperties::new_with_orderings(
             Arc::clone(&self.projected_schema),
-            self.sort_information.as_slice(),
+            self.sort_information.clone(),
         )
     }
 
@@ -234,7 +234,7 @@ impl TestMemoryExec {
             cache: PlanProperties::new(
                 EquivalenceProperties::new_with_orderings(
                     Arc::clone(&projected_schema),
-                    vec![].as_slice(),
+                    Vec::<LexOrdering>::new(),
                 ),
                 Partitioning::UnknownPartitioning(partitions.len()),
                 EmissionType::Incremental,
@@ -320,7 +320,7 @@ impl TestMemoryExec {
         if let Some(projection) = &self.projection {
             let base_eqp = EquivalenceProperties::new_with_orderings(
                 self.original_schema(),
-                &sort_information,
+                sort_information,
             );
             let proj_exprs = projection
                 .iter()

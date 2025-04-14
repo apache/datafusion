@@ -176,14 +176,14 @@ impl OrderingEquivalenceClass {
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        (!self.orderings.is_empty()).then(|| {
-            self.orderings
-                .iter()
-                .flatten()
-                .cloned()
-                .collect::<LexOrdering>()
-                .collapse()
-        })
+        self.orderings
+            .iter()
+            .cloned()
+            .reduce(|mut cat, o| {
+                cat.extend(o);
+                cat
+            })
+            .map(|o| o.collapse())
     }
 
     // Append orderings in `other` to all existing orderings in this equivalence
@@ -381,15 +381,13 @@ mod tests {
         // finer ordering satisfies, crude ordering should return true
         let eq_properties_finer = EquivalenceProperties::new_with_orderings(
             Arc::clone(&input_schema),
-            &[finer.clone()],
+            [finer.clone()],
         );
         assert!(eq_properties_finer.ordering_satisfy(crude.clone()));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
-        let eq_properties_crude = EquivalenceProperties::new_with_orderings(
-            Arc::clone(&input_schema),
-            &[crude],
-        );
+        let eq_properties_crude =
+            EquivalenceProperties::new_with_orderings(Arc::clone(&input_schema), [crude]);
         assert!(!eq_properties_crude.ordering_satisfy(finer));
         Ok(())
     }

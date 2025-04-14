@@ -214,10 +214,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let eq_properties = if sort_exprs.is_empty() {
             EquivalenceProperties::new(Arc::new(schema))
         } else {
-            EquivalenceProperties::new_with_orderings(
-                Arc::new(schema),
-                &[sort_exprs.into()],
-            )
+            EquivalenceProperties::new_with_orderings(Arc::new(schema), [sort_exprs])
         };
 
         let emission_type: EmissionType =

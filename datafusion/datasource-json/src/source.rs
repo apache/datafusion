@@ -76,7 +76,7 @@ impl NdJsonExec {
         ) = base_config.project();
         let cache = Self::compute_properties(
             projected_schema,
-            &projected_output_ordering,
+            projected_output_ordering,
             projected_constraints,
             &base_config,
         );
@@ -129,7 +129,7 @@ impl NdJsonExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         schema: SchemaRef,
-        orderings: &[LexOrdering],
+        orderings: Vec<LexOrdering>,
         constraints: Constraints,
         file_scan_config: &FileScanConfig,
     ) -> PlanProperties {

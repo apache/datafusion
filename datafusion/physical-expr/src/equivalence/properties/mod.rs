@@ -169,10 +169,18 @@ impl EquivalenceProperties {
     }
 
     /// Creates a new `EquivalenceProperties` object with the given orderings.
-    pub fn new_with_orderings(schema: SchemaRef, orderings: &[LexOrdering]) -> Self {
+    pub fn new_with_orderings(
+        schema: SchemaRef,
+        orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
+    ) -> Self {
+        let orderings = orderings
+            .into_iter()
+            .map(|o| o.into_iter().collect::<Vec<_>>())
+            .filter_map(|v| (!v.is_empty()).then(|| LexOrdering::new(v)))
+            .collect();
         Self {
             eq_group: EquivalenceGroup::empty(),
-            oeq_class: OrderingEquivalenceClass::new(orderings.to_vec()),
+            oeq_class: OrderingEquivalenceClass::new(orderings),
             constants: vec![],
             constraints: Constraints::empty(),
             schema,
@@ -270,7 +278,7 @@ impl EquivalenceProperties {
         &mut self,
         ordering: impl IntoIterator<Item = PhysicalSortExpr>,
     ) {
-        self.add_new_orderings([ordering]);
+        self.add_new_orderings(std::iter::once(ordering));
     }
 
     /// Incorporates the given equivalence group to into the existing

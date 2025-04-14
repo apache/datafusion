@@ -841,7 +841,7 @@ mod tests {
                 .map(|col_name| ConstExpr::new(col(col_name, schema).unwrap()))
                 .collect::<Vec<_>>();
 
-            EquivalenceProperties::new_with_orderings(Arc::clone(schema), &orderings)
+            EquivalenceProperties::new_with_orderings(Arc::clone(schema), orderings)
                 .with_constants(constants)
         }
     }

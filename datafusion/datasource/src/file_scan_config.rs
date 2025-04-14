@@ -531,7 +531,7 @@ impl DataSource for FileScanConfig {
 
     fn eq_properties(&self) -> EquivalenceProperties {
         let (schema, constraints, _, orderings) = self.project();
-        EquivalenceProperties::new_with_orderings(schema, orderings.as_slice())
+        EquivalenceProperties::new_with_orderings(schema, orderings)
             .with_constraints(constraints)
     }
 

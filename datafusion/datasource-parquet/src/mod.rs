@@ -444,7 +444,7 @@ impl ParquetExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         schema: SchemaRef,
-        orderings: &[LexOrdering],
+        orderings: Vec<LexOrdering>,
         constraints: Constraints,
         file_config: &FileScanConfig,
     ) -> PlanProperties {
