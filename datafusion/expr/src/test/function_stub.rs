@@ -25,6 +25,7 @@ use arrow::datatypes::{
     DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 
+use datafusion_common::Spans;
 use datafusion_common::{
     exec_err, not_impl_err, utils::take_function_args_with_diag, Result,
 };
@@ -97,13 +98,35 @@ pub fn avg(expr: Expr) -> Expr {
 #[derive(Debug)]
 pub struct Sum {
     signature: Signature,
+    /// Original source code location, if known
+    pub spans: Spans,
 }
 
 impl Sum {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Immutable),
+            spans: Spans::new(),
         }
+    }
+
+    /// Returns a reference to the set of locations in the SQL query where this
+    /// column appears, if known.
+    pub fn spans(&self) -> &Spans {
+        &self.spans
+    }
+
+    /// Returns a mutable reference to the set of locations in the SQL query
+    /// where this column appears, if known.
+    pub fn spans_mut(&mut self) -> &mut Spans {
+        &mut self.spans
+    }
+
+    /// Replaces the set of locations in the SQL query where this column
+    /// appears, if known.
+    pub fn with_spans(mut self, spans: Spans) -> Self {
+        self.spans = spans;
+        self
     }
 }
 
@@ -127,7 +150,9 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [array] = take_function_args_with_diag(self.name(), arg_types, None)?;
+        dbg!(self.spans());
+        let [array] =
+            take_function_args_with_diag(self.name(), arg_types, self.spans().first())?;
 
         // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
         // smallint, int, bigint, real, double precision, decimal, or interval.
