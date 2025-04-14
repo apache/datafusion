@@ -23,7 +23,7 @@ use arrow::{
     row::{RowConverter, Rows, SortField},
 };
 use arrow_ord::cmp::{gt, gt_eq, lt, lt_eq};
-use std::{clone, mem::size_of};
+use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
