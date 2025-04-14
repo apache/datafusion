@@ -23,7 +23,7 @@ use std::{
 };
 
 use datafusion_common::{
-    config::{ConfigExtension, ConfigOptions, ExecutionOptions},
+    config::{ConfigExtension, ConfigOptions},
     Result, ScalarValue,
 };
 
@@ -194,7 +194,7 @@ impl SessionConfig {
     /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
         self.options.execution.target_partitions = if n == 0 {
-            ExecutionOptions::default().target_partitions
+            datafusion_common::config::ExecutionOptions::default().target_partitions
         } else {
             n
         };
