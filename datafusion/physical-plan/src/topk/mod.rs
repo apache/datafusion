@@ -18,7 +18,7 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
-    compute::interleave,
+    compute::interleave_record_batch,
     row::{RowConverter, Rows, SortField},
 };
 use std::mem::size_of;
@@ -27,7 +27,7 @@ use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
-use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_common::{internal_datafusion_err, HashMap};
@@ -179,7 +179,7 @@ impl TopK {
             expr: Arc::from(expr),
             row_converter,
             scratch_rows,
-            heap: TopKHeap::new(k, batch_size, schema),
+            heap: TopKHeap::new(k, batch_size),
             common_sort_prefix_converter: prefix_row_converter,
             common_sort_prefix: Arc::from(common_sort_prefix),
             finished: false,
@@ -402,13 +402,13 @@ struct TopKHeap {
 }
 
 impl TopKHeap {
-    fn new(k: usize, batch_size: usize, schema: SchemaRef) -> Self {
+    fn new(k: usize, batch_size: usize) -> Self {
         assert!(k > 0);
         Self {
             k,
             batch_size,
             inner: BinaryHeap::new(),
-            store: RecordBatchStore::new(schema),
+            store: RecordBatchStore::new(),
             owned_bytes: 0,
         }
     }
@@ -485,8 +485,6 @@ impl TopKHeap {
     /// high, as a single [`RecordBatch`], and a sorted vec of the
     /// current heap's contents
     pub fn emit_with_state(&mut self) -> Result<(Option<RecordBatch>, Vec<TopKRow>)> {
-        let schema = Arc::clone(self.store.schema());
-
         // generate sorted rows
         let topk_rows = std::mem::take(&mut self.inner).into_sorted_vec();
 
@@ -501,30 +499,20 @@ impl TopKHeap {
             .map(|(i, k)| (i, k.index))
             .collect();
 
-        let num_columns = schema.fields().len();
-
-        // build the output columns one at time, using the
-        // `interleave` kernel to pick rows from different arrays
-        let output_columns: Vec<_> = (0..num_columns)
-            .map(|col| {
-                let input_arrays: Vec<_> = topk_rows
-                    .iter()
-                    .map(|k| {
-                        let entry =
-                            self.store.get(k.batch_id).expect("invalid stored batch id");
-                        entry.batch.column(col) as &dyn Array
-                    })
-                    .collect();
-
-                // at this point `indices` contains indexes within the
-                // rows and `input_arrays` contains a reference to the
-                // relevant Array for that index. `interleave` pulls
-                // them together into a single new array
-                Ok(interleave(&input_arrays, &indices)?)
+        let record_batches: Vec<_> = topk_rows
+            .iter()
+            .map(|k| {
+                let entry = self.store.get(k.batch_id).expect("invalid stored batch id");
+                &entry.batch
             })
-            .collect::<Result<_>>()?;
+            .collect();
 
-        let new_batch = RecordBatch::try_new(schema, output_columns)?;
+        // At this point `indices` contains indexes within the
+        // rows and `input_arrays` contains a reference to the
+        // relevant RecordBatch for that index. `interleave_record_batch` pulls
+        // them together into a single new batch
+        let new_batch = interleave_record_batch(&record_batches, &indices)?;
+
         Ok((Some(new_batch), topk_rows))
     }
 
@@ -679,17 +667,14 @@ struct RecordBatchStore {
     batches: HashMap<u32, RecordBatchEntry>,
     /// total size of all record batches tracked by this store
     batches_size: usize,
-    /// schema of the batches
-    schema: SchemaRef,
 }
 
 impl RecordBatchStore {
-    fn new(schema: SchemaRef) -> Self {
+    fn new() -> Self {
         Self {
             next_id: 0,
             batches: HashMap::new(),
             batches_size: 0,
-            schema,
         }
     }
 
@@ -740,11 +725,6 @@ impl RecordBatchStore {
         self.batches.is_empty()
     }
 
-    /// return the schema of batches stored
-    fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-
     /// remove a use from the specified batch id. If the use count
     /// reaches zero the batch entry is removed from the store
     ///
@@ -793,7 +773,7 @@ mod tests {
             Field::new("ints", DataType::Int32, true),
             Field::new("float64", DataType::Float64, false),
         ]));
-        let mut record_batch_store = RecordBatchStore::new(Arc::clone(&schema));
+        let mut record_batch_store = RecordBatchStore::new();
         let int_array =
             Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4), Some(5)]); // 5 * 4 = 20
         let float64_array = Float64Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0]); // 5 * 8 = 40
