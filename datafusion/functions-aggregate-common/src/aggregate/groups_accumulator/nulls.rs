@@ -20,7 +20,7 @@
 use arrow::array::{
     Array, ArrayRef, ArrowNumericType, AsArray, BinaryArray, BinaryViewArray,
     BooleanArray, LargeBinaryArray, LargeStringArray, PrimitiveArray, StringArray,
-    StringViewArray,
+    StringViewArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
@@ -193,6 +193,14 @@ pub fn set_nulls_dyn(input: &dyn Array, nulls: Option<NullBuffer>) -> Result<Arr
                 ))
             }
         }
+        DataType::Struct(_) => unsafe {
+            let input = input.as_struct();
+            Arc::new(StructArray::new_unchecked(
+                input.fields().clone(),
+                input.columns().to_vec(),
+                nulls,
+            ))
+        },
         _ => {
             return not_impl_err!("Applying nulls {:?}", input.data_type());
         }

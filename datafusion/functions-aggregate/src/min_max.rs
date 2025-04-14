@@ -19,6 +19,7 @@
 //! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
 
 mod min_max_bytes;
+mod min_max_struct;
 
 use arrow::array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
@@ -56,6 +57,7 @@ use arrow::datatypes::{
 };
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
+use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
@@ -267,6 +269,7 @@ impl AggregateUDFImpl for Max {
                 | LargeBinary
                 | BinaryView
                 | Duration(_)
+                | Struct(_)
         )
     }
 
@@ -342,7 +345,9 @@ impl AggregateUDFImpl for Max {
             Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
                 Ok(Box::new(MinMaxBytesAccumulator::new_max(data_type.clone())))
             }
-
+            Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_max(
+                data_type.clone(),
+            ))),
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for max({})", data_type),
         }
@@ -630,33 +635,26 @@ fn min_max_batch_struct(array: &ArrayRef, ordering: Ordering) -> Result<ScalarVa
             extreme = current;
             continue;
         }
-        match extreme.partial_cmp(&current) {
-            Some(cmp) => {
-                if cmp == ordering {
-                    extreme = current;
-                }
-            }
-            None => {
-                return internal_err!("Comparison error while computing min/max");
+        if let Some(cmp) = extreme.partial_cmp(&current) {
+            if cmp == ordering {
+                extreme = current;
             }
         }
     }
-    Ok(extreme)
+    // use deep_clone to free array reference
+    Ok(extreme.deep_clone())
 }
 
 macro_rules! min_max_struct {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
         if $VALUE.is_null() {
-            Ok($DELTA.clone())
+            $DELTA.clone()
         } else if $DELTA.is_null() {
-            Ok($VALUE.clone())
+            $VALUE.clone()
         } else {
             match $VALUE.partial_cmp(&$DELTA) {
-                Some(choose_min_max!($OP)) => Ok($DELTA.clone()),
-                Some(_) => Ok($VALUE.clone()),
-                None => {
-                    internal_err!("Comparison error while computing min/max")
-                }
+                Some(choose_min_max!($OP)) => $DELTA.clone(),
+                _ => $VALUE.clone(),
             }
         }
     }};
@@ -977,7 +975,7 @@ macro_rules! min_max {
                 lhs @ ScalarValue::Struct(_),
                 rhs @ ScalarValue::Struct(_),
             ) => {
-                min_max_struct!(lhs, rhs, $OP)?
+                min_max_struct!(lhs, rhs, $OP)
             }
             e => {
                 return internal_err!(
@@ -1189,6 +1187,7 @@ impl AggregateUDFImpl for Min {
                 | LargeBinary
                 | BinaryView
                 | Duration(_)
+                | Struct(_)
         )
     }
 
@@ -1264,7 +1263,9 @@ impl AggregateUDFImpl for Min {
             Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
                 Ok(Box::new(MinMaxBytesAccumulator::new_min(data_type.clone())))
             }
-
+            Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_min(
+                data_type.clone(),
+            ))),
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for min({})", data_type),
         }

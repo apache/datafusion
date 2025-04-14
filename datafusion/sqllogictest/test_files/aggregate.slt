@@ -6778,3 +6778,35 @@ query ?? rowsort
 SELECT MIN(c), MAX(c) FROM (SELECT * FROM (SELECT STRUCT(1 as 'a', 2 as 'b') AS c) LIMIT 0)
 ----
 NULL NULL
+
+# Min/Max group struct 
+query I?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT key, MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a', c2 AS 'b') AS c, (c1 % 2) AS key FROM t) GROUP BY key
+----
+0 {a: 2, b: 3} {a: 10, b: 11}
+1 {a: 1, b: 2} {a: 9, b: 10}
+
+# Min/Max group struct with NULL
+query I?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT key, MIN(c), MAX(c) FROM (SELECT CASE WHEN c1 % 2 == 0 THEN STRUCT(c1 AS 'a', c2 AS 'b') ELSE NULL END AS c, (c1 % 2) AS key FROM t) GROUP BY key
+----
+0 {a: 2, b: 3} {a: 10, b: 11}
+1 NULL NULL
+
+# Min/Max group struct with NULL
+query I?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT key, MIN(c), MAX(c) FROM (SELECT CASE WHEN c1 % 3 == 0 THEN STRUCT(c1 AS 'a', c2 AS 'b') ELSE NULL END AS c, (c1 % 2) AS key FROM t) GROUP BY key
+----
+0 {a: 6, b: 7} {a: 6, b: 7}
+1 {a: 3, b: 4} {a: 9, b: 10}
+
+# Min/Max struct empty
+query ?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a', c2 AS 'b') AS c, (c1 % 2) AS key FROM t LIMIT 0) GROUP BY key
+----
+
+
