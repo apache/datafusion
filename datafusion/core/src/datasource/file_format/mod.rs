@@ -58,8 +58,8 @@ pub(crate) mod test_util {
         let store = Arc::new(object_store::local::LocalFileSystem::new()) as _;
         let meta = local_unpartitioned_file(format!("{store_root}/{file_name}"));
 
-        let file_schema = if schema.is_some() {
-            schema.unwrap()
+        let file_schema = if let Some(file_schema) = schema {
+            file_schema
         } else {
             format
                 .infer_schema(state, &store, std::slice::from_ref(&meta))
