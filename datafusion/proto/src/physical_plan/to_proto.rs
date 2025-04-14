@@ -445,7 +445,7 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
         })? as u64;
         Ok(protobuf::PartitionedFile {
             path: pf.object_meta.location.as_ref().to_owned(),
-            size: pf.object_meta.size as u64,
+            size: pf.object_meta.size,
             last_modified_ns,
             partition_values: pf
                 .partition_values
