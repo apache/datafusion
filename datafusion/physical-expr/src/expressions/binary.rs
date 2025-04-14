@@ -840,7 +840,7 @@ const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 /// - For `AND`:
 ///    - if LHS is all false => short-circuit → return LHS
 ///    - if LHS is all true  => short-circuit → return RHS
-///    - if LHS is mixed and true_count/sum_count <= [`PRE_SELECTIO_THRESHOLD`] -> pre-selection
+///    - if LHS is mixed and true_count/sum_count <= [`PRE_SELECTION_THRESHOLD`] -> pre-selection
 /// - For `OR`:
 ///    - if LHS is all true  => short-circuit → return LHS
 ///    - if LHS is all false => short-circuit → return RHS
