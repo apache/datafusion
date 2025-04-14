@@ -963,7 +963,7 @@ fn check_short_circuit<'a>(
 ///   Right Evaluation
 ///     (Condition: Even numbers)
 ///          ↓
-///  Right Data: [2]
+///  Right Data: [ 2 ]
 ///    Right Bitmap: [1, 0]
 ///          ↓
 ///   Combine Results
