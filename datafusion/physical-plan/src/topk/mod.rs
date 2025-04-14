@@ -204,7 +204,9 @@ impl TopK {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // selected indices
+        // Selected indices in the input batch.
+        // Some indices may be pre-filtered if they exceed the heap’s current max value.
+
         let mut selected_rows = None;
 
         // If the heap doesn't have k elements yet, we can't create thresholds
