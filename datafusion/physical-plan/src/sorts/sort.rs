@@ -798,10 +798,10 @@ impl ExternalSorter {
     /// This is meant to be used with DataFusionError::ResourcesExhausted only.
     fn err_with_oom_context(e: DataFusionError) -> DataFusionError {
         match e {
-            DataFusionError::ResourcesExhausted(_) => e.context(format!(
+            DataFusionError::ResourcesExhausted(_) => e.context(
                 "Not enough memory to continue external sort. \
                     Consider increasing the memory limit, or decreasing sort_spill_reservation_bytes"
-            )),
+            ),
             // This is not an OOM error, so just return it as is.
             _ => e,
         }
