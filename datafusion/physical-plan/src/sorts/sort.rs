@@ -1350,6 +1350,7 @@ impl ExecutionPlan for SortExec {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::error::Error;
     use std::pin::Pin;
     use std::task::{Context, Poll};
 
@@ -1641,7 +1642,19 @@ mod tests {
 
         let err = result.unwrap_err();
         assert!(
-            matches!(err, DataFusionError::ResourcesExhausted(_)),
+            matches!(err, DataFusionError::Context(..)),
+            "Assertion failed: expected a Context error, but got: {:?}",
+            err
+        );
+
+        // Assert that the context error is wrapping a resources exhausted error.
+        let nested_err = err
+            .source()
+            .unwrap()
+            .downcast_ref::<DataFusionError>()
+            .unwrap();
+        assert!(
+            matches!(nested_err, DataFusionError::ResourcesExhausted(_)),
             "Assertion failed: expected a ResourcesExhausted error, but got: {:?}",
             err
         );
