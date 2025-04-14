@@ -555,7 +555,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
             object_meta: ObjectMeta {
                 location: Path::from(val.path.as_str()),
                 last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
-                size: val.size as usize,
+                size: val.size,
                 e_tag: None,
                 version: None,
             },

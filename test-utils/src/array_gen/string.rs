@@ -95,7 +95,7 @@ fn random_string(rng: &mut StdRng, max_len: usize) -> String {
         1 => String::from(rng.gen::<char>()),
         _ => {
             let len = rng.gen_range(1..=max_len);
-            rng.sample_iter::<char, _>(rand::distributions::Standard)
+            rng.sample_iter::<char, _>(rand::distr::StandardUniform)
                 .take(len)
                 .collect()
         }

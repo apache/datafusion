@@ -239,6 +239,7 @@ fn default_field_name(dt: &DataType) -> &str {
         }
         DataType::Decimal128(_, _) => "decimal",
         DataType::Decimal256(_, _) => "decimal",
+        DataType::Extension(_) => unimplemented!("Extension support not implemented"),
     }
 }
 

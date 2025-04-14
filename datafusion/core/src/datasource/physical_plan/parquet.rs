@@ -1806,7 +1806,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct TrackingParquetFileReaderFactory {
         inner: Arc<dyn ParquetFileReaderFactory>,
-        metadata_size_hint_calls: Arc<Mutex<Vec<Option<usize>>>>,
+        metadata_size_hint_calls: Arc<Mutex<Vec<Option<u64>>>>,
     }
 
     impl TrackingParquetFileReaderFactory {
@@ -1823,7 +1823,7 @@ mod tests {
             &self,
             partition_index: usize,
             file_meta: FileMeta,
-            metadata_size_hint: Option<usize>,
+            metadata_size_hint: Option<u64>,
             metrics: &ExecutionPlanMetricsSet,
         ) -> Result<Box<dyn parquet::arrow::async_reader::AsyncFileReader + Send>>
         {
@@ -1856,8 +1856,8 @@ mod tests {
         let schema = batch.schema();
         let name_1 = "test1.parquet";
         let name_2 = "test2.parquet";
-        let total_size_1 = write_batch(name_1, store.clone(), batch.clone()).await;
-        let total_size_2 = write_batch(name_2, store.clone(), batch.clone()).await;
+        let total_size_1 = write_batch(name_1, store.clone(), batch.clone()).await as u64;
+        let total_size_2 = write_batch(name_2, store.clone(), batch.clone()).await as u64;
 
         let reader_factory =
             Arc::new(TrackingParquetFileReaderFactory::new(store.clone()));

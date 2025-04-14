@@ -330,8 +330,8 @@ mod tests {
 
         fn list(
             &self,
-            _prefix: Option<&Path>,
-        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+            _: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             Box::pin(futures::stream::once(async {
                 Err(object_store::Error::NotImplemented)
             }))

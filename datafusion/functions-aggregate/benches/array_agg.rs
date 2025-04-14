@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use rand::distr::Distribution;
+use rand::distr::StandardUniform;
+use rand::Rng;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -28,8 +31,6 @@ use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
 
 use arrow::buffer::OffsetBuffer;
 use arrow::util::test_util::seedable_rng;
-use rand::distributions::{Distribution, Standard};
-use rand::Rng;
 
 fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     let list_item_data_type = values.as_list::<i32>().values().data_type().clone();
@@ -55,7 +56,7 @@ pub fn create_list_array<T>(
 ) -> ListArray
 where
     T: ArrowPrimitiveType,
-    Standard: Distribution<T::Native>,
+    StandardUniform: Distribution<T::Native>,
 {
     let mut nulls_builder = NullBufferBuilder::new(size);
     let mut rng = seedable_rng();

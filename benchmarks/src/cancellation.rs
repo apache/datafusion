@@ -38,7 +38,7 @@ use futures::TryStreamExt;
 use object_store::ObjectStore;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::rngs::ThreadRng;
 use rand::Rng;
 use structopt::StructOpt;

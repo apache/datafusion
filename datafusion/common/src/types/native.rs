@@ -411,6 +411,7 @@ impl From<DataType> for NativeType {
             DataType::Map(field, _) => Map(Arc::new(field.as_ref().into())),
             DataType::Dictionary(_, data_type) => data_type.as_ref().clone().into(),
             DataType::RunEndEncoded(_, field) => field.data_type().clone().into(),
+            DataType::Extension(extension) => extension.storage_type().clone().into(),
         }
     }
 }

@@ -272,7 +272,7 @@ pub struct ParquetSource {
     /// Batch size configuration
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
-    pub(crate) metadata_size_hint: Option<usize>,
+    pub(crate) metadata_size_hint: Option<u64>,
     pub(crate) projected_statistics: Option<Statistics>,
 }
 
@@ -293,7 +293,7 @@ impl ParquetSource {
     /// [`ParquetFileReaderFactory`] will request in the initial IO. If this is
     /// too small, the ParquetSource will need to make additional IO requests to
     /// read the footer.
-    pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
+    pub fn with_metadata_size_hint(mut self, metadata_size_hint: u64) -> Self {
         self.metadata_size_hint = Some(metadata_size_hint);
         self
     }
