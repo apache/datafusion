@@ -289,32 +289,18 @@ impl TopK {
 
         match selected_rows {
             Some(filter) => {
-                for (index, row) in filter.values().set_indices().zip(rows.iter()) {
-                    match self.heap.max() {
-                        // heap has k items, and the new row is greater than the
-                        // current max in the heap ==> it is not a new topk
-                        Some(max_row) if row.as_ref() >= max_row.row() => {}
-                        // don't yet have k items or new item is lower than the currently k low values
-                        None | Some(_) => {
-                            self.heap.add(&mut batch_entry, row, index);
-                            replacements += 1;
-                        }
-                    }
-                }
+                self.find_new_topk_items(
+                    filter.values().set_indices(),
+                    &mut batch_entry,
+                    &mut replacements,
+                );
             }
             None => {
-                for (index, row) in rows.iter().enumerate() {
-                    match self.heap.max() {
-                        // heap has k items, and the new row is greater than the
-                        // current max in the heap ==> it is not a new topk
-                        Some(max_row) if row.as_ref() >= max_row.row() => {}
-                        // don't yet have k items or new item is lower than the currently k low values
-                        None | Some(_) => {
-                            self.heap.add(&mut batch_entry, row, index);
-                            replacements += 1;
-                        }
-                    }
-                }
+                self.find_new_topk_items(
+                    0..sort_keys[0].len(),
+                    &mut batch_entry,
+                    &mut replacements,
+                );
             }
         }
 
@@ -332,6 +318,27 @@ impl TopK {
         // which means the top K won't change and the computation can be finished early.
         self.attempt_early_completion(&batch)?;
         Ok(())
+    }
+
+    fn find_new_topk_items(
+        &mut self,
+        items: impl Iterator<Item = usize>,
+        batch_entry: &mut RecordBatchEntry,
+        replacements: &mut usize,
+    ) {
+        let rows = &mut self.scratch_rows;
+        for (index, row) in items.zip(rows.iter()) {
+            match self.heap.max() {
+                // heap has k items, and the new row is greater than the
+                // current max in the heap ==> it is not a new topk
+                Some(max_row) if row.as_ref() >= max_row.row() => {}
+                // don't yet have k items or new item is lower than the currently k low values
+                None | Some(_) => {
+                    self.heap.add(batch_entry, row, index);
+                    *replacements += 1;
+                }
+            }
+        }
     }
 
     /// If input ordering shares a common sort prefix with the TopK, and if the TopK's heap is full,
