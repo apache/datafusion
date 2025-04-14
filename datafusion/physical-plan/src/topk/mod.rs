@@ -23,6 +23,7 @@ use arrow::{
     row::{RowConverter, Rows, SortField},
 };
 use arrow_ord::cmp::{gt, gt_eq, lt, lt_eq};
+use datafusion_expr::ColumnarValue;
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
@@ -226,56 +227,65 @@ impl TopK {
             let expr = Arc::clone(&self.expr[0].expr);
             let value = expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
 
-            // Convert to scalar value - should be a single value since we're evaluating on a single row batch
-            let threshold = Scalar::new(value.to_array(1)?);
-
-            // Create a filter for each sort key
-            let is_multi_col = self.expr.len() > 1;
-
-            let mut filter = match (is_multi_col, self.expr[0].options.descending) {
-                (true, true) => BooleanArray::new(
-                    gt_eq(&sort_keys[0], &threshold)?.values().clone(),
-                    None,
-                ),
-                (true, false) => BooleanArray::new(
-                    lt_eq(&sort_keys[0], &threshold)?.values().clone(),
-                    None,
-                ),
-                (false, true) => BooleanArray::new(
-                    gt(&sort_keys[0], &threshold)?.values().clone(),
-                    None,
-                ),
-                (false, false) => BooleanArray::new(
-                    lt(&sort_keys[0], &threshold)?.values().clone(),
-                    None,
-                ),
-            };
-            if sort_keys[0].is_nullable() {
-                // Keep any null values
-                // TODO it is possible to optimize this based on the current threshold value
-                // and the nulls first/last option and the number of following sort keys
-                filter = or(&filter, &is_null(&sort_keys[0])?)?;
-            }
-            if filter.true_count() == 0 {
-                // No rows are less than the max row, so we can skip this batch
-                // Early completion is still possible, as last row might be greater
-                self.attempt_early_completion(&batch)?;
-
-                return Ok(());
-            }
-
-            let filter_predicate = FilterBuilder::new(&filter);
-            let filter_predicate = if sort_keys.len() > 1 {
-                filter_predicate.optimize().build()
+            let scalar_is_null = if let ColumnarValue::Scalar(scalar_value) = &value {
+                scalar_value.is_null()
             } else {
-                filter_predicate.build()
+                false
             };
-            selected_rows = Some(filter);
 
-            sort_keys = sort_keys
-                .iter()
-                .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
-                .collect::<Result<Vec<_>>>()?;
+            // skip filtering if threshold is null
+            if !scalar_is_null {
+                // Convert to scalar value - should be a single value since we're evaluating on a single row batch
+                let threshold = Scalar::new(value.to_array(1)?);
+
+                // Create a filter for each sort key
+                let is_multi_col = self.expr.len() > 1;
+
+                let mut filter = match (is_multi_col, self.expr[0].options.descending) {
+                    (true, true) => BooleanArray::new(
+                        gt_eq(&sort_keys[0], &threshold)?.values().clone(),
+                        None,
+                    ),
+                    (true, false) => BooleanArray::new(
+                        lt_eq(&sort_keys[0], &threshold)?.values().clone(),
+                        None,
+                    ),
+                    (false, true) => BooleanArray::new(
+                        gt(&sort_keys[0], &threshold)?.values().clone(),
+                        None,
+                    ),
+                    (false, false) => BooleanArray::new(
+                        lt(&sort_keys[0], &threshold)?.values().clone(),
+                        None,
+                    ),
+                };
+                if sort_keys[0].is_nullable() {
+                    // Keep any null values
+                    // TODO it is possible to optimize this based on the current threshold value
+                    // and the nulls first/last option and the number of following sort keys
+                    filter = or(&filter, &is_null(&sort_keys[0])?)?;
+                }
+                if filter.true_count() == 0 {
+                    // No rows are less than the max row, so we can skip this batch
+                    // Early completion is still possible, as last row might be greater
+                    self.attempt_early_completion(&batch)?;
+
+                    return Ok(());
+                }
+
+                let filter_predicate = FilterBuilder::new(&filter);
+                let filter_predicate = if sort_keys.len() > 1 {
+                    filter_predicate.optimize().build()
+                } else {
+                    filter_predicate.build()
+                };
+                selected_rows = Some(filter);
+
+                sort_keys = sort_keys
+                    .iter()
+                    .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
+                    .collect::<Result<Vec<_>>>()?;
+            }
         }
 
         // reuse existing `Rows` to avoid reallocations
