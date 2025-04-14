@@ -2478,6 +2478,7 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-expr-common",
  "datafusion-functions-aggregate",
  "datafusion-functions-window",
  "datafusion-functions-window-common",

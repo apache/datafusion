@@ -479,7 +479,7 @@ impl GroupedHashAggregateStream {
         };
 
         let group_accumulator_metadata = GroupsAccumulatorMetadata {
-            contiguous_group_indices: agg.input_order_mode == InputOrderMode::Sorted,
+            group_indices_ordering: agg.input_order_mode.clone(),
         };
 
         // Instantiate the accumulators
@@ -1091,7 +1091,25 @@ impl GroupedHashAggregateStream {
             .with_reservation(self.reservation.new_empty())
             .build()?;
         self.input_done = false;
+
+        let group_ordering_changed =
+            !matches!(self.group_ordering, GroupOrdering::Full(_));
         self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
+
+        if group_ordering_changed {
+            if !self.group_values.is_empty() {
+                return internal_err!(
+                    "Cannot change grouping order after groups have been created"
+                );
+            }
+
+            for acc in self.accumulators.iter_mut() {
+                acc.register_metadata(&GroupsAccumulatorMetadata {
+                    group_indices_ordering: InputOrderMode::Sorted,
+                })?
+            }
+        }
+
         Ok(())
     }
 

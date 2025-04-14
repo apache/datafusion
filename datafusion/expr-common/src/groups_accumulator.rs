@@ -17,6 +17,7 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
+use crate::ordering::InputOrderMode;
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{not_impl_err, Result};
 
@@ -108,8 +109,8 @@ impl EmitTo {
 pub trait GroupsAccumulator: Send {
     /// Called with metadata about the groups that will be processed.
     ///
-    /// This will be called right after initialization before any call to [`Self::update_batch`], [`Self::merge_batch`],
-    /// [`Self::state`], [`Self::evaluate`] or [`Self::convert_to_state`].
+    /// This will be called before there are any groups. it can be called either after [`Self::state`], [`Self::evaluate`] consumed all the data or
+    /// right after initialization.
     ///
     /// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
     fn register_metadata(&mut self, _metadata: &GroupsAccumulatorMetadata) -> Result<()> {
@@ -265,14 +266,14 @@ pub trait GroupsAccumulator: Send {
 /// Metadata for [`GroupsAccumulator`] with some execution time information so you can optimize your implementation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupsAccumulatorMetadata {
-    /// Whether each group is contiguous, this will be `true`
+    /// Thr ordering of the group indices
     ///
-    /// Meaning that if you get the following group indices in [`GroupsAccumulator::update_batch`]/[`GroupsAccumulator::merge_batch`]
+    /// For example if this equals to [`InputOrderMode::Sorted`] it means that if you get the following group indices in [`GroupsAccumulator::update_batch`]/[`GroupsAccumulator::merge_batch`]
     /// ```text
     /// [1, 1, 1, 1, 1, 2, 2, 3]
     /// ```
     ///
     /// You can be sure that you will never get another group with index 1 or 2 (until call to [`GroupsAccumulator::state`]/[`GroupsAccumulator::evaluate`] which will shift the group indices).
     /// However, you might get another group with index 3 in the future.
-    pub contiguous_group_indices: bool,
+    pub group_indices_ordering: InputOrderMode,
 }

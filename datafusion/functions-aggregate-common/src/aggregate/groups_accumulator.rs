@@ -32,11 +32,14 @@ use arrow::{
     compute::take_arrays,
     datatypes::UInt32Type,
 };
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{
     EmitTo, GroupsAccumulator, GroupsAccumulatorMetadata,
 };
+use datafusion_expr_common::ordering::InputOrderMode;
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -421,7 +424,13 @@ impl GroupsAccumulatorAdapter {
 
 impl GroupsAccumulator for GroupsAccumulatorAdapter {
     fn register_metadata(&mut self, metadata: &GroupsAccumulatorMetadata) -> Result<()> {
-        self.contiguous_group_indices = metadata.contiguous_group_indices;
+        if !self.states.is_empty() {
+            return internal_err!(
+                "Cannot register metadata after the accumulator already has states"
+            );
+        }
+        self.contiguous_group_indices =
+            matches!(metadata.group_indices_ordering, InputOrderMode::Sorted);
 
         Ok(())
     }
