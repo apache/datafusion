@@ -67,13 +67,13 @@ pub(crate) mod test_util {
             .into_iter()
             .zip(tmp_files.into_iter())
             .map(|(batch, mut output)| {
-                let builder = parquet::file::properties::WriterProperties::builder();
-                let props = if multi_page {
-                    builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
-                } else {
-                    builder
+                let mut builder = parquet::file::properties::WriterProperties::builder();
+                if multi_page {
+                    builder = builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
                 }
-                .build();
+                builder = builder.set_bloom_filter_enabled(true);
+
+                let props = builder.build();
 
                 let mut writer = parquet::arrow::ArrowWriter::try_new(
                     &mut output,
@@ -331,7 +331,7 @@ mod tests {
         fn list(
             &self,
             _prefix: Option<&Path>,
-        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             Box::pin(futures::stream::once(async {
                 Err(object_store::Error::NotImplemented)
             }))
@@ -408,7 +408,7 @@ mod tests {
         )));
 
         // Use the file size as the hint so we can get the full metadata from the first fetch
-        let size_hint = meta[0].size;
+        let size_hint = meta[0].size as usize;
 
         fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
             .await
@@ -443,7 +443,7 @@ mod tests {
         )));
 
         // Use the a size hint larger than the file size to make sure we don't panic
-        let size_hint = meta[0].size + 100;
+        let size_hint = (meta[0].size + 100) as usize;
 
         fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
             .await

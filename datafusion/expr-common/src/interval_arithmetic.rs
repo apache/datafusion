@@ -174,7 +174,7 @@ macro_rules! value_transition {
 ///    - `INF` values are converted to `NULL`s while constructing an interval to
 ///      ensure consistency, with other data types.
 ///    - `NaN` (Not a Number) results are conservatively result in unbounded
-///       endpoints.
+///      endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
     lower: ScalarValue,

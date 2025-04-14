@@ -27,10 +27,9 @@ use datafusion_common::Result;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::SendableRecordBatchStream;
 
-use crate::metrics::SpillMetrics;
-use crate::stream::RecordBatchReceiverStream;
+use crate::{common::spawn_buffered, metrics::SpillMetrics};
 
-use super::{in_progress_spill_file::InProgressSpillFile, read_spill};
+use super::{in_progress_spill_file::InProgressSpillFile, SpillReaderStream};
 
 /// The `SpillManager` is responsible for the following tasks:
 /// - Reading and writing `RecordBatch`es to raw files based on the provided configurations.
@@ -73,7 +72,10 @@ impl SpillManager {
     /// intended to incrementally write in-memory batches into the same spill file,
     /// use [`Self::create_in_progress_file`] instead.
     /// None is returned if no batches are spilled.
-    #[allow(dead_code)] // TODO: remove after change SMJ to use SpillManager
+    ///
+    /// # Errors
+    /// - Returns an error if spilling would exceed the disk usage limit configured
+    ///   by `max_temp_directory_size` in `DiskManager`
     pub fn spill_record_batch_and_finish(
         &self,
         batches: &[RecordBatch],
@@ -90,7 +92,10 @@ impl SpillManager {
 
     /// Refer to the documentation for [`Self::spill_record_batch_and_finish`]. This method
     /// additionally spills the `RecordBatch` into smaller batches, divided by `row_limit`.
-    #[allow(dead_code)] // TODO: remove after change aggregate to use SpillManager
+    ///
+    /// # Errors
+    /// - Returns an error if spilling would exceed the disk usage limit configured
+    ///   by `max_temp_directory_size` in `DiskManager`
     pub fn spill_record_batch_by_size(
         &self,
         batch: &RecordBatch,
@@ -120,14 +125,11 @@ impl SpillManager {
         &self,
         spill_file_path: RefCountedTempFile,
     ) -> Result<SendableRecordBatchStream> {
-        let mut builder = RecordBatchReceiverStream::builder(
+        let stream = Box::pin(SpillReaderStream::new(
             Arc::clone(&self.schema),
-            self.batch_read_buffer_capacity,
-        );
-        let sender = builder.tx();
+            spill_file_path,
+        ));
 
-        builder.spawn_blocking(move || read_spill(sender, spill_file_path.path()));
-
-        Ok(builder.build())
+        Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
     }
 }
