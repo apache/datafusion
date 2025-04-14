@@ -16,15 +16,15 @@
 // under the License.
 
 use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
-use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
 };
+use arrow::datatypes::{Field, Int64Type};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact,
-    TypeSignature::Uniform, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    TypeSignature::Exact, TypeSignature::Uniform, Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::izip;
@@ -104,8 +104,9 @@ impl ScalarUDFImpl for RegexpCountFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Int64)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().all(|f| f.is_nullable());
+        Ok(Field::new(self.name(), Int64, nullable))
     }
 
     fn invoke_with_args(

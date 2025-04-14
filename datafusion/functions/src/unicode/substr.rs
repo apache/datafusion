@@ -25,12 +25,10 @@ use arrow::array::{
     StringViewArray, StringViewBuilder,
 };
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -91,8 +89,9 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 
     // `SubstrFunc` always generates `Utf8View` output for its efficiency.
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8View)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), DataType::Utf8View, nullable))
     }
 
     fn invoke_with_args(

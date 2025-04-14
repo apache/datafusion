@@ -23,7 +23,7 @@ use arrow::array::{
     Array, ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array,
     OffsetSizeTrait,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{
@@ -32,9 +32,7 @@ use datafusion_common::cast::{
 use datafusion_common::exec_err;
 use datafusion_common::Result;
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -93,8 +91,10 @@ impl ScalarUDFImpl for LeftFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "left")
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = utf8_to_str_type(args.arg_types[0].data_type(), "left")?;
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

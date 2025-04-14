@@ -20,11 +20,9 @@ use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait, PrimitiveBuilder,
     StringArrayType,
 };
-use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
+use arrow::datatypes::{ArrowNativeType, DataType, Field, Int32Type, Int64Type};
 use datafusion_common::Result;
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -86,6 +84,11 @@ impl ScalarUDFImpl for CharacterLengthFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         utf8_to_int_type(&arg_types[0], "character_length")
+    }
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types[0].is_nullable();
+        let data_type = utf8_to_int_type(args.arg_types[0].data_type(), "character_length")?;
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

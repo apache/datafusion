@@ -19,17 +19,14 @@
 
 use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray};
 use arrow::compute::kernels::regexp;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::types::logical_string;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_err, plan_err, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
-};
+use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility};
 use datafusion_macros::user_doc;
 
 use std::any::Any;
@@ -112,15 +109,18 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         use DataType::*;
 
-        Ok(match &arg_types[0] {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match args.arg_types[0].data_type() {
             Null => Null,
             // Type coercion is done by DataFusion based on signature, so if we
             // get here, the first argument is always a string
             _ => Boolean,
-        })
+        };
+
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

@@ -113,7 +113,7 @@ impl ScalarUDFImpl for BTrimFunc {
         } else {
             utf8_to_str_type(args.arg_types[0].data_type(), "btrim")?
         };
-        Ok(Field::new(self.name(), DataType::Utf8View, args.arg_types[0].is_nullable()))
+        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

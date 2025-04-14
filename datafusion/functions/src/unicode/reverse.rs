@@ -22,11 +22,9 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringBuilder, OffsetSizeTrait, StringArrayType,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 
@@ -81,8 +79,9 @@ impl ScalarUDFImpl for ReverseFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "reverse")
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = utf8_to_str_type(args.arg_types[0].data_type(), "reverse")?;
+        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
     }
 
     fn invoke_with_args(

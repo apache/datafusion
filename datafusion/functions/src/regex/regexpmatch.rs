@@ -24,7 +24,7 @@ use datafusion_common::exec_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::{arrow_datafusion_err, plan_err};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -112,11 +112,14 @@ impl ScalarUDFImpl for RegexpMatchFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match &arg_types[0] {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match args.arg_types[0].data_type() {
             DataType::Null => DataType::Null,
             other => DataType::List(Arc::new(Field::new_list_field(other.clone(), true))),
-        })
+        };
+
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

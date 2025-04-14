@@ -22,17 +22,14 @@ use arrow::array::{
     new_null_array, ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
     OffsetSizeTrait, PrimitiveArray,
 };
-use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
+use arrow::datatypes::{ArrowNativeType, DataType, Field, Int32Type, Int64Type};
 
 use crate::utils::utf8_to_int_type;
 use datafusion_common::{
     exec_err, internal_err, utils::take_function_args, Result, ScalarValue,
 };
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -93,8 +90,9 @@ impl ScalarUDFImpl for FindInSetFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_int_type(&arg_types[0], "find_in_set")
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = utf8_to_int_type(args.arg_types[0].data_type(), "find_in_set")?;
+        Ok(Field::new(self.name(), data_type, true))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

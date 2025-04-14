@@ -23,7 +23,7 @@ use arrow::array::StringViewBuilder;
 use arrow::array::{new_null_array, ArrayIter, AsArray};
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::array::{ArrayAccessor, StringViewArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
@@ -32,8 +32,8 @@ use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
 use datafusion_expr::function::Hint;
-use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
+use datafusion_expr::{ColumnarValue, ReturnFieldArgs};
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use regex::Regex;
@@ -122,9 +122,10 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         use DataType::*;
-        Ok(match &arg_types[0] {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match args.arg_types[0].data_type() {
             LargeUtf8 | LargeBinary => LargeUtf8,
             Utf8 | Binary => Utf8,
             Utf8View | BinaryView => Utf8View,
@@ -145,7 +146,9 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
                     "The regexp_replace function can only accept strings. Got {other}"
                 );
             }
-        })
+        };
+
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

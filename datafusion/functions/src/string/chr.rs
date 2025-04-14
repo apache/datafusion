@@ -20,9 +20,9 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::array::GenericStringBuilder;
-use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::Int64;
 use arrow::datatypes::DataType::Utf8;
+use arrow::datatypes::Field;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_int64_array;
@@ -121,9 +121,13 @@ impl ScalarUDFImpl for ChrFunc {
     }
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
-        Ok(Field::new(self.name(), Utf8, args.arg_types[0].is_nullable()))
+        Ok(Field::new(
+            self.name(),
+            Utf8,
+            args.arg_types[0].is_nullable(),
+        ))
     }
-    
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(chr, vec![])(&args.args)
     }
