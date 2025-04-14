@@ -18,13 +18,12 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
-    array::Scalar,
+    array::{BooleanArray, Scalar},
     compute::{interleave_record_batch, is_null, or, FilterBuilder},
     row::{RowConverter, Rows, SortField},
 };
 use arrow_ord::cmp::{gt, gt_eq, lt, lt_eq};
-use datafusion_expr::BinaryExpr;
-use std::mem::size_of;
+use std::{clone, mem::size_of};
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -231,20 +230,30 @@ impl TopK {
             // Create a filter for each sort key
             let is_multi_col = self.expr.len() > 1;
 
-            let filter = match (is_multi_col, self.expr[0].options.descending) {
-                (true, true) => {
-                    or(&gt_eq(&sort_keys[0], &threshold)?, &is_null(&sort_keys[0])?)?
-                }
-                (true, false) => {
-                    or(&lt_eq(&sort_keys[0], &threshold)?, &is_null(&sort_keys[0])?)?
-                }
-                (false, true) => {
-                    or(&gt(&sort_keys[0], &threshold)?, &is_null(&sort_keys[0])?)?
-                }
-                (false, false) => {
-                    or(&lt(&sort_keys[0], &threshold)?, &is_null(&sort_keys[0])?)?
-                }
+            let mut filter = match (is_multi_col, self.expr[0].options.descending) {
+                (true, true) => BooleanArray::new(
+                    gt_eq(&sort_keys[0], &threshold)?.values().clone(),
+                    None,
+                ),
+                (true, false) => BooleanArray::new(
+                    lt_eq(&sort_keys[0], &threshold)?.values().clone(),
+                    None,
+                ),
+                (false, true) => BooleanArray::new(
+                    gt(&sort_keys[0], &threshold)?.values().clone(),
+                    None,
+                ),
+                (false, false) => BooleanArray::new(
+                    lt(&sort_keys[0], &threshold)?.values().clone(),
+                    None,
+                ),
             };
+            if sort_keys[0].is_nullable() {
+                // Keep any null values
+                // TODO it is possible to optimize this based on the current threshold value
+                // and the nulls first/last option and the number of following sort keys
+                filter = or(&filter, &is_null(&sort_keys[0])?)?;
+            }
             if filter.true_count() == 0 {
                 // No rows are less than the max row, so we can skip this batch
                 // Early completion is still possible, as last row might be greater
