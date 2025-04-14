@@ -582,7 +582,7 @@ pub fn apply_file_schema_type_coercions(
     ))
 }
 
-/// Coerces the file schema if the table schema uses a view type.
+/// Coerces the file schema's Timestamps to the provided TimeUnit if Parquet schema contains INT96.
 pub fn coerce_int96_to_resolution(
     parquet_schema: &SchemaDescriptor,
     file_schema: &Schema,
