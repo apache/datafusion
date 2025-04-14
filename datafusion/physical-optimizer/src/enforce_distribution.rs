@@ -1036,12 +1036,14 @@ fn remove_dist_changing_operators(
 /// ```
 fn replace_order_preserving_variants(
     mut context: DistributionContext,
+    ordering_satisfied: bool,
 ) -> Result<(DistributionContext, Option<usize>)> {
     let mut children = vec![];
     let mut fetch = None;
     for child in context.children.into_iter() {
         if child.data {
-            let (child, inner_fetch) = replace_order_preserving_variants(child)?;
+            let (child, inner_fetch) =
+                replace_order_preserving_variants(child, ordering_satisfied)?;
             children.push(child);
             fetch = inner_fetch;
         } else {
@@ -1053,6 +1055,13 @@ fn replace_order_preserving_variants(
         // Keep the fetch value of the SortPreservingMerge operator, maybe it will be used later.
         let fetch = context.plan.fetch();
         let child_plan = Arc::clone(&context.children[0].plan);
+        if !ordering_satisfied {
+            // It's safe to unwrap because `CoalescePartitionsExec` supports `fetch`.
+            context.plan = CoalescePartitionsExec::new(child_plan)
+                .with_fetch(fetch)
+                .unwrap();
+            return Ok((context, None));
+        }
         context.plan = Arc::new(CoalescePartitionsExec::new(child_plan));
         return Ok((context, fetch));
     } else if let Some(repartition) =
@@ -1312,7 +1321,7 @@ pub fn ensure_distribution(
                         && child.data
                     {
                         let (replaced_child, fetch) =
-                            replace_order_preserving_variants(child)?;
+                            replace_order_preserving_variants(child, ordering_satisfied)?;
                         child = replaced_child;
                         // If ordering requirements were satisfied before repartitioning,
                         // make sure ordering requirements are still satisfied after.
@@ -1333,12 +1342,12 @@ pub fn ensure_distribution(
                         // Operator requires specific distribution.
                         Distribution::SinglePartition | Distribution::HashPartitioned(_) => {
                             // Since there is no ordering requirement, preserving ordering is pointless
-                            child = replace_order_preserving_variants(child)?.0;
+                            child = replace_order_preserving_variants(child, false)?.0;
                         }
                         Distribution::UnspecifiedDistribution => {
                             // Since ordering is lost, trying to preserve ordering is pointless
                             if !maintains || plan.as_any().is::<OutputRequirementExec>() {
-                                child = replace_order_preserving_variants(child)?.0;
+                                child = replace_order_preserving_variants(child, false)?.0;
                             }
                         }
                     }

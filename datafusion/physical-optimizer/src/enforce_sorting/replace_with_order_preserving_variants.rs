@@ -137,6 +137,11 @@ fn plan_with_order_preserving_variants(
         return Ok(sort_input);
     } else if is_coalesce_partitions(&sort_input.plan) && is_spm_better {
         let child = &sort_input.children[0].plan;
+        let mut fetch = fetch;
+        if let Some(coalesce_fetch) = sort_input.plan.fetch() {
+            // Get the min fetch between the `fetch` and the coalesce's fetch:
+            fetch = Some(coalesce_fetch.min(fetch.unwrap_or(usize::MAX)))
+        };
         if let Some(ordering) = child.output_ordering() {
             // When the input of a `CoalescePartitionsExec` has an ordering,
             // replace it with a `SortPreservingMergeExec` if appropriate:
