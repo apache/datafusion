@@ -19,10 +19,11 @@
 
 use arrow::{
     array::Scalar,
-    compute::{interleave_record_batch, FilterBuilder},
+    compute::{interleave_record_batch, is_null, or, FilterBuilder},
     row::{RowConverter, Rows, SortField},
 };
 use arrow_ord::cmp::{gt, gt_eq, lt, lt_eq};
+use datafusion_expr::BinaryExpr;
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
@@ -229,11 +230,20 @@ impl TopK {
 
             // Create a filter for each sort key
             let is_multi_col = self.expr.len() > 1;
+
             let filter = match (is_multi_col, self.expr[0].options.descending) {
-                (true, true) => gt_eq(&sort_keys[0], &threshold)?,
-                (true, false) => lt_eq(&sort_keys[0], &threshold)?,
-                (false, true) => gt(&sort_keys[0], &threshold)?,
-                (false, false) => lt(&sort_keys[0], &threshold)?,
+                (true, true) => {
+                    or(&gt_eq(&sort_keys[0], &threshold)?, &is_null(&sort_keys[0])?)?
+                }
+                (true, false) => {
+                    or(&lt_eq(&sort_keys[0], &threshold)?, &is_null(&sort_keys[0])?)?
+                }
+                (false, true) => {
+                    or(&gt(&sort_keys[0], &threshold)?, &is_null(&sort_keys[0])?)?
+                }
+                (false, false) => {
+                    or(&lt(&sort_keys[0], &threshold)?, &is_null(&sort_keys[0])?)?
+                }
             };
             if filter.true_count() == 0 {
                 // No rows are less than the max row, so we can skip this batch
@@ -242,6 +252,7 @@ impl TopK {
 
                 return Ok(());
             }
+
             let filter_predicate = FilterBuilder::new(&filter);
             let filter_predicate = if sort_keys.len() > 1 {
                 filter_predicate.optimize().build()
