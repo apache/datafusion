@@ -206,12 +206,12 @@ impl ExecutionPlan for DataSourceExec {
     }
 
     fn try_pushdown_filters(
-        &self,
+        self: Arc<Self>,
         fd: FilterDescription,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownSupport<Arc<dyn ExecutionPlan>>> {
-        let mut exec = self.clone();
-        match self.data_source.try_pushdown_filters(fd, config)? {
+        let mut exec = Arc::unwrap_or_clone(self);
+        match exec.data_source.try_pushdown_filters(fd, config)? {
             FilterPushdownSupport::Supported {
                 child_filters,
                 remaining_filters,
@@ -221,7 +221,7 @@ impl ExecutionPlan for DataSourceExec {
                 Ok(FilterPushdownSupport::Supported {
                     child_filters,
                     remaining_filters,
-                    op: Arc::new(exec),
+                    op: Arc::new(exec) as Arc<dyn ExecutionPlan>,
                 })
             }
             FilterPushdownSupport::NotSupported(fd) => {

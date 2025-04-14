@@ -109,5 +109,3 @@ pub trait FileSource: Send + Sync {
         Ok(FilterPushdownSupport::NotSupported(fd))
     }
 }
-
-pub type FileSourceFilterPushdownResult = FilterPushdownSupport<Arc<dyn FileSource>>;

@@ -17,9 +17,6 @@
 
 use std::sync::Arc;
 
-use crate::ExecutionPlan;
-
-use datafusion_common::Result;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 #[derive(Default)]

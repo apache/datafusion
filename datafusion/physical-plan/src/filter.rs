@@ -50,10 +50,10 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
 use datafusion_physical_expr::{
-    analyze, conjunction, split_conjunction, AcrossPartitions, AnalysisContext,
-    ConstExpr, ExprBoundaries, PhysicalExpr, PhysicalExprRef,
+    analyze, split_conjunction, AcrossPartitions, AnalysisContext, ConstExpr,
+    ExprBoundaries, PhysicalExpr,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -437,11 +437,18 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn try_pushdown_filters(
-        &self,
+        self: Arc<Self>,
         mut fd: FilterDescription,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownSupport<Arc<dyn ExecutionPlan>>> {
-        fd.filters.push(Arc::clone(self.predicate()));
+        // filters are in terms of the output columns of this plan, need to adapt them if we have a projection
+        let predicate = if self.projection.is_some() {
+            let input_schema = self.input.schema();
+            reassign_predicate_columns(Arc::clone(&self.predicate), &input_schema, false)?
+        } else {
+            Arc::clone(&self.predicate)
+        };
+        fd.filters.push(predicate);
         let child_filters = vec![fd];
         let remaining_filters = FilterDescription { filters: vec![] };
         Ok(FilterPushdownSupport::Supported {

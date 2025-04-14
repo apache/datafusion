@@ -26,7 +26,7 @@ use std::{
 use crate::file_groups::FileGroup;
 use crate::{
     display::FileGroupsDisplay,
-    file::{FileSource, FileSourceFilterPushdownResult},
+    file::FileSource,
     file_compression_type::FileCompressionType,
     file_stream::FileStream,
     source::{DataSource, DataSourceExec},
@@ -50,7 +50,7 @@ use datafusion_execution::{
 };
 use datafusion_physical_expr::{
     expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
-    PhysicalExprRef, PhysicalSortExpr,
+    PhysicalSortExpr,
 };
 use datafusion_physical_plan::filter_pushdown::{
     FilterDescription, FilterPushdownSupport,

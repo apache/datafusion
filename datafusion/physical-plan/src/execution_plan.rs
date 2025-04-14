@@ -469,8 +469,19 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(None)
     }
 
+    /// Attempts to recursively push given filters from the top of the tree into leafs.
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation assumes:
+    /// * Parent filters can't be passed onto children.
+    /// * This node has no filters to contribute.
+    /// 
+    /// See [`PushdownFilter`] for more details.
+    /// 
+    /// [`PushdownFilter`]: datafusion_physical_optimizer::filter_pushdown::PushdownFilter
     fn try_pushdown_filters(
-        &self,
+        self: Arc<Self>,
         fd: FilterDescription,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownSupport<Arc<dyn ExecutionPlan>>> {

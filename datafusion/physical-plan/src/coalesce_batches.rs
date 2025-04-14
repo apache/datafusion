@@ -216,7 +216,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn try_pushdown_filters(
-        &self,
+        self: Arc<Self>,
         fd: FilterDescription,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownSupport<Arc<dyn ExecutionPlan>>> {
@@ -225,7 +225,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         Ok(FilterPushdownSupport::Supported {
             child_filters,
             remaining_filters,
-            op: Arc::new(self.clone()),
+            op: Arc::clone(&self) as Arc<dyn ExecutionPlan>,
         })
     }
 }

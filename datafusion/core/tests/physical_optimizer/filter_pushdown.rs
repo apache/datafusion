@@ -30,14 +30,12 @@ use datafusion_common::{internal_err, Result};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::{
-    file::{FileSource, FileSourceFilterPushdownResult},
-    file_scan_config::FileScanConfig,
-    file_stream::FileOpener,
+    file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
 };
 use datafusion_expr::test::function_stub::count_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{
-    aggregate::AggregateExprBuilder, conjunction, Partitioning, PhysicalExprRef,
+    aggregate::AggregateExprBuilder, conjunction, Partitioning,
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::filter_pushdown::PushdownFilter;
@@ -50,7 +48,6 @@ use datafusion_physical_plan::{
     coalesce_batches::CoalesceBatchesExec,
     filter::FilterExec,
     repartition::RepartitionExec,
-    FilterPushdownResult,
 };
 use datafusion_physical_plan::{
     displayable, metrics::ExecutionPlanMetricsSet, DisplayFormatType, ExecutionPlan,
@@ -156,7 +153,7 @@ impl FileSource for TestSource {
     ) -> Result<FilterPushdownSupport<Arc<dyn FileSource>>> {
         if self.support {
             if config.execution.parquet.pushdown_filters {
-                return Ok(FilterPushdownSupport {
+                return Ok(FilterPushdownSupport::Supported {
                     child_filters: vec![],
                     remaining_filters: FilterDescription { filters: vec![] },
                     op: Arc::new(TestSource {
@@ -167,10 +164,10 @@ impl FileSource for TestSource {
                 });
             }
         }
-        Ok(FilterPushdownSupport {
+        Ok(FilterPushdownSupport::Supported {
             child_filters: vec![],
             remaining_filters: fd,
-            op: self,
+            op: Arc::new(self.clone()),
         })
     }
 }
@@ -285,7 +282,7 @@ fn test_filter_with_projection() {
     let projected_schema = Arc::new(schema().project(&projection).unwrap());
     let predicate = col_lit_predicate("a", "foo", &projected_schema);
     let plan = Arc::new(
-        FilterExec::try_new(predicate, scan)
+        FilterExec::try_new(predicate, Arc::clone(&scan))
             .unwrap()
             .with_projection(Some(projection))
             .unwrap(),
@@ -295,16 +292,44 @@ fn test_filter_with_projection() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownFilter{}),
-        @r"
+        @r#"
     OptimizationTest:
       input:
         - FilterExec: a@1 = foo, projection=[b@1, a@0]
         -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
       output:
+        Err: Internal error: Schema mismatch:
+
+    Before:
+    Schema { fields: [Field { name: "b", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "a", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }
+
+    After:
+    Schema { fields: [Field { name: "a", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }.
+    This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+    "#,
+    );
+
+    // add a test where the filter is on a column that isn't included in the output
+    let projection = vec![1];
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(
+        FilterExec::try_new(predicate, scan)
+            .unwrap()
+            .with_projection(Some(projection))
+            .unwrap(),
+    );
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownFilter{}),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo, projection=[b@1]
+        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+      output:
         Ok:
-          - FilterExec: true, projection=[b@1, a@0]
+          - FilterExec: true, projection=[b@1]
           -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
-    ",
+    "
     );
 }
 
