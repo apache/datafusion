@@ -103,7 +103,7 @@ to see the high level structure of the plan
 |               | ┌─────────────┴─────────────┐ |
 |               | │      RepartitionExec      │ |
 |               | │    --------------------   │ |
-|               | │  output_partition_count:  │ |
+|               | │   input_partition_count:  │ |
 |               | │             16            │ |
 |               | │                           │ |
 |               | │    partitioning_scheme:   │ |
@@ -112,7 +112,7 @@ to see the high level structure of the plan
 |               | ┌─────────────┴─────────────┐ |
 |               | │      RepartitionExec      │ |
 |               | │    --------------------   │ |
-|               | │  output_partition_count:  │ |
+|               | │   input_partition_count:  │ |
 |               | │             1             │ |
 |               | │                           │ |
 |               | │    partitioning_scheme:   │ |
