@@ -953,21 +953,21 @@ fn check_short_circuit<'a>(
 /// A combined ColumnarValue with values from right_result where left_result is true
 ///
 /// # Example
-///  Initial Data: [1, 2, 3, 4, 5]
+///  Initial Data: { 1, 2, 3, 4, 5 }
 ///  Left Evaluation
 ///     (Condition: Equal to 2 or 3)
 ///          ↓
-///  Filtered Data: [2, 3]
-///    Left Bitmap: [0, 1, 1, 0, 0]
+///  Filtered Data: {2, 3}
+///    Left Bitmap: { 0, 1, 1, 0, 0 }
 ///          ↓
 ///   Right Evaluation
 ///     (Condition: Even numbers)
 ///          ↓
-///  Right Data: [ 2 ]
-///    Right Bitmap: [1, 0]
+///  Right Data: { 2 }
+///    Right Bitmap: { 1, 0 }
 ///          ↓
 ///   Combine Results
-///  Final Bitmap: [0, 1, 0, 0, 0]
+///  Final Bitmap: { 0, 1, 0, 0, 0 }
 ///
 /// # Note
 /// Perhaps it would be better to modify `left_result` directly without creating a copy?
