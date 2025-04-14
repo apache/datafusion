@@ -768,7 +768,18 @@ impl ConfigField for ConfigOptions {
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
             "catalog" => self.catalog.set(rem, value),
-            "execution" => self.execution.set(rem, value),
+            "execution" => {
+                let value = match (rem, value) {
+                    ("target_partitions", "0") => {
+                        &ExecutionOptions::default().target_partitions.to_string()
+                    }
+                    ("planning_concurrency", "0") => {
+                        &ExecutionOptions::default().planning_concurrency.to_string()
+                    }
+                    _ => value,
+                };
+                self.execution.set(rem, value)
+            }
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
