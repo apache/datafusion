@@ -29,7 +29,7 @@ use arrow::array::{
     StringArray, UInt64Array,
 };
 use arrow::compute::{concat_batches, SortOptions};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, UInt64Type};
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{Field, Schema, SchemaRef};
 use datafusion::common::Result;
@@ -57,7 +57,7 @@ use test_utils::{add_empty_batches, StringBatchGenerator};
 
 use super::record_batch_generator::get_supported_types_columns;
 use datafusion_datasource::source::DataSource;
-use datafusion_execution::memory_pool::units::MB;
+use datafusion_execution::memory_pool::units::{KB, MB};
 use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
@@ -879,25 +879,69 @@ impl ExecutionPlan for StreamExec {
 
 
 #[tokio::test]
-async fn test_low_cardinality() -> Result<()> {
+async fn test_high_cardinality_with_limited_memory() -> Result<()> {
     let record_batch_size = 8192;
     let two_mb = 2 * MB as usize;
     let task_ctx = {
         let memory_pool = Arc::new(FairSpillPool::new(two_mb));
         TaskContext::default()
-            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-            .with_runtime(Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_pool(memory_pool)
-                    .build()?,
-            ))
+          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+          .with_runtime(Arc::new(
+              RuntimeEnvBuilder::new()
+                .with_memory_pool(memory_pool)
+                .build()?,
+          ))
     };
-    run_test_low_cardinality(task_ctx, 100).await
+
+    run_test_high_cardinality(task_ctx, 100, Box::pin(|_| (16 * KB) as usize)).await
 }
 
-async fn run_test_low_cardinality(
+
+#[tokio::test]
+async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch() -> Result<()> {
+    let record_batch_size = 8192;
+    let two_mb = 2 * MB as usize;
+    let task_ctx = {
+        let memory_pool = Arc::new(FairSpillPool::new(two_mb));
+        TaskContext::default()
+          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+          .with_runtime(Arc::new(
+              RuntimeEnvBuilder::new()
+                .with_memory_pool(memory_pool)
+                .build()?,
+          ))
+    };
+
+    run_test_high_cardinality(task_ctx, 100, Box::pin(|i| {
+        if i % 25 == 0 {
+            (64 * KB) as usize
+        } else {
+            (16 * KB) as usize
+        }
+    })).await
+}
+
+#[tokio::test]
+async fn test_high_cardinality_with_limited_memory_and_large_record_batch() -> Result<()> {
+    let record_batch_size = 8192;
+    let two_mb = 2 * MB as usize;
+    let task_ctx = {
+        let memory_pool = Arc::new(FairSpillPool::new(two_mb));
+        TaskContext::default()
+          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+          .with_runtime(Arc::new(
+              RuntimeEnvBuilder::new()
+                .with_memory_pool(memory_pool)
+                .build()?,
+          ))
+    };
+    run_test_high_cardinality(task_ctx, 100, Box::pin(move |_| two_mb / 4)).await
+}
+
+async fn run_test_high_cardinality(
     task_ctx: TaskContext,
     number_of_record_batches: usize,
+    get_size_of_record_batch_to_generate: Pin<Box<impl Fn(usize) -> usize + Send + 'static>>,
 ) -> Result<()> {
     let scan_schema = Arc::new(Schema::new(vec![
         Field::new("col_0", DataType::UInt64, true),
@@ -914,48 +958,43 @@ async fn run_test_low_cardinality(
             array_agg_udaf(),
             vec![col("col_1", &scan_schema).unwrap()],
         )
-        .schema(Arc::clone(&scan_schema))
-        .alias("array_agg(col_1)")
-        .build()?,
+          .schema(Arc::clone(&scan_schema))
+          .alias("array_agg(col_1)")
+          .build()?,
     )];
 
     let record_batch_size = task_ctx.session_config().batch_size() as u64;
 
-
     let schema = Arc::clone(&scan_schema);
     let plan: Arc<dyn ExecutionPlan> =
-        Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&schema),
-            futures::stream::iter((0..number_of_record_batches as u64).map(
-                move |index| {
-                    // Simulate a large record batch 3 times in a stream
-                    let string_array =
-                        if index % (number_of_record_batches as u64 / 3) == 0 {
-                            Arc::new(StringArray::from_iter_values(
-                                (0..record_batch_size).map(|_| "b".repeat(64)),
-                            ))
-                        } else {
-                            Arc::new(StringArray::from_iter_values(
-                                (0..record_batch_size).map(|_| "a".repeat(8)),
-                            ))
-                        };
+      Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
+          Arc::clone(&schema),
+          futures::stream::iter((0..number_of_record_batches as u64).map(
+              move |index| {
+                  let mut record_batch_memory_size = get_size_of_record_batch_to_generate(index as usize);
+                  record_batch_memory_size = record_batch_memory_size.saturating_sub(size_of::<u64>() * record_batch_size as usize);
 
-                    RecordBatch::try_new(
-                        Arc::clone(&schema),
-                        vec![
-                            // Grouping key
-                            Arc::new(UInt64Array::from_iter_values(
-                                (index * record_batch_size)
-                                    ..(index * record_batch_size) + record_batch_size,
-                            )),
-                            // Grouping value
-                            string_array,
-                        ],
-                    )
+                  let string_item_size = record_batch_memory_size / record_batch_size as usize;
+                  let string_array = Arc::new(StringArray::from_iter_values(
+                      (0..record_batch_size).map(|_| "a".repeat(string_item_size)),
+                  ));
+
+                  RecordBatch::try_new(
+                      Arc::clone(&schema),
+                      vec![
+                          // Grouping key
+                          Arc::new(UInt64Array::from_iter_values(
+                              (index * record_batch_size)
+                                ..(index * record_batch_size) + record_batch_size,
+                          )),
+                          // Grouping value
+                          string_array,
+                      ],
+                  )
                     .map_err(|err| err.into())
-                },
-            )),
-        ))));
+              },
+          )),
+      ))));
 
     let aggregate_exec = Arc::new(AggregateExec::try_new(
         AggregateMode::Partial,
@@ -985,7 +1024,10 @@ async fn run_test_low_cardinality(
         number_of_groups += batch.num_rows();
     }
 
-    assert_eq!(number_of_groups, number_of_record_batches * record_batch_size as usize);
+    assert_eq!(
+        number_of_groups,
+        number_of_record_batches * record_batch_size as usize
+    );
 
     assert_spill_count_metric(true, aggregate_final);
 
