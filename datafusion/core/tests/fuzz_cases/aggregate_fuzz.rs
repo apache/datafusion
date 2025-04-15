@@ -926,32 +926,35 @@ async fn run_test_low_cardinality(
     let plan: Arc<dyn ExecutionPlan> =
         Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
-            futures::stream::iter((0..number_of_record_batches as u64).map(move |index| {
-                let string_array = if index == number_of_record_batches as u64 / 2 {
-                    // Simulate a large record batch in a middle of the stream
-                    Arc::new(StringArray::from_iter_values(
-                        (0..record_batch_size).map(|_| "b".repeat(24)),
-                    ))
-                } else {
-                    Arc::new(StringArray::from_iter_values(
-                        (0..record_batch_size).map(|_| "a".repeat(8)),
-                    ))
-                };
+            futures::stream::iter((0..number_of_record_batches as u64).map(
+                move |index| {
+                    // Simulate a large record batch 3 times in a stream
+                    let string_array =
+                        if index % (number_of_record_batches as u64 / 3) == 0 {
+                            Arc::new(StringArray::from_iter_values(
+                                (0..record_batch_size).map(|_| "b".repeat(64)),
+                            ))
+                        } else {
+                            Arc::new(StringArray::from_iter_values(
+                                (0..record_batch_size).map(|_| "a".repeat(8)),
+                            ))
+                        };
 
-                RecordBatch::try_new(
-                    Arc::clone(&schema),
-                    vec![
-                        // Grouping key
-                        Arc::new(UInt64Array::from_iter_values(
-                            (index * record_batch_size)
-                                ..(index * record_batch_size) + record_batch_size,
-                        )),
-                        // Grouping value
-                        string_array,
-                    ],
-                )
-                .map_err(|err| err.into())
-            })),
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            // Grouping key
+                            Arc::new(UInt64Array::from_iter_values(
+                                (index * record_batch_size)
+                                    ..(index * record_batch_size) + record_batch_size,
+                            )),
+                            // Grouping value
+                            string_array,
+                        ],
+                    )
+                    .map_err(|err| err.into())
+                },
+            )),
         ))));
 
     let aggregate_exec = Arc::new(AggregateExec::try_new(
