@@ -300,7 +300,7 @@ config_namespace! {
         /// concurrency.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub target_partitions: usize, default = get_available_parallelism()
+        pub target_partitions: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// The default time zone
         ///
@@ -316,7 +316,7 @@ config_namespace! {
         /// This is mostly use to plan `UNION` children in parallel.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub planning_concurrency: usize, default = get_available_parallelism()
+        pub planning_concurrency: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// When set to true, skips verifying that the schema produced by
         /// planning the input of `LogicalPlan::Aggregate` exactly matches the
@@ -731,6 +731,19 @@ config_namespace! {
     }
 }
 
+impl ExecutionOptions {
+    /// Returns the correct parallelism based on the provided `value`.
+    /// If `value` is `"0"`, returns the default available parallelism, computed with
+    /// `get_available_parallelism`. Otherwise, returns `value`.
+    fn normalized_parallelism(value: &str) -> String {
+        if value.parse::<usize>() == Ok(0) {
+            get_available_parallelism().to_string()
+        } else {
+            value.to_owned()
+        }
+    }
+}
+
 /// A key value pair, with a corresponding description
 #[derive(Debug)]
 pub struct ConfigEntry {
@@ -768,18 +781,7 @@ impl ConfigField for ConfigOptions {
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
             "catalog" => self.catalog.set(rem, value),
-            "execution" => {
-                let value = match (rem, value) {
-                    ("target_partitions", "0") => {
-                        &ExecutionOptions::default().target_partitions.to_string()
-                    }
-                    ("planning_concurrency", "0") => {
-                        &ExecutionOptions::default().planning_concurrency.to_string()
-                    }
-                    _ => value,
-                };
-                self.execution.set(rem, value)
-            }
+            "execution" => self.execution.set(rem, value),
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
