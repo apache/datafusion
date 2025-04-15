@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use crate::fuzz_cases::aggregation_fuzzer::{
     AggregationFuzzerBuilder, DatasetGeneratorConfig, QueryBuilder,
 };
+use std::sync::Arc;
 
 use arrow::array::{
     types::Int64Type, Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch,
-    StringArray,
+    StringArray, UInt64Array,
 };
 use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::DataType;
@@ -47,16 +46,20 @@ use datafusion_physical_expr::expressions::{col, lit, Column};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::InputOrderMode;
+use futures::StreamExt;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
+use super::record_batch_generator::get_supported_types_columns;
+use crate::fuzz_cases::stream_exec::StreamExec;
+use datafusion_execution::memory_pool::units::MB;
 use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_execution::TaskContext;
+use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_physical_plan::metrics::MetricValue;
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use rand::rngs::StdRng;
 use rand::{random, thread_rng, Rng, SeedableRng};
-
-use super::record_batch_generator::get_supported_types_columns;
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]
@@ -640,6 +643,8 @@ fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<Aggregate
         } else if !expect_spill && spill_count > 0 {
             panic!("Expected no spill but found SpillCount metric with value greater than 0.");
         }
+
+        println!("SpillCount = {}", spill_count);
     } else {
         panic!("No metrics returned from the operator; cannot verify spilling.");
     }
@@ -750,6 +755,122 @@ async fn test_single_mode_aggregate_with_spill() -> Result<()> {
     .await?;
 
     assert_spill_count_metric(true, single_aggregate);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_high_cardinality_with_limited_memory() -> Result<()> {
+    let record_batch_size = 8192;
+    let two_mb = 2 * MB as usize;
+    let task_ctx = {
+        let memory_pool = Arc::new(FairSpillPool::new(two_mb));
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
+    };
+    run_test_high_cardinality(task_ctx, 100).await
+}
+
+async fn run_test_high_cardinality(
+    task_ctx: TaskContext,
+    number_of_record_batches: usize,
+) -> Result<()> {
+    let scan_schema = Arc::new(Schema::new(vec![
+        Field::new("col_0", DataType::UInt64, true),
+        Field::new("col_1", DataType::Utf8, true),
+    ]));
+
+    let group_by = PhysicalGroupBy::new_single(vec![(
+        Arc::new(Column::new("col_0", 0)),
+        "col_0".to_string(),
+    )]);
+
+    let aggregate_expressions = vec![Arc::new(
+        AggregateExprBuilder::new(
+            array_agg_udaf(),
+            vec![col("col_1", &scan_schema).unwrap()],
+        )
+        .schema(Arc::clone(&scan_schema))
+        .alias("array_agg(col_1)")
+        .build()?,
+    )];
+
+    let record_batch_size = task_ctx.session_config().batch_size() as u64;
+
+    let schema = Arc::clone(&scan_schema);
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter((0..number_of_record_batches as u64).map(
+                move |index| {
+                    // Simulate a large record batch 3 times in a stream
+                    let string_array =
+                        if index % (number_of_record_batches as u64 / 3) == 0 {
+                            Arc::new(StringArray::from_iter_values(
+                                (0..record_batch_size).map(|_| "b".repeat(64)),
+                            ))
+                        } else {
+                            Arc::new(StringArray::from_iter_values(
+                                (0..record_batch_size).map(|_| "a".repeat(8)),
+                            ))
+                        };
+
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            // Grouping key
+                            Arc::new(UInt64Array::from_iter_values(
+                                (index * record_batch_size)
+                                    ..(index * record_batch_size) + record_batch_size,
+                            )),
+                            // Grouping value
+                            string_array,
+                        ],
+                    )
+                    .map_err(|err| err.into())
+                },
+            )),
+        ))));
+
+    let aggregate_exec = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        group_by.clone(),
+        aggregate_expressions.clone(),
+        vec![None; aggregate_expressions.len()],
+        plan,
+        Arc::clone(&scan_schema),
+    )?);
+    let aggregate_final = Arc::new(AggregateExec::try_new(
+        AggregateMode::Final,
+        group_by,
+        aggregate_expressions.clone(),
+        vec![None; aggregate_expressions.len()],
+        aggregate_exec,
+        Arc::clone(&scan_schema),
+    )?);
+
+    let task_ctx = Arc::new(task_ctx);
+
+    let mut result = aggregate_final.execute(0, task_ctx)?;
+
+    let mut number_of_groups = 0;
+
+    while let Some(batch) = result.next().await {
+        let batch = batch?;
+        number_of_groups += batch.num_rows();
+    }
+
+    assert_eq!(
+        number_of_groups,
+        number_of_record_batches * record_batch_size as usize
+    );
+
+    assert_spill_count_metric(true, aggregate_final);
 
     Ok(())
 }
