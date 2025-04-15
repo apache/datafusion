@@ -45,7 +45,7 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
+    expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
 };
 
 /// Physical expression of a scalar function
@@ -117,18 +117,24 @@ impl ScalarFunctionExpr {
         schema: &Schema,
     ) -> Result<Self> {
         let name = fun.name().to_string();
-        let arg_types = args
+        let arg_fields = args
             .iter()
-            .map(|e| e.data_type(schema))
+            .enumerate()
+            .map(|(idx, e)| {
+                e.output_field(schema).and_then(|maybe_field| {
+                    Ok(maybe_field.unwrap_or({
+                        Field::new(format!("field_{idx}"), e.data_type(schema)?, true)
+                    }))
+                })
+            })
             .collect::<Result<Vec<_>>>()?;
 
         // verify that input data types is consistent with function's `TypeSignature`
-        data_types_with_scalar_udf(&arg_types, &fun)?;
-
-        let nullables = args
+        let arg_types = arg_fields
             .iter()
-            .map(|e| e.nullable(schema))
-            .collect::<Result<Vec<_>>>()?;
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        data_types_with_scalar_udf(&arg_types, &fun)?;
 
         let arguments = args
             .iter()
@@ -138,18 +144,17 @@ impl ScalarFunctionExpr {
                     .map(|literal| literal.value())
             })
             .collect::<Vec<_>>();
-        let ret_args = ReturnTypeArgs {
-            arg_types: &arg_types,
+        let ret_args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
             scalar_arguments: &arguments,
-            nullables: &nullables,
         };
-        let (return_type, nullable) = fun.return_type_from_args(ret_args)?.into_parts();
+        let return_field = fun.return_field_from_args(ret_args)?;
         Ok(Self {
             fun,
             name,
             args,
-            return_type,
-            nullable,
+            return_type: return_field.data_type().clone(),
+            nullable: return_field.is_nullable(),
             metadata: HashMap::new(),
         })
     }

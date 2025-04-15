@@ -20,16 +20,14 @@ use arrow::array::{
     Scalar,
 };
 use arrow::compute::SortOptions;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow_buffer::NullBuffer;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, utils::take_function_args, Result,
     ScalarValue,
 };
-use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
-};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -130,14 +128,14 @@ impl ScalarUDFImpl for GetFieldFunc {
     }
 
     fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_args should be called instead")
+        internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
         // Length check handled in the signature
         debug_assert_eq!(args.scalar_arguments.len(), 2);
 
-        match (&args.arg_types[0], args.scalar_arguments[1].as_ref()) {
+        match (&args.arg_fields[0].data_type(), args.scalar_arguments[1].as_ref()) {
             (DataType::Map(fields, _), _) => {
                 match fields.data_type() {
                     DataType::Struct(fields) if fields.len() == 2 => {
@@ -146,7 +144,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                         // instead, we assume that the second column is the "value" column both here and in
                         // execution.
                         let value_field = fields.get(1).expect("fields should have exactly two members");
-                        Ok(ReturnInfo::new_nullable(value_field.data_type().clone()))
+                        Ok(Field::new(self.name(), value_field.data_type().clone(), true))
                     },
                     _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
                 }
@@ -158,10 +156,10 @@ impl ScalarUDFImpl for GetFieldFunc {
                     |field_name| {
                     fields.iter().find(|f| f.name() == field_name)
                     .ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
-                    .map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
+                    .map(|f| Field::new(self.name(), f.data_type().to_owned(), true))
                 })
             },
-            (DataType::Null, _) => Ok(ReturnInfo::new_nullable(DataType::Null)),
+            (DataType::Null, _) => Ok(Field::new(self.name(), DataType::Null, true)),
             (other, _) => exec_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
         }
     }

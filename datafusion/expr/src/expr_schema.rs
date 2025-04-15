@@ -24,7 +24,7 @@ use crate::expr::{
 use crate::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
 };
-use crate::udf::ReturnTypeArgs;
+use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
@@ -418,11 +418,12 @@ impl ExprSchemable for Expr {
                 self.data_type_and_nullable_with_window_function(schema, window_function)
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                let (arg_types, nullables): (Vec<DataType>, Vec<bool>) = args
+                let (arg_types, fields): (Vec<DataType>, Vec<Arc<Field>>) = args
                     .iter()
-                    .map(|e| e.data_type_and_nullable(schema))
+                    .map(|e| e.to_field(schema).map(|(_, f)| f))
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()
+                    .map(|f| (f.data_type().clone(), f))
                     .unzip();
                 // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
                 let new_data_types = data_types_with_scalar_udf(&arg_types, func)
@@ -440,6 +441,12 @@ impl ExprSchemable for Expr {
                             )
                         )
                     })?;
+                let new_fields = fields.into_iter()
+                    .zip(new_data_types)
+                    .map(|(f, d)| {
+                        f.as_ref().clone().with_data_type(d)
+                    })
+                    .collect::<Vec<Field>>();
 
                 let arguments = args
                     .iter()
@@ -448,15 +455,13 @@ impl ExprSchemable for Expr {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                let args = ReturnTypeArgs {
-                    arg_types: &new_data_types,
+                let args = ReturnFieldArgs {
+                    arg_fields: &new_fields,
                     scalar_arguments: &arguments,
-                    nullables: &nullables,
                 };
 
-                let (return_type, nullable) =
-                    func.return_type_from_args(args)?.into_parts();
-                Ok((return_type, nullable))
+                let return_field = func.return_field_from_args(args)?;
+                Ok((return_field.data_type().clone(), return_field.is_nullable()))
             }
             _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
         }

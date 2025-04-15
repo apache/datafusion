@@ -18,9 +18,7 @@
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, internal_err, Result};
-use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -91,10 +89,10 @@ impl ScalarUDFImpl for NamedStructFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("named_struct: return_type called instead of return_type_from_args")
+        internal_err!("named_struct: return_type called instead of return_field_from_args")
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
         // do not accept 0 arguments.
         if args.scalar_arguments.is_empty() {
             return exec_err!(
@@ -126,7 +124,7 @@ impl ScalarUDFImpl for NamedStructFunc {
                 )
             )
             .collect::<Result<Vec<_>>>()?;
-        let types = args.arg_types.iter().skip(1).step_by(2).collect::<Vec<_>>();
+        let types = args.arg_fields.iter().skip(1).step_by(2).map(|f| f.data_type()).collect::<Vec<_>>();
 
         let return_fields = names
             .into_iter()
@@ -134,9 +132,9 @@ impl ScalarUDFImpl for NamedStructFunc {
             .map(|(name, data_type)| Ok(Field::new(name, data_type.to_owned(), true)))
             .collect::<Result<Vec<Field>>>()?;
 
-        Ok(ReturnInfo::new_nullable(DataType::Struct(Fields::from(
+        Ok(Field::new(self.name(), DataType::Struct(Fields::from(
             return_fields,
-        ))))
+        )), true))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

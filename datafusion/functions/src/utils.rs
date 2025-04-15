@@ -133,7 +133,7 @@ pub mod test {
             let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
             let func = $FUNC;
 
-            let type_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
+            let type_array = $ARGS.iter().map(|arg| arg.field()).collect::<Vec<_>>();
             let cardinality = $ARGS
                 .iter()
                 .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -153,10 +153,9 @@ pub mod test {
                 ColumnarValue::Array(a) => a.null_count() > 0,
             }).collect::<Vec<_>>();
 
-            let return_info = func.return_type_from_args(datafusion_expr::ReturnTypeArgs {
-                arg_types: &type_array,
+            let return_info = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
+                arg_fields: &field_array,
                 scalar_arguments: &scalar_arguments_refs,
-                nullables: &nullables
             });
 
             match expected {

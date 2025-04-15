@@ -43,8 +43,8 @@ use datafusion_common::{
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
-    OperateFunctionArg, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility,
+    OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
@@ -806,7 +806,7 @@ impl ScalarUDFImpl for TakeUDF {
         &self.signature
     }
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        not_impl_err!("Not called because the return_type_from_args is implemented")
+        not_impl_err!("Not called because the return_field_from_args is implemented")
     }
 
     /// This function returns the type of the first or second argument based on
@@ -814,9 +814,9 @@ impl ScalarUDFImpl for TakeUDF {
     ///
     /// 1. If the third argument is '0', return the type of the first argument
     /// 2. If the third argument is '1', return the type of the second argument
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        if args.arg_types.len() != 3 {
-            return plan_err!("Expected 3 arguments, got {}.", args.arg_types.len());
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+        if args.arg_fields.len() != 3 {
+            return plan_err!("Expected 3 arguments, got {}.", args.arg_fields.len());
         }
 
         let take_idx = if let Some(take_idx) = args.scalar_arguments.get(2) {
@@ -841,8 +841,10 @@ impl ScalarUDFImpl for TakeUDF {
             );
         };
 
-        Ok(ReturnInfo::new_nullable(
-            args.arg_types[take_idx].to_owned(),
+        Ok(Field::new(
+            self.name(),
+            args.arg_fields[take_idx].data_type().to_owned(),
+            true,
         ))
     }
 
