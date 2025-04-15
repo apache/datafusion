@@ -463,7 +463,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch() -> 
             if i % 25 == 1 {
                 pool_size / 4
             } else {
-                (16 * KB) as usize
+                16 * KB
             }
         }),
         memory_behavior: Default::default(),
@@ -501,7 +501,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_c
             if i % 25 == 1 {
                 pool_size / 4
             } else {
-                (16 * KB) as usize
+                16 * KB
             }
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAndReleaseEveryNthBatch(10),
@@ -539,7 +539,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_t
             if i % 25 == 1 {
                 pool_size / 4
             } else {
-                (16 * KB) as usize
+                16 * KB
             }
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAtTheBeginning,

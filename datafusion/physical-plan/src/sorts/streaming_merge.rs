@@ -184,16 +184,24 @@ impl<'a> StreamingMergeBuilder<'a> {
             enable_round_robin_tie_breaker,
         } = self;
 
-        if !sorted_spill_files.is_empty() && spill_manager.is_some() {
+        if !sorted_spill_files.is_empty() {
+            // Unwrapping mandatory fields
+            let schema = schema.expect("Schema cannot be empty for streaming merge");
+            let metrics = metrics.expect("Metrics cannot be empty for streaming merge");
+            let batch_size =
+                batch_size.expect("Batch size cannot be empty for streaming merge");
+            let reservation =
+                reservation.expect("Reservation cannot be empty for streaming merge");
+
             return Ok(MultiLevelMergeBuilder::new(
-                spill_manager.unwrap(),
-                schema.unwrap(),
+                spill_manager.expect("spill_manager should exist"),
+                schema,
                 sorted_spill_files,
                 streams,
                 expressions.clone(),
-                metrics.unwrap(),
-                batch_size.unwrap(),
-                reservation.unwrap(),
+                metrics,
+                batch_size,
+                reservation,
                 fetch,
                 enable_round_robin_tie_breaker,
             )
