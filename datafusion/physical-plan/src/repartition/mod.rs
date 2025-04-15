@@ -513,6 +513,11 @@ impl DisplayAs for RepartitionExec {
                     "input_partition_count={}",
                     self.input.output_partitioning().partition_count()
                 )?;
+                writeln!(
+                    f,
+                    "output_partition_count={}",
+                    self.partitioning().partition_count()
+                )?;
                 if self.preserve_order {
                     writeln!(f, "preserve_order={}", self.preserve_order)?;
                 }
