@@ -274,6 +274,7 @@ impl TopK {
 
                 let filter_predicate = FilterBuilder::new(&filter);
                 let filter_predicate = if sort_keys.len() > 1 {
+                    // Optimize filter when it has multiple sort keys
                     filter_predicate.optimize().build()
                 } else {
                     filter_predicate.build()
@@ -294,24 +295,12 @@ impl TopK {
 
         let mut batch_entry = self.heap.register_batch(batch.clone());
 
-        let mut replacements = 0;
-
-        match selected_rows {
+        let replacements = match selected_rows {
             Some(filter) => {
-                self.find_new_topk_items(
-                    filter.values().set_indices(),
-                    &mut batch_entry,
-                    &mut replacements,
-                );
+                self.find_new_topk_items(filter.values().set_indices(), &mut batch_entry)
             }
-            None => {
-                self.find_new_topk_items(
-                    0..sort_keys[0].len(),
-                    &mut batch_entry,
-                    &mut replacements,
-                );
-            }
-        }
+            None => self.find_new_topk_items(0..sort_keys[0].len(), &mut batch_entry),
+        };
 
         self.metrics.row_replacements.add(replacements);
         self.heap.insert_batch_entry(batch_entry);
@@ -333,8 +322,8 @@ impl TopK {
         &mut self,
         items: impl Iterator<Item = usize>,
         batch_entry: &mut RecordBatchEntry,
-        replacements: &mut usize,
-    ) {
+    ) -> usize {
+        let mut replacements = 0;
         let rows = &mut self.scratch_rows;
         for (index, row) in items.zip(rows.iter()) {
             match self.heap.max() {
@@ -344,10 +333,11 @@ impl TopK {
                 // don't yet have k items or new item is lower than the currently k low values
                 None | Some(_) => {
                     self.heap.add(batch_entry, row, index);
-                    *replacements += 1;
+                    replacements += 1;
                 }
             }
         }
+        replacements
     }
 
     /// If input ordering shares a common sort prefix with the TopK, and if the TopK's heap is full,
