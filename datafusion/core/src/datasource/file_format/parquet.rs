@@ -1075,7 +1075,10 @@ mod tests {
             .map(|factory| factory.create(state, &Default::default()).unwrap())
             .unwrap_or(Arc::new(ParquetFormat::new()));
 
-        scan_format(state, &*format, &testdata, file_name, projection, limit).await
+        scan_format(
+            state, &*format, None, &testdata, file_name, projection, limit,
+        )
+        .await
     }
 
     /// Test that 0-byte files don't break while reading

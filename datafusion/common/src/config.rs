@@ -459,6 +459,14 @@ config_namespace! {
         /// BLOB instead.
         pub binary_as_string: bool, default = false
 
+        /// (reading) If true, parquet reader will read columns of
+        /// physical type int96 as originating from a different resolution
+        /// than nanosecond. This is useful for reading data from systems like Spark
+        /// which stores microsecond resolution timestamps in an int96 allowing it
+        /// to write values with a larger date range than 64-bit timestamps with
+        /// nanosecond resolution.
+        pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
