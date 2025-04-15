@@ -34,7 +34,7 @@ use prost::{
     Message,
 };
 use std::sync::Arc;
-
+use arrow::datatypes::Field;
 // Reexport Bytes which appears in the API
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion::physical_plan::ExecutionPlan;
@@ -116,7 +116,7 @@ impl Serializeable for Expr {
                 Ok(Arc::new(create_udf(
                     name,
                     vec![],
-                    arrow::datatypes::DataType::Null,
+                    Field::new("empty", arrow::datatypes::DataType::Null, true),
                     Volatility::Immutable,
                     Arc::new(|_| unimplemented!()),
                 )))

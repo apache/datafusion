@@ -103,7 +103,7 @@ impl ScalarUDFImpl for ArrayDims {
             }
         };
         Ok(Field::new(
-            self.signature(),
+            self.name(),
             data_type,
             args.arg_types[0].is_nullable(),
         ))
@@ -185,7 +185,7 @@ impl ScalarUDFImpl for ArrayNdims {
                 return plan_err!("The array_ndims function can only accept List/LargeList/FixedSizeList.");
             }
         };
-        Ok(Field::new(self.signature(), data_type, nullable))
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

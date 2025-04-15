@@ -362,9 +362,9 @@ pub fn parse_physical_expr(
             let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
 
             let return_field = Field::new(
-                convert_required!(e.name),
+                e.name.clone(),
                 convert_required!(e.return_type)?,
-                convert_required!(e.nullable),
+                e.nullable,
             );
 
             Arc::new(

@@ -402,7 +402,7 @@ fn create_example_udf() -> ScalarUDF {
         // Expects two f64 values:
         vec![DataType::Float64, DataType::Float64],
         // Returns an f64 value:
-        DataType::Float64,
+        Field::new("example", DataType::Float64, true),
         Volatility::Immutable,
         adder,
     )

@@ -90,6 +90,7 @@ impl ScalarFunctionExpr {
         schema: &Schema,
     ) -> Result<Self> {
         let name = fun.name().to_string();
+
         let arg_types = args
             .iter()
             .map(|e| e.data_type(schema))
@@ -97,6 +98,19 @@ impl ScalarFunctionExpr {
 
         // verify that input data types is consistent with function's `TypeSignature`
         data_types_with_scalar_udf(&arg_types, &fun)?;
+
+        let arg_fields = args
+            .iter()
+            .map(|e| e.output_field(schema))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .zip(arg_types.into_iter())
+            .enumerate()
+            .map(|(idx, (field, data_type))| {
+                field.unwrap_or(Field::new(format!("field_{idx}"), data_type, true))
+            })
+            .collect::<Vec<_>>();
+
 
         let arguments = args
             .iter()
@@ -107,7 +121,7 @@ impl ScalarFunctionExpr {
             })
             .collect::<Vec<_>>();
         let ret_args = ReturnFieldArgs {
-            arg_types: &arg_types,
+            arg_types: &arg_fields,
             scalar_arguments: &arguments,
         };
         let return_field = fun.return_field(ret_args)?;

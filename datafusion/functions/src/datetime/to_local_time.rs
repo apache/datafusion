@@ -358,7 +358,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let [time_value] = take_function_args(self.name(), args.arg_types)?;
 
-        let data_type = match time_value {
+        let data_type = match time_value.data_type() {
             Timestamp(timeunit, _) => Timestamp(*timeunit, None),
             _ => exec_err!(
                 "The to_local_time function can only accept timestamp as the arg, got {:?}", time_value

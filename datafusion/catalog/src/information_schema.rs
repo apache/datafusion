@@ -32,7 +32,9 @@ use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
-use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
+use datafusion_expr::{
+    AggregateUDF, ReturnFieldArgs, ScalarUDF, Signature, TypeSignature, WindowUDF,
+};
 use datafusion_expr::{TableType, Volatility};
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::streaming::PartitionStream;
@@ -412,8 +414,23 @@ fn get_udf_args_and_return_types(
         Ok(arg_types
             .into_iter()
             .map(|arg_types| {
+                let arg_fields = arg_types
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, data_type)| {
+                        Field::new(format!("field_{idx}"), data_type.clone(), true)
+                    })
+                    .collect::<Vec<_>>();
+                let scalar_args = vec![None; arg_fields.len()];
+                let return_args = ReturnFieldArgs {
+                    arg_types: &arg_fields,
+                    scalar_arguments: &scalar_args,
+                };
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
-                let return_type = udf.return_type(&arg_types).ok().map(|t| t.to_string());
+                let return_type = udf
+                    .return_field(return_args)
+                    .ok()
+                    .map(|f| f.data_type().to_string());
                 let arg_types = arg_types
                     .into_iter()
                     .map(|t| t.to_string())

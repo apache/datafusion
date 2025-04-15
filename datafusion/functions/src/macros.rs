@@ -159,13 +159,13 @@ macro_rules! make_math_unary_udf {
             use std::sync::Arc;
 
             use arrow::array::{ArrayRef, AsArray};
-            use arrow::datatypes::{DataType, Float32Type, Float64Type};
+            use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
             use datafusion_common::{exec_err, Result};
             use datafusion_expr::interval_arithmetic::Interval;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
-                ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
-                Signature, Volatility,
+                ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+                ScalarUDFImpl, Signature, Volatility,
             };
 
             #[derive(Debug)]
@@ -198,14 +198,15 @@ macro_rules! make_math_unary_udf {
                     &self.signature
                 }
 
-                fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-                    let arg_type = &arg_types[0];
+                fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+                    let arg_type = &args.arg_types[0];
 
-                    match arg_type {
-                        DataType::Float32 => Ok(DataType::Float32),
+                    let data_type = match arg_type.data_type() {
+                        DataType::Float32 => DataType::Float32,
                         // For other types (possible values float64/null/int), use Float64
-                        _ => Ok(DataType::Float64),
-                    }
+                        _ => DataType::Float64,
+                    };
+                    Ok(Field::new(self.name(), data_type, arg_type.is_nullable()))
                 }
 
                 fn output_ordering(
@@ -273,13 +274,13 @@ macro_rules! make_math_binary_udf {
             use std::sync::Arc;
 
             use arrow::array::{ArrayRef, AsArray};
-            use arrow::datatypes::{DataType, Float32Type, Float64Type};
+            use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
             use datafusion_common::{exec_err, Result};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::TypeSignature;
             use datafusion_expr::{
-                ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
-                Signature, Volatility,
+                ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+                ScalarUDFImpl, Signature, Volatility,
             };
 
             #[derive(Debug)]
@@ -314,14 +315,15 @@ macro_rules! make_math_binary_udf {
                     &self.signature
                 }
 
-                fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-                    let arg_type = &arg_types[0];
+                fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+                    let arg_type = &args.arg_types[0];
 
-                    match arg_type {
-                        DataType::Float32 => Ok(DataType::Float32),
+                    let data_type = match arg_type.data_type() {
+                        DataType::Float32 => DataType::Float32,
                         // For other types (possible values float64/null/int), use Float64
-                        _ => Ok(DataType::Float64),
-                    }
+                        _ => DataType::Float64,
+                    };
+                    Ok(Field::new(self.name(), data_type, arg_type.is_nullable()))
                 }
 
                 fn output_ordering(

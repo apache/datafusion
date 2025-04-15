@@ -83,7 +83,7 @@ pub fn vec_field_to_rvec_wrapped(
 pub fn rvec_wrapped_to_vec_field(
     fields: &RVec<WrappedSchema>,
 ) -> Result<Vec<Field>, arrow::error::ArrowError> {
-    fields.iter().map(|d| DataType::try_from(&d.0)).collect()
+    fields.iter().map(|d| Field::try_from(&d.0)).collect()
 }
 
 /// This is a utility function to convert a slice of [`DataType`] to its equivalent

@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::StructArray;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
@@ -107,10 +107,11 @@ impl ScalarUDFImpl for StructFunc {
         if args.arg_types.is_empty() {
             return exec_err!("struct requires at least one argument, got 0 instead");
         }
+        let fields: Vec<Field> = args.arg_types.iter().cloned().collect();
 
         Ok(Field::new(
             self.name(),
-            DataType::Struct(args.arg_types.into()),
+            DataType::Struct(fields.into()),
             true,
         ))
     }

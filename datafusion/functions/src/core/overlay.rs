@@ -99,9 +99,9 @@ impl ScalarUDFImpl for OverlayFunc {
     }
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
-        let nullable = args.arg_types.iter().any(|field| field.nullable());
-        let data_type = utf8_to_str_type(&args.arg_types[0].data_type(), "overlay");
-        Field::new(self.name(), data_type?, nullable)
+        let nullable = args.arg_types.iter().any(|field| field.is_nullable());
+        let data_type = utf8_to_str_type(&args.arg_types[0].data_type(), "overlay")?;
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

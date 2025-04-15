@@ -347,7 +347,7 @@ pub fn serialize_physical_expr(
                     name: expr.name().to_string(),
                     args: serialize_physical_exprs(expr.args(), codec)?,
                     fun_definition: (!buf.is_empty()).then_some(buf),
-                    return_type: Some(expr.return_type().try_into()?),
+                    return_type: Some(expr.return_field().data_type().try_into()?),
                     nullable: expr.nullable(),
                 },
             )),

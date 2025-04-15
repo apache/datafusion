@@ -87,7 +87,7 @@ impl ScalarUDFImpl for UnionExtractFun {
             );
         }
 
-        let DataType::Union(fields, _) = &args.arg_types[0] else {
+        let DataType::Union(fields, _) = args.arg_types[0].data_type() else {
             return exec_err!(
                 "union_extract first argument must be a union, got {} instead",
                 args.arg_types[0]
