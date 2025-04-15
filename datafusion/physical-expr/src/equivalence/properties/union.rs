@@ -833,7 +833,7 @@ mod tests {
                     ordering
                         .iter()
                         .map(|name| parse_sort_expr(name, schema))
-                        .collect::<LexOrdering>()
+                        .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
 

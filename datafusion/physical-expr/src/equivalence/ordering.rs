@@ -214,9 +214,9 @@ impl OrderingEquivalenceClass {
     /// ordering equivalence class.
     pub fn add_offset(&mut self, offset: usize) {
         for ordering in self.orderings.iter_mut() {
-            ordering.transform(|sort_expr| {
+            for sort_expr in ordering.iter_mut() {
                 sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
-            })
+            }
         }
     }
 
@@ -338,12 +338,10 @@ impl Display for OrderingEquivalenceClass {
 mod tests {
     use std::sync::Arc;
 
-    use crate::equivalence::tests::{
-        convert_to_orderings, convert_to_sort_exprs, create_test_schema,
-    };
+    use crate::equivalence::tests::create_test_schema;
     use crate::equivalence::{
-        EquivalenceClass, EquivalenceGroup, EquivalenceProperties,
-        OrderingEquivalenceClass,
+        convert_to_orderings, convert_to_sort_exprs, EquivalenceClass, EquivalenceGroup,
+        EquivalenceProperties, OrderingEquivalenceClass,
     };
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::utils::tests::TestScalarUDF;

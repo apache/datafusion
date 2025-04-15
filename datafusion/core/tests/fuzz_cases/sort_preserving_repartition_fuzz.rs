@@ -37,11 +37,13 @@ mod sp_repartition_fuzz_tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::Result;
     use datafusion_execution::{config::SessionConfig, memory_pool::MemoryConsumer};
-    use datafusion_physical_expr::{
-        equivalence::{EquivalenceClass, EquivalenceProperties},
-        expressions::{col, Column},
-        ConstExpr, PhysicalExpr, PhysicalSortExpr,
+    use datafusion_physical_expr::equivalence::{
+        EquivalenceClass, EquivalenceProperties,
     };
+    use datafusion_physical_expr::expressions::{col, Column};
+    use datafusion_physical_expr::ConstExpr;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use test_utils::add_empty_batches;
 
     use itertools::izip;
@@ -344,18 +346,14 @@ mod sp_repartition_fuzz_tests {
         let schema = input1[0].schema();
         let session_config = SessionConfig::new().with_batch_size(50);
         let ctx = SessionContext::new_with_config(session_config);
-        let mut sort_keys = vec![];
-        for ordering_col in ["a", "b", "c"] {
-            sort_keys.push(PhysicalSortExpr {
-                expr: col(ordering_col, &schema).unwrap(),
-                options: SortOptions::default(),
-            })
-        }
+        let sort_keys = ["a", "b", "c"].map(|ordering_col| {
+            PhysicalSortExpr::new_default(col(ordering_col, &schema).unwrap())
+        });
 
         let concat_input_record = concat_batches(&schema, &input1).unwrap();
 
         let running_source = Arc::new(
-            MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
+            MemorySourceConfig::try_new(&[input1], schema.clone(), None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_keys.clone().into()])
                 .unwrap(),
@@ -378,7 +376,7 @@ mod sp_repartition_fuzz_tests {
             sort_preserving_repartition_exec_hash(intermediate, hash_exprs.clone())
         };
 
-        let final_plan = sort_preserving_merge_exec(sort_keys, intermediate);
+        let final_plan = sort_preserving_merge_exec(sort_keys.into(), intermediate);
         let task_ctx = ctx.task_ctx();
 
         let collected_running = collect(final_plan, task_ctx.clone()).await.unwrap();
@@ -425,10 +423,9 @@ mod sp_repartition_fuzz_tests {
     }
 
     fn sort_preserving_merge_exec(
-        sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+        sort_exprs: LexOrdering,
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
-        let sort_exprs = sort_exprs.into_iter().collect();
         Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
     }
 

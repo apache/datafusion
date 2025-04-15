@@ -88,10 +88,7 @@ fn project_orderings_random() -> Result<()> {
                     // Since ordered section satisfies schema, we expect
                     // that result will be same after sort (e.g sort was unnecessary).
                     assert!(
-                        is_table_same_after_sort(
-                            ordering.clone(),
-                            projected_batch.clone(),
-                        )?,
+                        is_table_same_after_sort(ordering.clone(), &projected_batch)?,
                         "{}",
                         err_msg
                     );
@@ -166,25 +163,28 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
 
                 for n_req in 1..=projected_exprs.len() {
                     for exprs in projected_exprs.iter().combinations(n_req) {
-                        let requirement = exprs
+                        let sort_exprs = exprs
                             .into_iter()
                             .map(|expr| PhysicalSortExpr {
                                 expr: Arc::clone(expr),
                                 options: SORT_OPTIONS,
                             })
-                            .collect::<LexOrdering>();
-                        let expected = is_table_same_after_sort(
-                            requirement.clone(),
-                            projected_batch.clone(),
-                        )?;
+                            .collect::<Vec<_>>();
+                        let Some(ordering) = LexOrdering::new(sort_exprs) else {
+                            unreachable!(
+                                "Test should always produce non-degenerate orderings"
+                            );
+                        };
+                        let expected =
+                            is_table_same_after_sort(ordering.clone(), &projected_batch)?;
                         let err_msg = format!(
                             "Error in test case requirement:{:?}, expected: {:?}, eq_properties: {}, projected_eq: {}, projection_mapping: {:?}",
-                            requirement, expected, eq_properties, projected_eq, projection_mapping
+                            ordering, expected, eq_properties, projected_eq, projection_mapping
                         );
                         // Check whether ordering_satisfy API result and
                         // experimental result matches.
                         assert_eq!(
-                            projected_eq.ordering_satisfy(requirement),
+                            projected_eq.ordering_satisfy(ordering),
                             expected,
                             "{}",
                             err_msg

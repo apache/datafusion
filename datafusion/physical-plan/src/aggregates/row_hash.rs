@@ -21,6 +21,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
+use super::order::GroupOrdering;
+use super::AggregateExec;
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
@@ -36,7 +38,6 @@ use crate::{aggregates, metrics, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
-use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -44,13 +45,11 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
-
-use super::order::GroupOrdering;
-use super::AggregateExec;
-use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -519,15 +518,20 @@ impl GroupedHashAggregateStream {
 
         let partial_agg_schema = Arc::new(partial_agg_schema);
 
-        let spill_expr = group_schema
-            .fields
-            .into_iter()
-            .enumerate()
-            .map(|(idx, field)| PhysicalSortExpr {
-                expr: Arc::new(Column::new(field.name().as_str(), idx)) as _,
-                options: SortOptions::default(),
-            })
-            .collect();
+        let spill_expr =
+            group_schema
+                .fields
+                .into_iter()
+                .enumerate()
+                .map(|(idx, field)| {
+                    PhysicalSortExpr::new_default(Arc::new(Column::new(
+                        field.name().as_str(),
+                        idx,
+                    )) as _)
+                });
+        let Some(spill_expr) = LexOrdering::new(spill_expr) else {
+            return internal_err!("Spill expression is empty");
+        };
 
         let name = format!("GroupedHashAggregateStream[{partition}]");
         let reservation = MemoryConsumer::new(name)

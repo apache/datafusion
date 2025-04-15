@@ -15,16 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::physical_plan::expressions::col;
-use datafusion::physical_plan::expressions::Column;
-use datafusion_physical_expr::{ConstExpr, EquivalenceProperties, PhysicalSortExpr};
 use std::any::Any;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
-use arrow::compute::SortOptions;
-use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn};
+use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
@@ -32,9 +28,13 @@ use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_physical_expr::equivalence::{EquivalenceClass, ProjectionMapping};
+use datafusion_physical_expr::equivalence::{
+    convert_to_orderings, EquivalenceClass, ProjectionMapping,
+};
+use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::expressions::{col, Column};
 
 use itertools::izip;
 use rand::prelude::*;
@@ -226,7 +226,7 @@ fn add_equal_conditions_test() -> Result<()> {
 /// already sorted according to `required_ordering` to begin with.
 pub fn is_table_same_after_sort(
     mut required_ordering: LexOrdering,
-    batch: RecordBatch,
+    batch: &RecordBatch,
 ) -> Result<bool> {
     // Clone the original schema and columns
     let original_schema = batch.schema();
@@ -492,29 +492,6 @@ pub fn generate_table_for_orderings(
     }
 
     Ok(batch)
-}
-
-// Convert each tuple to PhysicalSortExpr
-pub fn convert_to_sort_exprs(
-    in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-) -> LexOrdering {
-    in_data
-        .iter()
-        .map(|(expr, options)| PhysicalSortExpr {
-            expr: Arc::clone(*expr),
-            options: *options,
-        })
-        .collect()
-}
-
-// Convert each inner tuple to PhysicalSortExpr
-pub fn convert_to_orderings(
-    orderings: &[Vec<(&Arc<dyn PhysicalExpr>, SortOptions)>],
-) -> Vec<LexOrdering> {
-    orderings
-        .iter()
-        .map(|sort_exprs| convert_to_sort_exprs(sort_exprs))
-        .collect()
 }
 
 // Utility function to generate random f64 array

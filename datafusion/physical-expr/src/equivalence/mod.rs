@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::expressions::Column;
 use crate::PhysicalExpr;
 
+use arrow::compute::SortOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 mod class;
 mod ordering;
@@ -53,10 +56,29 @@ pub fn add_offset_to_expr(
     // an `Ok` value.
 }
 
+// Convert each tuple to a `PhysicalSortExpr` and construct a vector.
+pub fn convert_to_sort_exprs<T: Borrow<Arc<dyn PhysicalExpr>>>(
+    args: &[(T, SortOptions)],
+) -> Vec<PhysicalSortExpr> {
+    args.iter()
+        .map(|(expr, options)| PhysicalSortExpr {
+            expr: Arc::clone(expr.borrow()),
+            options: *options,
+        })
+        .collect()
+}
+
+// Convert each vector of tuples to a `LexOrdering`.
+pub fn convert_to_orderings<T: Borrow<Arc<dyn PhysicalExpr>>>(
+    args: &[Vec<(T, SortOptions)>],
+) -> Vec<LexOrdering> {
+    args.iter()
+        .filter_map(|sort_exprs| LexOrdering::new(convert_to_sort_exprs(sort_exprs)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use std::borrow::Borrow;
-
     use super::*;
     use crate::expressions::col;
     use crate::{LexRequirement, PhysicalSortExpr};
@@ -64,9 +86,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{plan_datafusion_err, Result};
-    use datafusion_physical_expr_common::sort_expr::{
-        LexOrdering, PhysicalSortRequirement,
-    };
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
 
     /// Converts a string to a physical sort expression
     ///
@@ -197,27 +217,6 @@ mod tests {
             .map(|(expr, options)| {
                 PhysicalSortRequirement::new(Arc::clone(*expr), *options)
             })
-            .collect()
-    }
-
-    // Convert each tuple to a `PhysicalSortExpr` and construct a vector.
-    pub fn convert_to_sort_exprs<T: Borrow<Arc<dyn PhysicalExpr>>>(
-        args: &[(T, SortOptions)],
-    ) -> Vec<PhysicalSortExpr> {
-        args.iter()
-            .map(|(expr, options)| PhysicalSortExpr {
-                expr: Arc::clone(expr.borrow()),
-                options: *options,
-            })
-            .collect()
-    }
-
-    // Convert each vector of tuples to a `LexOrdering`.
-    pub fn convert_to_orderings<T: Borrow<Arc<dyn PhysicalExpr>>>(
-        args: &[Vec<(T, SortOptions)>],
-    ) -> Vec<LexOrdering> {
-        args.iter()
-            .map(|sort_exprs| convert_to_sort_exprs(sort_exprs).into())
             .collect()
     }
 

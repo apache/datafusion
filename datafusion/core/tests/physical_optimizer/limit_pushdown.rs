@@ -19,14 +19,13 @@ use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
     coalesce_batches_exec, coalesce_partitions_exec, global_limit_exec, local_limit_exec,
-    sort_exec, sort_preserving_merge_exec,
+    sort_exec, sort_preserving_merge_exec, stream_exec,
 };
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{col, lit, BinaryExpr};
 use datafusion_physical_expr::Partitioning;
@@ -37,7 +36,6 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
 fn create_schema() -> SchemaRef {
@@ -46,17 +44,6 @@ fn create_schema() -> SchemaRef {
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::Int32, true),
     ]))
-}
-
-fn streaming_table_exec(schema: SchemaRef) -> Result<Arc<dyn ExecutionPlan>> {
-    Ok(Arc::new(StreamingTableExec::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(DummyStreamPartition { schema }) as _],
-        None,
-        None,
-        true,
-        None,
-    )?))
 }
 
 fn projection_exec(
@@ -100,24 +87,11 @@ fn empty_exec(schema: SchemaRef) -> Arc<dyn ExecutionPlan> {
     Arc::new(EmptyExec::new(schema))
 }
 
-#[derive(Debug)]
-struct DummyStreamPartition {
-    schema: SchemaRef,
-}
-impl PartitionStream for DummyStreamPartition {
-    fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        unreachable!()
-    }
-}
-
 #[test]
 fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> Result<()>
 {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(schema)?;
+    let streaming_table = stream_exec(&schema);
     let global_limit = global_limit_exec(streaming_table, 0, Some(5));
 
     let initial = get_plan_string(&global_limit);
@@ -142,7 +116,7 @@ fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> 
 fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_limit_when_skip_is_nonzero(
 ) -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(schema)?;
+    let streaming_table = stream_exec(&schema);
     let global_limit = global_limit_exec(streaming_table, 2, Some(5));
 
     let initial = get_plan_string(&global_limit);
@@ -168,7 +142,7 @@ fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_li
 fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limit(
 ) -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
+    let streaming_table = stream_exec(&schema);
     let repartition = repartition_exec(streaming_table)?;
     let filter = filter_exec(schema, repartition)?;
     let coalesce_batches = coalesce_batches_exec(filter, 8192);
@@ -206,7 +180,7 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
 #[test]
 fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
+    let streaming_table = stream_exec(&schema);
     let filter = filter_exec(Arc::clone(&schema), streaming_table)?;
     let projection = projection_exec(schema, filter)?;
     let global_limit = global_limit_exec(projection, 0, Some(5));
@@ -238,7 +212,7 @@ fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
 fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batches_exec_into_fetching_version(
 ) -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
+    let streaming_table = stream_exec(&schema);
     let coalesce_batches = coalesce_batches_exec(streaming_table, 8192);
     let projection = projection_exec(schema, coalesce_batches)?;
     let global_limit = global_limit_exec(projection, 0, Some(5));
@@ -269,7 +243,7 @@ fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batc
 #[test]
 fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
+    let streaming_table = stream_exec(&schema);
     let coalesce_batches = coalesce_batches_exec(streaming_table, 8192);
     let projection = projection_exec(Arc::clone(&schema), coalesce_batches)?;
     let repartition = repartition_exec(projection)?;
@@ -315,7 +289,7 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
 fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions() -> Result<()>
 {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
+    let streaming_table = stream_exec(&schema);
     let repartition = repartition_exec(streaming_table)?;
     let filter = filter_exec(schema, repartition)?;
     let coalesce_partitions = coalesce_partitions_exec(filter);

@@ -1053,7 +1053,7 @@ pub(crate) mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
-    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     use insta::assert_snapshot;
     use rstest::rstest;
@@ -1081,24 +1081,21 @@ pub(crate) mod tests {
             vec![batch]
         };
 
-        let mut source =
-            TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
-        if !sorted_column_names.is_empty() {
-            let mut sort_info = vec![];
-            for name in sorted_column_names {
-                let index = schema.index_of(name).unwrap();
-                let sort_expr = PhysicalSortExpr {
-                    expr: Arc::new(Column::new(name, index)),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    },
-                };
-                sort_info.push(sort_expr);
-            }
-            source = source
-                .try_with_sort_information(vec![sort_info.into()])
-                .unwrap();
+        let mut sort_info = vec![];
+        for name in sorted_column_names {
+            let index = schema.index_of(name).unwrap();
+            let sort_expr = PhysicalSortExpr {
+                expr: Arc::new(Column::new(name, index)),
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            };
+            sort_info.push(sort_expr);
+        }
+        let mut source = TestMemoryExec::try_new(&[batches], schema, None).unwrap();
+        if let Some(ordering) = LexOrdering::new(sort_info) {
+            source = source.try_with_sort_information(vec![ordering]).unwrap();
         }
 
         Arc::new(TestMemoryExec::update_cache(Arc::new(source)))

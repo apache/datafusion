@@ -635,7 +635,7 @@ pub fn update_expr(
     let mut state = RewriteState::Unchanged;
 
     let new_expr = Arc::clone(expr)
-        .transform_up(|expr: Arc<dyn PhysicalExpr>| {
+        .transform_up(|expr| {
             if state == RewriteState::RewrittenInvalid {
                 return Ok(Transformed::no(expr));
             }

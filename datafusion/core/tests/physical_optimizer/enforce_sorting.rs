@@ -78,8 +78,8 @@ fn parquet_exec_sorted(
         source,
     )
     .with_file(PartitionedFile::new("x".to_string(), 100));
-    if !sort_exprs.is_empty() {
-        builder = builder.with_output_ordering(vec![sort_exprs.into()]);
+    if let Some(ordering) = LexOrdering::new(sort_exprs) {
+        builder = builder.with_output_ordering(vec![ordering]);
     }
     let config = builder.build();
     DataSourceExec::from_data_source(config)
@@ -97,8 +97,8 @@ fn csv_exec_sorted(
         Arc::new(CsvSource::new(false, 0, 0)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100));
-    if !sort_exprs.is_empty() {
-        builder = builder.with_output_ordering(vec![sort_exprs.into()]);
+    if let Some(ordering) = LexOrdering::new(sort_exprs) {
+        builder = builder.with_output_ordering(vec![ordering]);
     }
 
     let config = builder.build();
@@ -1475,7 +1475,7 @@ async fn test_with_lost_ordering_unbounded_bounded(
     let sort_exprs = [sort_expr("a", &schema)];
     // create either bounded or unbounded source
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs.clone())
+        stream_exec_ordered(&schema, sort_exprs.clone().into())
     } else {
         csv_exec_sorted(&schema, sort_exprs.clone())
     };
@@ -2360,8 +2360,8 @@ async fn test_coalesce_propagate() -> Result<()> {
 #[tokio::test]
 async fn test_replace_with_partial_sort2() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = [sort_expr("a", &schema), sort_expr("c", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
+    let input_ordering = [sort_expr("a", &schema), sort_expr("c", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering);
     let physical_plan = sort_exec(
         [
             sort_expr("a", &schema),
@@ -2442,8 +2442,8 @@ async fn test_push_with_required_input_ordering_allowed() -> Result<()> {
 #[tokio::test]
 async fn test_replace_with_partial_sort() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = vec![sort_expr("a", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
+    let input_ordering = [sort_expr("a", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering);
     let physical_plan = sort_exec(
         [sort_expr("a", &schema), sort_expr("c", &schema)].into(),
         unbounded_input,
@@ -2464,8 +2464,8 @@ async fn test_replace_with_partial_sort() -> Result<()> {
 #[tokio::test]
 async fn test_not_replaced_with_partial_sort_for_unbounded_input() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = [sort_expr("b", &schema), sort_expr("c", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs);
+    let input_ordering = [sort_expr("b", &schema), sort_expr("c", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering);
     let physical_plan = sort_exec(
         [
             sort_expr("a", &schema),
@@ -3749,10 +3749,11 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
 #[test]
 fn test_removes_unused_orthogonal_sort() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = [sort_expr("b", &schema), sort_expr("c", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs.clone());
+    let input_ordering: LexOrdering =
+        [sort_expr("b", &schema), sort_expr("c", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering.clone());
     let orthogonal_sort = sort_exec([sort_expr("a", &schema)].into(), unbounded_input);
-    let output_sort = sort_exec(input_sort_exprs.into(), orthogonal_sort); // same sort as data source
+    let output_sort = sort_exec(input_ordering, orthogonal_sort); // same sort as data source
 
     // Test scenario/input has an orthogonal sort:
     let expected_input = [
@@ -3774,11 +3775,12 @@ fn test_removes_unused_orthogonal_sort() -> Result<()> {
 #[test]
 fn test_keeps_used_orthogonal_sort() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = [sort_expr("b", &schema), sort_expr("c", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs.clone());
+    let input_ordering: LexOrdering =
+        [sort_expr("b", &schema), sort_expr("c", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering.clone());
     let orthogonal_sort =
         sort_exec_with_fetch([sort_expr("a", &schema)].into(), Some(3), unbounded_input); // has fetch, so this orthogonal sort changes the output
-    let output_sort = sort_exec(input_sort_exprs.into(), orthogonal_sort);
+    let output_sort = sort_exec(input_ordering, orthogonal_sort);
 
     // Test scenario/input has an orthogonal sort:
     let expected_input = [
@@ -3798,8 +3800,9 @@ fn test_keeps_used_orthogonal_sort() -> Result<()> {
 #[test]
 fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = [sort_expr("b", &schema), sort_expr("c", &schema)];
-    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs.clone());
+    let input_ordering: LexOrdering =
+        [sort_expr("b", &schema), sort_expr("c", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering.clone());
     let ordering0: LexOrdering = [sort_expr("c", &schema)].into();
     let orthogonal_sort_0 = sort_exec(ordering0.clone(), unbounded_input); // has no fetch, so can be removed
     let ordering1: LexOrdering = [sort_expr("a", &schema)].into();
@@ -3807,7 +3810,7 @@ fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
         sort_exec_with_fetch(ordering1.clone(), Some(3), orthogonal_sort_0); // has fetch, so this orthogonal sort changes the output
     let orthogonal_sort_2 = sort_exec(ordering0, orthogonal_sort_1); // has no fetch, so can be removed
     let orthogonal_sort_3 = sort_exec(ordering1, orthogonal_sort_2); // has no fetch, so can be removed
-    let output_sort = sort_exec(input_sort_exprs.into(), orthogonal_sort_3); // final sort
+    let output_sort = sort_exec(input_ordering, orthogonal_sort_3); // final sort
 
     // Test scenario/input has an orthogonal sort:
     let expected_input = [

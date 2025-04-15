@@ -643,7 +643,9 @@ async fn run_window_test(
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
     if is_linear {
-        exec1 = Arc::new(SortExec::new(sort_keys.into(), exec1)) as _;
+        if let Some(ordering) = LexOrdering::new(sort_keys) {
+            exec1 = Arc::new(SortExec::new(ordering, exec1)) as _;
+        }
     }
 
     let extended_schema = schema_add_window_field(&args, &schema, &window_fn, &fn_name)?;
@@ -663,8 +665,8 @@ async fn run_window_test(
         false,
     )?) as _;
     let exec2 = DataSourceExec::from_data_source(
-        MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)?
-            .try_with_sort_information(vec![source_sort_keys.clone()])?,
+        MemorySourceConfig::try_new(&[input1], schema, None)?
+            .try_with_sort_information(vec![source_sort_keys])?,
     );
     let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
         vec![create_window_expr(

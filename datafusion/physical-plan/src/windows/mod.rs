@@ -696,16 +696,14 @@ mod tests {
     /// Created a sorted Streaming Table exec
     pub fn streaming_table_exec(
         schema: &SchemaRef,
-        sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+        ordering: LexOrdering,
         infinite_source: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let sort_exprs = sort_exprs.into_iter().collect();
-
         Ok(Arc::new(StreamingTableExec::try_new(
             Arc::clone(schema),
             vec![],
             None,
-            Some(sort_exprs),
+            Some(ordering),
             infinite_source,
             None,
         )?))
@@ -912,13 +910,14 @@ mod tests {
         // Columns a,c are nullable whereas b,d are not nullable.
         // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST, d ASC NULLS FIRST
         // Column e is not ordered.
-        let sort_exprs = vec![
+        let ordering = [
             sort_expr("a", &test_schema),
             sort_expr("b", &test_schema),
             sort_expr("c", &test_schema),
             sort_expr("d", &test_schema),
-        ];
-        let exec_unbounded = streaming_table_exec(&test_schema, sort_exprs, true)?;
+        ]
+        .into();
+        let exec_unbounded = streaming_table_exec(&test_schema, ordering, true)?;
 
         // test cases consists of vector of tuples. Where each tuple represents a single test case.
         // First field in the tuple is Vec<str> where each element in the vector represents PARTITION BY columns
@@ -1032,13 +1031,14 @@ mod tests {
         // Columns a,c are nullable whereas b,d are not nullable.
         // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST, d ASC NULLS FIRST
         // Column e is not ordered.
-        let sort_exprs = vec![
+        let ordering = [
             sort_expr("a", &test_schema),
             sort_expr("b", &test_schema),
             sort_expr("c", &test_schema),
             sort_expr("d", &test_schema),
-        ];
-        let exec_unbounded = streaming_table_exec(&test_schema, sort_exprs, true)?;
+        ]
+        .into();
+        let exec_unbounded = streaming_table_exec(&test_schema, ordering, true)?;
 
         // test cases consists of vector of tuples. Where each tuple represents a single test case.
         // First field in the tuple is Vec<str> where each element in the vector represents PARTITION BY columns

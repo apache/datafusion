@@ -818,7 +818,7 @@ mod tests {
 
         // Input ordering uses only column "a" (a prefix of the full sort).
         let prefix = vec![sort_expr_a.clone()];
-        let full_expr = LexOrdering::from(vec![sort_expr_a, sort_expr_b]);
+        let full_expr = LexOrdering::from([sort_expr_a, sort_expr_b]);
 
         // Create a dummy runtime environment and metrics.
         let runtime = Arc::new(RuntimeEnv::default());

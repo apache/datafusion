@@ -35,7 +35,7 @@ use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -306,20 +306,16 @@ impl ExecutionPlan for StreamingTableExec {
         );
 
         let mut lex_orderings = vec![];
-        for lex_ordering in self.projected_output_ordering().into_iter() {
-            let mut orderings = vec![];
-            for order in lex_ordering {
-                let Some(new_ordering) =
-                    update_expr(&order.expr, projection.expr(), false)?
+        for mut ordering in self.projected_output_ordering().into_iter() {
+            for sort_expr in ordering.iter_mut() {
+                let Some(new_sort_expr) =
+                    update_expr(&sort_expr.expr, projection.expr(), false)?
                 else {
                     return Ok(None);
                 };
-                orderings.push(PhysicalSortExpr {
-                    expr: new_ordering,
-                    options: order.options,
-                });
+                sort_expr.expr = new_sort_expr;
             }
-            lex_orderings.push(orderings.into());
+            lex_orderings.push(ordering);
         }
 
         StreamingTableExec::try_new(

@@ -134,22 +134,21 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if acc_args.order_bys.is_empty() {
+        let Some(ordering) = LexOrdering::new(acc_args.order_bys.to_vec()) else {
             return TrivialFirstValueAccumulator::try_new(
                 acc_args.return_type,
                 acc_args.ignore_nulls,
             )
             .map(|acc| Box::new(acc) as _);
-        }
-        let ordering_dtypes = acc_args
-            .order_bys
+        };
+        let ordering_dtypes = ordering
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
         FirstValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            acc_args.order_bys.iter().cloned().collect(),
+            ordering,
             acc_args.ignore_nulls,
         )
         .map(|acc| {
@@ -200,18 +199,17 @@ impl AggregateUDFImpl for FirstValue {
         fn create_accumulator<T: ArrowPrimitiveType + Send>(
             args: AccumulatorArgs,
         ) -> Result<Box<dyn GroupsAccumulator>> {
-            if args.order_bys.is_empty() {
+            let Some(ordering) = LexOrdering::new(args.order_bys.to_vec()) else {
                 return internal_err!("Groups accumulator must have an ordering.");
-            }
+            };
 
-            let ordering_dtypes = args
-                .order_bys
+            let ordering_dtypes = ordering
                 .iter()
                 .map(|e| e.expr.data_type(args.schema))
                 .collect::<Result<Vec<_>>>()?;
 
             FirstPrimitiveGroupsAccumulator::<T>::try_new(
-                args.order_bys.iter().cloned().collect(),
+                ordering,
                 args.ignore_nulls,
                 args.return_type,
                 &ordering_dtypes,
@@ -1057,22 +1055,21 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if acc_args.order_bys.is_empty() {
+        let Some(ordering) = LexOrdering::new(acc_args.order_bys.to_vec()) else {
             return TrivialLastValueAccumulator::try_new(
                 acc_args.return_type,
                 acc_args.ignore_nulls,
             )
             .map(|acc| Box::new(acc) as _);
-        }
-        let ordering_dtypes = acc_args
-            .order_bys
+        };
+        let ordering_dtypes = ordering
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
         LastValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            acc_args.order_bys.iter().cloned().collect(),
+            ordering,
             acc_args.ignore_nulls,
         )
         .map(|acc| {
@@ -1147,14 +1144,17 @@ impl AggregateUDFImpl for LastValue {
         where
             T: ArrowPrimitiveType + Send,
         {
-            let ordering_dtypes = args
-                .order_bys
+            let Some(ordering) = LexOrdering::new(args.order_bys.to_vec()) else {
+                return internal_err!("Groups accumulator must have an ordering.");
+            };
+
+            let ordering_dtypes = ordering
                 .iter()
                 .map(|e| e.expr.data_type(args.schema))
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(Box::new(FirstPrimitiveGroupsAccumulator::<T>::try_new(
-                args.order_bys.iter().cloned().collect(),
+                ordering,
                 args.ignore_nulls,
                 args.return_type,
                 &ordering_dtypes,

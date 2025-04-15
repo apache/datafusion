@@ -847,8 +847,7 @@ mod memory_source_tests {
             options: SortOptions::default(),
         }]
         .into();
-        let mut expected_output_order = vec![];
-        expected_output_order.extend(sort1.clone());
+        let mut expected_output_order = sort1.clone();
         expected_output_order.extend(sort2.clone());
 
         let sort_information = vec![sort1.clone(), sort2.clone()];
@@ -859,7 +858,7 @@ mod memory_source_tests {
 
         assert_eq!(
             mem_exec.properties().output_ordering().unwrap(),
-            &expected_output_order.into()
+            &expected_output_order
         );
         let eq_properties = mem_exec.properties().equivalence_properties();
         assert!(eq_properties.oeq_class().contains(&sort1));

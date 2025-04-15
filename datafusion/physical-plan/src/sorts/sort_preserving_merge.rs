@@ -33,9 +33,7 @@ use crate::{
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, OrderingRequirements, PhysicalSortExpr,
-};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use log::{debug, trace};
 
@@ -363,21 +361,18 @@ impl ExecutionPlan for SortPreservingMergeExec {
             return Ok(None);
         }
 
-        let mut updated_exprs = vec![];
-        for sort in self.expr() {
+        let mut updated_exprs = self.expr().clone();
+        for sort in updated_exprs.iter_mut() {
             let Some(updated_expr) = update_expr(&sort.expr, projection.expr(), false)?
             else {
                 return Ok(None);
             };
-            updated_exprs.push(PhysicalSortExpr {
-                expr: updated_expr,
-                options: sort.options,
-            });
+            sort.expr = updated_expr;
         }
 
         Ok(Some(Arc::new(
             SortPreservingMergeExec::new(
-                updated_exprs.into(),
+                updated_exprs,
                 make_with_child(projection, self.input())?,
             )
             .with_fetch(self.fetch()),

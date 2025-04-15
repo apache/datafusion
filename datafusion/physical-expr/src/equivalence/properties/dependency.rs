@@ -378,42 +378,37 @@ pub fn construct_prefix_orderings(
 /// # Parameters
 ///
 /// * `dependencies` - Set of relevant expressions.
-/// * `dependency_map` - Map of dependencies for expressions that may appear in `dependencies`
+/// * `dependency_map` - Map of dependencies for expressions that may appear in
+///   `dependencies`.
 ///
 /// # Returns
 ///
-/// A vector of lexical orderings (`Vec<LexOrdering>`) representing all valid orderings
-/// based on the given dependencies.
+/// A vector of lexical orderings (`Vec<LexOrdering>`) representing all valid
+/// orderings based on the given dependencies.
 pub fn generate_dependency_orderings(
     dependencies: &Dependencies,
     dependency_map: &DependencyMap,
 ) -> Vec<LexOrdering> {
     // Construct all the valid prefix orderings for each expression appearing
-    // in the projection:
-    let relevant_prefixes = dependencies
+    // in the projection. Note that if relevant prefixes are empty, there is no
+    // dependency, meaning that dependent is a leading ordering.
+    dependencies
         .iter()
         .flat_map(|dep| {
             let prefixes = construct_prefix_orderings(dep, dependency_map);
             (!prefixes.is_empty()).then_some(prefixes)
         })
-        .collect::<Vec<_>>();
-    // Note that if relevant prefixes are empty, there is no dependency,
-    // meaning that dependent is a leading ordering.
-
-    // Generate all possible valid orderings:
-    relevant_prefixes
-        .into_iter()
+        // Generate all possible valid orderings:
         .multi_cartesian_product()
         .flat_map(|prefix_orderings| {
+            let length = prefix_orderings.len();
             prefix_orderings
-                .iter()
-                .permutations(prefix_orderings.len())
+                .into_iter()
+                .permutations(length)
                 .filter_map(|prefixes| {
-                    (!prefixes.is_empty()).then(|| {
-                        prefixes
-                            .into_iter()
-                            .flat_map(|ordering| ordering.clone())
-                            .collect()
+                    prefixes.into_iter().reduce(|mut acc, ordering| {
+                        acc.extend(ordering);
+                        acc
                     })
                 })
                 .collect::<Vec<_>>()
@@ -428,10 +423,10 @@ mod tests {
 
     use super::*;
     use crate::equivalence::tests::{
-        convert_to_sort_exprs, convert_to_sort_reqs, create_test_params,
-        create_test_schema, output_schema, parse_sort_expr,
+        convert_to_sort_reqs, create_test_params, create_test_schema, output_schema,
+        parse_sort_expr,
     };
-    use crate::equivalence::ProjectionMapping;
+    use crate::equivalence::{convert_to_sort_exprs, ProjectionMapping};
     use crate::expressions::{col, BinaryExpr, CastExpr, Column};
     use crate::{ConstExpr, EquivalenceProperties, ScalarFunctionExpr};
 
@@ -440,7 +435,6 @@ mod tests {
     use datafusion_common::{Constraint, Constraints, Result};
     use datafusion_expr::sort_properties::SortProperties;
     use datafusion_expr::Operator;
-
     use datafusion_functions::string::concat;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{
@@ -1124,13 +1118,8 @@ mod tests {
                 let sort = case
                     .sort_columns
                     .iter()
-                    .map(|&name| {
-                        col(name, &schema).map(|col| PhysicalSortExpr {
-                            expr: col,
-                            options: SortOptions::default(),
-                        })
-                    })
-                    .collect::<Result<LexOrdering>>()?;
+                    .map(|&name| col(name, &schema).map(PhysicalSortExpr::new_default))
+                    .collect::<Result<Vec<_>>>()?;
 
                 assert_eq!(
                     properties.ordering_satisfy(sort),
@@ -1178,13 +1167,12 @@ mod tests {
         let orderings = eq_properties.oeq_class();
 
         let expected_ordering1 =
-            LexOrdering::from(vec![
-                PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc()
-            ]);
-        let expected_ordering2 = LexOrdering::from(vec![
+            [PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc()].into();
+        let expected_ordering2 = [
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
-        ]);
+        ]
+        .into();
 
         // The ordering should be [c ASC] and [a ASC, b ASC]
         assert_eq!(orderings.len(), 2);
@@ -1206,20 +1194,21 @@ mod tests {
         let col_b = col("b", &schema)?;
         let col_c = col("c", &schema)?;
 
-        let a_times_b: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        let a_times_b = Arc::new(BinaryExpr::new(
             Arc::clone(&col_a),
             Operator::Multiply,
             Arc::clone(&col_b),
-        ));
+        )) as _;
 
         // Assume existing ordering is [c ASC, a ASC, b ASC]
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
-        let initial_ordering = LexOrdering::from(vec![
+        let initial_ordering: LexOrdering = [
             PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc(),
-            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
-            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
-        ]);
+            PhysicalSortExpr::new_default(col_a).asc(),
+            PhysicalSortExpr::new_default(col_b).asc(),
+        ]
+        .into();
 
         eq_properties.add_new_ordering(initial_ordering.clone());
 
@@ -1247,12 +1236,12 @@ mod tests {
         let col_b = col("b", &schema)?;
         let col_c = col("c", &schema)?;
 
-        let a_concat_b: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
+        let a_concat_b = Arc::new(ScalarFunctionExpr::new(
             "concat",
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
             DataType::Utf8,
-        ));
+        )) as _;
 
         // Assume existing ordering is [concat(a, b) ASC, a ASC, b ASC]
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
@@ -1268,14 +1257,12 @@ mod tests {
 
         let orderings = eq_properties.oeq_class();
 
-        let expected_ordering1 = LexOrdering::from(vec![PhysicalSortExpr::new_default(
-            Arc::clone(&a_concat_b),
-        )
-        .asc()]);
-        let expected_ordering2 = LexOrdering::from(vec![
-            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
-            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
-        ]);
+        let expected_ordering1 = [PhysicalSortExpr::new_default(a_concat_b).asc()].into();
+        let expected_ordering2 = [
+            PhysicalSortExpr::new_default(col_a).asc(),
+            PhysicalSortExpr::new_default(col_b).asc(),
+        ]
+        .into();
 
         // The ordering should be [concat(a, b) ASC] and [a ASC, b ASC]
         assert_eq!(orderings.len(), 2);

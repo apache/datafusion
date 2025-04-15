@@ -82,7 +82,9 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{Column, Literal};
-use datafusion_physical_expr::{create_physical_sort_exprs, PhysicalSortExpr};
+use datafusion_physical_expr::{
+    create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
+};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
@@ -822,13 +824,17 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
-                let sort_expr = create_physical_sort_exprs(
+                let sort_exprs = create_physical_sort_exprs(
                     expr,
                     input_dfschema,
                     session_state.execution_props(),
                 )?;
-                let new_sort =
-                    SortExec::new(sort_expr.into(), physical_input).with_fetch(*fetch);
+                let Some(ordering) = LexOrdering::new(sort_exprs) else {
+                    return internal_err!(
+                        "SortExec requires at least one sort expression"
+                    );
+                };
+                let new_sort = SortExec::new(ordering, physical_input).with_fetch(*fetch);
                 Arc::new(new_sort)
             }
             LogicalPlan::Subquery(_) => todo!(),

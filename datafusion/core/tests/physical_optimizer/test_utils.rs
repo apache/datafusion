@@ -487,13 +487,8 @@ impl PartitionStream for TestStreamPartition {
     }
 }
 
-/// Create an unbounded stream exec
-pub fn stream_exec_ordered(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
+/// Create an unbounded stream table without data ordering.
+pub fn stream_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
     Arc::new(
         StreamingTableExec::try_new(
             Arc::clone(schema),
@@ -501,7 +496,7 @@ pub fn stream_exec_ordered(
                 schema: Arc::clone(schema),
             }) as _],
             None,
-            vec![sort_exprs],
+            vec![],
             true,
             None,
         )
@@ -509,12 +504,31 @@ pub fn stream_exec_ordered(
     )
 }
 
-// Creates a stream exec source for the test purposes
+/// Create an unbounded stream table with data ordering.
+pub fn stream_exec_ordered(
+    schema: &SchemaRef,
+    ordering: LexOrdering,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        StreamingTableExec::try_new(
+            Arc::clone(schema),
+            vec![Arc::new(TestStreamPartition {
+                schema: Arc::clone(schema),
+            }) as _],
+            None,
+            vec![ordering],
+            true,
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+/// Create an unbounded stream table with data ordering and built-in projection.
 pub fn stream_exec_ordered_with_projection(
     schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ordering: LexOrdering,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
     let projection: Vec<usize> = vec![0, 2, 3];
 
     Arc::new(
@@ -524,7 +538,7 @@ pub fn stream_exec_ordered_with_projection(
                 schema: Arc::clone(schema),
             }) as _],
             Some(&projection),
-            vec![sort_exprs],
+            vec![ordering],
             true,
             None,
         )

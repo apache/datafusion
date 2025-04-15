@@ -1408,13 +1408,10 @@ fn get_projected_output_ordering(
             break;
         }
 
-        // do not push empty entries
-        // otherwise we may have `Some(vec![])` at the output ordering.
-        if new_ordering.is_empty() {
+        let Some(new_ordering) = LexOrdering::new(new_ordering) else {
             continue;
-        }
+        };
 
-        let new_ordering = LexOrdering::from(new_ordering);
         // Check if any file groups are not sorted
         if base_config.file_groups.iter().any(|group| {
             if group.len() <= 1 {
@@ -1481,8 +1478,8 @@ mod tests {
     };
 
     use arrow::array::{Int32Array, RecordBatch};
-    use datafusion_common::assert_batches_eq;
     use datafusion_common::stats::Precision;
+    use datafusion_common::{assert_batches_eq, internal_err};
     use datafusion_expr::SortExpr;
     use datafusion_physical_expr::create_physical_sort_expr;
 
@@ -2001,7 +1998,7 @@ mod tests {
                     ))))
                     .collect::<Vec<_>>(),
             ));
-            let sort_order = LexOrdering::from(
+            let Some(sort_order) = LexOrdering::new(
                 case.sort
                     .into_iter()
                     .map(|expr| {
@@ -2012,7 +2009,9 @@ mod tests {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?,
-            );
+            ) else {
+                return internal_err!("This test should always use an ordering");
+            };
 
             let partitioned_files = FileGroup::new(
                 case.files.into_iter().map(From::from).collect::<Vec<_>>(),
@@ -2327,14 +2326,12 @@ mod tests {
         // Setup sort expression
         let exec_props = ExecutionProps::new();
         let df_schema = DFSchema::try_from_qualified_schema("test", schema.as_ref())?;
-        let sort_expr = vec![col("value").sort(true, false)];
-
-        let physical_sort_exprs: Vec<_> = sort_expr
-            .iter()
-            .map(|expr| create_physical_sort_expr(expr, &df_schema, &exec_props).unwrap())
-            .collect();
-
-        let sort_ordering = LexOrdering::from(physical_sort_exprs);
+        let sort_expr = [col("value").sort(true, false)];
+        let sort_ordering = sort_expr
+            .map(|expr| {
+                create_physical_sort_expr(&expr, &df_schema, &exec_props).unwrap()
+            })
+            .into();
 
         // Test case parameters
         struct TestCase {

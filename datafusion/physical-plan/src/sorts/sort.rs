@@ -371,12 +371,10 @@ impl ExternalSorter {
                 streams.push(stream);
             }
 
-            let expressions: LexOrdering = self.expr.iter().cloned().collect();
-
             StreamingMergeBuilder::new()
                 .with_streams(streams)
                 .with_schema(Arc::clone(&self.schema))
-                .with_expressions(&expressions)
+                .with_expressions(&self.expr.clone())
                 .with_metrics(self.metrics.baseline.clone())
                 .with_batch_size(self.batch_size)
                 .with_fetch(None)
@@ -694,12 +692,10 @@ impl ExternalSorter {
             })
             .collect::<Result<_>>()?;
 
-        let expressions: LexOrdering = self.expr.iter().cloned().collect();
-
         StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(Arc::clone(&self.schema))
-            .with_expressions(&expressions)
+            .with_expressions(&self.expr.clone())
             .with_metrics(metrics)
             .with_batch_size(self.batch_size)
             .with_fetch(None)
@@ -723,7 +719,7 @@ impl ExternalSorter {
         );
         let schema = batch.schema();
 
-        let expressions: LexOrdering = self.expr.iter().cloned().collect();
+        let expressions = self.expr.clone();
         let row_converter = Arc::clone(&self.sort_keys_row_converter);
         let stream = futures::stream::once(async move {
             let _timer = metrics.elapsed_compute().timer();
@@ -1289,25 +1285,19 @@ impl ExecutionPlan for SortExec {
             return Ok(None);
         }
 
-        let mut updated_exprs = vec![];
-        for sort in self.expr() {
-            let Some(new_expr) = update_expr(&sort.expr, projection.expr(), false)?
+        let mut updated_exprs = self.expr().clone();
+        for sort in updated_exprs.iter_mut() {
+            let Some(updated_expr) = update_expr(&sort.expr, projection.expr(), false)?
             else {
                 return Ok(None);
             };
-            updated_exprs.push(PhysicalSortExpr {
-                expr: new_expr,
-                options: sort.options,
-            });
+            sort.expr = updated_expr;
         }
 
         Ok(Some(Arc::new(
-            SortExec::new(
-                updated_exprs.into(),
-                make_with_child(projection, self.input())?,
-            )
-            .with_fetch(self.fetch())
-            .with_preserve_partitioning(self.preserve_partitioning()),
+            SortExec::new(updated_exprs, make_with_child(projection, self.input())?)
+                .with_fetch(self.fetch())
+                .with_preserve_partitioning(self.preserve_partitioning()),
         )))
     }
 }

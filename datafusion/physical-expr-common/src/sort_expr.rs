@@ -394,12 +394,6 @@ impl LexOrdering {
         self.inner.truncate(len);
         true
     }
-
-    /// Transforms each `PhysicalSortExpr` in the `LexOrdering`
-    /// in place using the provided closure `f`.
-    pub fn transform<F: FnMut(&mut PhysicalSortExpr)>(&mut self, f: F) {
-        self.inner.iter_mut().for_each(f);
-    }
 }
 
 impl PartialOrd for LexOrdering {
@@ -411,12 +405,6 @@ impl PartialOrd for LexOrdering {
             .zip(other.iter())
             .all(|(lhs, rhs)| lhs == rhs)
             .then(|| self.len().cmp(&other.len()))
-    }
-}
-
-impl From<Vec<PhysicalSortExpr>> for LexOrdering {
-    fn from(value: Vec<PhysicalSortExpr>) -> Self {
-        Self::new(value).unwrap()
     }
 }
 
@@ -457,12 +445,6 @@ impl Display for LexOrdering {
             write!(f, "{}", sort_expr)?;
         }
         Ok(())
-    }
-}
-
-impl FromIterator<PhysicalSortExpr> for LexOrdering {
-    fn from_iter<T: IntoIterator<Item = PhysicalSortExpr>>(iter: T) -> Self {
-        Self::new(iter).unwrap()
     }
 }
 

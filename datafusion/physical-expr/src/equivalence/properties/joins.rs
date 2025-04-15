@@ -136,17 +136,16 @@ pub fn updated_right_ordering_equivalence_class(
 
 #[cfg(test)]
 mod tests {
-
     use std::sync::Arc;
 
     use super::*;
-    use crate::equivalence::add_offset_to_expr;
-    use crate::equivalence::tests::{convert_to_orderings, create_test_schema};
+    use crate::equivalence::tests::create_test_schema;
+    use crate::equivalence::{add_offset_to_expr, convert_to_orderings};
     use crate::expressions::col;
-    use datafusion_common::Result;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Fields, Schema};
+    use datafusion_common::Result;
 
     #[test]
     fn test_join_equivalence_properties() -> Result<()> {

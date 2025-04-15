@@ -34,7 +34,7 @@ use arrow::{
 };
 use datafusion_common::stats::Precision;
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
-use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::{ColumnStatistics, Statistics};
 
@@ -110,25 +110,20 @@ impl MinMaxStatistics {
         };
 
         let sort_columns = sort_columns_from_physical_sort_exprs(projected_sort_order)
-            .ok_or(DataFusionError::Plan(
-                "sort expression must be on column".to_string(),
-            ))?;
+            .ok_or(plan_datafusion_err!("sort expression must be on column"))?;
 
         // Project the schema & sort order down to just the relevant columns
         let min_max_schema = Arc::new(
             projected_schema
                 .project(&(sort_columns.iter().map(|c| c.index()).collect::<Vec<_>>()))?,
         );
-        let min_max_sort_order = LexOrdering::from_iter(
-            sort_columns
-                .iter()
-                .zip(projected_sort_order.iter())
-                .enumerate()
-                .map(|(i, (col, sort))| PhysicalSortExpr {
-                    expr: Arc::new(Column::new(col.name(), i)),
-                    options: sort.options,
-                }),
-        );
+
+        let mut min_max_sort_order = projected_sort_order.clone();
+        for (idx, (sort_expr, col)) in
+            min_max_sort_order.iter_mut().zip(&sort_columns).enumerate()
+        {
+            sort_expr.expr = Arc::new(Column::new(col.name(), idx));
+        }
 
         let (min_values, max_values): (Vec<_>, Vec<_>) = sort_columns
             .iter()
@@ -186,9 +181,8 @@ impl MinMaxStatistics {
             .map_err(|e| e.context("create sort fields"))?;
         let converter = RowConverter::new(sort_fields)?;
 
-        let sort_columns = sort_columns_from_physical_sort_exprs(sort_order).ok_or(
-            DataFusionError::Plan("sort expression must be on column".to_string()),
-        )?;
+        let sort_columns = sort_columns_from_physical_sort_exprs(sort_order)
+            .ok_or(plan_datafusion_err!("sort expression must be on column"))?;
 
         // swap min/max if they're reversed in the ordering
         let (new_min_cols, new_max_cols): (Vec<_>, Vec<_>) = sort_order

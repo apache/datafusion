@@ -54,7 +54,8 @@ fn sort_preserving_merge_operator(
             expr: col(name, &schema).unwrap(),
             options: Default::default(),
         })
-        .collect::<LexOrdering>();
+        .collect::<Vec<_>>();
+    let sort = LexOrdering::new(sort).unwrap();
 
     let exec = MemorySourceConfig::try_new_exec(
         &batches.into_iter().map(|rb| vec![rb]).collect::<Vec<_>>(),

@@ -45,7 +45,9 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_err, Constraint, Constraints, HashMap, Result};
+use datafusion_common::{
+    internal_datafusion_err, plan_err, Constraint, Constraints, HashMap, Result,
+};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
@@ -820,12 +822,17 @@ impl EquivalenceProperties {
             })
             .collect::<Result<Vec<_>>>()?;
         // Generate all valid orderings, given substituted expressions.
-        let result = new_orderings
+        new_orderings
             .into_iter()
             .multi_cartesian_product()
-            .map(Into::into)
-            .collect();
-        Ok(result)
+            .map(|o| {
+                LexOrdering::new(o).ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected a non-empty list of sort expressions"
+                    )
+                })
+            })
+            .collect()
     }
 
     /// In projection, supposed we have a input function 'A DESC B DESC' and the output shares the same expression

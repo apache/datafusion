@@ -148,24 +148,18 @@ impl AggregateUDFImpl for NthValueAgg {
             }
         };
 
-        if acc_args.order_bys.is_empty() {
+        let Some(ordering) = LexOrdering::new(acc_args.order_bys.to_vec()) else {
             return TrivialNthValueAccumulator::try_new(n, acc_args.return_type)
                 .map(|acc| Box::new(acc) as _);
         };
-        let ordering_dtypes = acc_args
-            .order_bys
+        let ordering_dtypes = ordering
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
         let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
-        NthValueAccumulator::try_new(
-            n,
-            &data_type,
-            &ordering_dtypes,
-            acc_args.order_bys.iter().cloned().collect(),
-        )
-        .map(|acc| Box::new(acc) as _)
+        NthValueAccumulator::try_new(n, &data_type, &ordering_dtypes, ordering)
+            .map(|acc| Box::new(acc) as _)
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {

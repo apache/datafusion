@@ -1284,11 +1284,7 @@ impl protobuf::PhysicalPlanNode {
             &left_schema,
             extension_codec,
         )?;
-        let left_sort_exprs = if left_sort_exprs.is_empty() {
-            None
-        } else {
-            Some(left_sort_exprs.into())
-        };
+        let left_sort_exprs = LexOrdering::new(left_sort_exprs);
 
         let right_sort_exprs = parse_physical_sort_exprs(
             &sym_join.right_sort_exprs,
@@ -1296,11 +1292,7 @@ impl protobuf::PhysicalPlanNode {
             &right_schema,
             extension_codec,
         )?;
-        let right_sort_exprs = if right_sort_exprs.is_empty() {
-            None
-        } else {
-            Some(right_sort_exprs.into())
-        };
+        let right_sort_exprs = LexOrdering::new(right_sort_exprs);
 
         let partition_mode = protobuf::StreamPartitionMode::try_from(
             sym_join.partition_mode,
@@ -1412,47 +1404,45 @@ impl protobuf::PhysicalPlanNode {
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
+        let input = into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
         let exprs = sort
-                    .expr
-                    .iter()
-                    .map(|expr| {
-                        let expr = expr.expr_type.as_ref().ok_or_else(|| {
+            .expr
+            .iter()
+            .map(|expr| {
+                let expr = expr.expr_type.as_ref().ok_or_else(|| {
+                    proto_error(format!(
+                        "physical_plan::from_proto() Unexpected expr {self:?}"
+                    ))
+                })?;
+                if let ExprType::Sort(sort_expr) = expr {
+                    let expr = sort_expr
+                        .expr
+                        .as_ref()
+                        .ok_or_else(|| {
                             proto_error(format!(
-                                "physical_plan::from_proto() Unexpected expr {self:?}"
+                                "physical_plan::from_proto() Unexpected sort expr {self:?}"
                             ))
-                        })?;
-                        if let ExprType::Sort(sort_expr) = expr {
-                            let expr = sort_expr
-                                .expr
-                                .as_ref()
-                                .ok_or_else(|| {
-                                    proto_error(format!(
-                                        "physical_plan::from_proto() Unexpected sort expr {self:?}"
-                                    ))
-                                })?
-                                .as_ref();
-                            Ok(PhysicalSortExpr {
-                                expr: parse_physical_expr(expr, registry, input.schema().as_ref(), extension_codec)?,
-                                options: SortOptions {
-                                    descending: !sort_expr.asc,
-                                    nulls_first: sort_expr.nulls_first,
-                                },
-                            })
-                        } else {
-                            internal_err!(
-                                "physical_plan::from_proto() {self:?}"
-                            )
-                        }
+                        })?
+                        .as_ref();
+                    Ok(PhysicalSortExpr {
+                        expr: parse_physical_expr(expr, registry, input.schema().as_ref(), extension_codec)?,
+                        options: SortOptions {
+                            descending: !sort_expr.asc,
+                            nulls_first: sort_expr.nulls_first,
+                        },
                     })
-                    .collect::<Result<LexOrdering, _>>()?;
-        let fetch = if sort.fetch < 0 {
-            None
-        } else {
-            Some(sort.fetch as usize)
+                } else {
+                    internal_err!(
+                        "physical_plan::from_proto() {self:?}"
+                    )
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let Some(ordering) = LexOrdering::new(exprs) else {
+            return internal_err!("SortExec requires an ordering");
         };
-        let new_sort = SortExec::new(exprs, input)
+        let fetch = (sort.fetch >= 0).then_some(sort.fetch as usize);
+        let new_sort = SortExec::new(ordering, input)
             .with_fetch(fetch)
             .with_preserve_partitioning(sort.preserve_partitioning);
 
@@ -1466,8 +1456,7 @@ impl protobuf::PhysicalPlanNode {
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
+        let input = into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
         let exprs = sort
             .expr
             .iter()
@@ -1503,14 +1492,13 @@ impl protobuf::PhysicalPlanNode {
                     internal_err!("physical_plan::from_proto() {self:?}")
                 }
             })
-            .collect::<Result<LexOrdering, _>>()?;
-        let fetch = if sort.fetch < 0 {
-            None
-        } else {
-            Some(sort.fetch as usize)
+            .collect::<Result<Vec<_>>>()?;
+        let Some(ordering) = LexOrdering::new(exprs) else {
+            return internal_err!("SortExec requires an ordering");
         };
+        let fetch = (sort.fetch >= 0).then_some(sort.fetch as usize);
         Ok(Arc::new(
-            SortPreservingMergeExec::new(exprs, input).with_fetch(fetch),
+            SortPreservingMergeExec::new(ordering, input).with_fetch(fetch),
         ))
     }
 

@@ -25,7 +25,7 @@ use crate::fuzz_cases::equivalence::utils::{
 use datafusion_common::Result;
 use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::expressions::{col, BinaryExpr};
-use datafusion_physical_expr::ScalarFunctionExpr;
+use datafusion_physical_expr::{LexOrdering, ScalarFunctionExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use itertools::Itertools;
@@ -92,12 +92,11 @@ fn test_find_longest_permutation_random() -> Result<()> {
                 assert_eq!(ordering.len(), indices.len(), "{}", err_msg);
                 // Since ordered section satisfies schema, we expect
                 // that result will be same after sort (e.g sort was unnecessary).
+                let Some(ordering) = LexOrdering::new(ordering) else {
+                    continue;
+                };
                 assert!(
-                    ordering.is_empty()
-                        || is_table_same_after_sort(
-                            ordering.into(),
-                            table_data_with_properties.clone(),
-                        )?,
+                    is_table_same_after_sort(ordering, &table_data_with_properties)?,
                     "{}",
                     err_msg
                 );

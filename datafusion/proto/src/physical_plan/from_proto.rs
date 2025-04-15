@@ -37,7 +37,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
-use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
@@ -525,13 +525,13 @@ pub fn parse_protobuf_file_scan_config(
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
-        let sort_expr = parse_physical_sort_exprs(
+        let sort_exprs = parse_physical_sort_exprs(
             &node_collection.physical_sort_expr_nodes,
             registry,
             &schema,
             codec,
         )?;
-        output_ordering.push(sort_expr.into());
+        output_ordering.extend(LexOrdering::new(sort_exprs));
     }
 
     let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)

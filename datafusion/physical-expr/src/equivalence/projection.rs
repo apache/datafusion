@@ -138,8 +138,8 @@ fn project_index_to_exprs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::equivalence::tests::{convert_to_orderings, output_schema};
-    use crate::equivalence::EquivalenceProperties;
+    use crate::equivalence::tests::output_schema;
+    use crate::equivalence::{convert_to_orderings, EquivalenceProperties};
     use crate::expressions::{col, BinaryExpr};
     use crate::utils::tests::TestScalarUDF;
     use crate::{PhysicalExprRef, ScalarFunctionExpr};

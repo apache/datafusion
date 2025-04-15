@@ -52,10 +52,8 @@ use datafusion_common::{
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
-use datafusion_physical_expr::{
-    LexOrdering, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-};
+use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalExprRef};
 
 use crate::joins::SharedBitmapBuilder;
 use crate::projection::ProjectionExec;
@@ -134,7 +132,7 @@ fn replace_on_columns_of_right_ordering(
     right_ordering: &mut LexOrdering,
 ) {
     for (left_col, right_col) in on_columns {
-        right_ordering.transform(|item| {
+        for item in right_ordering.iter_mut() {
             item.expr = Arc::clone(&item.expr)
                 .transform(|e| {
                     if e.eq(right_col) {
@@ -145,7 +143,7 @@ fn replace_on_columns_of_right_ordering(
                 })
                 .data()
                 .expect("closure is infallible");
-        });
+        }
     }
 }
 
@@ -157,13 +155,13 @@ fn offset_ordering(
     match join_type {
         // In the case below, right ordering should be offsetted with the left
         // side length, since we append the right table to the left table.
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => ordering
-            .iter()
-            .map(|sort_expr| PhysicalSortExpr {
-                expr: add_offset_to_expr(Arc::clone(&sort_expr.expr), offset),
-                options: sort_expr.options,
-            })
-            .collect(),
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+            let mut ordering = ordering.clone();
+            for sort_expr in ordering.iter_mut() {
+                sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
+            }
+            ordering
+        }
         _ => ordering.clone(),
     }
 }
@@ -190,7 +188,9 @@ pub fn calculate_join_output_ordering(
                     let right_offset =
                         offset_ordering(right_ordering, &join_type, left_columns_len);
                     return if let Some(left_ordering) = left_ordering {
-                        Some(merge_vectors(left_ordering, &right_offset))
+                        let mut result = left_ordering.clone();
+                        result.extend(right_offset);
+                        Some(result)
                     } else {
                         Some(right_offset)
                     };
@@ -206,13 +206,12 @@ pub fn calculate_join_output_ordering(
                         on_columns,
                         &mut right_ordering.clone(),
                     );
-                    let right_offset =
+                    let mut right_offset =
                         offset_ordering(right_ordering, &join_type, left_columns_len);
                     if let Some(left_ordering) = left_ordering {
-                        Some(merge_vectors(&right_offset, left_ordering))
-                    } else {
-                        Some(right_offset)
+                        right_offset.extend(left_ordering.clone());
                     }
+                    Some(right_offset)
                 } else {
                     left_ordering.cloned()
                 };
@@ -1503,15 +1502,16 @@ pub(super) fn swap_join_projection(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::pin::Pin;
 
+    use super::*;
+
     use arrow::array::Int32Array;
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
+    use datafusion_physical_expr::PhysicalSortExpr;
 
     use rstest::rstest;
 
@@ -2322,30 +2322,14 @@ mod tests {
 
     #[test]
     fn test_calculate_join_output_ordering() -> Result<()> {
-        let options = SortOptions::default();
         let left_ordering = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("a", 0)),
-                options,
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("c", 2)),
-                options,
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("d", 3)),
-                options,
-            },
+            PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("c", 2))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("d", 3))),
         ]);
         let right_ordering = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("z", 2)),
-                options,
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("y", 1)),
-                options,
-            },
+            PhysicalSortExpr::new_default(Arc::new(Column::new("z", 2))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("y", 1))),
         ]);
         let join_type = JoinType::Inner;
         let on_columns = [(
@@ -2358,48 +2342,18 @@ mod tests {
 
         let expected = [
             LexOrdering::new(vec![
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("a", 0)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("c", 2)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("d", 3)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("z", 7)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("y", 6)),
-                    options,
-                },
+                PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("c", 2))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("d", 3))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("z", 7))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("y", 6))),
             ]),
             LexOrdering::new(vec![
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("z", 7)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("y", 6)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("a", 0)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("c", 2)),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: Arc::new(Column::new("d", 3)),
-                    options,
-                },
+                PhysicalSortExpr::new_default(Arc::new(Column::new("z", 7))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("y", 6))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("c", 2))),
+                PhysicalSortExpr::new_default(Arc::new(Column::new("d", 3))),
             ]),
         ];
 

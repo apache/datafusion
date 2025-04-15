@@ -1055,8 +1055,7 @@ fn get_aggregate_expr_req(
     if !aggr_expr.order_sensitivity().hard_requires() || !agg_mode.is_first_stage() {
         return None;
     }
-    let mut req = aggr_expr.order_bys().to_vec();
-
+    let mut sort_exprs = aggr_expr.order_bys().to_vec();
     // In non-first stage modes, we accumulate data (using `merge_batch`) from
     // different partitions (i.e. merge partial results). During this merge, we
     // consider the ordering of each partial result. Hence, we do not need to
@@ -1067,11 +1066,11 @@ fn get_aggregate_expr_req(
         // will definitely be satisfied -- Each group by expression will have
         // distinct values per group, hence all requirements are satisfied.
         let physical_exprs = group_by.input_exprs();
-        req.retain(|sort_expr| {
+        sort_exprs.retain(|sort_expr| {
             !physical_exprs_contains(&physical_exprs, &sort_expr.expr)
         });
     }
-    (!req.is_empty()).then(|| req.into())
+    LexOrdering::new(sort_exprs)
 }
 
 /// Concatenates the given slices.
