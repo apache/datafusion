@@ -29,7 +29,6 @@ use regex::Regex;
 use crate::{MockContextProvider, MockSessionState};
 
 fn do_query(sql: &'static str) -> Diagnostic {
-    // let dialect = GenericDialect {};
     let statement = DFParserBuilder::new(sql)
         .build()
         .expect("unable to create parser")
