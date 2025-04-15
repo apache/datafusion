@@ -61,7 +61,7 @@ pub fn to_substrait_rel(
                     substrait_files.push(FileOrFiles {
                         partition_index: partition_index.try_into().unwrap(),
                         start: 0,
-                        length: file.object_meta.size as u64,
+                        length: file.object_meta.size,
                         path_type: Some(PathType::UriPath(
                             file.object_meta.location.as_ref().to_string(),
                         )),
