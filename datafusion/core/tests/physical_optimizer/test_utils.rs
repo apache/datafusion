@@ -69,10 +69,10 @@ use datafusion_physical_plan::{
 };
 
 /// Create a non sorted parquet exec
-pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
+pub fn parquet_exec(schema: SchemaRef) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema.clone(),
+        schema,
         Arc::new(ParquetSource::default()),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
@@ -83,11 +83,12 @@ pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
 
 /// Create a single parquet file that is sorted
 pub(crate) fn parquet_exec_with_sort(
+    schema: SchemaRef,
     output_ordering: Vec<LexOrdering>,
 ) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema(),
+        schema,
         Arc::new(ParquetSource::default()),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))

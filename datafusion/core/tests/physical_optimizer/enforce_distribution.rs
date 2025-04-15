@@ -22,7 +22,7 @@ use std::sync::Arc;
 use crate::physical_optimizer::test_utils::{
     check_integrity, coalesce_partitions_exec, parquet_exec_with_sort, repartition_exec,
     schema, sort_exec, sort_exec_with_preserve_partitioning, sort_merge_join_exec,
-    sort_preserving_merge_exec,
+    sort_preserving_merge_exec, union_exec,
 };
 
 use arrow::compute::SortOptions;
@@ -167,7 +167,7 @@ impl ExecutionPlan for SortRequiredExec {
 }
 
 fn parquet_exec() -> Arc<DataSourceExec> {
-    parquet_exec_with_sort(vec![])
+    parquet_exec_with_sort(schema(), vec![])
 }
 
 fn parquet_exec_multiple() -> Arc<DataSourceExec> {
@@ -319,10 +319,6 @@ fn limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
         0,
         Some(100),
     ))
-}
-
-fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(UnionExec::new(input))
 }
 
 fn sort_required_exec_with_req(
@@ -2094,7 +2090,10 @@ fn repartition_ignores_sort_preserving_merge_with_union() -> Result<()> {
         options: SortOptions::default(),
     }]
     .into();
-    let input = union_exec(vec![parquet_exec_with_sort(vec![sort_key.clone()]); 2]);
+    let input = union_exec(vec![
+        parquet_exec_with_sort(schema, vec![sort_key.clone()]);
+        2
+    ]);
     let plan = sort_preserving_merge_exec(sort_key, input);
 
     // Test: run EnforceDistribution, then EnforceSort.
@@ -2134,7 +2133,7 @@ fn repartition_does_not_destroy_sort() -> Result<()> {
     }]
     .into();
     let plan = sort_required_exec_with_req(
-        filter_exec(parquet_exec_with_sort(vec![sort_key.clone()])),
+        filter_exec(parquet_exec_with_sort(schema, vec![sort_key.clone()])),
         sort_key,
     );
 
@@ -2173,7 +2172,7 @@ fn repartition_does_not_destroy_sort_more_complex() -> Result<()> {
     }]
     .into();
     let input1 = sort_required_exec_with_req(
-        parquet_exec_with_sort(vec![sort_key.clone()]),
+        parquet_exec_with_sort(schema, vec![sort_key.clone()]),
         sort_key,
     );
     let input2 = filter_exec(parquet_exec());
@@ -2836,7 +2835,7 @@ fn parallelization_prior_to_sort_preserving_merge() -> Result<()> {
     // sort preserving merge already sorted input,
     let plan_parquet = sort_preserving_merge_exec(
         sort_key.clone(),
-        parquet_exec_with_sort(vec![sort_key.clone()]),
+        parquet_exec_with_sort(schema, vec![sort_key.clone()]),
     );
     let plan_csv =
         sort_preserving_merge_exec(sort_key.clone(), csv_exec_with_sort(vec![sort_key]));
@@ -2877,7 +2876,10 @@ fn parallelization_sort_preserving_merge_with_union() -> Result<()> {
     .into();
     // 2 sorted parquet files unioned (partitions are concatenated, sort is preserved)
     let input_parquet =
-        union_exec(vec![parquet_exec_with_sort(vec![sort_key.clone()]); 2]);
+        union_exec(vec![
+            parquet_exec_with_sort(schema, vec![sort_key.clone()]);
+            2
+        ]);
     let input_csv = union_exec(vec![csv_exec_with_sort(vec![sort_key.clone()]); 2]);
     let plan_parquet = sort_preserving_merge_exec(sort_key.clone(), input_parquet);
     let plan_csv = sort_preserving_merge_exec(sort_key, input_csv);
@@ -2952,7 +2954,7 @@ fn parallelization_does_not_benefit() -> Result<()> {
     //  SortRequired
     //    Parquet(sorted)
     let plan_parquet = sort_required_exec_with_req(
-        parquet_exec_with_sort(vec![sort_key.clone()]),
+        parquet_exec_with_sort(schema, vec![sort_key.clone()]),
         sort_key.clone(),
     );
     let plan_csv =
@@ -3001,8 +3003,10 @@ fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> 
         ("a".to_string(), "a2".to_string()),
         ("c".to_string(), "c2".to_string()),
     ];
-    let proj_parquet =
-        projection_exec_with_alias(parquet_exec_with_sort(vec![sort_key]), alias_pairs);
+    let proj_parquet = projection_exec_with_alias(
+        parquet_exec_with_sort(schema, vec![sort_key]),
+        alias_pairs,
+    );
     let sort_key_after_projection = [PhysicalSortExpr {
         expr: col("c2", &proj_parquet.schema())?,
         options: SortOptions::default(),
@@ -3384,7 +3388,7 @@ fn do_not_add_unnecessary_hash() -> Result<()> {
     }]
     .into();
     let alias = vec![("a".to_string(), "a".to_string())];
-    let input = parquet_exec_with_sort(vec![sort_key]);
+    let input = parquet_exec_with_sort(schema, vec![sort_key]);
     let physical_plan = aggregate_exec_with_alias(input, alias);
 
     // TestConfig:

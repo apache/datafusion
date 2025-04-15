@@ -1441,7 +1441,7 @@ impl protobuf::PhysicalPlanNode {
         let Some(ordering) = LexOrdering::new(exprs) else {
             return internal_err!("SortExec requires an ordering");
         };
-        let fetch = (sort.fetch >= 0).then_some(sort.fetch as usize);
+        let fetch = (sort.fetch >= 0).then_some(sort.fetch as _);
         let new_sort = SortExec::new(ordering, input)
             .with_fetch(fetch)
             .with_preserve_partitioning(sort.preserve_partitioning);
@@ -1496,7 +1496,7 @@ impl protobuf::PhysicalPlanNode {
         let Some(ordering) = LexOrdering::new(exprs) else {
             return internal_err!("SortExec requires an ordering");
         };
-        let fetch = (sort.fetch >= 0).then_some(sort.fetch as usize);
+        let fetch = (sort.fetch >= 0).then_some(sort.fetch as _);
         Ok(Arc::new(
             SortPreservingMergeExec::new(ordering, input).with_fetch(fetch),
         ))

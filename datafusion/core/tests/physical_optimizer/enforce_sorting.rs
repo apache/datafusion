@@ -21,9 +21,9 @@ use crate::physical_optimizer::test_utils::{
     aggregate_exec, bounded_window_exec, bounded_window_exec_with_partition,
     check_integrity, coalesce_batches_exec, coalesce_partitions_exec, create_test_schema,
     create_test_schema2, create_test_schema3, filter_exec, global_limit_exec,
-    hash_join_exec, local_limit_exec, memory_exec, parquet_exec, projection_exec,
-    repartition_exec, sort_exec, sort_exec_with_fetch, sort_expr, sort_expr_options,
-    sort_merge_join_exec, sort_preserving_merge_exec,
+    hash_join_exec, local_limit_exec, memory_exec, parquet_exec, parquet_exec_with_sort,
+    projection_exec, repartition_exec, sort_exec, sort_exec_with_fetch, sort_expr,
+    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec,
     sort_preserving_merge_exec_with_fetch, spr_repartition_exec, stream_exec_ordered,
     union_exec, RequirementsTestExec,
 };
@@ -54,7 +54,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan, InputOrderMode};
-use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
+use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion_physical_optimizer::enforce_sorting::{EnforceSorting, PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort, parallelize_sorts, ensure_sorting};
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
@@ -64,26 +64,6 @@ use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 
 use rstest::rstest;
-
-/// Created a sorted parquet exec
-fn parquet_exec_sorted(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect::<Vec<_>>();
-    let source = Arc::new(ParquetSource::default());
-    let mut builder = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        schema.clone(),
-        source,
-    )
-    .with_file(PartitionedFile::new("x".to_string(), 100));
-    if let Some(ordering) = LexOrdering::new(sort_exprs) {
-        builder = builder.with_output_ordering(vec![ordering]);
-    }
-    let config = builder.build();
-    DataSourceExec::from_data_source(config)
-}
 
 /// Create a sorted Csv exec
 fn csv_exec_sorted(
@@ -197,8 +177,9 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
     let left_schema = create_test_schema2()?;
     let right_schema = create_test_schema3()?;
     let left_input = memory_exec(&left_schema);
-    let parquet_sort_exprs = [sort_expr("a", &right_schema)];
-    let right_input = parquet_exec_sorted(&right_schema, parquet_sort_exprs);
+    let parquet_ordering = [sort_expr("a", &right_schema)].into();
+    let right_input =
+        parquet_exec_with_sort(right_schema.clone(), vec![parquet_ordering]);
     let on = vec![(
         Arc::new(Column::new_with_schema("col_a", &left_schema)?) as _,
         Arc::new(Column::new_with_schema("c", &right_schema)?) as _,
@@ -225,7 +206,7 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
 #[tokio::test]
 async fn test_do_not_remove_sort_with_limit() -> Result<()> {
     let schema = create_test_schema()?;
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let ordering: LexOrdering = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
@@ -233,8 +214,8 @@ async fn test_do_not_remove_sort_with_limit() -> Result<()> {
     .into();
     let sort = sort_exec(ordering.clone(), source1);
     let limit = local_limit_exec(sort, 100);
-    let parquet_sort_exprs = [sort_expr("nullable_col", &schema)];
-    let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs);
+    let parquet_ordering = [sort_expr("nullable_col", &schema)].into();
+    let source2 = parquet_exec_with_sort(schema, vec![parquet_ordering]);
     let union = union_exec(vec![source2, limit]);
     let repartition = repartition_exec(union);
     let physical_plan = sort_preserving_merge_exec(ordering, repartition);
@@ -267,10 +248,10 @@ async fn test_do_not_remove_sort_with_limit() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_sorted() -> Result<()> {
     let schema = create_test_schema()?;
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
     let sort = sort_exec(ordering.clone(), source1);
-    let source2 = parquet_exec_sorted(&schema, ordering.clone());
+    let source2 = parquet_exec_with_sort(schema, vec![ordering.clone()]);
     let union = union_exec(vec![source2, sort]);
     let physical_plan = sort_preserving_merge_exec(ordering, union);
 
@@ -291,14 +272,15 @@ async fn test_union_inputs_sorted() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted() -> Result<()> {
     let schema = create_test_schema()?;
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
     let sort = sort_exec(ordering.clone(), source1);
-    let parquet_sort_exprs = [
+    let parquet_ordering = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs);
+    ]
+    .into();
+    let source2 = parquet_exec_with_sort(schema, vec![parquet_ordering]);
     let union = union_exec(vec![source2, sort]);
     let physical_plan = sort_preserving_merge_exec(ordering, union);
 
@@ -319,15 +301,15 @@ async fn test_union_inputs_different_sorted() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted2() -> Result<()> {
     let schema = create_test_schema()?;
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let sort_exprs: LexOrdering = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
     ]
     .into();
     let sort = sort_exec(sort_exprs.clone(), source1);
-    let parquet_sort_exprs = [sort_expr("nullable_col", &schema)];
-    let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs);
+    let parquet_ordering = [sort_expr("nullable_col", &schema)].into();
+    let source2 = parquet_exec_with_sort(schema, vec![parquet_ordering]);
     let union = union_exec(vec![source2, sort]);
     let physical_plan = sort_preserving_merge_exec(sort_exprs, union);
 
@@ -357,7 +339,7 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted3() -> Result<()> {
     let schema = create_test_schema()?;
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let ordering1 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
@@ -367,7 +349,7 @@ async fn test_union_inputs_different_sorted3() -> Result<()> {
     let ordering2 = [sort_expr("nullable_col", &schema)].into();
     let sort2 = sort_exec(ordering2, source1);
     let parquet_ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
-    let source2 = parquet_exec_sorted(&schema, parquet_ordering.clone());
+    let source2 = parquet_exec_with_sort(schema, vec![parquet_ordering.clone()]);
     let union = union_exec(vec![sort1, source2, sort2]);
     let physical_plan = sort_preserving_merge_exec(parquet_ordering, union);
 
@@ -401,7 +383,7 @@ async fn test_union_inputs_different_sorted3() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted4() -> Result<()> {
     let schema = create_test_schema()?;
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let ordering1 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
@@ -410,7 +392,7 @@ async fn test_union_inputs_different_sorted4() -> Result<()> {
     let ordering2: LexOrdering = [sort_expr("nullable_col", &schema)].into();
     let sort1 = sort_exec(ordering2.clone(), source1.clone());
     let sort2 = sort_exec(ordering2.clone(), source1);
-    let source2 = parquet_exec_sorted(&schema, ordering2);
+    let source2 = parquet_exec_with_sort(schema, vec![ordering2]);
     let union = union_exec(vec![sort1, source2, sort2]);
     let physical_plan = sort_preserving_merge_exec(ordering1, union);
 
@@ -445,7 +427,7 @@ async fn test_union_inputs_different_sorted4() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted5() -> Result<()> {
     let schema = create_test_schema()?;
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let ordering1 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
@@ -496,7 +478,7 @@ async fn test_union_inputs_different_sorted5() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted6() -> Result<()> {
     let schema = create_test_schema()?;
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let ordering1 = [sort_expr("nullable_col", &schema)].into();
     let sort1 = sort_exec(ordering1, source1.clone());
     let ordering2 = [
@@ -507,7 +489,7 @@ async fn test_union_inputs_different_sorted6() -> Result<()> {
     let repartition = repartition_exec(source1);
     let spm = sort_preserving_merge_exec(ordering2, repartition);
     let parquet_ordering: LexOrdering = [sort_expr("nullable_col", &schema)].into();
-    let source2 = parquet_exec_sorted(&schema, parquet_ordering.clone());
+    let source2 = parquet_exec_with_sort(schema, vec![parquet_ordering.clone()]);
     let union = union_exec(vec![sort1, source2, spm]);
     let physical_plan = sort_preserving_merge_exec(parquet_ordering, union);
 
@@ -547,8 +529,7 @@ async fn test_union_inputs_different_sorted6() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted7() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let ordering1: LexOrdering = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
@@ -556,7 +537,6 @@ async fn test_union_inputs_different_sorted7() -> Result<()> {
     .into();
     let sort1 = sort_exec(ordering1.clone(), source1.clone());
     let sort2 = sort_exec(ordering1, source1);
-
     let union = union_exec(vec![sort1, sort2]);
     let ordering2 = [sort_expr("nullable_col", &schema)].into();
     let physical_plan = sort_preserving_merge_exec(ordering2, union);
@@ -587,8 +567,7 @@ async fn test_union_inputs_different_sorted7() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted8() -> Result<()> {
     let schema = create_test_schema()?;
-
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let ordering1 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
@@ -641,7 +620,7 @@ async fn test_union_inputs_different_sorted8() -> Result<()> {
 #[tokio::test]
 async fn test_soft_hard_requirements_remove_soft_requirement() -> Result<()> {
     let schema = create_test_schema()?;
-    let source = parquet_exec_sorted(&schema, vec![]);
+    let source = parquet_exec(schema.clone());
     let sort_exprs = [sort_expr_options(
         "nullable_col",
         &schema,
@@ -679,7 +658,7 @@ async fn test_soft_hard_requirements_remove_soft_requirement() -> Result<()> {
 async fn test_soft_hard_requirements_remove_soft_requirement_without_pushdowns(
 ) -> Result<()> {
     let schema = create_test_schema()?;
-    let source = parquet_exec_sorted(&schema, vec![]);
+    let source = parquet_exec(schema.clone());
     let ordering = [sort_expr_options(
         "nullable_col",
         &schema,
@@ -776,7 +755,7 @@ async fn test_soft_hard_requirements_remove_soft_requirement_without_pushdowns(
 #[tokio::test]
 async fn test_soft_hard_requirements_multiple_soft_requirements() -> Result<()> {
     let schema = create_test_schema()?;
-    let source = parquet_exec_sorted(&schema, vec![]);
+    let source = parquet_exec(schema.clone());
     let ordering = [sort_expr_options(
         "nullable_col",
         &schema,
@@ -905,7 +884,7 @@ async fn test_soft_hard_requirements_multiple_soft_requirements() -> Result<()> 
 #[tokio::test]
 async fn test_soft_hard_requirements_multiple_sorts() -> Result<()> {
     let schema = create_test_schema()?;
-    let source = parquet_exec_sorted(&schema, vec![]);
+    let source = parquet_exec(schema.clone());
     let ordering = [sort_expr_options(
         "nullable_col",
         &schema,
@@ -974,7 +953,7 @@ async fn test_soft_hard_requirements_multiple_sorts() -> Result<()> {
 async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_requirement(
 ) -> Result<()> {
     let schema = create_test_schema()?;
-    let source = parquet_exec_sorted(&schema, vec![]);
+    let source = parquet_exec(schema.clone());
     let ordering = [sort_expr_options(
         "nullable_col",
         &schema,
@@ -1039,13 +1018,14 @@ async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_
 #[tokio::test]
 async fn test_window_multi_path_sort() -> Result<()> {
     let schema = create_test_schema()?;
-    let sort_exprs1 = [
+    let ordering1 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
-    ];
-    let sort_exprs2 = [sort_expr("nullable_col", &schema)];
+    ]
+    .into();
+    let ordering2 = [sort_expr("nullable_col", &schema)].into();
     // Reverse of the above
-    let ordering: LexOrdering = [sort_expr_options(
+    let ordering3: LexOrdering = [sort_expr_options(
         "nullable_col",
         &schema,
         SortOptions {
@@ -1054,13 +1034,13 @@ async fn test_window_multi_path_sort() -> Result<()> {
         },
     )]
     .into();
-    let source1 = parquet_exec_sorted(&schema, sort_exprs1);
-    let source2 = parquet_exec_sorted(&schema, sort_exprs2);
-    let sort1 = sort_exec(ordering.clone(), source1);
-    let sort2 = sort_exec(ordering.clone(), source2);
+    let source1 = parquet_exec_with_sort(schema.clone(), vec![ordering1]);
+    let source2 = parquet_exec_with_sort(schema, vec![ordering2]);
+    let sort1 = sort_exec(ordering3.clone(), source1);
+    let sort2 = sort_exec(ordering3.clone(), source2);
     let union = union_exec(vec![sort1, sort2]);
-    let spm = sort_preserving_merge_exec(ordering.clone(), union);
-    let physical_plan = bounded_window_exec("nullable_col", ordering, spm);
+    let spm = sort_preserving_merge_exec(ordering3.clone(), union);
+    let physical_plan = bounded_window_exec("nullable_col", ordering3, spm);
 
     // The `WindowAggExec` gets its sorting from multiple children jointly.
     // During the removal of `SortExec`s, it should be able to remove the
@@ -1096,8 +1076,8 @@ async fn test_window_multi_path_sort2() -> Result<()> {
     ]
     .into();
     let ordering2: LexOrdering = [sort_expr("nullable_col", &schema)].into();
-    let source1 = parquet_exec_sorted(&schema, ordering2.clone());
-    let source2 = parquet_exec_sorted(&schema, ordering2.clone());
+    let source1 = parquet_exec_with_sort(schema.clone(), vec![ordering2.clone()]);
+    let source2 = parquet_exec_with_sort(schema, vec![ordering2.clone()]);
     let sort1 = sort_exec(ordering1.clone(), source1);
     let sort2 = sort_exec(ordering1.clone(), source2);
     let union = union_exec(vec![sort1, sort2]);
@@ -1130,7 +1110,7 @@ async fn test_window_multi_path_sort2() -> Result<()> {
 #[tokio::test]
 async fn test_union_inputs_different_sorted_with_limit() -> Result<()> {
     let schema = create_test_schema()?;
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let ordering1 = [
         sort_expr("nullable_col", &schema),
         sort_expr("non_nullable_col", &schema),
@@ -1187,8 +1167,8 @@ async fn test_sort_merge_join_order_by_left() -> Result<()> {
     let left_schema = create_test_schema()?;
     let right_schema = create_test_schema2()?;
 
-    let left = parquet_exec(&left_schema);
-    let right = parquet_exec(&right_schema);
+    let left = parquet_exec(left_schema);
+    let right = parquet_exec(right_schema);
 
     // Join on (nullable_col == col_a)
     let join_on = vec![(
@@ -1260,8 +1240,8 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
     let left_schema = create_test_schema()?;
     let right_schema = create_test_schema2()?;
 
-    let left = parquet_exec(&left_schema);
-    let right = parquet_exec(&right_schema);
+    let left = parquet_exec(left_schema);
+    let right = parquet_exec(right_schema);
 
     // Join on (nullable_col == col_a)
     let join_on = vec![(
@@ -1333,8 +1313,8 @@ async fn test_sort_merge_join_complex_order_by() -> Result<()> {
     let left_schema = create_test_schema()?;
     let right_schema = create_test_schema2()?;
 
-    let left = parquet_exec(&left_schema);
-    let right = parquet_exec(&right_schema);
+    let left = parquet_exec(left_schema);
+    let right = parquet_exec(right_schema);
 
     // Join on (nullable_col == col_a)
     let join_on = vec![(
@@ -1401,7 +1381,7 @@ async fn test_sort_merge_join_complex_order_by() -> Result<()> {
 #[tokio::test]
 async fn test_multilayer_coalesce_partitions() -> Result<()> {
     let schema = create_test_schema()?;
-    let source1 = parquet_exec(&schema);
+    let source1 = parquet_exec(schema.clone());
     let repartition = repartition_exec(source1);
     let coalesce = Arc::new(CoalescePartitionsExec::new(repartition)) as _;
     // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
@@ -1649,8 +1629,8 @@ async fn test_window_multi_layer_requirement() -> Result<()> {
 #[tokio::test]
 async fn test_not_replaced_with_partial_sort_for_bounded_input() -> Result<()> {
     let schema = create_test_schema3()?;
-    let input_sort_exprs = [sort_expr("b", &schema), sort_expr("c", &schema)];
-    let parquet_input = parquet_exec_sorted(&schema, input_sort_exprs);
+    let parquet_ordering = [sort_expr("b", &schema), sort_expr("c", &schema)].into();
+    let parquet_input = parquet_exec_with_sort(schema.clone(), vec![parquet_ordering]);
     let physical_plan = sort_exec(
         [
             sort_expr("a", &schema),
@@ -2486,15 +2466,16 @@ async fn test_not_replaced_with_partial_sort_for_unbounded_input() -> Result<()>
 #[tokio::test]
 async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
     let input_schema = create_test_schema()?;
-    let sort_exprs = vec![sort_expr_options(
+    let ordering = [sort_expr_options(
         "nullable_col",
         &input_schema,
         SortOptions {
             descending: false,
             nulls_first: false,
         },
-    )];
-    let source = parquet_exec_sorted(&input_schema, sort_exprs);
+    )]
+    .into();
+    let source = parquet_exec_with_sort(input_schema.clone(), vec![ordering]) as _;
 
     // Function definition - Alias of the resulting column - Arguments of the function
     #[derive(Clone)]
