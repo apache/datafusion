@@ -1744,8 +1744,8 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 <section id="string-agg">
 <h3><code class="docutils literal notranslate"><span class="pre">string_agg</span></code><a class="headerlink" href="#string-agg" title="Link to this heading">¶</a></h3>
-<p>Concatenates the values of string expressions and places separator values between them.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">string_agg</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="k">delimiter</span><span class="p">)</span>
+<p>Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">string_agg</span><span class="p">([</span><span class="k">DISTINCT</span><span class="p">]</span><span class="w"> </span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="k">delimiter</span><span class="w"> </span><span class="p">[</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id24">
@@ -1762,7 +1762,21 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 <span class="o">+</span><span class="c1">--------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">names_list</span><span class="w">               </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">--------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">Alice</span><span class="p">,</span><span class="w"> </span><span class="n">Bob</span><span class="p">,</span><span class="w"> </span><span class="n">Charlie</span><span class="w">      </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Alice</span><span class="p">,</span><span class="w"> </span><span class="n">Bob</span><span class="p">,</span><span class="w"> </span><span class="n">Bob</span><span class="p">,</span><span class="w"> </span><span class="n">Charlie</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------+</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">string_agg</span><span class="p">(</span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;, &#39;</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="k">DESC</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">names_list</span>
+<span class="w">  </span><span class="k">FROM</span><span class="w"> </span><span class="n">employee</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">names_list</span><span class="w">               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Charlie</span><span class="p">,</span><span class="w"> </span><span class="n">Bob</span><span class="p">,</span><span class="w"> </span><span class="n">Bob</span><span class="p">,</span><span class="w"> </span><span class="n">Alice</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------+</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">string_agg</span><span class="p">(</span><span class="k">DISTINCT</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;, &#39;</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="k">DESC</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">names_list</span>
+<span class="w">  </span><span class="k">FROM</span><span class="w"> </span><span class="n">employee</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">names_list</span><span class="w">               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Charlie</span><span class="p">,</span><span class="w"> </span><span class="n">Bob</span><span class="p">,</span><span class="w"> </span><span class="n">Alice</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">--------------------------+</span>
 </pre></div>
 </div>
