@@ -582,6 +582,9 @@ impl Unparser<'_> {
                     }
                     _ => (&join.left, &join.right),
                 };
+                // If there's an outer projection plan, it will already set up the projection.
+                // In that case, we don't need to worry about setting up the projection here.
+                // The outer projection plan will handle projecting the correct columns.
                 let already_projected = select.already_projected();
 
                 let left_plan =
@@ -738,10 +741,17 @@ impl Unparser<'_> {
                         from.push_join(ast_join);
                         select.push_from(from);
                         if !already_projected {
+                            let Some(left_projection) = left_projection else {
+                                return internal_err!("Left projection is missing");
+                            };
+
+                            let Some(right_projection) = right_projection else {
+                                return internal_err!("Right projection is missing");
+                            };
+
                             let projection = left_projection
-                                .unwrap()
                                 .into_iter()
-                                .chain(right_projection.unwrap().into_iter())
+                                .chain(right_projection.into_iter())
                                 .collect();
                             select.projection(projection);
                         }
