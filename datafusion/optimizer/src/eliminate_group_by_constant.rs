@@ -152,7 +152,7 @@ mod tests {
         fn signature(&self) -> &Signature {
             &self.signature
         }
-        fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
             Ok(Field::new(self.name(), DataType::Int32, true))
         }
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

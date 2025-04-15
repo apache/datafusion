@@ -24,6 +24,7 @@ use crate::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use crate::protobuf;
+use arrow::datatypes::Field;
 use datafusion_common::{plan_datafusion_err, Result};
 use datafusion_expr::{
     create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LogicalPlan, Volatility,
@@ -34,7 +35,6 @@ use prost::{
     Message,
 };
 use std::sync::Arc;
-use arrow::datatypes::Field;
 // Reexport Bytes which appears in the API
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion::physical_plan::ExecutionPlan;

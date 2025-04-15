@@ -1594,7 +1594,7 @@ mod test {
             &self.signature
         }
 
-        fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
             Ok(Field::new(self.name(), DataType::Int32, true))
         }
 
@@ -1702,7 +1702,7 @@ mod test {
             &self.signature
         }
 
-        fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
             Ok(Field::new(self.name(), DataType::Float64, true))
         }
 

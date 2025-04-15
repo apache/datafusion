@@ -3346,7 +3346,7 @@ impl ScalarUDFImpl for DummyUDF {
         &self.signature
     }
 
-    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
         Ok(Field::new(self.name(), self.return_type.clone(), true))
     }
 

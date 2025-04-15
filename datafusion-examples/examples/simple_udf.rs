@@ -24,12 +24,12 @@ use datafusion::{
     logical_expr::Volatility,
 };
 
+use arrow_schema::Field;
 use datafusion::common::cast::as_float64_array;
 use datafusion::error::Result;
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::prelude::*;
 use std::sync::Arc;
-use arrow_schema::Field;
 
 /// create local execution context with an in-memory table:
 ///

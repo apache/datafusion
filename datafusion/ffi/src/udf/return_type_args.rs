@@ -19,17 +19,14 @@ use abi_stable::{
     std_types::{ROption, RVec},
     StableAbi,
 };
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::Field;
 use datafusion::{
     common::exec_datafusion_err, error::DataFusionError, logical_expr::ReturnFieldArgs,
     scalar::ScalarValue,
 };
 
+use crate::arrow_wrappers::WrappedSchema;
 use crate::util::{rvec_wrapped_to_vec_field, vec_field_to_rvec_wrapped};
-use crate::{
-    arrow_wrappers::WrappedSchema,
-    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
-};
 use prost::Message;
 
 /// A stable struct for sharing a [`ReturnTypeArgs`] across FFI boundaries.

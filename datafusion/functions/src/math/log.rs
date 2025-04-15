@@ -25,8 +25,7 @@ use super::power::PowerFunc;
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, ExprSchema, Result,
-    ScalarValue,
+    exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};

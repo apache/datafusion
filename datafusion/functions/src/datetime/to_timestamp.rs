@@ -1016,11 +1016,12 @@ mod tests {
 
         for udf in &udfs {
             for array in arrays {
-
-                let rt = udf.return_field(ReturnFieldArgs {
-                    arg_types: &[Field::new("f", array.data_type(), true)],
-                    scalar_arguments: &[None],
-                }).unwrap();
+                let rt = udf
+                    .return_field(ReturnFieldArgs {
+                        arg_types: &[Field::new("f", array.data_type(), true)],
+                        scalar_arguments: &[None],
+                    })
+                    .unwrap();
                 assert!(matches!(rt.data_type(), Timestamp(_, Some(_))));
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
@@ -1068,10 +1069,12 @@ mod tests {
 
         for udf in &udfs {
             for array in arrays {
-                let rt = udf.return_field(ReturnFieldArgs{
-                    arg_types: &[Field::new("f", array.data_type(), true)],
-                    scalar_arguments: &[None],
-                }).unwrap();
+                let rt = udf
+                    .return_field(ReturnFieldArgs {
+                        arg_types: &[Field::new("f", array.data_type(), true)],
+                        scalar_arguments: &[None],
+                    })
+                    .unwrap();
                 assert!(matches!(rt.data_type(), Timestamp(_, None)));
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],

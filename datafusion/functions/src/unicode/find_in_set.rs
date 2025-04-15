@@ -351,7 +351,9 @@ mod tests {
     use arrow::array::{Array, Int32Array, StringArray};
     use arrow::datatypes::DataType::Int32;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
+    use datafusion_expr::{
+        ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    };
     use std::sync::Arc;
 
     #[test]
@@ -463,7 +465,10 @@ mod tests {
                 let args = $args;
                 let expected = $expected;
 
-                let type_array = args.iter().map(|a| arrow::datatypes::Field::new("f", a.data_type(), true)).collect::<Vec<_>>();
+                let type_array = args
+                    .iter()
+                    .map(|a| arrow::datatypes::Field::new("f", a.data_type(), true))
+                    .collect::<Vec<_>>();
                 let cardinality = args
                     .iter()
                     .fold(Option::<usize>::None, |acc, arg| match arg {

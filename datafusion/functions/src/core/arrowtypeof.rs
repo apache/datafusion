@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::Array;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{

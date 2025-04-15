@@ -111,7 +111,6 @@ impl ScalarFunctionExpr {
             })
             .collect::<Vec<_>>();
 
-
         let arguments = args
             .iter()
             .map(|e| {

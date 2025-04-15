@@ -20,6 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
+use arrow::datatypes::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use rand::rngs::ThreadRng;
@@ -49,8 +50,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = vec![precision, timestamps];
         let arg_fields = args
             .iter()
-            .map(|arg| arg.data_type())
-            .cloned()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("f_{idx}"), arg.data_type(), true))
             .collect::<Vec<_>>();
         let scalar_arguments = args
             .iter()

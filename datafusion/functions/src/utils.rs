@@ -208,7 +208,7 @@ pub mod test {
     }
 
     use arrow::datatypes::DataType;
-    use datafusion_common::DataFusionError;
+
     #[allow(unused_imports)]
     pub(crate) use test_function;
 

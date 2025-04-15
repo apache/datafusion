@@ -102,8 +102,8 @@ impl ScalarUDFImpl for UpperFunc {
 mod tests {
     use super::*;
     use arrow::array::{Array, ArrayRef, StringArray};
-    use std::sync::Arc;
     use arrow::datatypes::DataType;
+    use std::sync::Arc;
 
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();

@@ -100,8 +100,8 @@ impl ScalarUDFImpl for LowerFunc {
 mod tests {
     use super::*;
     use arrow::array::{Array, ArrayRef, StringArray};
-    use std::sync::Arc;
     use arrow::datatypes::DataType;
+    use std::sync::Arc;
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = LowerFunc::new();

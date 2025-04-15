@@ -424,7 +424,6 @@ pub fn generate_dependency_orderings(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::ops::Not;
     use std::sync::Arc;
 
