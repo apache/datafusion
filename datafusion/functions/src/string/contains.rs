@@ -18,7 +18,7 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::compute::contains as arrow_contains;
-use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
+use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, DataFusionError, Result};

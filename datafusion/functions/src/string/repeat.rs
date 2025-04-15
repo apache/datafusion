@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::ptr::null;
 use std::sync::Arc;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
@@ -25,7 +24,7 @@ use arrow::array::{
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::Field;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{logical_int64, logical_string, NativeType};
 use datafusion_common::{exec_err, DataFusionError, Result};
@@ -97,7 +96,7 @@ impl ScalarUDFImpl for RepeatFunc {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        let data_type = utf8_to_str_type(&args.arg_types[0].data_type(), "repeat")?;
+        let data_type = utf8_to_str_type(args.arg_types[0].data_type(), "repeat")?;
         Ok(Field::new(self.name(), data_type, nullable))
     }
 

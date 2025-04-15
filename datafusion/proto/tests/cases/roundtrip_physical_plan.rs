@@ -962,7 +962,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
     let udf = create_udf(
         "dummy",
         vec![DataType::Int64],
-        DataType::Int64,
+        Field::new("dummy", DataType::Int64, true),
         Volatility::Immutable,
         scalar_fn.clone(),
     );

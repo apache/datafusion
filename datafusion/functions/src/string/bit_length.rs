@@ -84,7 +84,7 @@ impl ScalarUDFImpl for BitLengthFunc {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        let data_type = utf8_to_int_type(&args.arg_types[0].data_type(), "bit_length")?;
+        let data_type = utf8_to_int_type(args.arg_types[0].data_type(), "bit_length")?;
         Ok(Field::new("ascii", data_type, nullable))
     }
 

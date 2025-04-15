@@ -219,9 +219,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::Array;
+    use arrow::array::{Array, Int32Array, Int64Array};
 
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, DataType::{Int32, Int64}, Field};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 

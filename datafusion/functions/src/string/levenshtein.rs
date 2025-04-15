@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::ptr::null;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};

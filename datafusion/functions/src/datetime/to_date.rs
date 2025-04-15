@@ -17,7 +17,7 @@
 
 use crate::datetime::common::*;
 use arrow::datatypes::DataType::*;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::Field;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
 use datafusion_common::error::DataFusionError;

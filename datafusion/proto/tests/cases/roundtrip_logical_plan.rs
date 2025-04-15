@@ -2194,7 +2194,7 @@ fn roundtrip_scalar_udf() {
     let udf = create_udf(
         "dummy",
         vec![DataType::Utf8],
-        DataType::Utf8,
+        Field::new("dummy", DataType::Utf8, true),
         Volatility::Immutable,
         scalar_fn,
     );

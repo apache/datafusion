@@ -644,7 +644,7 @@ mod tests {
         TimestampNanosecondArray, TimestampSecondArray,
     };
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
-    use arrow::datatypes::TimeUnit;
+    use arrow::datatypes::{Field, TimeUnit};
     use chrono::Utc;
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
@@ -1016,13 +1016,17 @@ mod tests {
 
         for udf in &udfs {
             for array in arrays {
-                let rt = udf.return_type(&[array.data_type()]).unwrap();
-                assert!(matches!(rt, Timestamp(_, Some(_))));
+
+                let rt = udf.return_field(ReturnFieldArgs {
+                    arg_types: &[Field::new("f", array.data_type(), true)],
+                    scalar_arguments: &[None],
+                }).unwrap();
+                assert!(matches!(rt.data_type(), Timestamp(_, Some(_))));
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
                     arg_fields: vec![None; 1],
                     number_rows: 4,
-                    return_type: &rt,
+                    return_type: rt.data_type(),
                 };
                 let res = udf
                     .invoke_with_args(args)
@@ -1064,13 +1068,16 @@ mod tests {
 
         for udf in &udfs {
             for array in arrays {
-                let rt = udf.return_type(&[array.data_type()]).unwrap();
-                assert!(matches!(rt, Timestamp(_, None)));
+                let rt = udf.return_field(ReturnFieldArgs{
+                    arg_types: &[Field::new("f", array.data_type(), true)],
+                    scalar_arguments: &[None],
+                }).unwrap();
+                assert!(matches!(rt.data_type(), Timestamp(_, None)));
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
                     arg_fields: vec![None; 1],
                     number_rows: 5,
-                    return_type: &rt,
+                    return_type: rt.data_type(),
                 };
                 let res = udf
                     .invoke_with_args(args)

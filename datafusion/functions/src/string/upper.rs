@@ -17,7 +17,7 @@
 
 use crate::string::common::to_upper;
 use crate::utils::utf8_to_str_type;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::Field;
 use datafusion_common::types::logical_string;
 use datafusion_common::Result;
 use datafusion_expr::{
@@ -103,6 +103,7 @@ mod tests {
     use super::*;
     use arrow::array::{Array, ArrayRef, StringArray};
     use std::sync::Arc;
+    use arrow::datatypes::DataType;
 
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();

@@ -953,7 +953,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         &self.signature
     }
 
-    fn return_field(&self, _args: &[DataType]) -> Result<Field> {
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
         Ok(Field::new(self.name(), self.return_type.clone(), true))
     }
 
@@ -1236,7 +1236,8 @@ impl ScalarUDFImpl for MyRegexUdf {
     }
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
-        let data_type = if matches!(args, [DataType::Utf8]) {
+        let [field] = take_function_args("regex_udf", args.arg_types)?;
+        let data_type = if matches!(field.data_type(), DataType::Utf8) {
             DataType::Boolean
         } else {
             plan_err!("regex_udf only accepts a Utf8 argument")?

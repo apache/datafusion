@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
 use datafusion::execution::FunctionRegistry;
 use datafusion::prelude::SessionContext;
@@ -238,7 +238,7 @@ fn context_with_udf() -> SessionContext {
     let udf = create_udf(
         "dummy",
         vec![DataType::Utf8],
-        DataType::Utf8,
+        Field::new("f", DataType::Utf8, true),
         Volatility::Immutable,
         scalar_fn,
     );

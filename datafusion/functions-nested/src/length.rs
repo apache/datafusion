@@ -22,7 +22,6 @@ use arrow::array::{
     Array, ArrayRef, Int64Array, LargeListArray, ListArray, OffsetSizeTrait, UInt64Array,
 };
 use arrow::datatypes::{
-    DataType,
     DataType::{FixedSizeList, LargeList, List, UInt64},
     Field,
 };

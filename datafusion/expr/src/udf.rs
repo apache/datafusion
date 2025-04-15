@@ -167,7 +167,7 @@ impl ScalarUDF {
 
     /// Return the datatype this function returns given the input argument types.
     ///
-    /// See [`ScalarUDFImpl::return_type_from_args`] for more details.
+    /// See [`ScalarUDFImpl::return_field`] for more details.
     pub fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         self.inner.return_field(args)
     }

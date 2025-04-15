@@ -351,7 +351,7 @@ mod tests {
     use arrow::array::{Array, Int32Array, StringArray};
     use arrow::datatypes::DataType::Int32;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
     #[test]
@@ -463,7 +463,7 @@ mod tests {
                 let args = $args;
                 let expected = $expected;
 
-                let type_array = args.iter().map(|a| a.data_type()).collect::<Vec<_>>();
+                let type_array = args.iter().map(|a| arrow::datatypes::Field::new("f", a.data_type(), true)).collect::<Vec<_>>();
                 let cardinality = args
                     .iter()
                     .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -471,13 +471,17 @@ mod tests {
                         ColumnarValue::Array(a) => Some(a.len()),
                     })
                     .unwrap_or(1);
-                let return_type = fis.return_type(&type_array)?;
+                let return_field_args = ReturnFieldArgs {
+                    arg_types: &type_array,
+                    scalar_arguments: &vec![None; type_array.len()],
+                };
+                let return_type = fis.return_field(return_field_args)?;
                 let arg_fields = vec![None; args.len()];
                 let result = fis.invoke_with_args(ScalarFunctionArgs {
                     args,
                     arg_fields,
                     number_rows: cardinality,
-                    return_type: &return_type,
+                    return_type: return_type.data_type(),
                 });
                 assert!(result.is_ok());
 

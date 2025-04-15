@@ -27,6 +27,7 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use std::any::Any;
 use std::fmt::Debug;
+use datafusion_common::utils::take_function_args;
 
 mod roundtrip_logical_plan;
 mod roundtrip_physical_plan;
@@ -64,7 +65,8 @@ impl ScalarUDFImpl for MyRegexUdf {
     }
 
     fn return_field(&self, args: ReturnFieldArgs) -> datafusion_common::Result<Field> {
-        if matches!(args, [DataType::Utf8]) {
+        let [field] = take_function_args("regex_udf", args.arg_types)?;
+        if matches!(field.data_type(), DataType::Utf8) {
             Ok(Field::new(self.name(), DataType::Int64, true))
         } else {
             plan_err!("regex_udf only accepts Utf8 arguments")

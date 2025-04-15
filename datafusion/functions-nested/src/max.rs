@@ -19,7 +19,7 @@
 use crate::utils::make_scalar_function;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType::List;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::Field;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, ScalarValue};

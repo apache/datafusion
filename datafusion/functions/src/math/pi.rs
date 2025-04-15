@@ -17,7 +17,6 @@
 
 use std::any::Any;
 
-use arrow::datatypes::DataType::Float64;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};

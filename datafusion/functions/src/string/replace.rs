@@ -94,7 +94,7 @@ impl ScalarUDFImpl for ReplaceFunc {
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
         let data_type = if let Some(coercion_data_type) =
-            string_coercion(args.arg_types[0].data_type(), &args.arg_types[1].data_type())
+            string_coercion(args.arg_types[0].data_type(), args.arg_types[1].data_type())
                 .and_then(|dt| string_coercion(&dt, args.arg_types[2].data_type()))
                 .or_else(|| {
                     binary_to_string_coercion(

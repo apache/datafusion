@@ -17,7 +17,6 @@
 
 //! [`ScalarUDFImpl`] definitions for array_position and array_positions functions.
 
-use arrow::datatypes::DataType;
 use arrow::datatypes::{
     DataType::{LargeList, List, UInt64},
     Field,

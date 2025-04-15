@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::compute::kernels::length::length;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::Field;
 use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
@@ -83,7 +83,7 @@ impl ScalarUDFImpl for OctetLengthFunc {
     }
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
-        let data_type = utf8_to_int_type(&args.arg_types[0].data_type(), "octet_length")?;
+        let data_type = utf8_to_int_type(args.arg_types[0].data_type(), "octet_length")?;
         Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
     }
 

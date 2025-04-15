@@ -130,7 +130,7 @@ pub mod test {
     /// $ARRAY_TYPE is the column type after function applied
     macro_rules! test_function {
         ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
-            let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
+            let expected: Result<Option<$EXPECTED_TYPE>, datafusion_common::DataFusionError> = $EXPECTED;
             let func = $FUNC;
 
             let type_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
@@ -153,20 +153,23 @@ pub mod test {
                 ColumnarValue::Array(a) => a.null_count() > 0,
             }).collect::<Vec<_>>();
 
-            let return_info = func.return_type_from_args(datafusion_expr::ReturnTypeArgs {
-                arg_types: &type_array,
+            let arg_fields = type_array.into_iter().zip(nullables.into_iter()).enumerate()
+            .map(|(idx, (data_type, nullable))| arrow::datatypes::Field::new(format!("field_{idx}"), data_type.clone(), nullable))
+            .collect::<Vec<_>>();
+
+            let return_info = func.return_field(datafusion_expr::ReturnFieldArgs {
+                arg_types: &arg_fields,
                 scalar_arguments: &scalar_arguments_refs,
-                nullables: &nullables
             });
 
             match expected {
                 Ok(expected) => {
                     assert_eq!(return_info.is_ok(), true);
-                    let (return_type, _nullable) = return_info.unwrap().into_parts();
-                    assert_eq!(return_type, $EXPECTED_DATA_TYPE);
+                    let return_info = return_info.unwrap();
+                    assert_eq!(return_info.data_type(), &$EXPECTED_DATA_TYPE);
 
                     let arg_fields = vec![None; $ARGS.len()];
-                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_type: &return_type});
+                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_type: return_info.data_type()});
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
                     let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
@@ -187,7 +190,8 @@ pub mod test {
                         }
                     }
                     else {
-                        let (return_type, _nullable) = return_info.unwrap().into_parts();
+                        let return_info = return_info.unwrap();
+                        let return_type = return_info.data_type();
 
                         let arg_fields = vec![None; $ARGS.len()];
                         // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
@@ -204,6 +208,7 @@ pub mod test {
     }
 
     use arrow::datatypes::DataType;
+    use datafusion_common::DataFusionError;
     #[allow(unused_imports)]
     pub(crate) use test_function;
 

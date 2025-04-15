@@ -155,7 +155,7 @@ fn test_evaluate(input_expr: Expr, expected_expr: Expr) {
 // Make a UDF that adds its two values together, with the specified volatility
 fn make_udf_add(volatility: Volatility) -> Arc<ScalarUDF> {
     let input_types = vec![DataType::Int32, DataType::Int32];
-    let return_type = DataType::Int32;
+    let return_field = Field::new("simplification", DataType::Int32, true);
 
     let fun = Arc::new(|args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
@@ -183,7 +183,7 @@ fn make_udf_add(volatility: Volatility) -> Arc<ScalarUDF> {
     Arc::new(create_udf(
         "udf_add",
         input_types,
-        return_type,
+        return_field,
         volatility,
         fun,
     ))

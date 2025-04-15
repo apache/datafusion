@@ -104,7 +104,7 @@ impl ScalarFunctionExpr {
             .map(|e| e.output_field(schema))
             .collect::<Result<Vec<_>>>()?
             .into_iter()
-            .zip(arg_types.into_iter())
+            .zip(arg_types)
             .enumerate()
             .map(|(idx, (field, data_type))| {
                 field.unwrap_or(Field::new(format!("field_{idx}"), data_type, true))

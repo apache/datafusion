@@ -450,7 +450,7 @@ impl ExprSchemable for Expr {
                     .collect::<Vec<_>>();
                 let arg_fields = new_data_types
                     .into_iter()
-                    .zip(nullables.into_iter())
+                    .zip(nullables)
                     .enumerate()
                     .map(|(idx, (data_type, nullable))| {
                         Field::new(format!("field_{}", idx), data_type, nullable)

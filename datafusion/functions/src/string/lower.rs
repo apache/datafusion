@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::Field;
 use std::any::Any;
 
 use crate::string::common::to_lower;
@@ -82,7 +82,7 @@ impl ScalarUDFImpl for LowerFunc {
     }
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
-        let data_type = utf8_to_str_type(&args.arg_types[0].data_type(), "lower")?;
+        let data_type = utf8_to_str_type(args.arg_types[0].data_type(), "lower")?;
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
         Ok(Field::new(self.name(), data_type, nullable))
     }
@@ -101,6 +101,7 @@ mod tests {
     use super::*;
     use arrow::array::{Array, ArrayRef, StringArray};
     use std::sync::Arc;
+    use arrow::datatypes::DataType;
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = LowerFunc::new();

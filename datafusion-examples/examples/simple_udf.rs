@@ -29,6 +29,7 @@ use datafusion::error::Result;
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::prelude::*;
 use std::sync::Arc;
+use arrow_schema::Field;
 
 /// create local execution context with an in-memory table:
 ///
@@ -109,7 +110,7 @@ async fn main() -> Result<()> {
         // expects two f64
         vec![DataType::Float64, DataType::Float64],
         // returns f64
-        DataType::Float64,
+        Field::new("pow", DataType::Float64, true),
         Volatility::Immutable,
         pow,
     );

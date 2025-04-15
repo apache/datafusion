@@ -1298,7 +1298,7 @@ async fn registry() -> Result<()> {
     ctx.register_udf(create_udf(
         "my_fn",
         vec![DataType::Float64],
-        DataType::Float64,
+        Field::new("my_fn", DataType::Float64, true),
         Volatility::Immutable,
         my_fn,
     ));
