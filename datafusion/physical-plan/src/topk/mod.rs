@@ -213,9 +213,8 @@ impl TopK {
         // If the heap doesn't have k elements yet, we can't create thresholds
         if let Some(max_row) = self.heap.max() {
             // Get the batch that contains the max row
-            let batch_entry = match self.heap.store.get(max_row.batch_id) {
-                Some(entry) => entry,
-                None => return internal_err!("Invalid batch ID in TopKRow"),
+            let Some(entry) = self.heap.store.get(max_row.batch_id) else {
+                return internal_err!("Invalid batch ID in TopKRow"),
             };
 
             // Extract threshold values for each sort expression
