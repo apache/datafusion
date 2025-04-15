@@ -766,31 +766,31 @@ async fn test_high_cardinality_with_limited_memory() -> Result<()> {
     let task_ctx = {
         let memory_pool = Arc::new(FairSpillPool::new(two_mb));
         TaskContext::default()
-          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-          .with_runtime(Arc::new(
-              RuntimeEnvBuilder::new()
-                .with_memory_pool(memory_pool)
-                .build()?,
-          ))
+            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
     };
 
     run_test_high_cardinality(task_ctx, 100, |_| (16 * KB) as usize).await
 }
 
-
 #[tokio::test]
-async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch() -> Result<()> {
+async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch(
+) -> Result<()> {
     let record_batch_size = 8192;
     let two_mb = 2 * MB as usize;
     let task_ctx = {
         let memory_pool = Arc::new(FairSpillPool::new(two_mb));
         TaskContext::default()
-          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-          .with_runtime(Arc::new(
-              RuntimeEnvBuilder::new()
-                .with_memory_pool(memory_pool)
-                .build()?,
-          ))
+            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
     };
 
     run_test_high_cardinality(task_ctx, 100, |i| {
@@ -799,22 +799,24 @@ async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record
         } else {
             (16 * KB) as usize
         }
-    }).await
+    })
+    .await
 }
 
 #[tokio::test]
-async fn test_high_cardinality_with_limited_memory_and_large_record_batch() -> Result<()> {
+async fn test_high_cardinality_with_limited_memory_and_large_record_batch() -> Result<()>
+{
     let record_batch_size = 8192;
     let two_mb = 2 * MB as usize;
     let task_ctx = {
         let memory_pool = Arc::new(FairSpillPool::new(two_mb));
         TaskContext::default()
-          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-          .with_runtime(Arc::new(
-              RuntimeEnvBuilder::new()
-                .with_memory_pool(memory_pool)
-                .build()?,
-          ))
+            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
     };
     run_test_high_cardinality(task_ctx, 100, |_| two_mb / 5).await
 }
@@ -852,10 +854,14 @@ async fn run_test_high_cardinality(
             Arc::clone(&schema),
             futures::stream::iter((0..number_of_record_batches as u64).map(
                 move |index| {
-                    let mut record_batch_memory_size = get_size_of_record_batch_to_generate(index as usize);
-                    record_batch_memory_size = record_batch_memory_size.saturating_sub(size_of::<UInt64Type::Native>() * record_batch_memory_size);
+                    let mut record_batch_memory_size =
+                        get_size_of_record_batch_to_generate(index as usize);
+                    record_batch_memory_size = record_batch_memory_size.saturating_sub(
+                        size_of::<UInt64Type::Native>() * record_batch_memory_size,
+                    );
 
-                    let string_item_size = record_batch_memory_size / record_batch_size as usize;
+                    let string_item_size =
+                        record_batch_memory_size / record_batch_size as usize;
                     let string_array = Arc::new(StringArray::from_iter_values(
                         (0..record_batch_size).map(|_| "a".repeat(string_item_size)),
                     ));
