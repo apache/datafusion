@@ -475,7 +475,12 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
-        let data_types = args.arg_fields.iter().map(|f| f.data_type()).cloned().collect::<Vec<_>>();
+        let data_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type())
+            .cloned()
+            .collect::<Vec<_>>();
         let return_type = self.return_type(&data_types)?;
         Ok(Field::new(self.name(), return_type, true))
     }

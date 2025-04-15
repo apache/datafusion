@@ -133,7 +133,7 @@ pub mod test {
             let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
             let func = $FUNC;
 
-            let type_array = $ARGS.iter().map(|arg| arg.field()).collect::<Vec<_>>();
+            let data_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
             let cardinality = $ARGS
                 .iter()
                 .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -153,6 +153,10 @@ pub mod test {
                 ColumnarValue::Array(a) => a.null_count() > 0,
             }).collect::<Vec<_>>();
 
+            let field_array = data_array.into_iter().zip(nullables).enumerate()
+                .map(|(idx, (data_type, nullable))| arrow::datatypes::Field::new(format!("field_{idx}"), data_type, nullable))
+                .collect::<Vec<_>>();
+
             let return_info = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
                 arg_fields: &field_array,
                 scalar_arguments: &scalar_arguments_refs,
@@ -161,8 +165,9 @@ pub mod test {
             match expected {
                 Ok(expected) => {
                     assert_eq!(return_info.is_ok(), true);
-                    let (return_type, _nullable) = return_info.unwrap().into_parts();
-                    assert_eq!(return_type, $EXPECTED_DATA_TYPE);
+                    let return_info = return_info.unwrap();
+                    let return_type = return_info.data_type();
+                    assert_eq!(return_type, &$EXPECTED_DATA_TYPE);
 
                     let arg_fields = vec![None; $ARGS.len()];
                     let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_type: &return_type});
@@ -186,7 +191,8 @@ pub mod test {
                         }
                     }
                     else {
-                        let (return_type, _nullable) = return_info.unwrap().into_parts();
+                        let return_info = return_info.unwrap();
+                        let return_type = return_info.data_type();
 
                         let arg_fields = vec![None; $ARGS.len()];
                         // invoke is expected error - cannot use .expect_err() due to Debug not being implemented

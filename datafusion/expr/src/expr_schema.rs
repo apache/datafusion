@@ -441,11 +441,10 @@ impl ExprSchemable for Expr {
                             )
                         )
                     })?;
-                let new_fields = fields.into_iter()
+                let new_fields = fields
+                    .into_iter()
                     .zip(new_data_types)
-                    .map(|(f, d)| {
-                        f.as_ref().clone().with_data_type(d)
-                    })
+                    .map(|(f, d)| f.as_ref().clone().with_data_type(d))
                     .collect::<Vec<Field>>();
 
                 let arguments = args

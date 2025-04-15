@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::{
+    arrow_wrappers::{WrappedArray, WrappedSchema},
+    df_result, rresult, rresult_return,
+    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
+    volatility::FFI_Volatility,
+};
 use abi_stable::std_types::ROption;
 use abi_stable::{
     std_types::{RResult, RString, RVec},
@@ -26,11 +32,10 @@ use arrow::{
     error::ArrowError,
     ffi::{from_ffi, to_ffi, FFI_ArrowSchema},
 };
+use datafusion::logical_expr::ReturnFieldArgs;
 use datafusion::{
     error::DataFusionError,
-    logical_expr::{
-        type_coercion::functions::data_types_with_scalar_udf,
-    },
+    logical_expr::type_coercion::functions::data_types_with_scalar_udf,
 };
 use datafusion::{
     error::Result,
@@ -42,13 +47,6 @@ use return_type_args::{
     FFI_ReturnFieldArgs, ForeignReturnFieldArgs, ForeignReturnFieldArgsOwned,
 };
 use std::{ffi::c_void, sync::Arc};
-use datafusion::logical_expr::ReturnFieldArgs;
-use crate::{
-    arrow_wrappers::{WrappedArray, WrappedSchema},
-    df_result, rresult, rresult_return,
-    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
-    volatility::FFI_Volatility,
-};
 
 pub mod return_type_args;
 

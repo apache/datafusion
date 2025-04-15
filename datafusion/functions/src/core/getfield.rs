@@ -27,7 +27,9 @@ use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, utils::take_function_args, Result,
     ScalarValue,
 };
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;

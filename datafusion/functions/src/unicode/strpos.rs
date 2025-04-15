@@ -95,9 +95,15 @@ impl ScalarUDFImpl for StrposFunc {
         &self,
         args: datafusion_expr::ReturnFieldArgs,
     ) -> Result<Field> {
-        utf8_to_int_type(args.arg_fields[0].data_type(), "strpos/instr/position").map(|data_type| {
-            Field::new(self.name(), data_type, args.arg_fields.iter().any(|x| x.is_nullable()))
-        })
+        utf8_to_int_type(args.arg_fields[0].data_type(), "strpos/instr/position").map(
+            |data_type| {
+                Field::new(
+                    self.name(),
+                    data_type,
+                    args.arg_fields.iter().any(|x| x.is_nullable()),
+                )
+            },
+        )
     }
 
     fn invoke_with_args(
@@ -322,13 +328,14 @@ mod tests {
         fn get_nullable(string_array_nullable: bool, substring_nullable: bool) -> bool {
             let strpos = StrposFunc::new();
             let args = datafusion_expr::ReturnFieldArgs {
-                arg_fields: &[Field::new("f1", DataType::Utf8, string_array_nullable), Field::new("f2", DataType::Utf8, substring_nullable)],
+                arg_fields: &[
+                    Field::new("f1", DataType::Utf8, string_array_nullable),
+                    Field::new("f2", DataType::Utf8, substring_nullable),
+                ],
                 scalar_arguments: &[None::<&ScalarValue>, None::<&ScalarValue>],
             };
 
-            let (_, nullable) = strpos.return_field_from_args(args).unwrap().into_parts();
-
-            nullable
+            strpos.return_field_from_args(args).unwrap().is_nullable()
         }
 
         assert!(!get_nullable(false, false));
