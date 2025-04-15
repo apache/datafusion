@@ -123,7 +123,11 @@ impl ScalarFunctionExpr {
             .map(|(idx, e)| {
                 e.output_field(schema).and_then(|maybe_field| {
                     Ok(maybe_field.unwrap_or({
-                        Field::new(format!("field_{idx}"), e.data_type(schema)?, true)
+                        Field::new(
+                            format!("field_{idx}"),
+                            e.data_type(schema)?,
+                            e.nullable(schema)?,
+                        )
                     }))
                 })
             })
