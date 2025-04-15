@@ -20,14 +20,13 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
+use arrow::array::UInt64Array;
 use arrow::{
     array::{as_string_array, ArrayRef, Int32Array, StringArray},
     compute::SortOptions,
     record_batch::RecordBatch,
 };
-use arrow::array::UInt64Array;
 use arrow_schema::{DataType, Field, Schema};
-use futures::StreamExt;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
@@ -38,16 +37,19 @@ use datafusion_common::cast::as_int32_array;
 use datafusion_execution::memory_pool::{FairSpillPool, GreedyMemoryPool};
 use datafusion_physical_expr::expressions::{col, Column};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use futures::StreamExt;
 
-use rand::Rng;
+use crate::fuzz_cases::stream_exec::StreamExec;
 use datafusion_execution::memory_pool::units::MB;
 use datafusion_execution::TaskContext;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateMode, PhysicalGroupBy,
+};
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use rand::Rng;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
-use crate::fuzz_cases::stream_exec::StreamExec;
 
 const KB: usize = 1 << 10;
 #[tokio::test]
@@ -398,21 +400,24 @@ async fn test_with_limited_memory() -> datafusion_common::Result<()> {
     let task_ctx = {
         let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         TaskContext::default()
-          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-          .with_runtime(Arc::new(
-              RuntimeEnvBuilder::new()
-                .with_memory_pool(memory_pool)
-                .build()?,
-          ))
+            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
     };
 
     let record_batch_size = pool_size / 16;
 
     // Basic test with a lot of groups that cannot all fit in memory and 1 record batch
     // from each spill file is too much memory
-    let spill_count =
-      run_memory_test_for_limited_memory(task_ctx, 100, Box::pin(move |_| record_batch_size))
-        .await?;
+    let spill_count = run_memory_test_for_limited_memory(
+        task_ctx,
+        100,
+        Box::pin(move |_| record_batch_size),
+    )
+    .await?;
 
     let total_spill_files_size = spill_count * record_batch_size;
     assert!(
@@ -433,12 +438,12 @@ async fn test_with_limited_memory_and_different_sizes_of_record_batch(
     let task_ctx = {
         let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         TaskContext::default()
-          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-          .with_runtime(Arc::new(
-              RuntimeEnvBuilder::new()
-                .with_memory_pool(memory_pool)
-                .build()?,
-          ))
+            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
     };
 
     run_memory_test_for_limited_memory(
@@ -452,7 +457,7 @@ async fn test_with_limited_memory_and_different_sizes_of_record_batch(
             }
         }),
     )
-      .await?;
+    .await?;
 
     Ok(())
 }
@@ -465,16 +470,17 @@ async fn test_with_limited_memory_and_large_record_batch() -> datafusion_common:
     let task_ctx = {
         let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         TaskContext::default()
-          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-          .with_runtime(Arc::new(
-              RuntimeEnvBuilder::new()
-                .with_memory_pool(memory_pool)
-                .build()?,
-          ))
+            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
     };
 
     // Test that the merge degree of multi level merge sort cannot be fixed size when there is not enough memory
-    run_memory_test_for_limited_memory(task_ctx, 100, Box::pin(move |_| pool_size / 4)).await?;
+    run_memory_test_for_limited_memory(task_ctx, 100, Box::pin(move |_| pool_size / 4))
+        .await?;
 
     Ok(())
 }
@@ -495,36 +501,35 @@ async fn run_memory_test_for_limited_memory(
 
     let schema = Arc::clone(&scan_schema);
     let plan: Arc<dyn ExecutionPlan> =
-      Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
-          Arc::clone(&schema),
-          futures::stream::iter((0..number_of_record_batches as u64).map(
-              move |index| {
-                  let mut record_batch_memory_size =
-                    get_size_of_record_batch_to_generate(index as usize);
-                  record_batch_memory_size = record_batch_memory_size
-                    .saturating_sub(size_of::<u64>() * record_batch_size as usize);
+        Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter((0..number_of_record_batches as u64).map(
+                move |index| {
+                    let mut record_batch_memory_size =
+                        get_size_of_record_batch_to_generate(index as usize);
+                    record_batch_memory_size = record_batch_memory_size
+                        .saturating_sub(size_of::<u64>() * record_batch_size as usize);
 
-                  let string_item_size =
-                    record_batch_memory_size / record_batch_size as usize;
-                  let string_array = Arc::new(StringArray::from_iter_values(
-                      (0..record_batch_size).map(|_| "a".repeat(string_item_size)),
-                  ));
+                    let string_item_size =
+                        record_batch_memory_size / record_batch_size as usize;
+                    let string_array = Arc::new(StringArray::from_iter_values(
+                        (0..record_batch_size).map(|_| "a".repeat(string_item_size)),
+                    ));
 
-                  RecordBatch::try_new(
-                      Arc::clone(&schema),
-                      vec![
-                          Arc::new(UInt64Array::from_iter_values(
-                              (index * record_batch_size)
-                                ..(index * record_batch_size) + record_batch_size,
-                          )),
-                          string_array,
-                      ],
-                  )
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(UInt64Array::from_iter_values(
+                                (index * record_batch_size)
+                                    ..(index * record_batch_size) + record_batch_size,
+                            )),
+                            string_array,
+                        ],
+                    )
                     .map_err(|err| err.into())
-              },
-          )),
-      ))));
-
+                },
+            )),
+        ))));
 
     let sort_exec = Arc::new(SortExec::new(
         LexOrdering::new(vec![PhysicalSortExpr {
@@ -555,7 +560,10 @@ async fn run_memory_test_for_limited_memory(
 
     let spill_count = sort_exec.metrics().unwrap().spill_count().unwrap();
 
-    assert!(spill_count > 0, "Expected spill, but did not: {number_of_record_batches:?}");
+    assert!(
+        spill_count > 0,
+        "Expected spill, but did not: {number_of_record_batches:?}"
+    );
 
     Ok(spill_count)
 }
