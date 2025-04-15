@@ -19,15 +19,15 @@
 
 # Format Options
 
-DataFusion supports customizing how data is read from or written to disk as a result of a `COPY`, `INSERT INTO`, or `CREATE EXTERNAL TABLE` query. There are a few special options, file format (e.g., CSV or Parquet) specific options, and Parquet column-specific options. Options can also in some cases be specified in multiple ways with a set order of precedence.
+DataFusion supports customizing how data is read from or written to disk as a result of a `COPY`, `INSERT INTO`, or `CREATE EXTERNAL TABLE` statements. There are a few special options, file format (e.g., CSV or Parquet) specific options, and Parquet column-specific options. In some cases, Options can be specified in multiple ways with a set order of precedence.
 
 ## Specifying Options and Order of Precedence
 
-Format-related options can be specified in the following ways:
+Format-related options can be specified in three ways, in decreasing order of precedence:
 
-- Session-level config defaults
-- `CREATE EXTERNAL TABLE` options
+- `CREATE EXTERNAL TABLE` syntax
 - `COPY` option tuples
+- Session-level config defaults
 
 For a list of supported session-level config defaults, see [Configuration Settings](../configs). These defaults apply to all operations but have the lowest level of precedence.
 
@@ -64,12 +64,6 @@ In this example, we write the entirety of `source_table` out to a folder of Parq
 
 # Available Options
 
-## Generic Options
-
-| Option     | Description                                                   | Default Value    |
-| ---------- | ------------------------------------------------------------- | ---------------- |
-| NULL_VALUE | Sets the string which should be used to indicate null values. | arrow-rs default |
-
 ## Execution-Specific Options
 
 The following options are available when executing a `COPY` query.
@@ -91,10 +85,12 @@ The following options are available when reading or writing JSON files. Note: If
 **Example:**
 
 ```sql
-CREATE EXTERNAL TABLE t
+CREATE EXTERNAL TABLE t(a int)
 STORED AS JSON
-LOCATION '/tmp/foo.json'
-OPTIONS('COMPRESSION', 'gzip');
+LOCATION '/tmp/foo/'
+OPTIONS('COMPRESSION' 'gzip');
+-- Inserting arow creates a new file in /tmp/foo
+INSERT INTO t VALUES(1);
 ```
 
 ## CSV Format Options
@@ -104,7 +100,7 @@ The following options are available when reading or writing CSV files. Note: If 
 | Option             | Description                                                                                                                       | Default Value    |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
 | COMPRESSION        | Sets the compression that should be applied to the entire CSV file. Supported values are GZIP, BZIP2, XZ, ZSTD, and UNCOMPRESSED. | UNCOMPRESSED     |
-| HEADER             | Sets if the CSV file should include column headers                                                                                | false            |
+| HAS_HEADER         | Sets if the CSV file should include column headers                                                                                | false            |
 | NEWLINES_IN_VALUES | Sets if newlines in quoted values are supported                                                                                   | false            |
 | DATE_FORMAT        | Sets the format that dates should be encoded in within the CSV file                                                               | arrow-rs default |
 | DATETIME_FORMAT    | Sets the format that datetimes should be encoded in within the CSV file                                                           | arrow-rs default |
@@ -116,27 +112,33 @@ The following options are available when reading or writing CSV files. Note: If 
 **Example:**
 
 ```sql
-CREATE EXTERNAL TABLE t
+CREATE EXTERNAL TABLE t (col1 varchar, col2 int, col3 boolean)
 STORED AS CSV
-LOCATION '/tmp/foo.csv'
-OPTIONS('DELIMITER', '|', 'HEADER', 'true', 'NEWLINES_IN_VALUES', 'true');
+LOCATION '/tmp/foo/'
+OPTIONS('DELIMITER' '|', 'HAS_HEADER' 'true', 'NEWLINES_IN_VALUES' 'true');
 ```
 
 ## Parquet Format Options
 
 The following options are available when reading or writing Parquet files. If any unsupported option is specified, an error will be raised and the query will fail. If a column-specific option is specified for a column that does not exist, the option will be ignored without error.
 
-| Option               | Can be Column Specific? | Description                                                                                                                         |
-| -------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| COMPRESSION          | Yes                     | Sets the compression codec and if applicable compression level to use                                                               |
-| MAX_ROW_GROUP_SIZE   | No                      | Sets the maximum number of rows that can be encoded in a single row group. Larger row groups require more memory to write and read. |
-| BLOOM_FILTER_ENABLED | Yes                     | Sets whether a bloom filter should be written into the file.                                                                        |
+| Option               | Can be Column Specific? | Description                                                                                                                                                                                                                                                                                                                                  | OPTIONS Key                             |
+| -------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| COMPRESSION          | Yes                     | Sets the internal Parquet **compression codec** for data pages, optionally including the compression level. Applies globally if set without `::col`, or specifically to a column if set using `'compression::column_name'`. Valid values : `uncompressed`, `snappy`, `gzip(level)`, `lzo`, `brotli(level)`, `lz4`, `zstd(level)`, `lz4_raw`. | `'compression'` or `'compression::col'` |
+| ENCODING             | Yes                     | Sets the **encoding** scheme for data pages. Valid values (lowercase recommended): `plain`, `plain_dictionary`, `rle`, `bit_packed`, `delta_binary_packed`, `delta_length_byte_array`, `delta_byte_array`, `rle_dictionary`, `byte_stream_split`. Use key `'encoding'` or `'encoding::col'` in OPTIONS.                                      | `'encoding'` or `'encoding::col'`       |
+| MAX_ROW_GROUP_SIZE   | No                      | Sets the maximum number of rows per row group. Larger groups require more memory but can improve compression and scan efficiency.                                                                                                                                                                                                            | `'max_row_group_size'`                  |
+| BLOOM_FILTER_ENABLED | Yes (Only via `::col`)  | Sets whether a bloom filter should be written for a specific column.                                                                                                                                                                                                                                                                         | `'bloom_filter_enabled::column_name'`   |
 
 **Example:**
 
 ```sql
-CREATE EXTERNAL TABLE t
+CREATE EXTERNAL TABLE t (id bigint, value double, category varchar)
 STORED AS PARQUET
-LOCATION '/tmp/foo.parquet'
-OPTIONS('COMPRESSION', 'snappy', 'MAX_ROW_GROUP_SIZE', '1000000', 'BLOOM_FILTER_ENABLED', 'true');
+LOCATION '/tmp/parquet_data/'
+OPTIONS(
+  'COMPRESSION::user_id' 'snappy',
+  'ENCODING::col_a' 'delta_binary_packed',
+  'MAX_ROW_GROUP_SIZE' '1000000',
+  'BLOOM_FILTER_ENABLED::id' 'true'
+);
 ```
