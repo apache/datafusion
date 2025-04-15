@@ -52,7 +52,7 @@ pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use chrono::TimeZone;
 use datafusion_common::stats::Precision;
-use datafusion_common::{ColumnStatistics, Result};
+use datafusion_common::{exec_datafusion_err, ColumnStatistics, Result};
 use datafusion_common::{ScalarValue, Statistics};
 use file_meta::FileMeta;
 use futures::{Stream, StreamExt};
@@ -125,7 +125,7 @@ impl PartitionedFile {
             object_meta: ObjectMeta {
                 location: Path::from(path.into()),
                 last_modified: chrono::Utc.timestamp_nanos(0),
-                size: size as usize,
+                size,
                 e_tag: None,
                 version: None,
             },
@@ -143,7 +143,7 @@ impl PartitionedFile {
             object_meta: ObjectMeta {
                 location: Path::from(path),
                 last_modified: chrono::Utc.timestamp_nanos(0),
-                size: size as usize,
+                size,
                 e_tag: None,
                 version: None,
             },
@@ -226,7 +226,7 @@ impl From<ObjectMeta> for PartitionedFile {
 ///   Indicates that the range calculation determined no further action is
 ///   necessary, possibly because the calculated range is empty or invalid.
 pub enum RangeCalculation {
-    Range(Option<Range<usize>>),
+    Range(Option<Range<u64>>),
     TerminateEarly,
 }
 
@@ -252,7 +252,12 @@ pub async fn calculate_range(
     match file_meta.range {
         None => Ok(RangeCalculation::Range(None)),
         Some(FileRange { start, end }) => {
-            let (start, end) = (start as usize, end as usize);
+            let start: u64 = start.try_into().map_err(|_| {
+                exec_datafusion_err!("Expect start range to fit in u64, got {start}")
+            })?;
+            let end: u64 = end.try_into().map_err(|_| {
+                exec_datafusion_err!("Expect end range to fit in u64, got {end}")
+            })?;
 
             let start_delta = if start != 0 {
                 find_first_newline(store, location, start - 1, file_size, newline).await?
@@ -291,10 +296,10 @@ pub async fn calculate_range(
 async fn find_first_newline(
     object_store: &Arc<dyn ObjectStore>,
     location: &Path,
-    start: usize,
-    end: usize,
+    start: u64,
+    end: u64,
     newline: u8,
-) -> Result<usize> {
+) -> Result<u64> {
     let options = GetOptions {
         range: Some(GetRange::Bounded(start..end)),
         ..Default::default()
@@ -307,10 +312,11 @@ async fn find_first_newline(
 
     while let Some(chunk) = result_stream.next().await.transpose()? {
         if let Some(position) = chunk.iter().position(|&byte| byte == newline) {
+            let position = position as u64;
             return Ok(index + position);
         }
 
-        index += chunk.len();
+        index += chunk.len() as u64;
     }
 
     Ok(index)
