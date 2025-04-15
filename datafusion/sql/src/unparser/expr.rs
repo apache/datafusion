@@ -1694,12 +1694,7 @@ mod tests {
     use ast::ObjectName;
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
-    use datafusion_expr::{
-        case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
-        interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
-        table_scan, try_cast, when, ColumnarValue, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
-    };
+    use datafusion_expr::{case, cast, col, cube, exists, grouping_set, interval_datetime_lit, interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast, when, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition};
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
     use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;
@@ -1744,8 +1739,8 @@ mod tests {
             &self.signature
         }
 
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Int32)
+        fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+            Ok(Field::new(self.name(), DataType::Int32, true))
         }
 
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

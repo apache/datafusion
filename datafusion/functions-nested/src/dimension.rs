@@ -21,19 +21,15 @@ use arrow::array::{
     Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait, UInt64Array,
 };
 use arrow::datatypes::{
-    DataType,
     DataType::{FixedSizeList, LargeList, List, UInt64},
     Field, UInt64Type,
 };
 use std::any::Any;
-
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
@@ -95,15 +91,16 @@ impl ScalarUDFImpl for ArrayDims {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = match args.arg_types[0].data_type() {
             List(_) | LargeList(_) | FixedSizeList(_, _) => {
                 List(Arc::new(Field::new_list_field(UInt64, true)))
             }
             _ => {
                 return plan_err!("The array_dims function can only accept List/LargeList/FixedSizeList.");
             }
-        })
+        };
+        Ok(Field::new(self.signature(), data_type, args.arg_types[0].is_nullable()))
     }
 
     fn invoke_with_args(
@@ -174,13 +171,15 @@ impl ScalarUDFImpl for ArrayNdims {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match args.arg_types[0].data_type() {
             List(_) | LargeList(_) | FixedSizeList(_, _) => UInt64,
             _ => {
                 return plan_err!("The array_ndims function can only accept List/LargeList/FixedSizeList.");
             }
-        })
+        };
+        Ok(Field::new(self.signature(), data_type, nullable))
     }
 
     fn invoke_with_args(

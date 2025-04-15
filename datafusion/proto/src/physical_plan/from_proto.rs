@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
+use arrow::datatypes::Field;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::dml::InsertOp;
 use object_store::path::Path;
@@ -360,13 +361,14 @@ pub fn parse_physical_expr(
 
             let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
 
+            let return_field = Field::new(convert_required!(e.name), convert_required!(e.return_type)?, convert_required!(e.nullable));
+
             Arc::new(
                 ScalarFunctionExpr::new(
                     e.name.as_str(),
                     scalar_fun_def,
                     args,
-                    convert_required!(e.return_type)?,
-                    std::collections::hash_map::HashMap::new(),
+                    return_field,
                 )
                 .with_nullable(e.nullable),
             )

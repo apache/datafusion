@@ -32,10 +32,7 @@ use arrow::datatypes::{
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
-use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
-};
+use datafusion_expr::{ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -123,17 +120,19 @@ impl ScalarUDFImpl for ArrayResize {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::clone(field))),
-            LargeList(field) => Ok(LargeList(Arc::clone(field))),
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match &args.arg_types[0].data_type() {
+            List(field) | FixedSizeList(field, _) => List(Arc::clone(field)),
+            LargeList(field) => LargeList(Arc::clone(field)),
             DataType::Null => {
-                Ok(List(Arc::new(Field::new_list_field(DataType::Int64, true))))
+                List(Arc::new(Field::new_list_field(DataType::Int64, true)))
             }
             _ => exec_err!(
                 "Not reachable, data_type should be List, LargeList or FixedSizeList"
-            ),
-        }
+            )?,
+        };
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

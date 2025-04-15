@@ -82,9 +82,6 @@ impl ScalarUDFImpl for CharacterLengthFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_int_type(&arg_types[0], "character_length")
-    }
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types[0].is_nullable();
         let data_type = utf8_to_int_type(args.arg_types[0].data_type(), "character_length")?;

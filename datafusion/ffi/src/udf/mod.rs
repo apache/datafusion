@@ -35,7 +35,7 @@ use arrow::{
 use datafusion::{
     error::DataFusionError,
     logical_expr::{
-        type_coercion::functions::data_types_with_scalar_udf, ReturnInfo, ReturnTypeArgs,
+        type_coercion::functions::data_types_with_scalar_udf,
     },
 };
 use datafusion::{
@@ -44,13 +44,12 @@ use datafusion::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     },
 };
-use return_info::FFI_ReturnInfo;
 use return_type_args::{
-    FFI_ReturnTypeArgs, ForeignReturnTypeArgs, ForeignReturnTypeArgsOwned,
+    FFI_ReturnFieldArgs, ForeignReturnFieldArgs, ForeignReturnFieldArgsOwned,
 };
 use std::{ffi::c_void, sync::Arc};
+use datafusion::logical_expr::ReturnFieldArgs;
 
-pub mod return_info;
 pub mod return_type_args;
 
 /// A stable struct for sharing a [`ScalarUDF`] across FFI boundaries.
@@ -67,20 +66,12 @@ pub struct FFI_ScalarUDF {
     /// FFI equivalent to the `volatility` of a [`ScalarUDF`]
     pub volatility: FFI_Volatility,
 
-    /// Determines the return type of the underlying [`ScalarUDF`] based on the
-    /// argument types.
-    pub return_type: unsafe extern "C" fn(
+    /// Determines the return field of the underlying [`ScalarUDF`].
+    pub return_field: unsafe extern "C" fn(
         udf: &Self,
-        arg_types: RVec<WrappedSchema>,
-    ) -> RResult<WrappedSchema, RString>,
-
-    /// Determines the return info of the underlying [`ScalarUDF`]. Either this
-    /// or return_type may be implemented on a UDF.
-    pub return_type_from_args: unsafe extern "C" fn(
-        udf: &Self,
-        args: FFI_ReturnTypeArgs,
+        args: FFI_ReturnFieldArgs,
     )
-        -> RResult<FFI_ReturnInfo, RString>,
+        -> RResult<WrappedSchema, RString>,
 
     /// Execute the underlying [`ScalarUDF`] and return the result as a `FFI_ArrowArray`
     /// within an AbiStable wrapper.
@@ -154,19 +145,19 @@ unsafe extern "C" fn return_type_fn_wrapper(
     rresult!(return_type)
 }
 
-unsafe extern "C" fn return_type_from_args_fn_wrapper(
+unsafe extern "C" fn return_field_fn_wrapper(
     udf: &FFI_ScalarUDF,
-    args: FFI_ReturnTypeArgs,
-) -> RResult<FFI_ReturnInfo, RString> {
+    args: FFI_ReturnFieldArgs,
+) -> RResult<WrappedSchema, RString> {
     let private_data = udf.private_data as *const ScalarUDFPrivateData;
     let udf = &(*private_data).udf;
 
-    let args: ForeignReturnTypeArgsOwned = rresult_return!((&args).try_into());
-    let args_ref: ForeignReturnTypeArgs = (&args).into();
+    let args: ForeignReturnFieldArgsOwned = rresult_return!((&args).try_into());
+    let args_ref: ForeignReturnFieldArgs = (&args).into();
 
     let return_type = udf
-        .return_type_from_args((&args_ref).into())
-        .and_then(FFI_ReturnInfo::try_from);
+        .return_field((&args_ref).into())
+        .and_then(WrappedSchema::try_from);
 
     rresult!(return_type)
 }
@@ -290,8 +281,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             volatility,
             short_circuits,
             invoke_with_args: invoke_with_args_fn_wrapper,
-            return_type: return_type_fn_wrapper,
-            return_type_from_args: return_type_from_args_fn_wrapper,
+            return_field: return_field_fn_wrapper,
             coerce_types: coerce_types_fn_wrapper,
             output_field: output_field_fn_wrapper,
             clone: clone_fn_wrapper,
@@ -355,20 +345,10 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_types = vec_datatype_to_rvec_wrapped(arg_types)?;
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let args: FFI_ReturnFieldArgs = args.try_into()?;
 
-        let result = unsafe { (self.udf.return_type)(&self.udf, arg_types) };
-
-        let result = df_result!(result);
-
-        result.and_then(|r| (&r.0).try_into().map_err(DataFusionError::from))
-    }
-
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        let args: FFI_ReturnTypeArgs = args.try_into()?;
-
-        let result = unsafe { (self.udf.return_type_from_args)(&self.udf, args) };
+        let result = unsafe { (self.udf.return_field)(&self.udf, args) };
 
         let result = df_result!(result);
 

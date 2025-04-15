@@ -30,9 +30,7 @@ use datafusion_common::Result;
 use datafusion_common::{JoinSide, JoinType, ScalarValue};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_expr::{
-    Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
 use datafusion_physical_expr::expressions::{
     binary, cast, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
 };
@@ -91,8 +89,8 @@ impl ScalarUDFImpl for DummyUDF {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), DataType::Int32, true))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -129,8 +127,7 @@ fn test_update_matching_exprs() -> Result<()> {
                     Arc::new(Column::new("b", 1)),
                 )),
             ],
-            DataType::Int32,
-            HashMap::default(),
+            Field::new("scalar_expr", DataType::Int32, true),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 2))),
@@ -195,8 +192,7 @@ fn test_update_matching_exprs() -> Result<()> {
                     Arc::new(Column::new("b", 1)),
                 )),
             ],
-            DataType::Int32,
-            HashMap::default(),
+            Field::new("scalar_expr", DataType::Int32, true),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 3))),
@@ -264,8 +260,7 @@ fn test_update_projected_exprs() -> Result<()> {
                     Arc::new(Column::new("b", 1)),
                 )),
             ],
-            DataType::Int32,
-            HashMap::default(),
+            Field::new("scalar_expr", DataType::Int32, true),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 2))),
@@ -330,8 +325,7 @@ fn test_update_projected_exprs() -> Result<()> {
                     Arc::new(Column::new("b_new", 1)),
                 )),
             ],
-            DataType::Int32,
-            HashMap::default(),
+            Field::new("scalar_expr", DataType::Int32, true),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d_new", 3))),

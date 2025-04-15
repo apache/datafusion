@@ -28,9 +28,7 @@ use datafusion_common::{
     exec_err, utils::take_function_args, HashSet, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 use crate::make_array::make_array;
@@ -253,24 +251,27 @@ impl ScalarUDFImpl for MapFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [keys_arg, values_arg] = take_function_args(self.name(), arg_types)?;
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let [keys_arg, values_arg] = take_function_args(self.name(), args.arg_types)?;
         let mut builder = SchemaBuilder::new();
         builder.push(Field::new(
             "key",
-            get_element_type(keys_arg)?.clone(),
+            get_element_type(keys_arg.data_type())?.clone(),
             false,
         ));
         builder.push(Field::new(
             "value",
-            get_element_type(values_arg)?.clone(),
+            get_element_type(values_arg.data_type())?.clone(),
             true,
         ));
         let fields = builder.finish().fields;
-        Ok(DataType::Map(
+        let data_type = DataType::Map(
             Arc::new(Field::new("entries", DataType::Struct(fields), false)),
             false,
-        ))
+        );
+        let nullable = keys_arg.is_nullable() || values_arg.is_nullable();
+
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

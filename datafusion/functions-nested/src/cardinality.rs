@@ -22,8 +22,8 @@ use arrow::array::{
     Array, ArrayRef, GenericListArray, MapArray, OffsetSizeTrait, UInt64Array,
 };
 use arrow::datatypes::{
-    DataType,
     DataType::{FixedSizeList, LargeList, List, Map, UInt64},
+    Field,
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_common::utils::take_function_args;
@@ -31,7 +31,7 @@ use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -103,13 +103,18 @@ impl ScalarUDFImpl for Cardinality {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = match args.arg_types[0].data_type() {
             List(_) | LargeList(_) | FixedSizeList(_, _) | Map(_, _) => UInt64,
             _ => {
                 return plan_err!("The cardinality function can only accept List/LargeList/FixedSizeList/Map.");
             }
-        })
+        };
+        Ok(Field::new(
+            self.name(),
+            data_type,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(

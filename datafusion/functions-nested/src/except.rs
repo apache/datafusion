@@ -20,13 +20,11 @@
 use crate::utils::{check_datatypes, make_scalar_function};
 use arrow::array::{cast::AsArray, Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{internal_err, HashSet, Result};
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -99,11 +97,14 @@ impl ScalarUDFImpl for ArrayExcept {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match (&arg_types[0].clone(), &arg_types[1].clone()) {
-            (DataType::Null, _) | (_, DataType::Null) => Ok(arg_types[0].clone()),
-            (dt, _) => Ok(dt.clone()),
-        }
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match (args.arg_types[0].data_type(), args.arg_types[1].data_type()) {
+            (DataType::Null, _) | (_, DataType::Null) => args.arg_types[0].data_type().clone(),
+            (dt, _) => dt.clone(),
+        };
+
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

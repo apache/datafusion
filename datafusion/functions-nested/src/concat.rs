@@ -33,10 +33,7 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_err,
     utils::{list_ndims, take_function_args},
 };
-use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
-};
+use datafusion_expr::{ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
 use datafusion_macros::user_doc;
 
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
@@ -105,8 +102,9 @@ impl ScalarUDFImpl for ArrayAppend {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), args.arg_types[0].data_type().clone(), nullable))
     }
 
     fn invoke_with_args(
@@ -200,8 +198,9 @@ impl ScalarUDFImpl for ArrayPrepend {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[1].clone())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), args.arg_types[1].data_type().clone(), nullable))
     }
 
     fn invoke_with_args(
@@ -286,10 +285,11 @@ impl ScalarUDFImpl for ArrayConcat {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let mut expr_type = DataType::Null;
         let mut max_dims = 0;
-        for arg_type in arg_types {
+        for arg in args.arg_types {
+            let arg_type = arg.data_type();
             let DataType::List(field) = arg_type else {
                 return plan_err!(
                     "The array_concat function can only accept list as the args."
@@ -319,7 +319,7 @@ impl ScalarUDFImpl for ArrayConcat {
             }
         }
 
-        Ok(expr_type)
+        Ok(Field::new(self.name(), expr_type, true))
     }
 
     fn invoke_with_args(

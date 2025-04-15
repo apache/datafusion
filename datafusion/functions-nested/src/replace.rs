@@ -27,10 +27,7 @@ use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
-use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
-};
+use datafusion_expr::{ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
 use datafusion_macros::user_doc;
 
 use crate::utils::compare_element_to_list;
@@ -124,8 +121,9 @@ impl ScalarUDFImpl for ArrayReplace {
         &self.signature
     }
 
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        Ok(args[0].clone())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), args.arg_types[0].data_type().clone(), nullable))
     }
 
     fn invoke_with_args(
@@ -205,8 +203,9 @@ impl ScalarUDFImpl for ArrayReplaceN {
         &self.signature
     }
 
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        Ok(args[0].clone())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), args.arg_types[0].data_type().clone(), nullable))
     }
 
     fn invoke_with_args(
@@ -284,8 +283,9 @@ impl ScalarUDFImpl for ArrayReplaceAll {
         &self.signature
     }
 
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        Ok(args[0].clone())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), args.arg_types[0].data_type().clone(), nullable))
     }
 
     fn invoke_with_args(

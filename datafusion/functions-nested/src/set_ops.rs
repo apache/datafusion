@@ -23,12 +23,12 @@ use arrow::array::{new_empty_array, Array, ArrayRef, GenericListArray, OffsetSiz
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools;
@@ -123,12 +123,15 @@ impl ScalarUDFImpl for ArrayUnion {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match (&arg_types[0], &arg_types[1]) {
-            (&Null, dt) => Ok(dt.clone()),
-            (dt, Null) => Ok(dt.clone()),
-            (dt, _) => Ok(dt.clone()),
-        }
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().all(|f| f.is_nullable());
+        let data_type =
+            match (args.arg_types[0].data_type(), args.arg_types[1].data_type()) {
+                (&Null, dt) => dt.clone(),
+                (dt, Null) => dt.clone(),
+                (dt, _) => dt.clone(),
+            };
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(
@@ -202,12 +205,15 @@ impl ScalarUDFImpl for ArrayIntersect {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match (arg_types[0].clone(), arg_types[1].clone()) {
-            (Null, Null) | (Null, _) => Ok(Null),
-            (_, Null) => Ok(empty_array_type()),
-            (dt, _) => Ok(dt),
-        }
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().all(|f| f.is_nullable());
+        let data_type =
+            match (args.arg_types[0].data_type(), args.arg_types[1].data_type()) {
+                (Null, Null) | (Null, _) => Null,
+                (_, Null) => empty_array_type(),
+                (dt, _) => dt.clone(),
+            };
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(
@@ -271,19 +277,24 @@ impl ScalarUDFImpl for ArrayDistinct {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = match args.arg_types[0].data_type() {
+            List(field) | FixedSizeList(field, _) => List(Arc::new(
                 Field::new_list_field(field.data_type().clone(), true),
-            ))),
-            LargeList(field) => Ok(LargeList(Arc::new(Field::new_list_field(
+            )),
+            LargeList(field) => LargeList(Arc::new(Field::new_list_field(
                 field.data_type().clone(),
                 true,
-            )))),
+            ))),
             _ => exec_err!(
                 "Not reachable, data_type should be List, LargeList or FixedSizeList"
-            ),
-        }
+            )?,
+        };
+        Ok(Field::new(
+            self.name(),
+            data_type,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(
@@ -359,11 +370,11 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     // array_union(arr, []) -> arr;
     // array_intersect(arr, []) -> [];
     if r.value_length(0).is_zero() {
-        if set_op == SetOp::Union {
-            return Ok(Arc::new(l.clone()) as ArrayRef);
+        return if set_op == SetOp::Union {
+            Ok(Arc::new(l.clone()) as ArrayRef)
         } else {
-            return Ok(Arc::new(r.clone()) as ArrayRef);
-        }
+            Ok(Arc::new(r.clone()) as ArrayRef)
+        };
     }
 
     if l.value_type() != r.value_type() {

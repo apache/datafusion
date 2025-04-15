@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use datafusion_common::ScalarValue;
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs};
+use datafusion_expr::{ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_nested::planner::NestedFunctionPlanner;
 
@@ -94,8 +94,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         let keys = ColumnarValue::Scalar(ScalarValue::List(Arc::new(key_list)));
         let values = ColumnarValue::Scalar(ScalarValue::List(Arc::new(value_list)));
 
-        let return_type = &map_udf()
-            .return_type(&[DataType::Utf8, DataType::Int32])
+        let return_field = &map_udf()
+            .return_field(ReturnFieldArgs {
+                arg_types: &[Field::new("f1", DataType::Utf8, true), Field::new("f2", DataType::Int32, true)],
+                scalar_arguments: &[None, None]
+            })
             .expect("should get return type");
 
         b.iter(|| {
@@ -105,7 +108,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![keys.clone(), values.clone()],
                         arg_fields: vec![None; 2],
                         number_rows: 1,
-                        return_type,
+                        return_type: return_field.data_type()
                     })
                     .expect("map should work on valid values"),
             );

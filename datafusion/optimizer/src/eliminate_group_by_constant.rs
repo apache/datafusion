@@ -117,13 +117,10 @@ mod tests {
     use super::*;
     use crate::test::*;
 
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
-    use datafusion_expr::{
-        col, lit, ColumnarValue, LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, TypeSignature,
-    };
+    use datafusion_expr::{col, lit, ColumnarValue, LogicalPlanBuilder, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature};
 
     use datafusion_functions_aggregate::expr_fn::count;
 
@@ -152,8 +149,8 @@ mod tests {
         fn signature(&self) -> &Signature {
             &self.signature
         }
-        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Int32)
+        fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+            Ok(Field::new(self.name(), DataType::Int32, true))
         }
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             unimplemented!()

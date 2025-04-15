@@ -41,11 +41,7 @@ use datafusion_common::{
     plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{
-    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
-    OperateFunctionArg, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
 use regex::Regex;
@@ -127,7 +123,7 @@ async fn scalar_udf() -> Result<()> {
     ctx.register_udf(create_udf(
         "my_add",
         vec![DataType::Int32, DataType::Int32],
-        DataType::Int32,
+        Field::new("my_add", DataType::Int32, true),
         Volatility::Immutable,
         myfunc,
     ));
@@ -209,8 +205,8 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(self.return_type.clone())
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), self.return_type.clone(), true))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -239,7 +235,7 @@ async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
     ctx.register_udf(create_udf(
         "buggy_func",
         vec![DataType::Int32],
-        DataType::Int32,
+        Field::new("buggy_func", DataType::Int32, true),
         Volatility::Immutable,
         buggy_udf,
     ));
@@ -321,7 +317,7 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
     ctx.register_udf(create_udf(
         "abs",
         vec![DataType::Int32],
-        DataType::Int32,
+        Field::new("abs", DataType::Int32, true),
         Volatility::Immutable,
         Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(1))))),
     ));
@@ -414,7 +410,7 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     ctx.register_udf(create_udf(
         "MY_FUNC",
         vec![DataType::Int32],
-        DataType::Int32,
+        Field::new("my_func", DataType::Int32, true),
         Volatility::Immutable,
         myfunc,
     ));
@@ -458,7 +454,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     let udf = create_udf(
         "dummy",
         vec![DataType::Int32],
-        DataType::Int32,
+        Field::new("dummy", DataType::Int32, true),
         Volatility::Immutable,
         myfunc,
     )
@@ -518,8 +514,8 @@ impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(self.return_type.clone())
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), self.return_type.clone(), true))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -682,8 +678,9 @@ impl ScalarUDFImpl for CastToI64UDF {
     fn signature(&self) -> &Signature {
         &self.signature
     }
-    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), DataType::Int64, true))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -805,16 +802,13 @@ impl ScalarUDFImpl for TakeUDF {
     fn signature(&self) -> &Signature {
         &self.signature
     }
-    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        not_impl_err!("Not called because the return_type_from_args is implemented")
-    }
 
     /// This function returns the type of the first or second argument based on
     /// the third argument:
     ///
     /// 1. If the third argument is '0', return the type of the first argument
     /// 2. If the third argument is '1', return the type of the second argument
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         if args.arg_types.len() != 3 {
             return plan_err!("Expected 3 arguments, got {}.", args.arg_types.len());
         }
@@ -841,9 +835,7 @@ impl ScalarUDFImpl for TakeUDF {
             );
         };
 
-        Ok(ReturnInfo::new_nullable(
-            args.arg_types[take_idx].to_owned(),
-        ))
+        Ok(Field::new(self.name(), args.arg_types[take_idx].data_type().to_owned(), true))
     }
 
     // The actual implementation
@@ -953,8 +945,8 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(self.return_type.clone())
+    fn return_field(&self, _args: &[DataType]) -> Result<Field> {
+        Ok(Field::new(self.name(), self.return_type.clone(), true))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1235,12 +1227,13 @@ impl ScalarUDFImpl for MyRegexUdf {
         &self.signature
     }
 
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        if matches!(args, [DataType::Utf8]) {
-            Ok(DataType::Boolean)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = if matches!(args, [DataType::Utf8]) {
+            DataType::Boolean
         } else {
-            plan_err!("regex_udf only accepts a Utf8 argument")
-        }
+            plan_err!("regex_udf only accepts a Utf8 argument")?
+        };
+        Ok(Field::new(self.name(), data_type, true))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1324,7 +1317,7 @@ fn create_udf_context() -> SessionContext {
     ctx.register_udf(create_udf(
         "custom_sqrt",
         vec![DataType::Float64],
-        DataType::Float64,
+        Field::new("custom_sqrt", DataType::Float64, true),
         Volatility::Immutable,
         Arc::new(custom_sqrt),
     ));
@@ -1407,8 +1400,8 @@ impl ScalarUDFImpl for MetadataBasedUdf {
         &self.signature
     }
 
-    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        Ok(DataType::UInt64)
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), DataType::UInt64, true))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1559,8 +1552,8 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
         &self.signature
     }
 
-    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), DataType::Utf8, true))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

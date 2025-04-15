@@ -24,10 +24,11 @@ use arrow::array::{
 use arrow::compute;
 use arrow::datatypes::{DataType, Float64Type};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::Field;
 use datafusion::common::{exec_err, internal_err, ScalarValue};
 use datafusion::error::Result;
 use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion::logical_expr::Volatility;
+use datafusion::logical_expr::{ReturnFieldArgs, Volatility};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
 };
@@ -81,8 +82,8 @@ impl ScalarUDFImpl for PowUdf {
     /// What is the type of value that will be returned by this function? In
     /// this case it will always be a constant value, but it could also be a
     /// function of the input types.
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Float64)
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), DataType::Float64, true))
     }
 
     /// This function actually calculates the results of the scalar function.

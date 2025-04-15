@@ -262,9 +262,7 @@ pub(crate) mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{exec_err, DataFusionError, ScalarValue};
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-    use datafusion_expr::{
-        ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
-    };
+    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
     use petgraph::visit::Bfs;
 
@@ -298,13 +296,15 @@ pub(crate) mod tests {
             &self.signature
         }
 
-        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-            let arg_type = &arg_types[0];
+        fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+            let arg_type = args.arg_types[0].data_type();
 
-            match arg_type {
-                DataType::Float32 => Ok(DataType::Float32),
-                _ => Ok(DataType::Float64),
-            }
+            let data_type = match arg_type {
+                DataType::Float32 => DataType::Float32,
+                _ => DataType::Float64,
+            };
+
+            Ok(Field::new(self.name(), data_type, true))
         }
 
         fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {

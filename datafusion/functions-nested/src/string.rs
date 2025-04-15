@@ -44,10 +44,7 @@ use arrow::datatypes::DataType::{
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::exec_err;
 use datafusion_common::types::logical_string;
-use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
-};
+use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility};
 use datafusion_functions::{downcast_arg, downcast_named_arg};
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -184,13 +181,15 @@ impl ScalarUDFImpl for ArrayToString {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match args.arg_types[0].data_type() {
             List(_) | LargeList(_) | FixedSizeList(_, _) => Utf8,
             _ => {
                 return plan_err!("The array_to_string function can only accept List/LargeList/FixedSizeList.");
             }
-        })
+        };
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(
@@ -283,17 +282,19 @@ impl ScalarUDFImpl for StringToArray {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match args.arg_types[0].data_type() {
             Utf8 | Utf8View | LargeUtf8 => {
-                List(Arc::new(Field::new_list_field(arg_types[0].clone(), true)))
+                List(Arc::new(Field::new_list_field(args.arg_types[0].data_type().clone(), true)))
             }
             _ => {
                 return plan_err!(
                     "The string_to_array function can only accept Utf8, Utf8View or LargeUtf8."
                 );
             }
-        })
+        };
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

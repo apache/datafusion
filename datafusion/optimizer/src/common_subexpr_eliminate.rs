@@ -795,11 +795,7 @@ mod test {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::logical_plan::{table_scan, JoinType};
-    use datafusion_expr::{
-        grouping_set, is_null, not, AccumulatorFactoryFunction, AggregateUDF,
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        SimpleAggregateUDF, Volatility,
-    };
+    use datafusion_expr::{grouping_set, is_null, not, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Volatility};
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
 
     use super::*;
@@ -1594,8 +1590,8 @@ mod test {
             &self.signature
         }
 
-        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Int32)
+        fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+            Ok(Field::new(self.name(), DataType::Int32, true))
         }
 
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1702,8 +1698,8 @@ mod test {
             &self.signature
         }
 
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Float64)
+        fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+            Ok(Field::new(self.name(), DataType::Float64, true))
         }
 
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

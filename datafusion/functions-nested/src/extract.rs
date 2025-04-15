@@ -36,7 +36,7 @@ use datafusion_common::{
     DataFusionError, Result,
 };
 use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
+    ArrayFunctionArgument, ArrayFunctionSignature, Expr, ReturnFieldArgs, TypeSignature,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -161,16 +161,18 @@ impl ScalarUDFImpl for ArrayElement {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = match args.arg_types[0].data_type() {
             List(field)
             | LargeList(field)
-            | FixedSizeList(field, _) => Ok(field.data_type().clone()),
-            DataType::Null => Ok(List(Arc::new(Field::new_list_field(DataType::Int64, true)))),
+            | FixedSizeList(field, _) => field.data_type().clone(),
+            DataType::Null => List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             _ => plan_err!(
                 "ArrayElement can only accept List, LargeList or FixedSizeList as the first argument"
-            ),
-        }
+            )?,
+        };
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(
@@ -391,8 +393,13 @@ impl ScalarUDFImpl for ArraySlice {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[0].data_type().clone(),
+            nullable,
+        ))
     }
 
     fn invoke_with_args(
@@ -699,8 +706,12 @@ impl ScalarUDFImpl for ArrayPopFront {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[0].data_type().clone(),
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(
@@ -806,8 +817,12 @@ impl ScalarUDFImpl for ArrayPopBack {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[0].data_type().clone(),
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(
@@ -904,15 +919,21 @@ impl ScalarUDFImpl for ArrayAnyValue {
     fn signature(&self) -> &Signature {
         &self.signature
     }
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
+
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = match args.arg_types[0].data_type() {
             List(field)
             | LargeList(field)
-            | FixedSizeList(field, _) => Ok(field.data_type().clone()),
+            | FixedSizeList(field, _) => field.data_type().clone(),
             _ => plan_err!(
                 "array_any_value can only accept List, LargeList or FixedSizeList as the argument"
-            ),
-        }
+            )?,
+        };
+        Ok(Field::new(
+            self.name(),
+            data_type,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(
@@ -1003,7 +1024,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Column, DFSchema};
     use datafusion_expr::expr::ScalarFunction;
-    use datafusion_expr::{Expr, ExprSchemable};
+    use datafusion_expr::{Expr, ExprSchemable, ReturnFieldArgs};
     use std::collections::HashMap;
 
     // Regression test for https://github.com/apache/datafusion/issues/13755
@@ -1032,9 +1053,16 @@ mod tests {
 
         // ScalarUDFImpl::return_type
         assert_eq!(
-            udf.return_type(&[array_type.clone(), index_type.clone()])
-                .unwrap(),
-            fixed_size_list_type
+            udf.return_field(ReturnFieldArgs {
+                arg_types: &[
+                    Field::new("f1", array_type.clone(), true),
+                    Field::new("f2", index_type.clone(), true)
+                ],
+                scalar_arguments: &[]
+            })
+            .unwrap()
+            .data_type(),
+            &fixed_size_list_type
         );
 
         // Via ExprSchemable::get_type (e.g. SimplifyInfo)

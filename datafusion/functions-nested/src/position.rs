@@ -22,9 +22,7 @@ use arrow::datatypes::{
     DataType::{LargeList, List, UInt64},
     Field,
 };
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 use std::any::Any;
@@ -116,8 +114,9 @@ impl ScalarUDFImpl for ArrayPosition {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(UInt64)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        Ok(Field::new(self.name(), UInt64, nullable))
     }
 
     fn invoke_with_args(
@@ -269,8 +268,11 @@ impl ScalarUDFImpl for ArrayPositions {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(List(Arc::new(Field::new_list_field(UInt64, true))))
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = List(Arc::new(Field::new_list_field(UInt64, true)));
+
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

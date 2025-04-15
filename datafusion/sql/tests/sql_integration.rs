@@ -26,13 +26,7 @@ use common::MockContextProvider;
 use datafusion_common::{
     assert_contains, DataFusionError, ParamValues, Result, ScalarValue,
 };
-use datafusion_expr::{
-    col,
-    logical_plan::{LogicalPlan, Prepare},
-    test::function_stub::sum_udaf,
-    ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Statement, Volatility,
-};
+use datafusion_expr::{col, logical_plan::{LogicalPlan, Prepare}, test::function_stub::sum_udaf, ColumnarValue, CreateIndex, DdlStatement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Statement, Volatility};
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
     parser::DFParser,
@@ -3346,8 +3340,8 @@ impl ScalarUDFImpl for DummyUDF {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(self.return_type.clone())
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), self.return_type.clone(), true))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

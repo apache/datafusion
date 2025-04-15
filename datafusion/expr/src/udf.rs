@@ -360,7 +360,7 @@ pub struct ReturnFieldArgs<'a> {
 ///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "add_one" }
 ///    fn signature(&self) -> &Signature { &self.signature }
-///    fn return_field(&self, args: ReturnFieldArgs) -> Result<DataType> {
+///    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
 ///      if !matches!(args.arg_types.get(0).map(|f| f.data_type()), Some(&DataType::Int32)) {
 ///        return plan_err!("add_one only accepts Int32 arguments");
 ///      }

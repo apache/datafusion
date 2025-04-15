@@ -31,10 +31,8 @@ use arrow::datatypes::{
     Field,
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
-use datafusion_common::{exec_err, utils::take_function_args, Result};
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_common::{exec_err, utils::take_function_args, ExprSchema, Result};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -108,11 +106,13 @@ impl ScalarUDFImpl for ArrayRepeat {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(List(Arc::new(Field::new_list_field(
-            arg_types[0].clone(),
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = List(Arc::new(Field::new_list_field(
+            args.arg_types[0].data_type().clone(),
             true,
-        ))))
+        )));
+        Ok(Field::new(self.name(), data_type,nullable))
     }
 
     fn invoke_with_args(

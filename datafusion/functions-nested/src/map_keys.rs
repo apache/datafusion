@@ -22,10 +22,7 @@ use arrow::array::{Array, ArrayRef, ListArray};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{cast::as_map_array, exec_err, Result};
-use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
-};
+use datafusion_expr::{ArrayFunctionSignature, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -91,13 +88,14 @@ impl ScalarUDFImpl for MapKeysFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [map_type] = take_function_args(self.name(), arg_types)?;
-        let map_fields = get_map_entry_field(map_type)?;
-        Ok(DataType::List(Arc::new(Field::new_list_field(
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let [map_field] = take_function_args(self.name(), args.arg_types)?;
+        let map_fields = get_map_entry_field(map_field.data_type())?;
+        let data_type = DataType::List(Arc::new(Field::new_list_field(
             map_fields.first().unwrap().data_type().clone(),
             false,
-        ))))
+        )));
+        Ok(Field::new(self.name(), data_type, map_field.is_nullable()))
     }
 
     fn invoke_with_args(

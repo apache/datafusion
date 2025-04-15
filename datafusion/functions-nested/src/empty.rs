@@ -20,13 +20,13 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow::datatypes::{
-    DataType,
     DataType::{Boolean, FixedSizeList, LargeList, List},
+    Field,
 };
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -89,13 +89,18 @@ impl ScalarUDFImpl for ArrayEmpty {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = match args.arg_types[0].data_type() {
             List(_) | LargeList(_) | FixedSizeList(_, _) => Boolean,
             _ => {
                 return plan_err!("The array_empty function can only accept List/LargeList/FixedSizeList.");
             }
-        })
+        };
+        Ok(Field::new(
+            self.name(),
+            data_type,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(

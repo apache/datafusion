@@ -3181,13 +3181,11 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
-    use crate::{
-        case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue,
-        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
-    };
+    use crate::{case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility};
     use sqlparser::ast;
     use sqlparser::ast::{Ident, IdentWithAlias};
     use std::any::Any;
+    use arrow::datatypes::Field;
 
     #[test]
     #[allow(deprecated)]
@@ -3308,8 +3306,8 @@ mod test {
                 &self.signature
             }
 
-            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                Ok(DataType::Utf8)
+            fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+                Ok(Field::new(self.name(), DataType::Utf8, true))
             }
 
             fn invoke_with_args(

@@ -20,18 +20,12 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{
-    DataType,
-    DataType::{FixedSizeList, LargeList, List, Null},
-};
+use arrow::datatypes::{DataType, DataType::{FixedSizeList, LargeList, List, Null}, Field};
 use datafusion_common::cast::{
     as_generic_list_array, as_large_list_array, as_list_array,
 };
 use datafusion_common::{exec_err, utils::take_function_args, Result};
-use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
-};
+use datafusion_expr::{ArrayFunctionSignature, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -101,7 +95,7 @@ impl ScalarUDFImpl for Flatten {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         fn get_base_type(data_type: &DataType) -> Result<DataType> {
             match data_type {
                 List(field) | FixedSizeList(field, _)
@@ -120,8 +114,8 @@ impl ScalarUDFImpl for Flatten {
             }
         }
 
-        let data_type = get_base_type(&arg_types[0])?;
-        Ok(data_type)
+        let data_type = get_base_type(args.arg_types[0].data_type())?;
+        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
     }
 
     fn invoke_with_args(

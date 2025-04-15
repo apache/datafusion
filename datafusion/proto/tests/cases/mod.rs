@@ -19,10 +19,7 @@ use arrow::datatypes::{DataType, Field};
 use datafusion::logical_expr::ColumnarValue;
 use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
-use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, PartitionEvaluator, ScalarFunctionArgs, ScalarUDFImpl,
-    Signature, Volatility, WindowUDFImpl,
-};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, PartitionEvaluator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility, WindowUDFImpl};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use std::any::Any;
@@ -62,9 +59,10 @@ impl ScalarUDFImpl for MyRegexUdf {
     fn signature(&self) -> &Signature {
         &self.signature
     }
-    fn return_type(&self, args: &[DataType]) -> datafusion_common::Result<DataType> {
+
+    fn return_field(&self, args: ReturnFieldArgs) -> datafusion_common::Result<Field> {
         if matches!(args, [DataType::Utf8]) {
-            Ok(DataType::Int64)
+            Ok(Field::new(self.name(), DataType::Int64, true))
         } else {
             plan_err!("regex_udf only accepts Utf8 arguments")
         }

@@ -4304,8 +4304,8 @@ mod tests {
             &self.signature
         }
 
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Int16)
+        fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+            Ok(Field::new(self.name(), DataType::Int16, true))
         }
 
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -1394,12 +1394,7 @@ mod tests {
     use datafusion_common::{DFSchemaRef, ScalarValue};
     use datafusion_expr::expr::{ScalarFunction, WindowFunction};
     use datafusion_expr::logical_plan::table_scan;
-    use datafusion_expr::{
-        col, in_list, in_subquery, lit, ColumnarValue, ExprFunctionExt, Extension,
-        LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
-        WindowFunctionDefinition,
-    };
+    use datafusion_expr::{col, in_list, in_subquery, lit, ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType, UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition};
 
     use crate::optimizer::Optimizer;
     use crate::simplify_expressions::SimplifyExpressions;
@@ -3622,8 +3617,8 @@ Projection: a, b
             &self.signature
         }
 
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Int32)
+        fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+            Ok(Field::new(self.name(), DataType::Int32, true))
         }
 
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

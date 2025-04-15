@@ -37,9 +37,7 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, not_impl_datafusion_err,
     utils::take_function_args, Result,
 };
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;
@@ -144,15 +142,17 @@ impl ScalarUDFImpl for Range {
             .try_collect()
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.iter().any(|t| t.is_null()) {
-            Ok(Null)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = if args.arg_types.iter().any(|t| t.data_type().is_null()) {
+            Null
         } else {
-            Ok(List(Arc::new(Field::new_list_field(
-                arg_types[0].clone(),
+            List(Arc::new(Field::new_list_field(
+                args.arg_types[0].data_type().clone(),
                 true,
-            ))))
-        }
+            )))
+        };
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(
@@ -268,15 +268,17 @@ impl ScalarUDFImpl for GenSeries {
             .try_collect()
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.iter().any(|t| t.is_null()) {
-            Ok(Null)
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
+        let data_type = if args.arg_types.iter().any(|t| t.data_type().is_null()) {
+            Null
         } else {
-            Ok(List(Arc::new(Field::new_list_field(
-                arg_types[0].clone(),
+            List(Arc::new(Field::new_list_field(
+                args.arg_types[0].data_type().clone(),
                 true,
-            ))))
-        }
+            )))
+        };
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

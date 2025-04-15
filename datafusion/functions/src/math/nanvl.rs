@@ -86,12 +86,6 @@ impl ScalarUDFImpl for NanvlFunc {
         };
         Ok(Field::new(self.name(), data_type, nullable))
     }
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            Float32 => Ok(Float32),
-            _ => Ok(Float64),
-        }
-    }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(nanvl, vec![])(&args.args)

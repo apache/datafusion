@@ -20,12 +20,13 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
+use arrow::datatypes::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use rand::rngs::ThreadRng;
 use rand::Rng;
 
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_bin;
 
 fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
@@ -42,12 +43,14 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut rng = rand::thread_rng();
         let timestamps_array = Arc::new(timestamps(&mut rng)) as ArrayRef;
         let batch_len = timestamps_array.len();
-        let interval = ColumnarValue::Scalar(ScalarValue::new_interval_dt(0, 1_000_000));
+        let interval_value = ScalarValue::new_interval_dt(0, 1_000_000);
+        let interval = ColumnarValue::Scalar(interval_value.clone());
         let timestamps = ColumnarValue::Array(timestamps_array);
         let udf = date_bin();
-        let return_type = udf
-            .return_type(&[interval.data_type(), timestamps.data_type()])
-            .unwrap();
+        let return_field = udf.return_field(ReturnFieldArgs {
+            arg_types: &[Field::new("f1", interval.data_type(), true), Field::new("f2", timestamps.data_type(), true)],
+            scalar_arguments: &[Some(&interval_value), None]
+        }).expect("date_bin_1000 should return valid field");
 
         b.iter(|| {
             black_box(
@@ -55,7 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: vec![interval.clone(), timestamps.clone()],
                     arg_fields: vec![None; 2],
                     number_rows: batch_len,
-                    return_type: &return_type,
+                    return_type: return_field.data_type(),
                 })
                 .expect("date_bin should work on valid values"),
             )

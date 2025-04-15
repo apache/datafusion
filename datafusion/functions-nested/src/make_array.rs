@@ -37,7 +37,7 @@ use datafusion_common::{plan_err, Result};
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
-use datafusion_expr::TypeSignature;
+use datafusion_expr::{ReturnFieldArgs, TypeSignature};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -104,17 +104,19 @@ impl ScalarUDFImpl for MakeArray {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types.len() {
-            0 => Ok(empty_array_type()),
+    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
+        let data_type = match args.arg_types.len() {
+            0 => empty_array_type(),
             _ => {
                 // At this point, all the type in array should be coerced to the same one
-                Ok(List(Arc::new(Field::new_list_field(
-                    arg_types[0].to_owned(),
+                List(Arc::new(Field::new_list_field(
+                    args.arg_types[0].data_type().to_owned(),
                     true,
-                ))))
+                )))
             }
-        }
+        };
+
+        Ok(Field::new(self.name(), data_type, true))
     }
 
     fn invoke_with_args(
