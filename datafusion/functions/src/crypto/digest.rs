@@ -22,7 +22,10 @@ use datafusion_common::{
     types::{logical_binary, logical_string},
     Result,
 };
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, Volatility,
+};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -97,7 +100,11 @@ impl ScalarUDFImpl for DigestFunc {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        Ok(Field::new(self.name(), utf8_or_binary_to_binary_type(args.arg_types[0].data_type(), self.name())?, nullable))
+        Ok(Field::new(
+            self.name(),
+            utf8_or_binary_to_binary_type(args.arg_types[0].data_type(), self.name())?,
+            nullable,
+        ))
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         digest(&args.args)

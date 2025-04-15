@@ -28,7 +28,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -91,7 +93,7 @@ impl ScalarUDFImpl for TranslateFunc {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        let data_type =  utf8_to_str_type(args.arg_types[0].data_type(), "translate")?;
+        let data_type = utf8_to_str_type(args.arg_types[0].data_type(), "translate")?;
         Ok(Field::new(self.name(), data_type, nullable))
     }
 

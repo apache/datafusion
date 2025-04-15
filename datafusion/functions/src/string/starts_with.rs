@@ -28,7 +28,10 @@ use datafusion_expr::type_coercion::binary::{
 use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::{cast, Coercion, ColumnarValue, Documentation, Expr, Like, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility};
+use datafusion_expr::{
+    cast, Coercion, ColumnarValue, Documentation, Expr, Like, ReturnFieldArgs,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 /// Returns true if string starts with prefix.

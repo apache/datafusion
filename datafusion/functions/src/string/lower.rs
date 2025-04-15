@@ -22,7 +22,10 @@ use crate::string::common::to_lower;
 use crate::utils::utf8_to_str_type;
 use datafusion_common::types::logical_string;
 use datafusion_common::Result;
-use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -79,7 +82,7 @@ impl ScalarUDFImpl for LowerFunc {
     }
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
-        let data_type =  utf8_to_str_type(&args.arg_types[0].data_type(), "lower")?;
+        let data_type = utf8_to_str_type(&args.arg_types[0].data_type(), "lower")?;
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
         Ok(Field::new(self.name(), data_type, nullable))
     }

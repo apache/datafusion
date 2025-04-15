@@ -26,7 +26,13 @@ use common::MockContextProvider;
 use datafusion_common::{
     assert_contains, DataFusionError, ParamValues, Result, ScalarValue,
 };
-use datafusion_expr::{col, logical_plan::{LogicalPlan, Prepare}, test::function_stub::sum_udaf, ColumnarValue, CreateIndex, DdlStatement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Statement, Volatility};
+use datafusion_expr::{
+    col,
+    logical_plan::{LogicalPlan, Prepare},
+    test::function_stub::sum_udaf,
+    ColumnarValue, CreateIndex, DdlStatement, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, Statement, Volatility,
+};
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
     parser::DFParser,

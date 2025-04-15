@@ -22,7 +22,9 @@ use arrow::datatypes::{
     DataType::{LargeList, List, UInt64},
     Field,
 };
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 use std::any::Any;

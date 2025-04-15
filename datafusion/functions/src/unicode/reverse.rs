@@ -24,7 +24,9 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 
@@ -81,7 +83,11 @@ impl ScalarUDFImpl for ReverseFunc {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let data_type = utf8_to_str_type(args.arg_types[0].data_type(), "reverse")?;
-        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
+        Ok(Field::new(
+            self.name(),
+            data_type,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(

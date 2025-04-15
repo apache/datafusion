@@ -120,7 +120,10 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
-    use datafusion_expr::{col, lit, ColumnarValue, LogicalPlanBuilder, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature};
+    use datafusion_expr::{
+        col, lit, ColumnarValue, LogicalPlanBuilder, ReturnFieldArgs, ScalarFunctionArgs,
+        ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
+    };
 
     use datafusion_functions_aggregate::expr_fn::count;
 

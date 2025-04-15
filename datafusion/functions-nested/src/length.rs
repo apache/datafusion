@@ -21,10 +21,16 @@ use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, Int64Array, LargeListArray, ListArray, OffsetSizeTrait, UInt64Array,
 };
-use arrow::datatypes::{DataType, DataType::{FixedSizeList, LargeList, List, UInt64}, Field};
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, LargeList, List, UInt64},
+    Field,
+};
 use datafusion_common::cast::{as_generic_list_array, as_int64_array};
 use datafusion_common::{exec_err, internal_datafusion_err, plan_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::{downcast_arg, downcast_named_arg};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -96,7 +102,11 @@ impl ScalarUDFImpl for ArrayLength {
                 return plan_err!("The array_length function can only accept List/LargeList/FixedSizeList.");
             }
         };
-        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
+        Ok(Field::new(
+            self.name(),
+            data_type,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(

@@ -29,7 +29,10 @@ use datafusion_common::{
     exec_err, internal_err, utils::take_function_args, Result, ScalarValue,
 };
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(

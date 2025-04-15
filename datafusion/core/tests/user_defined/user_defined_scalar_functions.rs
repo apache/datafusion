@@ -41,7 +41,11 @@ use datafusion_common::{
     plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
+    OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
+};
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
 use regex::Regex;
@@ -835,7 +839,11 @@ impl ScalarUDFImpl for TakeUDF {
             );
         };
 
-        Ok(Field::new(self.name(), args.arg_types[take_idx].data_type().to_owned(), true))
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[take_idx].data_type().to_owned(),
+            true,
+        ))
     }
 
     // The actual implementation

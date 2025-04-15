@@ -20,12 +20,19 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, DataType::{FixedSizeList, LargeList, List, Null}, Field};
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, LargeList, List, Null},
+    Field,
+};
 use datafusion_common::cast::{
     as_generic_list_array, as_large_list_array, as_list_array,
 };
 use datafusion_common::{exec_err, utils::take_function_args, Result};
-use datafusion_expr::{ArrayFunctionSignature, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion_expr::{
+    ArrayFunctionSignature, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl,
+    Signature, TypeSignature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -115,7 +122,11 @@ impl ScalarUDFImpl for Flatten {
         }
 
         let data_type = get_base_type(args.arg_types[0].data_type())?;
-        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
+        Ok(Field::new(
+            self.name(),
+            data_type,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(

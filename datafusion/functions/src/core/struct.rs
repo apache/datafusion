@@ -18,7 +18,9 @@
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, internal_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -106,7 +108,11 @@ impl ScalarUDFImpl for StructFunc {
             return exec_err!("struct requires at least one argument, got 0 instead");
         }
 
-        Ok(Field::new(self.name(), DataType::Struct(args.arg_types.into()), true))
+        Ok(Field::new(
+            self.name(),
+            DataType::Struct(args.arg_types.into()),
+            true,
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

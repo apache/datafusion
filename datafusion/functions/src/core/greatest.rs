@@ -141,7 +141,11 @@ impl ScalarUDFImpl for GreatestFunc {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().all(|f| !f.is_nullable());
-        Ok(Field::new(self.name(), args.arg_types[0].data_type().clone(), nullable))
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[0].data_type().clone(),
+            nullable,
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

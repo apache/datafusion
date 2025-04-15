@@ -92,7 +92,7 @@ impl ExprPlanner for NestedFunctionPlanner {
                 } else {
                     // array1 <@ array2 -> array_has_all(array2, array1)
                     Ok(PlannerResult::Planned(array_has_all(right, left)))
-                }
+                };
             }
         }
 

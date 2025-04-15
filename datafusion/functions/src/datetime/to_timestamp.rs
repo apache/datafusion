@@ -21,9 +21,14 @@ use std::sync::Arc;
 use crate::datetime::common::*;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{ArrowTimestampType, DataType, Field, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType};
+use arrow::datatypes::{
+    ArrowTimestampType, DataType, Field, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
 use datafusion_common::{exec_err, Result, ScalarType, ScalarValue};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -435,7 +440,6 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         Ok(Field::new(self.name(), data_type, true))
     }
 
-
     fn invoke_with_args(
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
@@ -495,7 +499,6 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         Ok(Field::new(self.name(), data_type, true))
     }
 
-
     fn invoke_with_args(
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
@@ -554,7 +557,6 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         let data_type = return_type_for(args.arg_types[0].data_type(), Nanosecond);
         Ok(Field::new(self.name(), data_type, true))
     }
-
 
     fn invoke_with_args(
         &self,

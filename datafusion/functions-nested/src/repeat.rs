@@ -32,7 +32,9 @@ use arrow::datatypes::{
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
 use datafusion_common::{exec_err, utils::take_function_args, ExprSchema, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -112,7 +114,7 @@ impl ScalarUDFImpl for ArrayRepeat {
             args.arg_types[0].data_type().clone(),
             true,
         )));
-        Ok(Field::new(self.name(), data_type,nullable))
+        Ok(Field::new(self.name(), data_type, nullable))
     }
 
     fn invoke_with_args(

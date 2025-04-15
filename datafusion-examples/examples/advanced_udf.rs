@@ -28,10 +28,10 @@ use arrow_schema::Field;
 use datafusion::common::{exec_err, internal_err, ScalarValue};
 use datafusion::error::Result;
 use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion::logical_expr::{ReturnFieldArgs, Volatility};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
 };
+use datafusion::logical_expr::{ReturnFieldArgs, Volatility};
 use datafusion::prelude::*;
 
 /// This example shows how to use the full ScalarUDFImpl API to implement a user

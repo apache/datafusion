@@ -25,7 +25,9 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, TypeSignature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, TypeSignature, Volatility,
+};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 use std::any::Any;

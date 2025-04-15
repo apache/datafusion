@@ -37,7 +37,9 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, not_impl_datafusion_err,
     utils::take_function_args, Result,
 };
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;

@@ -29,7 +29,9 @@ use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, ReturnFieldArgs, Volatility};
+use datafusion_expr::{
+    lit, ColumnarValue, Documentation, Expr, ReturnFieldArgs, Volatility,
+};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
@@ -300,7 +302,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
             .filter_map(|expr| match expr {
                 Expr::Literal(l) => {
                     Some((Field::new("item", l.data_type(), true), Some(l)))
-                },
+                }
                 _ => None,
             })
             .unzip();

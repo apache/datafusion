@@ -28,7 +28,9 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(

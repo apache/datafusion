@@ -795,7 +795,11 @@ mod test {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::logical_plan::{table_scan, JoinType};
-    use datafusion_expr::{grouping_set, is_null, not, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Volatility};
+    use datafusion_expr::{
+        grouping_set, is_null, not, AccumulatorFactoryFunction, AggregateUDF,
+        ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+        Signature, SimpleAggregateUDF, Volatility,
+    };
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
 
     use super::*;

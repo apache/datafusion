@@ -24,8 +24,8 @@ use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
-use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{logical_int64, logical_string, NativeType};
 use datafusion_common::{exec_err, DataFusionError, Result};

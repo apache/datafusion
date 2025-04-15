@@ -19,14 +19,17 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array};
-use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::Int64;
+use arrow::datatypes::{DataType, Field};
 
 use arrow::error::ArrowError;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
 };
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 use super::gcd::unsigned_gcd;

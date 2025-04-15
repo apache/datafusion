@@ -37,10 +37,10 @@ use datafusion_common::{plan_err, Result};
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
-use datafusion_expr::{ReturnFieldArgs, TypeSignature};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_expr::{ReturnFieldArgs, TypeSignature};
 use datafusion_macros::user_doc;
 
 make_udf_expr_and_func!(

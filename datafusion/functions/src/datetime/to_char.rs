@@ -20,17 +20,20 @@ use std::sync::Arc;
 
 use arrow::array::cast::AsArray;
 use arrow::array::{new_null_array, Array, ArrayRef, StringArray};
-use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Time32, Time64, Timestamp, Utf8,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
+use arrow::datatypes::{DataType, Field};
 use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 
 use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+    TIMEZONE_WILDCARD,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -215,7 +218,7 @@ fn _to_char_scalar(
             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
         } else {
             Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())))
-        }
+        };
     }
 
     let format_options = match _build_format_options(data_type, format) {

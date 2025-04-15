@@ -21,7 +21,9 @@ use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::binary::try_type_union_resolution;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use itertools::Itertools;

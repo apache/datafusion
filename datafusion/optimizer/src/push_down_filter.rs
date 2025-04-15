@@ -1394,7 +1394,12 @@ mod tests {
     use datafusion_common::{DFSchemaRef, ScalarValue};
     use datafusion_expr::expr::{ScalarFunction, WindowFunction};
     use datafusion_expr::logical_plan::table_scan;
-    use datafusion_expr::{col, in_list, in_subquery, lit, ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType, UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition};
+    use datafusion_expr::{
+        col, in_list, in_subquery, lit, ColumnarValue, ExprFunctionExt, Extension,
+        LogicalPlanBuilder, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+        ScalarUDFImpl, Signature, TableSource, TableType, UserDefinedLogicalNodeCore,
+        Volatility, WindowFunctionDefinition,
+    };
 
     use crate::optimizer::Optimizer;
     use crate::simplify_expressions::SimplifyExpressions;

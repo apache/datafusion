@@ -30,7 +30,10 @@ use datafusion_common::Result;
 use datafusion_common::{JoinSide, JoinType, ScalarValue};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_expr::{Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility,
+};
 use datafusion_physical_expr::expressions::{
     binary, cast, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
 };

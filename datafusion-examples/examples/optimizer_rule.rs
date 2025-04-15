@@ -17,15 +17,18 @@
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::DataType;
+use arrow_schema::Field;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{assert_batches_eq, Result, ScalarValue};
-use datafusion::logical_expr::{BinaryExpr, ColumnarValue, Expr, LogicalPlan, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{
+    BinaryExpr, ColumnarValue, Expr, LogicalPlan, Operator, ReturnFieldArgs,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion::optimizer::ApplyOrder;
 use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion::prelude::SessionContext;
 use std::any::Any;
 use std::sync::Arc;
-use arrow_schema::Field;
 
 /// This example demonstrates how to add your own [`OptimizerRule`]
 /// to DataFusion.

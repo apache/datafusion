@@ -3181,11 +3181,14 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
-    use crate::{case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility};
+    use crate::{
+        case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue,
+        ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
+    };
+    use arrow::datatypes::Field;
     use sqlparser::ast;
     use sqlparser::ast::{Ident, IdentWithAlias};
     use std::any::Any;
-    use arrow::datatypes::Field;
 
     #[test]
     #[allow(deprecated)]

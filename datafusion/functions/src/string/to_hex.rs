@@ -20,7 +20,9 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
-use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType, Field, Int32Type, Int64Type};
+use arrow::datatypes::{
+    ArrowNativeType, ArrowPrimitiveType, DataType, Field, Int32Type, Int64Type,
+};
 
 use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_primitive_array;
@@ -122,7 +124,11 @@ impl ScalarUDFImpl for ToHexFunc {
                 return plan_err!("The to_hex function can only accept integers.");
             }
         };
-        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
+        Ok(Field::new(
+            self.name(),
+            data_type,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

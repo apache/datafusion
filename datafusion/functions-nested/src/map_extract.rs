@@ -25,7 +25,9 @@ use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{cast::as_map_array, exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -107,7 +109,11 @@ impl ScalarUDFImpl for MapExtract {
             true,
         )));
 
-        Ok(Field::new(self.name(), data_type, map_field.is_nullable() || key_field.is_nullable()))
+        Ok(Field::new(
+            self.name(),
+            data_type,
+            map_field.is_nullable() || key_field.is_nullable(),
+        ))
     }
 
     fn invoke_with_args(

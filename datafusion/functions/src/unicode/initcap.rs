@@ -27,7 +27,10 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -90,7 +93,11 @@ impl ScalarUDFImpl for InitcapFunc {
         } else {
             utf8_to_str_type(args.arg_types[0].data_type(), "initcap")?
         };
-        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
+        Ok(Field::new(
+            self.name(),
+            data_type,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(

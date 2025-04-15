@@ -24,7 +24,9 @@ use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 

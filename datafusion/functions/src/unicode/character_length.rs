@@ -22,7 +22,9 @@ use arrow::array::{
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Field, Int32Type, Int64Type};
 use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -84,7 +86,8 @@ impl ScalarUDFImpl for CharacterLengthFunc {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types[0].is_nullable();
-        let data_type = utf8_to_int_type(args.arg_types[0].data_type(), "character_length")?;
+        let data_type =
+            utf8_to_int_type(args.arg_types[0].data_type(), "character_length")?;
         Ok(Field::new(self.name(), data_type, nullable))
     }
 

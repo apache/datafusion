@@ -18,12 +18,15 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::compute::contains as arrow_contains;
-use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
-use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;

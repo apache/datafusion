@@ -19,14 +19,17 @@
 
 use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray};
 use arrow::compute::kernels::regexp;
-use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::types::logical_string;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_err, plan_err, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 use std::any::Any;

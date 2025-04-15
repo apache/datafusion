@@ -96,8 +96,11 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let return_field = &map_udf()
             .return_field(ReturnFieldArgs {
-                arg_types: &[Field::new("f1", DataType::Utf8, true), Field::new("f2", DataType::Int32, true)],
-                scalar_arguments: &[None, None]
+                arg_types: &[
+                    Field::new("f1", DataType::Utf8, true),
+                    Field::new("f2", DataType::Int32, true),
+                ],
+                scalar_arguments: &[None, None],
             })
             .expect("should get return type");
 
@@ -108,7 +111,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![keys.clone(), values.clone()],
                         arg_fields: vec![None; 2],
                         number_rows: 1,
-                        return_type: return_field.data_type()
+                        return_type: return_field.data_type(),
                     })
                     .expect("map should work on valid values"),
             );

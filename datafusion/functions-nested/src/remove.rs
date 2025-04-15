@@ -27,7 +27,9 @@ use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -97,7 +99,11 @@ impl ScalarUDFImpl for ArrayRemove {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        Ok(Field::new(self.name(), args.arg_types[0].data_type().clone(), nullable))
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[0].data_type().clone(),
+            nullable,
+        ))
     }
 
     fn invoke_with_args(
@@ -176,7 +182,11 @@ impl ScalarUDFImpl for ArrayRemoveN {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        Ok(Field::new(self.name(), args.arg_types[0].data_type().clone(), nullable))
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[0].data_type().clone(),
+            nullable,
+        ))
     }
 
     fn invoke_with_args(
@@ -254,7 +264,11 @@ impl ScalarUDFImpl for ArrayRemoveAll {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        Ok(Field::new(self.name(), args.arg_types[0].data_type().clone(), nullable))
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[0].data_type().clone(),
+            nullable,
+        ))
     }
 
     fn invoke_with_args(

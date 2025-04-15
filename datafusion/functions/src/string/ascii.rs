@@ -21,7 +21,9 @@ use arrow::datatypes::{DataType, Field};
 use arrow::error::ArrowError;
 use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, TypeSignatureClass};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, TypeSignatureClass,
+};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;

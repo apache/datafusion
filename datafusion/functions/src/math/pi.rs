@@ -17,11 +17,14 @@
 
 use std::any::Any;
 
-use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::Float64;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(

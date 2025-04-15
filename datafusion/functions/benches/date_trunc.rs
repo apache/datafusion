@@ -47,15 +47,24 @@ fn criterion_benchmark(c: &mut Criterion) {
         let timestamps = ColumnarValue::Array(timestamps_array);
         let udf = date_trunc();
         let args = vec![precision, timestamps];
-        let arg_fields = args.iter().map(|arg| arg.data_type()).cloned().collect::<Vec<_>>();
-        let scalar_arguments = args.iter().map(|arg| match arg {
-            ColumnarValue::Scalar(s) => Some(s),
-            ColumnarValue::Array(_) => None
-        }).collect::<Vec<_>>();
-        let return_field = udf.return_field(ReturnFieldArgs {
-            arg_types: &arg_fields,
-            scalar_arguments: &scalar_arguments,
-        }).expect("date_trunc should return valid field");
+        let arg_fields = args
+            .iter()
+            .map(|arg| arg.data_type())
+            .cloned()
+            .collect::<Vec<_>>();
+        let scalar_arguments = args
+            .iter()
+            .map(|arg| match arg {
+                ColumnarValue::Scalar(s) => Some(s),
+                ColumnarValue::Array(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let return_field = udf
+            .return_field(ReturnFieldArgs {
+                arg_types: &arg_fields,
+                scalar_arguments: &scalar_arguments,
+            })
+            .expect("date_trunc should return valid field");
 
         b.iter(|| {
             black_box(

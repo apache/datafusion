@@ -22,7 +22,10 @@ use arrow::array::{Array, ArrayRef, ListArray};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{cast::as_map_array, exec_err, Result};
-use datafusion_expr::{ArrayFunctionSignature, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion_expr::{
+    ArrayFunctionSignature, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl,
+    Signature, TypeSignature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;

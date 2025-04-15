@@ -29,7 +29,10 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
+};
 use datafusion_physical_expr::equivalence::{EquivalenceClass, ProjectionMapping};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;

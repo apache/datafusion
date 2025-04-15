@@ -24,10 +24,11 @@ use arrow::datatypes::{DataType, Field};
 use arrow_buffer::NullBuffer;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    exec_err, plan_datafusion_err, utils::take_function_args, Result,
-    ScalarValue,
+    exec_err, plan_datafusion_err, utils::take_function_args, Result, ScalarValue,
 };
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -126,7 +127,6 @@ impl ScalarUDFImpl for GetFieldFunc {
     fn signature(&self) -> &Signature {
         &self.signature
     }
-
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         // Length check handled in the signature

@@ -361,7 +361,11 @@ pub fn parse_physical_expr(
 
             let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
 
-            let return_field = Field::new(convert_required!(e.name), convert_required!(e.return_type)?, convert_required!(e.nullable));
+            let return_field = Field::new(
+                convert_required!(e.name),
+                convert_required!(e.return_type)?,
+                convert_required!(e.nullable),
+            );
 
             Arc::new(
                 ScalarFunctionExpr::new(

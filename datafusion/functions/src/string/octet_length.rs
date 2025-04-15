@@ -23,7 +23,10 @@ use crate::utils::utf8_to_int_type;
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(

@@ -25,7 +25,10 @@ use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -82,7 +85,7 @@ impl ScalarUDFImpl for NanvlFunc {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
         let data_type = match args.arg_types[0].data_type() {
             Float32 => Float32,
-            _ => Float64
+            _ => Float64,
         };
         Ok(Field::new(self.name(), data_type, nullable))
     }

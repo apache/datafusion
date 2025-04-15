@@ -33,7 +33,10 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_err,
     utils::{list_ndims, take_function_args},
 };
-use datafusion_expr::{ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion_expr::{
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
@@ -104,7 +107,11 @@ impl ScalarUDFImpl for ArrayAppend {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        Ok(Field::new(self.name(), args.arg_types[0].data_type().clone(), nullable))
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[0].data_type().clone(),
+            nullable,
+        ))
     }
 
     fn invoke_with_args(
@@ -200,7 +207,11 @@ impl ScalarUDFImpl for ArrayPrepend {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        Ok(Field::new(self.name(), args.arg_types[1].data_type().clone(), nullable))
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[1].data_type().clone(),
+            nullable,
+        ))
     }
 
     fn invoke_with_args(

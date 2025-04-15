@@ -448,9 +448,13 @@ impl ExprSchemable for Expr {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                let arg_fields = new_data_types.into_iter().zip(nullables.into_iter())
+                let arg_fields = new_data_types
+                    .into_iter()
+                    .zip(nullables.into_iter())
                     .enumerate()
-                    .map(|(idx, (data_type, nullable))| Field::new(format!("field_{}", idx), data_type, nullable))
+                    .map(|(idx, (data_type, nullable))| {
+                        Field::new(format!("field_{}", idx), data_type, nullable)
+                    })
                     .collect::<Vec<_>>();
                 let args = ReturnFieldArgs {
                     arg_types: &arg_fields,

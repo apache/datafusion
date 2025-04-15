@@ -44,7 +44,10 @@ use arrow::datatypes::DataType::{
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::exec_err;
 use datafusion_common::types::logical_string;
-use datafusion_expr::{Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
+};
 use datafusion_functions::{downcast_arg, downcast_named_arg};
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -285,9 +288,10 @@ impl ScalarUDFImpl for StringToArray {
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
         let data_type = match args.arg_types[0].data_type() {
-            Utf8 | Utf8View | LargeUtf8 => {
-                List(Arc::new(Field::new_list_field(args.arg_types[0].data_type().clone(), true)))
-            }
+            Utf8 | Utf8View | LargeUtf8 => List(Arc::new(Field::new_list_field(
+                args.arg_types[0].data_type().clone(),
+                true,
+            ))),
             _ => {
                 return plan_err!(
                     "The string_to_array function can only accept Utf8, Utf8View or LargeUtf8."

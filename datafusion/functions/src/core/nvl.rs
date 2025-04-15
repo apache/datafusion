@@ -20,7 +20,10 @@ use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{utils::take_function_args, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
@@ -111,7 +114,11 @@ impl ScalarUDFImpl for NVLFunc {
     }
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
-        Ok(Field::new(self.name(), args.arg_types[0].data_type().to_owned(), true))
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[0].data_type().to_owned(),
+            true,
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

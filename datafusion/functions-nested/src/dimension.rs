@@ -24,12 +24,14 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, UInt64},
     Field, UInt64Type,
 };
-use std::any::Any;
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
+use std::any::Any;
 
 use crate::utils::{compute_array_dims, make_scalar_function};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
@@ -100,7 +102,11 @@ impl ScalarUDFImpl for ArrayDims {
                 return plan_err!("The array_dims function can only accept List/LargeList/FixedSizeList.");
             }
         };
-        Ok(Field::new(self.signature(), data_type, args.arg_types[0].is_nullable()))
+        Ok(Field::new(
+            self.signature(),
+            data_type,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(

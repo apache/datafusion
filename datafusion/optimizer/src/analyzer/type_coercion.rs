@@ -1067,7 +1067,12 @@ mod test {
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
-    use datafusion_expr::{cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility};
+    use datafusion_expr::{
+        cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
+        BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
+        Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+        Signature, SimpleAggregateUDF, Subquery, Union, Volatility,
+    };
     use datafusion_functions_aggregate::average::AvgAccumulator;
     use datafusion_sql::TableReference;
 

@@ -26,7 +26,9 @@ use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::{exec_err, ExprSchema, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, TypeSignature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, TypeSignature, Volatility,
+};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 

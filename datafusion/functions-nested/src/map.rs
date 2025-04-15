@@ -28,7 +28,10 @@ use datafusion_common::{
     exec_err, utils::take_function_args, HashSet, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    Volatility,
+};
 use datafusion_macros::user_doc;
 
 use crate::make_array::make_array;

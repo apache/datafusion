@@ -47,10 +47,15 @@ fn criterion_benchmark(c: &mut Criterion) {
         let interval = ColumnarValue::Scalar(interval_value.clone());
         let timestamps = ColumnarValue::Array(timestamps_array);
         let udf = date_bin();
-        let return_field = udf.return_field(ReturnFieldArgs {
-            arg_types: &[Field::new("f1", interval.data_type(), true), Field::new("f2", timestamps.data_type(), true)],
-            scalar_arguments: &[Some(&interval_value), None]
-        }).expect("date_bin_1000 should return valid field");
+        let return_field = udf
+            .return_field(ReturnFieldArgs {
+                arg_types: &[
+                    Field::new("f1", interval.data_type(), true),
+                    Field::new("f2", timestamps.data_type(), true),
+                ],
+                scalar_arguments: &[Some(&interval_value), None],
+            })
+            .expect("date_bin_1000 should return valid field");
 
         b.iter(|| {
             black_box(

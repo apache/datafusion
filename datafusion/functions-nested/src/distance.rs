@@ -21,7 +21,11 @@ use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, Float64Array, LargeListArray, ListArray, OffsetSizeTrait,
 };
-use arrow::datatypes::{DataType, DataType::{FixedSizeList, Float64, LargeList, List}, Field};
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, Float64, LargeList, List},
+    Field,
+};
 use datafusion_common::cast::{
     as_float32_array, as_float64_array, as_generic_list_array, as_int32_array,
     as_int64_array,
@@ -30,7 +34,9 @@ use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::{
     exec_err, internal_datafusion_err, utils::take_function_args, Result,
 };
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::{downcast_arg, downcast_named_arg};
 use datafusion_macros::user_doc;
 use std::any::Any;

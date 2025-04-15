@@ -19,7 +19,9 @@ use super::to_timestamp::ToTimestampSecondsFunc;
 use crate::datetime::common::*;
 use arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 
@@ -87,7 +89,6 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
     fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
         Ok(Field::new(self.name(), DataType::Int64, true))
     }
-
 
     fn invoke_with_args(
         &self,

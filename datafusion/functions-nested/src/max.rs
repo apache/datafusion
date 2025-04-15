@@ -18,13 +18,16 @@
 //! [`ScalarUDFImpl`] definitions for array_max function.
 use crate::utils::make_scalar_function;
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field};
 use arrow::datatypes::DataType::List;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_doc::Documentation;
-use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
+};
 use datafusion_functions_aggregate::min_max;
 use datafusion_macros::user_doc;
 use itertools::Itertools;
@@ -94,7 +97,11 @@ impl ScalarUDFImpl for ArrayMax {
             List(field) => field.data_type().clone(),
             _ => exec_err!("Not reachable, data_type should be List")?,
         };
-        Ok(Field::new(self.name(), data_type, args.arg_types[0].is_nullable()))
+        Ok(Field::new(
+            self.name(),
+            data_type,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(

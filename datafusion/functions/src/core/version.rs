@@ -19,7 +19,10 @@
 
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{utils::take_function_args, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 

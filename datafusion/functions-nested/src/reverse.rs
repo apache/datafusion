@@ -26,7 +26,9 @@ use arrow::datatypes::DataType::{LargeList, List, Null};
 use arrow::datatypes::{Field, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, utils::take_function_args, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -91,7 +93,11 @@ impl ScalarUDFImpl for ArrayReverse {
     }
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
-        Ok(Field::new(self.name(), args.arg_types[0].data_type().clone(), args.arg_types[0].is_nullable()))
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[0].data_type().clone(),
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(

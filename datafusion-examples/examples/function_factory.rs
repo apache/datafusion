@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::DataType;
+use arrow_schema::Field;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{exec_err, internal_err, DataFusionError};
 use datafusion::error::Result;
@@ -24,10 +25,12 @@ use datafusion::execution::context::{
 };
 use datafusion::logical_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion::logical_expr::{ColumnarValue, CreateFunction, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{
+    ColumnarValue, CreateFunction, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
+};
 use std::result::Result as RResult;
 use std::sync::Arc;
-use arrow_schema::Field;
 
 /// This example shows how to utilize [FunctionFactory] to implement simple
 /// SQL-macro like functions using a `CREATE FUNCTION` statement. The same

@@ -32,11 +32,10 @@ use arrow::{
     error::ArrowError,
     ffi::{from_ffi, to_ffi, FFI_ArrowSchema},
 };
+use datafusion::logical_expr::ReturnFieldArgs;
 use datafusion::{
     error::DataFusionError,
-    logical_expr::{
-        type_coercion::functions::data_types_with_scalar_udf,
-    },
+    logical_expr::type_coercion::functions::data_types_with_scalar_udf,
 };
 use datafusion::{
     error::Result,
@@ -48,7 +47,6 @@ use return_type_args::{
     FFI_ReturnFieldArgs, ForeignReturnFieldArgs, ForeignReturnFieldArgsOwned,
 };
 use std::{ffi::c_void, sync::Arc};
-use datafusion::logical_expr::ReturnFieldArgs;
 
 pub mod return_type_args;
 
@@ -70,8 +68,7 @@ pub struct FFI_ScalarUDF {
     pub return_field: unsafe extern "C" fn(
         udf: &Self,
         args: FFI_ReturnFieldArgs,
-    )
-        -> RResult<WrappedSchema, RString>,
+    ) -> RResult<WrappedSchema, RString>,
 
     /// Execute the underlying [`ScalarUDF`] and return the result as a `FFI_ArrowArray`
     /// within an AbiStable wrapper.

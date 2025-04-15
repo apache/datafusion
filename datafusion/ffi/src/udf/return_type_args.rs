@@ -25,12 +25,12 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
+use crate::util::{rvec_wrapped_to_vec_field, vec_field_to_rvec_wrapped};
 use crate::{
     arrow_wrappers::WrappedSchema,
     util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
 };
 use prost::Message;
-use crate::util::{rvec_wrapped_to_vec_field, vec_field_to_rvec_wrapped};
 
 /// A stable struct for sharing a [`ReturnTypeArgs`] across FFI boundaries.
 #[repr(C)]

@@ -27,7 +27,9 @@ use arrow::datatypes::{DataType, Field, Int32Type, Int64Type};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(

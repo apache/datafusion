@@ -36,10 +36,10 @@ use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
+use arrow::datatypes::Field;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
-use arrow::datatypes::Field;
 
 #[user_doc(
     doc_section(label = "Binary String Functions"),
@@ -184,7 +184,11 @@ impl ScalarUDFImpl for DecodeFunc {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        Ok(Field::new(self.name(), args.arg_types[0].data_type().to_owned(), nullable))
+        Ok(Field::new(
+            self.name(),
+            args.arg_types[0].data_type().to_owned(),
+            nullable,
+        ))
     }
 
     fn invoke_with_args(

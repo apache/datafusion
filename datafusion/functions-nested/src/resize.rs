@@ -32,7 +32,10 @@ use arrow::datatypes::{
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
-use datafusion_expr::{ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion_expr::{
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ReturnFieldArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;

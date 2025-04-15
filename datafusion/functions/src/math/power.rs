@@ -29,7 +29,10 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, TypeSignature};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    TypeSignature,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
@@ -84,7 +87,7 @@ impl ScalarUDFImpl for PowerFunc {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
         let data_type = match args.arg_types[0].data_type() {
             DataType::Int64 => DataType::Int64,
-            _ => DataType::Float64
+            _ => DataType::Float64,
         };
         Ok(Field::new(self.name(), data_type, nullable))
     }

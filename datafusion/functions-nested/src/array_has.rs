@@ -29,7 +29,10 @@ use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::expr::{InList, ScalarFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    Volatility,
+};
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
@@ -381,7 +384,6 @@ impl ScalarUDFImpl for ArrayHasAll {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
         Ok(Field::new(self.name(), DataType::Boolean, nullable))
     }
-
 
     fn invoke_with_args(
         &self,

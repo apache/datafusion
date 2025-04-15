@@ -43,7 +43,9 @@ use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
-use datafusion_expr::{expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF};
+use datafusion_expr::{
+    expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+};
 
 /// Physical expression of a scalar function
 #[derive(Eq, PartialEq, Hash)]
@@ -71,7 +73,7 @@ impl ScalarFunctionExpr {
         name: &str,
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
-        return_field: Field
+        return_field: Field,
     ) -> Self {
         Self {
             fun,
@@ -113,7 +115,7 @@ impl ScalarFunctionExpr {
             fun,
             name,
             args,
-            return_field
+            return_field,
         })
     }
 
@@ -226,14 +228,12 @@ impl PhysicalExpr for ScalarFunctionExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(
-            ScalarFunctionExpr::new(
-                &self.name,
-                Arc::clone(&self.fun),
-                children,
-                self.return_field().clone(),
-            )
-        ))
+        Ok(Arc::new(ScalarFunctionExpr::new(
+            &self.name,
+            Arc::clone(&self.fun),
+            children,
+            self.return_field().clone(),
+        )))
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {

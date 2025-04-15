@@ -262,7 +262,10 @@ pub(crate) mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{exec_err, DataFusionError, ScalarValue};
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+    use datafusion_expr::{
+        ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+        Volatility,
+    };
 
     use petgraph::visit::Bfs;
 

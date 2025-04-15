@@ -36,7 +36,10 @@ use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+    TIMEZONE_WILDCARD,
+};
 use datafusion_macros::user_doc;
 
 use chrono::{

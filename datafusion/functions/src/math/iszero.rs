@@ -24,7 +24,10 @@ use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
 
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 use crate::utils::make_scalar_function;
@@ -72,7 +75,11 @@ impl ScalarUDFImpl for IsZeroFunc {
     }
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
-        Ok(Field::new(self.name(), Boolean, args.arg_types[0].is_nullable()))
+        Ok(Field::new(
+            self.name(),
+            Boolean,
+            args.arg_types[0].is_nullable(),
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

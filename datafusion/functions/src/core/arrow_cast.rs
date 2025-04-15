@@ -28,7 +28,10 @@ use datafusion_common::{
 use std::any::Any;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 /// Implements casting to arbitrary arrow types (rather than SQL types)
