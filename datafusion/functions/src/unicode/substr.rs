@@ -91,9 +91,8 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 
     // `SubstrFunc` always generates `Utf8View` output for its efficiency.
-    fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
-        let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        Ok(Field::new(self.name(), DataType::Utf8View, nullable))
+    fn return_field(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), DataType::Utf8View, true))
     }
 
     fn invoke_with_args(

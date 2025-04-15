@@ -305,14 +305,14 @@ async fn test_fn_struct() -> Result<()> {
     assert_snapshot!(
         batches_to_string(&batches),
         @r"
-    +--------------------------+
-    | struct(test.a,test.b)    |
-    +--------------------------+
-    | {c0: abcDEF, c1: 1}      |
-    | {c0: abc123, c1: 10}     |
-    | {c0: CBAdef, c1: 10}     |
-    | {c0: 123AbcDef, c1: 100} |
-    +--------------------------+
+    +------------------------+
+    | struct(test.a,test.b)  |
+    +------------------------+
+    | {a: abcDEF, b: 1}      |
+    | {a: abc123, b: 10}     |
+    | {a: CBAdef, b: 10}     |
+    | {a: 123AbcDef, b: 100} |
+    +------------------------+
     ");
 
     Ok(())

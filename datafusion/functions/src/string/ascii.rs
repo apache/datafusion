@@ -90,7 +90,7 @@ impl ScalarUDFImpl for AsciiFunc {
 
     fn return_field(&self, args: ReturnFieldArgs) -> Result<Field> {
         let nullable = args.arg_types.iter().any(|f| f.is_nullable());
-        Ok(Field::new("ascii", DataType::Utf8, nullable))
+        Ok(Field::new("ascii", DataType::Int32, nullable))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
