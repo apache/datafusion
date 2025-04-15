@@ -33,3 +33,4 @@ mod window_fuzz;
 
 // Utility modules
 mod record_batch_generator;
+mod stream_exec;
