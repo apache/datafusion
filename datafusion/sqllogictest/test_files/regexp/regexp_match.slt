@@ -21,6 +21,7 @@ include ./init_data.slt.part
 query ?
 SELECT regexp_match(str, pattern, flags) FROM regexp_test_data;
 ----
+NULL
 [a]
 [A]
 [B]
@@ -41,6 +42,7 @@ SELECT arrow_cast(str, 'Utf8View') as str, arrow_cast(pattern, 'Utf8View') as pa
 query ?
 SELECT regexp_match(str, pattern, flags) FROM t_stringview;
 ----
+NULL
 [a]
 [A]
 [B]

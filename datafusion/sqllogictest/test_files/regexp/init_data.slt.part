@@ -17,6 +17,7 @@
 
 statement ok
 create table regexp_test_data (str varchar, pattern varchar, start int, flags varchar) as values
+    (NULL,        '^(a)', 1, 'i'),
     ('abc',       '^(a)', 1, 'i'),
     ('ABC',       '^(A).*', 1, 'i'),
     ('aBc',       '(b|d)', 1, 'i'),

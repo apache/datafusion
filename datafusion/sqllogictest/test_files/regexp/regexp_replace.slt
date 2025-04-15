@@ -21,6 +21,7 @@ include ./init_data.slt.part
 query T
 SELECT regexp_replace(str, pattern, 'X', concat('g', flags)) FROM regexp_test_data;
 ----
+NULL
 Xbc
 X
 aXc
@@ -41,6 +42,7 @@ SELECT arrow_cast(str, 'Utf8View') as str, arrow_cast(pattern, 'Utf8View') as pa
 query T
 SELECT regexp_replace(str, pattern, 'X', concat('g', flags)) FROM t_stringview;
 ----
+NULL
 Xbc
 X
 aXc

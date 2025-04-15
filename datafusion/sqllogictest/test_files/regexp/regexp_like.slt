@@ -21,6 +21,7 @@ include ./init_data.slt.part
 query B
 SELECT regexp_like(str, pattern, flags) FROM regexp_test_data;
 ----
+NULL
 true
 true
 true
@@ -47,6 +48,7 @@ NULL
 NULL
 NULL
 NULL
+NULL
 
 query B
 select str ~ right('foo', NULL) FROM regexp_test_data;
@@ -62,10 +64,12 @@ NULL
 NULL
 NULL
 NULL
+NULL
 
 query B
 select right('foo', NULL) !~ str FROM regexp_test_data;
 ----
+NULL
 NULL
 NULL
 NULL
@@ -193,9 +197,6 @@ query B
 SELECT NULL not iLIKE NULL;
 ----
 NULL
-
-statement ok
-drop table if exists t;
 
 statement ok
 create or replace table strings as values
