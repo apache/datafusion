@@ -26,7 +26,7 @@ use arrow::array::{
     StringArray, UInt64Array,
 };
 use arrow::compute::{concat_batches, SortOptions};
-use arrow::datatypes::{DataType, UInt64Type};
+use arrow::datatypes::DataType;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{Field, Schema, SchemaRef};
 use datafusion::common::Result;
@@ -778,13 +778,15 @@ async fn test_high_cardinality_with_limited_memory() -> Result<()> {
             ))
     };
 
+    let record_batch_size = pool_size / 16;
+
     // Basic test with a lot of groups that cannot all fit in memory and 1 record batch
     // from each spill file is too much memory
     let spill_count =
-        run_test_high_cardinality(task_ctx, 100, Box::pin(|_| (16 * KB) as usize))
+        run_test_high_cardinality(task_ctx, 100, Box::pin(move |_| record_batch_size))
             .await?;
 
-    let total_spill_files_size = spill_count * 16 * KB as usize;
+    let total_spill_files_size = spill_count * record_batch_size;
     assert!(
         total_spill_files_size > pool_size,
         "Total spill files size {} should be greater than pool size {}",
@@ -814,8 +816,8 @@ async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record
     run_test_high_cardinality(
         task_ctx,
         100,
-        Box::pin(|i| {
-            if i + 1 % 25 == 0 {
+        Box::pin(move |i| {
+            if i % 25 == 1 {
                 pool_size / 4
             } else {
                 (16 * KB) as usize
