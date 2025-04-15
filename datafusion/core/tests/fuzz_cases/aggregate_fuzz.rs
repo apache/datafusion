@@ -18,6 +18,7 @@
 use crate::fuzz_cases::aggregation_fuzzer::{
     AggregationFuzzerBuilder, DatasetGeneratorConfig, QueryBuilder,
 };
+use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -626,7 +627,10 @@ fn extract_result_counts(results: Vec<RecordBatch>) -> HashMap<Option<String>, i
     output
 }
 
-fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<AggregateExec>) {
+fn assert_spill_count_metric(
+    expect_spill: bool,
+    single_aggregate: Arc<AggregateExec>,
+) -> usize {
     if let Some(metrics_set) = single_aggregate.metrics() {
         let mut spill_count = 0;
 
@@ -644,7 +648,7 @@ fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<Aggregate
             panic!("Expected no spill but found SpillCount metric with value greater than 0.");
         }
 
-        println!("SpillCount = {}", spill_count);
+        spill_count
     } else {
         panic!("No metrics returned from the operator; cannot verify spilling.");
     }
@@ -762,9 +766,9 @@ async fn test_single_mode_aggregate_with_spill() -> Result<()> {
 #[tokio::test]
 async fn test_high_cardinality_with_limited_memory() -> Result<()> {
     let record_batch_size = 8192;
-    let two_mb = 2 * MB as usize;
+    let pool_size = 2 * MB as usize;
     let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(two_mb));
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         TaskContext::default()
             .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
             .with_runtime(Arc::new(
@@ -774,16 +778,30 @@ async fn test_high_cardinality_with_limited_memory() -> Result<()> {
             ))
     };
 
-    run_test_high_cardinality(task_ctx, 100, |_| (16 * KB) as usize).await
+    // Basic test with a lot of groups that cannot all fit in memory and 1 record batch
+    // from each spill file is too much memory
+    let spill_count =
+        run_test_high_cardinality(task_ctx, 100, Box::pin(|_| (16 * KB) as usize))
+            .await?;
+
+    let total_spill_files_size = spill_count * 16 * KB as usize;
+    assert!(
+        total_spill_files_size > pool_size,
+        "Total spill files size {} should be greater than pool size {}",
+        total_spill_files_size,
+        pool_size
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
 async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch(
 ) -> Result<()> {
     let record_batch_size = 8192;
-    let two_mb = 2 * MB as usize;
+    let pool_size = 2 * MB as usize;
     let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(two_mb));
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         TaskContext::default()
             .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
             .with_runtime(Arc::new(
@@ -793,23 +811,29 @@ async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record
             ))
     };
 
-    run_test_high_cardinality(task_ctx, 100, |i| {
-        if i % 25 == 0 {
-            (64 * KB) as usize
-        } else {
-            (16 * KB) as usize
-        }
-    })
-    .await
+    run_test_high_cardinality(
+        task_ctx,
+        100,
+        Box::pin(|i| {
+            if i + 1 % 25 == 0 {
+                pool_size / 4
+            } else {
+                (16 * KB) as usize
+            }
+        }),
+    )
+    .await?;
+
+    Ok(())
 }
 
 #[tokio::test]
 async fn test_high_cardinality_with_limited_memory_and_large_record_batch() -> Result<()>
 {
     let record_batch_size = 8192;
-    let two_mb = 2 * MB as usize;
+    let pool_size = 2 * MB as usize;
     let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(two_mb));
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         TaskContext::default()
             .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
             .with_runtime(Arc::new(
@@ -818,14 +842,20 @@ async fn test_high_cardinality_with_limited_memory_and_large_record_batch() -> R
                     .build()?,
             ))
     };
-    run_test_high_cardinality(task_ctx, 100, |_| two_mb / 5).await
+
+    // Test that the merge degree of multi level merge sort cannot be fixed size when there is not enough memory
+    run_test_high_cardinality(task_ctx, 100, Box::pin(move |_| pool_size / 4)).await?;
+
+    Ok(())
 }
 
 async fn run_test_high_cardinality(
     task_ctx: TaskContext,
     number_of_record_batches: usize,
-    get_size_of_record_batch_to_generate: impl Fn(usize) -> usize,
-) -> Result<()> {
+    get_size_of_record_batch_to_generate: Pin<
+        Box<impl Fn(usize) -> usize + Send + 'static>,
+    >,
+) -> Result<usize> {
     let scan_schema = Arc::new(Schema::new(vec![
         Field::new("col_0", DataType::UInt64, true),
         Field::new("col_1", DataType::Utf8, true),
@@ -856,9 +886,8 @@ async fn run_test_high_cardinality(
                 move |index| {
                     let mut record_batch_memory_size =
                         get_size_of_record_batch_to_generate(index as usize);
-                    record_batch_memory_size = record_batch_memory_size.saturating_sub(
-                        size_of::<UInt64Type::Native>() * record_batch_memory_size,
-                    );
+                    record_batch_memory_size = record_batch_memory_size
+                        .saturating_sub(size_of::<u64>() * record_batch_size as usize);
 
                     let string_item_size =
                         record_batch_memory_size / record_batch_size as usize;
@@ -916,7 +945,7 @@ async fn run_test_high_cardinality(
         number_of_record_batches * record_batch_size as usize
     );
 
-    assert_spill_count_metric(true, aggregate_final);
+    let spill_count = assert_spill_count_metric(true, aggregate_final);
 
-    Ok(())
+    Ok(spill_count)
 }
