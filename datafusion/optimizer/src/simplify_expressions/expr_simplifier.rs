@@ -779,6 +779,65 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 })
             }
 
+            // Optimize `col = x'deadbeef'` when `col` is a `FixedSizeBinary`. It might look already
+            // simple, but type coercion will cast the LHS to `Binary` instead of casting the RHS
+            // literal to `FixedSizeBinary`. So we fix that here.
+            //
+            // Simplies the equality `CAST(<FixedSizeBinary(N)> AS BINARY) = <literal>` when `N ==
+            // length(literal)`, by converting the literal to fixed length and removing the LHS cast.
+            //
+            // Assumes canonical form with the literal on the right.
+            Expr::BinaryExpr(BinaryExpr {
+                ref left,
+                op: Eq,
+                ref right,
+            }) if is_fixed_binary_cast_to_binary(left, info)?
+                && matches!(right.as_ref(), &Expr::Literal(ScalarValue::Binary(_))) =>
+            {
+                // Extract the inner LHS expr from the cast and type length.
+                let (lhs_expr, lhs_len) = {
+                    let lhs_expr = match left.as_ref() {
+                        Expr::Cast(Cast { expr, .. }) => expr,
+                        _ => {
+                            return internal_err!("Expected cast to binary, got {left:?}")
+                        }
+                    };
+
+                    match info.get_data_type(lhs_expr)? {
+                        DataType::FixedSizeBinary(len) => (lhs_expr, len),
+                        _ => return internal_err!("Expected FixedSizeBinary: {left:?}"),
+                    }
+                };
+
+                let (binary_lit, lit_len) = match right.as_ref() {
+                    Expr::Literal(l @ ScalarValue::Binary(v)) => {
+                        (l, v.as_ref().and_then(|l| i32::try_from(l.len()).ok()))
+                    }
+                    _ => return internal_err!("Expected binary literal, got {expr:?}"),
+                };
+
+                // If the lengths don't match, don't simplify.
+                if Some(lhs_len) != lit_len {
+                    return Ok(Transformed::no(expr));
+                }
+
+                // If the lengths match, cast the literal to remove the column cast.
+                let new_lit = match try_cast_literal_to_type(
+                    binary_lit,
+                    &DataType::FixedSizeBinary(lhs_len),
+                ) {
+                    Some(lit) => lit,
+                    None => return internal_err!("failed to cast binary literal"),
+                };
+
+                // The LHS cast is removed, and the RHS literal has been converted to fixed size.
+                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                    left: lhs_expr.clone(),
+                    op: Eq,
+                    right: Box::new(Expr::Literal(new_lit)),
+                })));
+            }
+
             // Rules for NotEq
             //
 
@@ -2107,6 +2166,18 @@ fn simplify_null_div_other_case<S: SimplifyInfo>(
     }
 }
 
+fn is_fixed_binary_cast_to_binary(
+    expr: &Expr,
+    info: &impl SimplifyInfo,
+) -> Result<bool, DataFusionError> {
+    if let Expr::Cast(Cast { expr, data_type }) = expr {
+        if let DataType::FixedSizeBinary(_) = info.get_data_type(expr)? {
+            return Ok(data_type.equals_datatype(&DataType::Binary));
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::simplify_expressions::SimplifyContext;
@@ -3310,6 +3381,15 @@ mod tests {
         simplifier.simplify(expr)
     }
 
+    fn coerce(expr: Expr) -> Expr {
+        let schema = expr_test_schema();
+        let execution_props = ExecutionProps::new();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&execution_props).with_schema(schema.clone()),
+        );
+        simplifier.coerce(expr, schema.as_ref()).unwrap()
+    }
+
     fn simplify(expr: Expr) -> Expr {
         try_simplify(expr).unwrap()
     }
@@ -3352,6 +3432,7 @@ mod tests {
                     Field::new("c2_non_null", DataType::Boolean, false),
                     Field::new("c3_non_null", DataType::Int64, false),
                     Field::new("c4_non_null", DataType::UInt32, false),
+                    Field::new("c5", DataType::FixedSizeBinary(3), true),
                 ]
                 .into(),
                 HashMap::new(),
@@ -4473,6 +4554,34 @@ mod tests {
                     .and((rand.clone().eq(lit(0))).or(rand.clone().eq(lit(0))))
             );
         }
+    }
+
+    #[test]
+    fn simplify_fixed_size_binary_eq_lit() {
+        let bytes = [1u8, 2, 3].as_slice();
+
+        // The expression starts simple.
+        let expr = col("c5").eq(lit(bytes));
+
+        // The type coercer introduces a cast.
+        let coerced = coerce(expr.clone());
+        let schema = expr_test_schema();
+        assert_eq!(
+            coerced,
+            col("c5")
+                .cast_to(&DataType::Binary, schema.as_ref())
+                .unwrap()
+                .eq(lit(bytes))
+        );
+
+        // The simplifier removes the cast.
+        assert_eq!(
+            simplify(coerced),
+            col("c5").eq(Expr::Literal(ScalarValue::FixedSizeBinary(
+                3,
+                Some(bytes.to_vec()),
+            )))
+        );
     }
 
     fn if_not_null(expr: Expr, then: bool) -> Expr {
