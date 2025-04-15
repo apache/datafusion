@@ -633,7 +633,10 @@ fn extract_result_counts(results: Vec<RecordBatch>) -> HashMap<Option<String>, i
     output
 }
 
-fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<AggregateExec>) {
+fn assert_spill_count_metric(
+    expect_spill: bool,
+    single_aggregate: Arc<AggregateExec>,
+) -> usize {
     if let Some(metrics_set) = single_aggregate.metrics() {
         let mut spill_count = 0;
 
@@ -652,6 +655,8 @@ fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<Aggregate
         }
 
         println!("SpillCount = {}", spill_count);
+
+        spill_count
     } else {
         panic!("No metrics returned from the operator; cannot verify spilling.");
     }
@@ -820,11 +825,7 @@ impl StreamExec {
 }
 
 impl DisplayAs for StreamExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut Formatter,
-    ) -> std::fmt::Result {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "StreamExec:")
@@ -877,72 +878,101 @@ impl ExecutionPlan for StreamExec {
     }
 }
 
-
 #[tokio::test]
 async fn test_high_cardinality_with_limited_memory() -> Result<()> {
     let record_batch_size = 8192;
-    let two_mb = 2 * MB as usize;
+    let pool_size = 2 * MB as usize;
     let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(two_mb));
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         TaskContext::default()
-          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-          .with_runtime(Arc::new(
-              RuntimeEnvBuilder::new()
-                .with_memory_pool(memory_pool)
-                .build()?,
-          ))
+            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
     };
 
-    run_test_high_cardinality(task_ctx, 100, Box::pin(|_| (16 * KB) as usize)).await
-}
+    let record_batch_size = pool_size / 16;
 
+    // Basic test with a lot of groups that cannot all fit in memory and 1 record batch
+    // from each spill file is too much memory
+    let spill_count =
+        run_test_high_cardinality(task_ctx, 100, Box::pin(move |_| record_batch_size))
+            .await?;
 
-#[tokio::test]
-async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch() -> Result<()> {
-    let record_batch_size = 8192;
-    let two_mb = 2 * MB as usize;
-    let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(two_mb));
-        TaskContext::default()
-          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-          .with_runtime(Arc::new(
-              RuntimeEnvBuilder::new()
-                .with_memory_pool(memory_pool)
-                .build()?,
-          ))
-    };
+    let total_spill_files_size = spill_count * record_batch_size;
+    assert!(
+        total_spill_files_size > pool_size,
+        "Total spill files size {} should be greater than pool size {}",
+        total_spill_files_size,
+        pool_size
+    );
 
-    run_test_high_cardinality(task_ctx, 100, Box::pin(|i| {
-        if i % 25 == 0 {
-            (64 * KB) as usize
-        } else {
-            (16 * KB) as usize
-        }
-    })).await
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_high_cardinality_with_limited_memory_and_large_record_batch() -> Result<()> {
+async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch(
+) -> Result<()> {
     let record_batch_size = 8192;
-    let two_mb = 2 * MB as usize;
+    let pool_size = 2 * MB as usize;
     let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(two_mb));
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         TaskContext::default()
-          .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-          .with_runtime(Arc::new(
-              RuntimeEnvBuilder::new()
-                .with_memory_pool(memory_pool)
-                .build()?,
-          ))
+            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
     };
-    run_test_high_cardinality(task_ctx, 100, Box::pin(move |_| two_mb / 4)).await
+
+    run_test_high_cardinality(
+        task_ctx,
+        100,
+        Box::pin(move |i| {
+            if i + 1 % 25 == 0 {
+                pool_size / 4
+            } else {
+                (16 * KB) as usize
+            }
+        }),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_high_cardinality_with_limited_memory_and_large_record_batch() -> Result<()>
+{
+    let record_batch_size = 8192;
+    let pool_size = 2 * MB as usize;
+    let task_ctx = {
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
+            .with_runtime(Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_pool(memory_pool)
+                    .build()?,
+            ))
+    };
+
+    // Test that the merge degree of multi level merge sort cannot be fixed size when there is not enough memory
+    run_test_high_cardinality(task_ctx, 100, Box::pin(move |_| pool_size / 4)).await?;
+
+    Ok(())
 }
 
 async fn run_test_high_cardinality(
     task_ctx: TaskContext,
     number_of_record_batches: usize,
-    get_size_of_record_batch_to_generate: Pin<Box<impl Fn(usize) -> usize + Send + 'static>>,
-) -> Result<()> {
+    get_size_of_record_batch_to_generate: Pin<
+        Box<impl Fn(usize) -> usize + Send + 'static>,
+    >,
+) -> Result<usize> {
     let scan_schema = Arc::new(Schema::new(vec![
         Field::new("col_0", DataType::UInt64, true),
         Field::new("col_1", DataType::Utf8, true),
@@ -958,43 +988,46 @@ async fn run_test_high_cardinality(
             array_agg_udaf(),
             vec![col("col_1", &scan_schema).unwrap()],
         )
-          .schema(Arc::clone(&scan_schema))
-          .alias("array_agg(col_1)")
-          .build()?,
+        .schema(Arc::clone(&scan_schema))
+        .alias("array_agg(col_1)")
+        .build()?,
     )];
 
     let record_batch_size = task_ctx.session_config().batch_size() as u64;
 
     let schema = Arc::clone(&scan_schema);
     let plan: Arc<dyn ExecutionPlan> =
-      Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
-          Arc::clone(&schema),
-          futures::stream::iter((0..number_of_record_batches as u64).map(
-              move |index| {
-                  let mut record_batch_memory_size = get_size_of_record_batch_to_generate(index as usize);
-                  record_batch_memory_size = record_batch_memory_size.saturating_sub(size_of::<u64>() * record_batch_size as usize);
+        Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            futures::stream::iter((0..number_of_record_batches as u64).map(
+                move |index| {
+                    let mut record_batch_memory_size =
+                        get_size_of_record_batch_to_generate(index as usize);
+                    record_batch_memory_size = record_batch_memory_size
+                        .saturating_sub(size_of::<u64>() * record_batch_size as usize);
 
-                  let string_item_size = record_batch_memory_size / record_batch_size as usize;
-                  let string_array = Arc::new(StringArray::from_iter_values(
-                      (0..record_batch_size).map(|_| "a".repeat(string_item_size)),
-                  ));
+                    let string_item_size =
+                        record_batch_memory_size / record_batch_size as usize;
+                    let string_array = Arc::new(StringArray::from_iter_values(
+                        (0..record_batch_size).map(|_| "a".repeat(string_item_size)),
+                    ));
 
-                  RecordBatch::try_new(
-                      Arc::clone(&schema),
-                      vec![
-                          // Grouping key
-                          Arc::new(UInt64Array::from_iter_values(
-                              (index * record_batch_size)
-                                ..(index * record_batch_size) + record_batch_size,
-                          )),
-                          // Grouping value
-                          string_array,
-                      ],
-                  )
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            // Grouping key
+                            Arc::new(UInt64Array::from_iter_values(
+                                (index * record_batch_size)
+                                    ..(index * record_batch_size) + record_batch_size,
+                            )),
+                            // Grouping value
+                            string_array,
+                        ],
+                    )
                     .map_err(|err| err.into())
-              },
-          )),
-      ))));
+                },
+            )),
+        ))));
 
     let aggregate_exec = Arc::new(AggregateExec::try_new(
         AggregateMode::Partial,
@@ -1029,7 +1062,7 @@ async fn run_test_high_cardinality(
         number_of_record_batches * record_batch_size as usize
     );
 
-    assert_spill_count_metric(true, aggregate_final);
+    let spill_count = assert_spill_count_metric(true, aggregate_final);
 
-    Ok(())
+    Ok(spill_count)
 }

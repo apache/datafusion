@@ -159,8 +159,7 @@ impl MultiLevelMergeBuilder {
             (1, 0) => {
                 let spill_file = self.sorted_spill_files.remove(0);
 
-                self.spill_manager
-                    .read_spill_as_stream(spill_file.file)
+                self.spill_manager.read_spill_as_stream(spill_file.file)
             }
 
             // Only in memory streams, so merge them all in a single pass
