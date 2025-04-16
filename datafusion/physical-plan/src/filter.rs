@@ -26,7 +26,9 @@ use super::{
 };
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
-use crate::filter_pushdown::{FilterDescription, FilterPushdownSupport};
+use crate::filter_pushdown::{
+    FilterDescription, FilterPushdownResult, FilterPushdownSupport,
+};
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
     ProjectionExec,
@@ -437,24 +439,28 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn try_pushdown_filters(
-        self: Arc<Self>,
+        &self,
         mut fd: FilterDescription,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownSupport<Arc<dyn ExecutionPlan>>> {
-        // filters are in terms of the output columns of this plan, need to adapt them if we have a projection
-        let predicate = if self.projection.is_some() {
-            let input_schema = self.input.schema();
-            reassign_predicate_columns(Arc::clone(&self.predicate), &input_schema, false)?
-        } else {
-            Arc::clone(&self.predicate)
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        if self.projection.is_some() {
+            return Ok(FilterPushdownResult {
+                support: FilterPushdownSupport::NotSupported,
+                remaining_description: fd,
+            });
         };
-        fd.filters.push(predicate);
-        let child_filters = vec![fd];
-        let remaining_filters = FilterDescription { filters: vec![] };
-        Ok(FilterPushdownSupport::Supported {
-            child_filters,
-            remaining_filters,
-            op: Arc::clone(&self.input),
+
+        fd.filters.push(self.predicate.clone());
+        let child_descriptions = vec![fd];
+        let remaining_description = FilterDescription { filters: vec![] };
+
+        Ok(FilterPushdownResult {
+            support: FilterPushdownSupport::Supported {
+                child_descriptions,
+                op: Arc::new(self.clone()),
+                retry: false,
+            },
+            remaining_description,
         })
     }
 }

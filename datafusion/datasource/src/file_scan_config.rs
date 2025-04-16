@@ -53,7 +53,8 @@ use datafusion_physical_expr::{
     PhysicalSortExpr,
 };
 use datafusion_physical_plan::filter_pushdown::{
-    FilterDescription, FilterPushdownSupport,
+    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
+    FilterPushdownSupport,
 };
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
@@ -593,26 +594,38 @@ impl DataSource for FileScanConfig {
         &self,
         fd: FilterDescription,
         config: &ConfigOptions,
-    ) -> Result<FilterPushdownSupport<Arc<dyn DataSource>>> {
-        match self.file_source.try_pushdown_filters(fd, config)? {
+    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
+        let FilterPushdownResult {
+            support,
+            remaining_description,
+        } = self.file_source.try_pushdown_filters(fd, config)?;
+
+        match support {
             FilterPushdownSupport::Supported {
-                child_filters,
-                remaining_filters,
-                op: file_source,
+                child_descriptions,
+                op,
+                retry,
             } => {
                 let new_data_source = Arc::new(
                     FileScanConfigBuilder::from(self.clone())
-                        .with_source(file_source)
+                        .with_source(op)
                         .build(),
                 );
-                Ok(FilterPushdownSupport::Supported {
-                    child_filters,
-                    remaining_filters,
-                    op: new_data_source,
+
+                debug_assert!(child_descriptions.is_empty());
+                debug_assert!(!retry);
+
+                Ok(FilterPushdownResult {
+                    support: FilterPushdownSupport::Supported {
+                        child_descriptions,
+                        op: new_data_source,
+                        retry,
+                    },
+                    remaining_description,
                 })
             }
-            FilterPushdownSupport::NotSupported(fd) => {
-                Ok(FilterPushdownSupport::NotSupported(fd))
+            FilterPushdownSupport::NotSupported => {
+                Ok(filter_pushdown_not_supported(remaining_description))
             }
         }
     }

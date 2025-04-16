@@ -19,10 +19,16 @@ use std::sync::Arc;
 
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-#[derive(Default)]
+#[derive(Clone)]
 pub struct FilterDescription {
     /// Expressions coming from the parent nodes
     pub filters: Vec<Arc<dyn PhysicalExpr>>,
+}
+
+impl Default for FilterDescription {
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 impl FilterDescription {
@@ -30,19 +36,40 @@ impl FilterDescription {
     pub fn take_filters(&mut self) -> Vec<Arc<dyn PhysicalExpr>> {
         std::mem::take(&mut self.filters)
     }
+
+    pub fn empty() -> FilterDescription {
+        Self { filters: vec![] }
+    }
 }
 
 pub enum FilterPushdownSupport<T> {
     Supported {
         // Filter predicates which can be pushed down through the operator.
         // NOTE that these are not placed into any operator.
-        child_filters: Vec<FilterDescription>,
-        // Filters which cannot be pushed down through the operator.
-        // NOTE that caller of try_pushdown_filters() should handle these remanining predicates,
-        // possibly introducing a FilterExec on top of this operator.
-        remaining_filters: FilterDescription,
+        child_descriptions: Vec<FilterDescription>,
         // Possibly updated new operator
         op: T,
+        // Whether the node is removed from the plan and the rule should be re-run manually
+        // on the new node.
+        // TODO: If TreeNodeRecursion supports Retry mechanism, this flag can be removed
+        retry: bool,
     },
-    NotSupported(FilterDescription),
+    NotSupported,
+}
+
+pub struct FilterPushdownResult<T> {
+    pub support: FilterPushdownSupport<T>,
+    // Filters which cannot be pushed down through the operator.
+    // NOTE that caller of try_pushdown_filters() should handle these remanining predicates,
+    // possibly introducing a FilterExec on top of this operator.
+    pub remaining_description: FilterDescription,
+}
+
+pub fn filter_pushdown_not_supported<T>(
+    remaining_description: FilterDescription,
+) -> FilterPushdownResult<T> {
+    FilterPushdownResult {
+        support: FilterPushdownSupport::NotSupported,
+        remaining_description,
+    }
 }

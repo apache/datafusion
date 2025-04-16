@@ -36,7 +36,8 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    FilterDescription, FilterPushdownSupport,
+    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
+    FilterPushdownSupport,
 };
 
 /// Common behaviors in Data Sources for both from Files and Memory.
@@ -88,8 +89,8 @@ pub trait DataSource: Send + Sync + Debug {
         &self,
         fd: FilterDescription,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownSupport<Arc<dyn DataSource>>> {
-        Ok(FilterPushdownSupport::NotSupported(fd))
+    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
+        Ok(filter_pushdown_not_supported(fd))
     }
 }
 
@@ -206,26 +207,37 @@ impl ExecutionPlan for DataSourceExec {
     }
 
     fn try_pushdown_filters(
-        self: Arc<Self>,
+        &self,
         fd: FilterDescription,
         config: &ConfigOptions,
-    ) -> Result<FilterPushdownSupport<Arc<dyn ExecutionPlan>>> {
-        let mut exec = Arc::unwrap_or_clone(self);
-        match exec.data_source.try_pushdown_filters(fd, config)? {
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        let FilterPushdownResult {
+            support,
+            remaining_description,
+        } = self.data_source.try_pushdown_filters(fd, config)?;
+
+        match support {
             FilterPushdownSupport::Supported {
-                child_filters,
-                remaining_filters,
+                child_descriptions,
                 op,
+                retry,
             } => {
-                exec.data_source = op;
-                Ok(FilterPushdownSupport::Supported {
-                    child_filters,
-                    remaining_filters,
-                    op: Arc::new(exec) as Arc<dyn ExecutionPlan>,
+                let new_exec = Arc::new(DataSourceExec::new(op));
+
+                debug_assert!(child_descriptions.is_empty());
+                debug_assert!(!retry);
+
+                Ok(FilterPushdownResult {
+                    support: FilterPushdownSupport::Supported {
+                        child_descriptions,
+                        op: new_exec,
+                        retry,
+                    },
+                    remaining_description,
                 })
             }
-            FilterPushdownSupport::NotSupported(fd) => {
-                Ok(FilterPushdownSupport::NotSupported(fd))
+            FilterPushdownSupport::NotSupported => {
+                Ok(filter_pushdown_not_supported(remaining_description))
             }
         }
     }

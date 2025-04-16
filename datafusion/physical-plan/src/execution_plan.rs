@@ -16,7 +16,10 @@
 // under the License.
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-use crate::filter_pushdown::{FilterDescription, FilterPushdownSupport};
+use crate::filter_pushdown::{
+    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
+    FilterPushdownSupport,
+};
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
@@ -476,16 +479,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// The default implementation assumes:
     /// * Parent filters can't be passed onto children.
     /// * This node has no filters to contribute.
-    /// 
+    ///
     /// See [`PushdownFilter`] for more details.
-    /// 
+    ///
     /// [`PushdownFilter`]: datafusion_physical_optimizer::filter_pushdown::PushdownFilter
     fn try_pushdown_filters(
-        self: Arc<Self>,
+        &self,
         fd: FilterDescription,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownSupport<Arc<dyn ExecutionPlan>>> {
-        Ok(FilterPushdownSupport::NotSupported(fd))
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(filter_pushdown_not_supported(fd))
     }
 }
 

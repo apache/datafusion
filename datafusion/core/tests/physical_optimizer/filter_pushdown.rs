@@ -41,7 +41,8 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::filter_pushdown::PushdownFilter;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter_pushdown::{
-    FilterDescription, FilterPushdownSupport,
+    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
+    FilterPushdownSupport,
 };
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
@@ -150,25 +151,23 @@ impl FileSource for TestSource {
         &self,
         fd: FilterDescription,
         config: &ConfigOptions,
-    ) -> Result<FilterPushdownSupport<Arc<dyn FileSource>>> {
-        if self.support {
-            if config.execution.parquet.pushdown_filters {
-                return Ok(FilterPushdownSupport::Supported {
-                    child_filters: vec![],
-                    remaining_filters: FilterDescription { filters: vec![] },
+    ) -> Result<FilterPushdownResult<Arc<dyn FileSource>>> {
+        if self.support && config.execution.parquet.pushdown_filters {
+            Ok(FilterPushdownResult {
+                support: FilterPushdownSupport::Supported {
+                    child_descriptions: vec![],
                     op: Arc::new(TestSource {
-                        support: self.support,
+                        support: true,
                         predicate: Some(conjunction(fd.filters)),
-                        statistics: self.statistics.clone(),
+                        statistics: self.statistics.clone(), // should be updated ?
                     }),
-                });
-            }
+                    retry: false,
+                },
+                remaining_description: Default::default(),
+            })
+        } else {
+            Ok(filter_pushdown_not_supported(fd))
         }
-        Ok(FilterPushdownSupport::Supported {
-            child_filters: vec![],
-            remaining_filters: fd,
-            op: Arc::new(self.clone()),
-        })
     }
 }
 

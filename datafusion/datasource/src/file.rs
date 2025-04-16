@@ -30,7 +30,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    FilterDescription, FilterPushdownSupport,
+    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
+    FilterPushdownSupport,
 };
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
@@ -97,6 +98,7 @@ pub trait FileSource: Send + Sync {
         }
         Ok(None)
     }
+
     /// Try to push down filters into this FileSource.
     /// See [`ExecutionPlan::try_pushdown_filters`] for more details.
     ///
@@ -105,7 +107,7 @@ pub trait FileSource: Send + Sync {
         &self,
         fd: FilterDescription,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownSupport<Arc<dyn FileSource>>> {
-        Ok(FilterPushdownSupport::NotSupported(fd))
+    ) -> Result<FilterPushdownResult<Arc<dyn FileSource>>> {
+        Ok(filter_pushdown_not_supported(fd))
     }
 }
