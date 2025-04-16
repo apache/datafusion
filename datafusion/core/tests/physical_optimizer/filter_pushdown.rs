@@ -227,7 +227,7 @@ fn test_pushdown_into_scan_with_config_options() {
       output:
         Ok:
           - FilterExec: a@0 = foo
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
     "
     );
 
@@ -467,7 +467,9 @@ impl OptimizationTest {
     where
         O: PhysicalOptimizerRule,
     {
-        Self::new_with_config(input_plan, opt, &ConfigOptions::default())
+        let mut parquet_pushdown_config = ConfigOptions::default();
+        parquet_pushdown_config.execution.parquet.pushdown_filters = true;
+        Self::new_with_config(input_plan, opt, &parquet_pushdown_config)
     }
 
     pub fn new_with_config<O>(

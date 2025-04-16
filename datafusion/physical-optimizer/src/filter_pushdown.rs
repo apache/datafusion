@@ -442,12 +442,12 @@ impl PushdownFilter {
                     node.plan = op;
                     // Operators having 2 children cannot be removed
                     node.data = child_descriptions.swap_remove(0);
-                    if !node.children.is_empty() {
-                        node.children = node.children.swap_remove(0).children;
-                        Self::try_pushdown(node, config)
-                    } else {
+                    if node.children.is_empty() {
                         node.children = vec![];
                         Ok(Transformed::yes(node))
+                    } else {
+                        node.children = node.children.swap_remove(0).children;
+                        Self::try_pushdown(node, config)
                     }
                 } else {
                     if remaining_description.filters.is_empty() {

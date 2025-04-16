@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FilterDescription {
     /// Expressions coming from the parent nodes
     pub filters: Vec<Arc<dyn PhysicalExpr>>,
@@ -42,6 +42,7 @@ impl FilterDescription {
     }
 }
 
+#[derive(Debug)]
 pub enum FilterPushdownSupport<T> {
     Supported {
         // Filter predicates which can be pushed down through the operator.
@@ -57,6 +58,7 @@ pub enum FilterPushdownSupport<T> {
     NotSupported,
 }
 
+#[derive(Debug)]
 pub struct FilterPushdownResult<T> {
     pub support: FilterPushdownSupport<T>,
     // Filters which cannot be pushed down through the operator.
