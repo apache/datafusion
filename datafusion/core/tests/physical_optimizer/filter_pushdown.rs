@@ -310,7 +310,7 @@ fn test_filter_with_projection() {
 
     // add a test where the filter is on a column that isn't included in the output
     let projection = vec![1];
-    let predicate = col_lit_predicate("a", "foo", &schema());
+    let predicate = col_lit_predicate("a", "foo", schema());
     let plan = Arc::new(
         FilterExec::try_new(predicate, scan)
             .unwrap()
