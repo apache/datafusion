@@ -146,7 +146,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                         // instead, we assume that the second column is the "value" column both here and in
                         // execution.
                         let value_field = fields.get(1).expect("fields should have exactly two members");
-                        Ok(Field::new(self.name(), value_field.data_type().clone(), true))
+                        Ok(value_field.as_ref().clone())
                     },
                     _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
                 }
@@ -158,7 +158,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                     |field_name| {
                     fields.iter().find(|f| f.name() == field_name)
                     .ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
-                    .map(|f| Field::new(self.name(), f.data_type().to_owned(), true))
+                    .map(|f| f.as_ref().clone())
                 })
             },
             (DataType::Null, _) => Ok(Field::new(self.name(), DataType::Null, true)),
