@@ -3385,7 +3385,7 @@ mod tests {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
         let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&execution_props).with_schema(schema.clone()),
+            SimplifyContext::new(&execution_props).with_schema(Arc::clone(&schema)),
         );
         simplifier.coerce(expr, schema.as_ref()).unwrap()
     }
