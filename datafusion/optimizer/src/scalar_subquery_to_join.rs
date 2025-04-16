@@ -21,7 +21,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
-use crate::decorrelate_general::GeneralPullUpCorrelatedExpr;
 use crate::optimizer::ApplyOrder;
 use crate::utils::{evaluates_to_null, replace_qualified_name};
 use crate::{OptimizerConfig, OptimizerRule};
@@ -29,7 +28,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
+    TreeNodeRewriter,
 };
 use datafusion_common::{internal_err, plan_err, Column, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
@@ -74,7 +74,6 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     fn supports_rewrite(&self) -> bool {
         true
     }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -88,6 +87,8 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     return Ok(Transformed::no(LogicalPlan::Filter(filter)));
                 }
 
+                // reWriteExpr is all the filter in the subquery that is irrelevant to the subquery execution
+                // i.e where outer=some col, or outer + binary operator with some aggregated value
                 let (subqueries, mut rewrite_expr) = self.extract_subquery_exprs(
                     &filter.predicate,
                     config.alias_generator(),
@@ -289,25 +290,24 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
 ///
 /// # Arguments
 ///
-/// * `query_info` - The subquery portion of the `where` (select avg(total) from orders)
+/// * `subquery` - The subquery portion of the `where` (select avg(total) from orders)
 /// * `filter_input` - The non-subquery portion (from customers)
-/// * `outer_others` - Any additional parts to the `where` expression (and c.x = y)
 /// * `subquery_alias` - Subquery aliases
+/// # Returns
+/// * an optimize subquery if any
+/// * a map of original count expr to a transformed expr (a hacky way to handle count bug)
 fn build_join(
     subquery: &Subquery,
     filter_input: &LogicalPlan,
     subquery_alias: &str,
 ) -> Result<Option<(LogicalPlan, HashMap<String, Expr>)>> {
     let subquery_plan = subquery.subquery.as_ref();
-    let mut pull_up = GeneralPullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let new_plan = subquery_plan.clone().rewrite(&mut pull_up).data()?;
 
     if !pull_up.can_pull_up {
         return Ok(None);
     }
-
-    println!("before rewrite: {}", subquery_plan);
-    println!("ater rewrite: {}", new_plan);
 
     let collected_count_expr_map =
         pull_up.collected_count_expr_map.get(&new_plan).cloned();
@@ -320,11 +320,6 @@ fn build_join(
         .correlated_subquery_cols_map
         .values()
         .for_each(|cols| all_correlated_cols.extend(cols.clone()));
-    println!("========\ncorrelated cols");
-    for col in &all_correlated_cols {
-        println!("{}", col);
-    }
-    println!("====================");
 
     // alias the join filter
     let join_filter_opt =
@@ -353,7 +348,6 @@ fn build_join(
             }
         }
     } else {
-        println!("++++++++++++++++filter input: {}", filter_input);
         // left join if correlated, grouping by the join keys so we don't change row count
         LogicalPlanBuilder::from(filter_input.clone())
             .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?

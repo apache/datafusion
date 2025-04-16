@@ -3,12 +3,12 @@ CREATE TABLE students(
     id int,
     name varchar,
     major varchar,
-    year int
+    year timestamp
 )
 AS VALUES
-    (1,'toai','math',2014),
-    (2,'manh','math',2015),
-    (3,'bao','math',2025)
+    (1,'A','math','2014-01-01T00:00:00'::timestamp),
+    (2,'B','math','2015-01-01T00:00:00'::timestamp),
+    (3,'C','math','2016-01-01T00:00:00'::timestamp)
 ;
 
 statement ok
@@ -16,12 +16,12 @@ CREATE TABLE exams(
     sid int,
     curriculum varchar,
     grade int,
-    date int
+    date timestamp
 )
 AS VALUES
-    (1, 'math', 10, 2014),
-    (2, 'math', 9, 2015),
-    (3, 'math', 4, 2025)
+    (1, 'math', 10, '2014-01-01T00:00:00'::timestamp),
+    (2, 'math', 9, '2015-01-01T00:00:00'::timestamp),
+    (3, 'math', 4, '2016-01-01T00:00:00'::timestamp)
 ;
 
 -- explain select s.name, e.curriculum from students s, exams e where s.id=e.sid
