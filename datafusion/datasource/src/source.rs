@@ -208,6 +208,7 @@ impl ExecutionPlan for DataSourceExec {
 
     fn try_pushdown_filters(
         &self,
+        _node: Arc<dyn ExecutionPlan>,
         fd: FilterDescription,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {

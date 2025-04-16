@@ -18,7 +18,6 @@
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use crate::filter_pushdown::{
     filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -485,6 +484,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`PushdownFilter`]: datafusion_physical_optimizer::filter_pushdown::PushdownFilter
     fn try_pushdown_filters(
         &self,
+        _node: Arc<dyn ExecutionPlan>,
         fd: FilterDescription,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {

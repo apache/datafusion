@@ -420,7 +420,11 @@ impl PushdownFilter {
         let FilterPushdownResult {
             support,
             remaining_description,
-        } = initial_plan.try_pushdown_filters(initial_description, config)?;
+        } = initial_plan.try_pushdown_filters(
+            Arc::clone(&initial_plan),
+            initial_description,
+            config,
+        )?;
 
         match support {
             FilterPushdownSupport::Supported {
