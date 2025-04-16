@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use super::{add_offset_to_expr, ProjectionMapping};
-use crate::expressions::Column;
+use crate::expressions::{Column, Literal};
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -91,7 +91,8 @@ impl ConstExpr {
     ///
     /// Note that you can also use `ConstExpr::from` to create a constant
     /// expression from just a physical expression, with the *safe* assumption
-    /// of heterogenous values across partitions.
+    /// of heterogenous values across partitions unless the expression is a
+    /// literal.
     pub fn new(expr: Arc<dyn PhysicalExpr>, across_partitions: AcrossPartitions) -> Self {
         Self {
             expr,
@@ -141,10 +142,17 @@ impl Display for ConstExpr {
 
 impl From<Arc<dyn PhysicalExpr>> for ConstExpr {
     fn from(expr: Arc<dyn PhysicalExpr>) -> Self {
+        // By default, assume constant expressions are not same across partitions.
+        // However, if we have a literal, it will have a single value that is the
+        // same across all partitions.
+        let across = if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
+            AcrossPartitions::Uniform(Some(lit.value().clone()))
+        } else {
+            AcrossPartitions::Heterogeneous
+        };
         Self {
             expr,
-            // By default, assume constant expressions are not same across partitions.
-            across_partitions: Default::default(),
+            across_partitions: across,
         }
     }
 }
