@@ -125,8 +125,8 @@ use itertools::Itertools;
 /// # let col_c = col("c", &schema).unwrap();
 /// // This object represents data that is sorted by a ASC, c DESC
 /// // with a single constant value of b
-/// let mut eq_properties = EquivalenceProperties::new(schema)
-///   .with_constants(vec![ConstExpr::from(col_b)]);
+/// let mut eq_properties = EquivalenceProperties::new(schema);
+/// eq_properties.add_constants(vec![ConstExpr::from(col_b)]);
 /// eq_properties.add_new_ordering([
 ///   PhysicalSortExpr::new_default(col_a).asc(),
 ///   PhysicalSortExpr::new_default(col_c).desc(),
