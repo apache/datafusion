@@ -5202,4 +5202,108 @@ mod tests {
             ShortCircuitStrategy::None
         ));
     }
+
+    /// Test for [pre_selection_scatter]
+    /// Since [check_short_circuit] ensures that the left side does not contain null and is neither all_true nor all_false, as well as not being empty,
+    /// the following tests have been designed:
+    /// 1. Test sparse left with interleaved true/false
+    /// 2. Test multiple consecutive true blocks
+    /// 3. Test multiple consecutive true blocks
+    /// 4. Test single true at first position
+    /// 5. Test single true at last position
+    /// 6. Test nulls in right array
+    /// 7. Test scalar right handling
+    #[test]
+    fn test_pre_selection_scatter() {
+        fn create_bool_array(bools: Vec<bool>) -> BooleanArray {
+            BooleanArray::from(bools.into_iter().map(Some).collect::<Vec<_>>())
+        }
+        // Test sparse left with interleaved true/false
+        {
+            // Left: [T, F, T, F, T]
+            // Right: [F, T, F] (values for 3 true positions)
+            let left = create_bool_array(vec![true, false, true, false, true]);
+            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![
+                false, true, false,
+            ])));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            let expected = create_bool_array(vec![false, false, true, false, false]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // Test multiple consecutive true blocks
+        {
+            // Left: [F, T, T, F, T, T, T]
+            // Right: [T, F, F, T, F]
+            let left =
+                create_bool_array(vec![false, true, true, false, true, true, true]);
+            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![
+                true, false, false, true, false,
+            ])));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            let expected =
+                create_bool_array(vec![false, true, false, false, false, true, false]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // Test single true at first position
+        {
+            // Left: [T, F, F]
+            // Right: [F]
+            let left = create_bool_array(vec![true, false, false]);
+            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![false])));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            let expected = create_bool_array(vec![false, false, false]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // Test single true at last position
+        {
+            // Left: [F, F, T]
+            // Right: [F]
+            let left = create_bool_array(vec![false, false, true]);
+            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![false])));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            let expected = create_bool_array(vec![false, false, false]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // Test nulls in right array
+        {
+            // Left: [F, T, F, T]
+            // Right: [None, Some(false)] (with null at first position)
+            let left = create_bool_array(vec![false, true, false, true]);
+            let right_arr = BooleanArray::from(vec![None, Some(false)]);
+            let right = ColumnarValue::Array(Arc::new(right_arr));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            let expected = BooleanArray::from(vec![
+                Some(false),
+                None, // null from right
+                Some(false),
+                Some(false),
+            ]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // Test scalar right handling
+        {
+            // Left: [T, F, T]
+            // Right: Scalar true
+            let left = create_bool_array(vec![true, false, true]);
+            let right = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            assert!(matches!(result, ColumnarValue::Scalar(_)));
+        }
+    }
 }
