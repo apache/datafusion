@@ -245,7 +245,8 @@ fn test_pushdown_into_scan_with_config_options() {
         -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
       output:
         Ok:
-          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
+          - FilterExec: a@0 = foo
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
     "
     );
 }
@@ -291,21 +292,16 @@ fn test_filter_with_projection() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownFilter{}),
-        @r#"
+        @r"
     OptimizationTest:
       input:
         - FilterExec: a@1 = foo, projection=[b@1, a@0]
         -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
       output:
-        Err: Internal error: Schema mismatch:
-
-    Before:
-    Schema { fields: [Field { name: "b", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "a", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }
-
-    After:
-    Schema { fields: [Field { name: "a", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }.
-    This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
-    "#,
+        Ok:
+          - FilterExec: a@1 = foo, projection=[b@1, a@0]
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=true
+    ",
     );
 
     // add a test where the filter is on a column that isn't included in the output
@@ -326,8 +322,8 @@ fn test_filter_with_projection() {
         -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
       output:
         Ok:
-          - FilterExec: true, projection=[b@1]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
+          - FilterExec: a@0 = foo, projection=[b@1]
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=true
     "
     );
 }
