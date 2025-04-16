@@ -360,7 +360,7 @@ impl<'a> DFParserBuilder<'a> {
         // Convert TokenizerError -> ParserError
         let tokens = tokenizer
             .tokenize_with_location()
-            .map_err(|e| ParserError::from(e))?;
+            .map_err(ParserError::from)?;
 
         Ok(DFParser {
             parser: Parser::new(self.dialect)
