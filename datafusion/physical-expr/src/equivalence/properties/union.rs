@@ -75,9 +75,8 @@ fn calculate_union_binary(
     orderings.add_satisfied_orderings(&rhs, &lhs);
     let orderings = orderings.build();
 
-    let mut eq_properties =
-        EquivalenceProperties::new(lhs.schema).with_constants(constants);
-
+    let mut eq_properties = EquivalenceProperties::new(lhs.schema);
+    eq_properties.add_constants(constants);
     eq_properties.add_new_orderings(orderings);
     Ok(eq_properties)
 }
@@ -842,8 +841,10 @@ mod tests {
                 .map(|col_name| ConstExpr::from(col(col_name, schema).unwrap()))
                 .collect::<Vec<_>>();
 
-            EquivalenceProperties::new_with_orderings(Arc::clone(schema), orderings)
-                .with_constants(constants)
+            let mut props =
+                EquivalenceProperties::new_with_orderings(Arc::clone(schema), orderings);
+            props.add_constants(constants);
+            props
         }
     }
 
@@ -862,16 +863,16 @@ mod tests {
             Arc::clone(&col_a),
             AcrossPartitions::Uniform(Some(literal_10.clone())),
         );
-        let input1 = EquivalenceProperties::new(Arc::clone(&schema))
-            .with_constants(vec![const_expr1]);
+        let mut input1 = EquivalenceProperties::new(Arc::clone(&schema));
+        input1.add_constants(vec![const_expr1]);
 
         // Create second input with a=10
         let const_expr2 = ConstExpr::new(
             Arc::clone(&col_a),
             AcrossPartitions::Uniform(Some(literal_10.clone())),
         );
-        let input2 = EquivalenceProperties::new(Arc::clone(&schema))
-            .with_constants(vec![const_expr2]);
+        let mut input2 = EquivalenceProperties::new(Arc::clone(&schema));
+        input2.add_constants(vec![const_expr2]);
 
         // Calculate union properties
         let union_props = calculate_union(vec![input1, input2], schema)?;

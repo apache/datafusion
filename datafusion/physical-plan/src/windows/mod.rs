@@ -390,8 +390,8 @@ pub(crate) fn window_equivalence_properties(
                     Arc::new(Column::new(expr.name(), i + input_schema_len)) as _;
                 if no_partitioning {
                     // Window function has a constant result across the table:
-                    window_eq_properties = window_eq_properties
-                        .with_constants(std::iter::once(ConstExpr::from(window_col)))
+                    window_eq_properties
+                        .add_constants(std::iter::once(ConstExpr::from(window_col)))
                 } else {
                     // Window function results in a partial constant value in
                     // some ordering. Adjust the ordering equivalences accordingly:
@@ -586,7 +586,7 @@ pub fn get_window_mode(
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
-    let input_eqs = input.equivalence_properties().clone();
+    let mut input_eqs = input.equivalence_properties().clone();
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
     let partition_by_reqs = indices
         .iter()
@@ -597,7 +597,7 @@ pub fn get_window_mode(
         .collect::<Vec<_>>();
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().cloned().map(ConstExpr::from);
-    let partition_by_eqs = input_eqs.with_constants(const_exprs);
+    input_eqs.add_constants(const_exprs);
     let reverse_orderby_keys =
         orderby_keys.iter().map(|e| e.reverse()).collect::<Vec<_>>();
     for (should_swap, orderbys) in
@@ -605,7 +605,7 @@ pub fn get_window_mode(
     {
         let mut req = partition_by_reqs.clone();
         req.extend(orderbys.iter().cloned().map(Into::into));
-        if req.is_empty() || partition_by_eqs.ordering_satisfy_requirement(req) {
+        if req.is_empty() || input_eqs.ordering_satisfy_requirement(req) {
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {
                 InputOrderMode::Sorted

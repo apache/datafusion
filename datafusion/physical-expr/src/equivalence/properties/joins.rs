@@ -104,10 +104,10 @@ pub fn join_equivalence_properties(
     }
     match join_type {
         JoinType::LeftAnti | JoinType::LeftSemi => {
-            result = result.with_constants(left_constants);
+            result.add_constants(left_constants);
         }
         JoinType::RightAnti | JoinType::RightSemi => {
-            result = result.with_constants(right_constants);
+            result.add_constants(right_constants);
         }
         _ => {}
     }

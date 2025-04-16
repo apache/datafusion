@@ -683,7 +683,7 @@ impl AggregateExec {
                 ConstExpr::from(column as Arc<dyn PhysicalExpr>)
             });
             constants.extend(new_constants);
-            eq_properties = eq_properties.with_constants(constants);
+            eq_properties.add_constants(constants);
         }
 
         // Group by expression will be a distinct value after the aggregation.

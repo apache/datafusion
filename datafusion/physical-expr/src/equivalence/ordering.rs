@@ -665,7 +665,7 @@ mod tests {
             let constants = constants.into_iter().map(|expr| {
                 ConstExpr::new(Arc::clone(expr), AcrossPartitions::Uniform(None))
             });
-            eq_properties = eq_properties.with_constants(constants);
+            eq_properties.add_constants(constants);
 
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
