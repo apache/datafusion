@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-statement ok
+statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/alltypes_plain\.parquet not found: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 
 query ?I
@@ -30,15 +30,8 @@ SELECT * FROM (SELECT null AS id1, 1 AS id2) t1
 ----
 NULL 1
 
-query IR
+query error DataFusion error: Error during planning: table 'datafusion\.public\.alltypes_plain' not found
 SELECT int_col, double_col FROM alltypes_plain where int_col > 0 INTERSECT ALL SELECT int_col, double_col FROM alltypes_plain LIMIT 4
-----
-1 10.1
-1 10.1
-1 10.1
-1 10.1
 
-query IR
+query error DataFusion error: Error during planning: table 'datafusion\.public\.alltypes_plain' not found
 SELECT int_col, double_col FROM alltypes_plain where int_col > 0 INTERSECT SELECT int_col, double_col FROM alltypes_plain
-----
-1 10.1

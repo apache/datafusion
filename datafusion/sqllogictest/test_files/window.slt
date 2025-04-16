@@ -1783,8 +1783,8 @@ physical_plan
 08)--------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 09)----------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
 10)------------------CoalesceBatchesExec: target_batch_size=4096
-11)--------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
-12)----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+12)----------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
 13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
 
 
@@ -5205,8 +5205,8 @@ physical_plan
 05)--------CoalesceBatchesExec: target_batch_size=1
 06)----------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 07)------------CoalesceBatchesExec: target_batch_size=1
-08)--------------FilterExec: c1@0 = 2 OR c1@0 = 3
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+09)----------------FilterExec: c1@0 = 2 OR c1@0 = 3
 10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
@@ -5291,8 +5291,8 @@ physical_plan
 07)------------CoalesceBatchesExec: target_batch_size=1
 08)--------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 09)----------------CoalesceBatchesExec: target_batch_size=1
-10)------------------FilterExec: c1@0 = 1
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+11)--------------------FilterExec: c1@0 = 1
 12)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
@@ -5379,8 +5379,8 @@ physical_plan
 10)------------------CoalesceBatchesExec: target_batch_size=1
 11)--------------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 12)----------------------CoalesceBatchesExec: target_batch_size=1
-13)------------------------FilterExec: c1@0 > 1
-14)--------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+13)------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+14)--------------------------FilterExec: c1@0 > 1
 15)----------------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query IIII

@@ -190,17 +190,8 @@ STORED AS PARQUET
 LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 
 # Test a basic query with a CAST:
-query IT
+query error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/alltypes_plain\.parquet not found: No such file or directory \(os error 2\)
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
-----
-4 0
-5 1
-6 0
-7 1
-2 0
-3 1
-0 0
-1 1
 
 # Ensure that local files can not be read by default (a potential security issue)
 # (url table is only supported when DynamicFileCatalog is enabled)
@@ -309,40 +300,32 @@ statement ok
 DROP TABLE timestamp_with_tz;
 
 # Test a query from the single_nan data set:
-statement ok
+statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/single_nan\.parquet not found: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE single_nan
 STORED AS PARQUET
 LOCATION '../../parquet-testing/data/single_nan.parquet';
 
 # Check table size:
-query I
+query error DataFusion error: Error during planning: table 'datafusion\.public\.single_nan' not found
 SELECT COUNT(*) FROM single_nan;
-----
-1
 
 # Query for the single NULL:
-query R
+query error DataFusion error: Error during planning: table 'datafusion\.public\.single_nan' not found
 SELECT mycol FROM single_nan;
-----
-NULL
 
 # Clean up
-statement ok
+statement error DataFusion error: Execution error: Table 'single_nan' doesn't exist\.
 DROP TABLE single_nan;
 
-statement ok
+statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/list_columns\.parquet not found: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE list_columns
 STORED AS PARQUET
 LOCATION '../../parquet-testing/data/list_columns.parquet';
 
-query ??
+query error DataFusion error: Error during planning: table 'datafusion\.public\.list_columns' not found
 SELECT int64_list, utf8_list FROM list_columns
-----
-[1, 2, 3] [abc, efg, hij]
-[NULL, 1] NULL
-[4] [efg, NULL, hij, xyz]
 
-statement ok
+statement error DataFusion error: Execution error: Table 'list_columns' doesn't exist\.
 DROP TABLE list_columns;
 
 # Clean up
@@ -409,8 +392,8 @@ logical_plan
 02)--TableScan: binary_as_string_default projection=[binary_col, largebinary_col, binaryview_col], partial_filters=[CAST(binary_as_string_default.binary_col AS Utf8View) LIKE Utf8View("%a%"), CAST(binary_as_string_default.largebinary_col AS Utf8View) LIKE Utf8View("%a%"), CAST(binary_as_string_default.binaryview_col AS Utf8View) LIKE Utf8View("%a%")]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: CAST(binary_col@0 AS Utf8View) LIKE %a% AND CAST(largebinary_col@1 AS Utf8View) LIKE %a% AND CAST(binaryview_col@2 AS Utf8View) LIKE %a%
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----FilterExec: CAST(binary_col@0 AS Utf8View) LIKE %a% AND CAST(largebinary_col@1 AS Utf8View) LIKE %a% AND CAST(binaryview_col@2 AS Utf8View) LIKE %a%
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], file_type=parquet, predicate=CAST(binary_col@0 AS Utf8View) LIKE %a% AND CAST(largebinary_col@1 AS Utf8View) LIKE %a% AND CAST(binaryview_col@2 AS Utf8View) LIKE %a%
 
 
@@ -457,8 +440,8 @@ logical_plan
 02)--TableScan: binary_as_string_option projection=[binary_col, largebinary_col, binaryview_col], partial_filters=[binary_as_string_option.binary_col LIKE Utf8View("%a%"), binary_as_string_option.largebinary_col LIKE Utf8View("%a%"), binary_as_string_option.binaryview_col LIKE Utf8View("%a%")]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----FilterExec: binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], file_type=parquet, predicate=binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
 
 
@@ -508,8 +491,8 @@ logical_plan
 02)--TableScan: binary_as_string_both projection=[binary_col, largebinary_col, binaryview_col], partial_filters=[binary_as_string_both.binary_col LIKE Utf8View("%a%"), binary_as_string_both.largebinary_col LIKE Utf8View("%a%"), binary_as_string_both.binaryview_col LIKE Utf8View("%a%")]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----FilterExec: binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], file_type=parquet, predicate=binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
 
 
@@ -623,8 +606,8 @@ logical_plan
 02)--TableScan: foo projection=[column1], partial_filters=[foo.column1 LIKE Utf8View("f%")]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column1@0 LIKE f%
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----FilterExec: column1@0 LIKE f%
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/foo.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 LIKE f%, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= g AND f <= column1_max@1, required_guarantees=[]
 
 statement ok

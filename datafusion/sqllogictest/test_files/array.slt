@@ -5992,7 +5992,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
-05)--------Projection:
+05)--------Projection: 
 06)----------Filter: substr(CAST(md5(CAST(tmp_table.value AS Utf8)) AS Utf8), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
 07)------------TableScan: tmp_table projection=[value]
 physical_plan
@@ -6002,8 +6002,8 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------ProjectionExec: expr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------FilterExec: substr(md5(CAST(value@0 AS Utf8)), 1, 32) IN ([Literal { value: Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278") }, Literal { value: Utf8View("a") }, Literal { value: Utf8View("b") }, Literal { value: Utf8View("c") }])
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------FilterExec: substr(md5(CAST(value@0 AS Utf8)), 1, 32) IN ([Literal { value: Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278") }, Literal { value: Utf8View("a") }, Literal { value: Utf8View("b") }, Literal { value: Utf8View("c") }])
 09)----------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
@@ -6021,7 +6021,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
-05)--------Projection:
+05)--------Projection: 
 06)----------Filter: substr(CAST(md5(CAST(tmp_table.value AS Utf8)) AS Utf8), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
 07)------------TableScan: tmp_table projection=[value]
 physical_plan
@@ -6031,8 +6031,8 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------ProjectionExec: expr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------FilterExec: substr(md5(CAST(value@0 AS Utf8)), 1, 32) IN ([Literal { value: Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278") }, Literal { value: Utf8View("a") }, Literal { value: Utf8View("b") }, Literal { value: Utf8View("c") }])
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------FilterExec: substr(md5(CAST(value@0 AS Utf8)), 1, 32) IN ([Literal { value: Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278") }, Literal { value: Utf8View("a") }, Literal { value: Utf8View("b") }, Literal { value: Utf8View("c") }])
 09)----------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
@@ -6050,7 +6050,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
-05)--------Projection:
+05)--------Projection: 
 06)----------Filter: substr(CAST(md5(CAST(tmp_table.value AS Utf8)) AS Utf8), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
 07)------------TableScan: tmp_table projection=[value]
 physical_plan
@@ -6060,8 +6060,8 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------ProjectionExec: expr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------FilterExec: substr(md5(CAST(value@0 AS Utf8)), 1, 32) IN ([Literal { value: Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278") }, Literal { value: Utf8View("a") }, Literal { value: Utf8View("b") }, Literal { value: Utf8View("c") }])
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------FilterExec: substr(md5(CAST(value@0 AS Utf8)), 1, 32) IN ([Literal { value: Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278") }, Literal { value: Utf8View("a") }, Literal { value: Utf8View("b") }, Literal { value: Utf8View("c") }])
 09)----------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 # FIXME: due to rewrite below not working, this is _extremely_ slow to evaluate
@@ -6081,7 +6081,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
-05)--------Projection:
+05)--------Projection: 
 06)----------Filter: array_has(LargeList([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), substr(CAST(md5(CAST(tmp_table.value AS Utf8)) AS Utf8), Int64(1), Int64(32)))
 07)------------TableScan: tmp_table projection=[value]
 physical_plan
@@ -6091,8 +6091,8 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------ProjectionExec: expr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------FilterExec: array_has([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c], substr(md5(CAST(value@0 AS Utf8)), 1, 32))
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------FilterExec: array_has([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c], substr(md5(CAST(value@0 AS Utf8)), 1, 32))
 09)----------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
@@ -6110,7 +6110,7 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
-05)--------Projection:
+05)--------Projection: 
 06)----------Filter: substr(CAST(md5(CAST(tmp_table.value AS Utf8)) AS Utf8), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
 07)------------TableScan: tmp_table projection=[value]
 physical_plan
@@ -6120,8 +6120,8 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 05)--------ProjectionExec: expr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------FilterExec: substr(md5(CAST(value@0 AS Utf8)), 1, 32) IN ([Literal { value: Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278") }, Literal { value: Utf8View("a") }, Literal { value: Utf8View("b") }, Literal { value: Utf8View("c") }])
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------FilterExec: substr(md5(CAST(value@0 AS Utf8)), 1, 32) IN ([Literal { value: Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278") }, Literal { value: Utf8View("a") }, Literal { value: Utf8View("b") }, Literal { value: Utf8View("c") }])
 09)----------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I

@@ -172,19 +172,19 @@ physical_plan
 05)│            8192           │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
-08)│         FilterExec        │
+08)│      RepartitionExec      │
 09)│    --------------------   │
-10)│         predicate:        │
-11)│     string_col != foo     │
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│      RepartitionExec      │
-15)│    --------------------   │
-16)│  output_partition_count:  │
-17)│             1             │
-18)│                           │
-19)│    partitioning_scheme:   │
-20)│     RoundRobinBatch(4)    │
+10)│  output_partition_count:  │
+11)│             1             │
+12)│                           │
+13)│    partitioning_scheme:   │
+14)│     RoundRobinBatch(4)    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│         FilterExec        │
+18)│    --------------------   │
+19)│         predicate:        │
+20)│     string_col != foo     │
 21)└─────────────┬─────────────┘
 22)┌─────────────┴─────────────┐
 23)│       DataSourceExec      │
@@ -422,23 +422,23 @@ physical_plan
 05)│            8192           │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
-08)│         FilterExec        │
+08)│      RepartitionExec      │
 09)│    --------------------   │
-10)│         predicate:        │
-11)│   string_col != foo AND   │
-12)│      string_col != bar    │
-13)│     AND string_col != a   │
-14)│     really long string    │
-15)│          constant         │
-16)└─────────────┬─────────────┘
-17)┌─────────────┴─────────────┐
-18)│      RepartitionExec      │
-19)│    --------------------   │
-20)│  output_partition_count:  │
-21)│             1             │
-22)│                           │
-23)│    partitioning_scheme:   │
-24)│     RoundRobinBatch(4)    │
+10)│  output_partition_count:  │
+11)│             1             │
+12)│                           │
+13)│    partitioning_scheme:   │
+14)│     RoundRobinBatch(4)    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│         FilterExec        │
+18)│    --------------------   │
+19)│         predicate:        │
+20)│   string_col != foo AND   │
+21)│      string_col != bar    │
+22)│     AND string_col != a   │
+23)│     really long string    │
+24)│          constant         │
 25)└─────────────┬─────────────┘
 26)┌─────────────┴─────────────┐
 27)│       DataSourceExec      │
@@ -460,20 +460,20 @@ physical_plan
 05)│            8192           │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
-08)│         FilterExec        │
+08)│      RepartitionExec      │
 09)│    --------------------   │
-10)│         predicate:        │
-11)│       string_col !=       │
-12)│        aaaaaaaaaaaa       │
-13)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
-14)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
-15)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
-16)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
-17)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
-18)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
-19)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
-20)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
-21)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+10)│  output_partition_count:  │
+11)│             1             │
+12)│                           │
+13)│    partitioning_scheme:   │
+14)│     RoundRobinBatch(4)    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│         FilterExec        │
+18)│    --------------------   │
+19)│         predicate:        │
+20)│       string_col !=       │
+21)│        aaaaaaaaaaaa       │
 22)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
 23)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
 24)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
@@ -491,16 +491,16 @@ physical_plan
 36)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
 37)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
 38)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
-39)│            ...            │
-40)└─────────────┬─────────────┘
-41)┌─────────────┴─────────────┐
-42)│      RepartitionExec      │
-43)│    --------------------   │
-44)│  output_partition_count:  │
-45)│             1             │
-46)│                           │
-47)│    partitioning_scheme:   │
-48)│     RoundRobinBatch(4)    │
+39)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+40)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+41)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+42)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+43)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+44)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+45)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+46)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+47)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+48)│            ...            │
 49)└─────────────┬─────────────┘
 50)┌─────────────┴─────────────┐
 51)│       DataSourceExec      │
@@ -522,19 +522,19 @@ physical_plan
 05)│            8192           │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
-08)│         FilterExec        │
+08)│      RepartitionExec      │
 09)│    --------------------   │
-10)│         predicate:        │
-11)│string_col != aaaaaaaaaaaaa│
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│      RepartitionExec      │
-15)│    --------------------   │
-16)│  output_partition_count:  │
-17)│             1             │
-18)│                           │
-19)│    partitioning_scheme:   │
-20)│     RoundRobinBatch(4)    │
+10)│  output_partition_count:  │
+11)│             1             │
+12)│                           │
+13)│    partitioning_scheme:   │
+14)│     RoundRobinBatch(4)    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│         FilterExec        │
+18)│    --------------------   │
+19)│         predicate:        │
+20)│string_col != aaaaaaaaaaaaa│
 21)└─────────────┬─────────────┘
 22)┌─────────────┴─────────────┐
 23)│       DataSourceExec      │
@@ -556,21 +556,21 @@ physical_plan
 05)│            8192           │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
-08)│         FilterExec        │
+08)│      RepartitionExec      │
 09)│    --------------------   │
-10)│         predicate:        │
-11)│       string_col !=       │
-12)│        aaaaaaaaaaaa       │
-13)│            aaa            │
-14)└─────────────┬─────────────┘
-15)┌─────────────┴─────────────┐
-16)│      RepartitionExec      │
-17)│    --------------------   │
-18)│  output_partition_count:  │
-19)│             1             │
-20)│                           │
-21)│    partitioning_scheme:   │
-22)│     RoundRobinBatch(4)    │
+10)│  output_partition_count:  │
+11)│             1             │
+12)│                           │
+13)│    partitioning_scheme:   │
+14)│     RoundRobinBatch(4)    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│         FilterExec        │
+18)│    --------------------   │
+19)│         predicate:        │
+20)│       string_col !=       │
+21)│        aaaaaaaaaaaa       │
+22)│            aaa            │
 23)└─────────────┬─────────────┘
 24)┌─────────────┴─────────────┐
 25)│       DataSourceExec      │
@@ -591,19 +591,19 @@ physical_plan
 05)│            8192           │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
-08)│         FilterExec        │
+08)│      RepartitionExec      │
 09)│    --------------------   │
-10)│         predicate:        │
-11)│     string_col != foo     │
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│      RepartitionExec      │
-15)│    --------------------   │
-16)│  output_partition_count:  │
-17)│             1             │
-18)│                           │
-19)│    partitioning_scheme:   │
-20)│     RoundRobinBatch(4)    │
+10)│  output_partition_count:  │
+11)│             1             │
+12)│                           │
+13)│    partitioning_scheme:   │
+14)│     RoundRobinBatch(4)    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│         FilterExec        │
+18)│    --------------------   │
+19)│         predicate:        │
+20)│     string_col != foo     │
 21)└─────────────┬─────────────┘
 22)┌─────────────┴─────────────┐
 23)│       DataSourceExec      │
@@ -625,19 +625,19 @@ physical_plan
 05)│            8192           │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
-08)│         FilterExec        │
+08)│      RepartitionExec      │
 09)│    --------------------   │
-10)│         predicate:        │
-11)│     string_col != foo     │
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│      RepartitionExec      │
-15)│    --------------------   │
-16)│  output_partition_count:  │
-17)│             1             │
-18)│                           │
-19)│    partitioning_scheme:   │
-20)│     RoundRobinBatch(4)    │
+10)│  output_partition_count:  │
+11)│             1             │
+12)│                           │
+13)│    partitioning_scheme:   │
+14)│     RoundRobinBatch(4)    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│         FilterExec        │
+18)│    --------------------   │
+19)│         predicate:        │
+20)│     string_col != foo     │
 21)└─────────────┬─────────────┘
 22)┌─────────────┴─────────────┐
 23)│       DataSourceExec      │
@@ -686,19 +686,19 @@ physical_plan
 05)│            8192           │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
-08)│         FilterExec        │
+08)│      RepartitionExec      │
 09)│    --------------------   │
-10)│         predicate:        │
-11)│     string_col != foo     │
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│      RepartitionExec      │
-15)│    --------------------   │
-16)│  output_partition_count:  │
-17)│             1             │
-18)│                           │
-19)│    partitioning_scheme:   │
-20)│     RoundRobinBatch(4)    │
+10)│  output_partition_count:  │
+11)│             1             │
+12)│                           │
+13)│    partitioning_scheme:   │
+14)│     RoundRobinBatch(4)    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│         FilterExec        │
+18)│    --------------------   │
+19)│         predicate:        │
+20)│     string_col != foo     │
 21)└─────────────┬─────────────┘
 22)┌─────────────┴─────────────┐
 23)│       DataSourceExec      │
@@ -719,19 +719,19 @@ physical_plan
 05)│            8192           │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
-08)│         FilterExec        │
+08)│      RepartitionExec      │
 09)│    --------------------   │
-10)│         predicate:        │
-11)│     string_col != foo     │
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│      RepartitionExec      │
-15)│    --------------------   │
-16)│  output_partition_count:  │
-17)│             1             │
-18)│                           │
-19)│    partitioning_scheme:   │
-20)│     RoundRobinBatch(4)    │
+10)│  output_partition_count:  │
+11)│             1             │
+12)│                           │
+13)│    partitioning_scheme:   │
+14)│     RoundRobinBatch(4)    │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│         FilterExec        │
+18)│    --------------------   │
+19)│         predicate:        │
+20)│     string_col != foo     │
 21)└─────────────┬─────────────┘
 22)┌─────────────┴─────────────┐
 23)│       DataSourceExec      │
@@ -1599,18 +1599,18 @@ physical_plan
 11)│            8192           │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
-14)│         FilterExec        │
+14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│   predicate: ticker = A   │
-17)└─────────────┬─────────────┘
-18)┌─────────────┴─────────────┐
-19)│      RepartitionExec      │
-20)│    --------------------   │
-21)│  output_partition_count:  │
-22)│             1             │
-23)│                           │
-24)│    partitioning_scheme:   │
-25)│     RoundRobinBatch(4)    │
+16)│  output_partition_count:  │
+17)│             1             │
+18)│                           │
+19)│    partitioning_scheme:   │
+20)│     RoundRobinBatch(4)    │
+21)└─────────────┬─────────────┘
+22)┌─────────────┴─────────────┐
+23)│         FilterExec        │
+24)│    --------------------   │
+25)│   predicate: ticker = A   │
 26)└─────────────┬─────────────┘
 27)┌─────────────┴─────────────┐
 28)│     StreamingTableExec    │
@@ -1639,20 +1639,20 @@ physical_plan
 10)│            8192           │
 11)└─────────────┬─────────────┘
 12)┌─────────────┴─────────────┐
-13)│         FilterExec        │
+13)│      RepartitionExec      │
 14)│    --------------------   │
-15)│         predicate:        │
-16)│  ticker = A AND CAST(time │
-17)│      AS Date32) = date    │
-18)└─────────────┬─────────────┘
-19)┌─────────────┴─────────────┐
-20)│      RepartitionExec      │
-21)│    --------------------   │
-22)│  output_partition_count:  │
-23)│             1             │
-24)│                           │
-25)│    partitioning_scheme:   │
-26)│     RoundRobinBatch(4)    │
+15)│  output_partition_count:  │
+16)│             1             │
+17)│                           │
+18)│    partitioning_scheme:   │
+19)│     RoundRobinBatch(4)    │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│         FilterExec        │
+23)│    --------------------   │
+24)│         predicate:        │
+25)│  ticker = A AND CAST(time │
+26)│      AS Date32) = date    │
 27)└─────────────┬─────────────┘
 28)┌─────────────┴─────────────┐
 29)│     StreamingTableExec    │
@@ -1680,20 +1680,20 @@ physical_plan
 10)│            8192           │
 11)└─────────────┬─────────────┘
 12)┌─────────────┴─────────────┐
-13)│         FilterExec        │
+13)│      RepartitionExec      │
 14)│    --------------------   │
-15)│         predicate:        │
-16)│  ticker = A AND CAST(time │
-17)│      AS Date32) = date    │
-18)└─────────────┬─────────────┘
-19)┌─────────────┴─────────────┐
-20)│      RepartitionExec      │
-21)│    --------------------   │
-22)│  output_partition_count:  │
-23)│             1             │
-24)│                           │
-25)│    partitioning_scheme:   │
-26)│     RoundRobinBatch(4)    │
+15)│  output_partition_count:  │
+16)│             1             │
+17)│                           │
+18)│    partitioning_scheme:   │
+19)│     RoundRobinBatch(4)    │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│         FilterExec        │
+23)│    --------------------   │
+24)│         predicate:        │
+25)│  ticker = A AND CAST(time │
+26)│      AS Date32) = date    │
 27)└─────────────┬─────────────┘
 28)┌─────────────┴─────────────┐
 29)│     StreamingTableExec    │
@@ -1719,20 +1719,20 @@ physical_plan
 08)│            8192           │
 09)└─────────────┬─────────────┘
 10)┌─────────────┴─────────────┐
-11)│         FilterExec        │
+11)│      RepartitionExec      │
 12)│    --------------------   │
-13)│         predicate:        │
-14)│  ticker = A AND CAST(time │
-15)│      AS Date32) = date    │
-16)└─────────────┬─────────────┘
-17)┌─────────────┴─────────────┐
-18)│      RepartitionExec      │
-19)│    --------------------   │
-20)│  output_partition_count:  │
-21)│             1             │
-22)│                           │
-23)│    partitioning_scheme:   │
-24)│     RoundRobinBatch(4)    │
+13)│  output_partition_count:  │
+14)│             1             │
+15)│                           │
+16)│    partitioning_scheme:   │
+17)│     RoundRobinBatch(4)    │
+18)└─────────────┬─────────────┘
+19)┌─────────────┴─────────────┐
+20)│         FilterExec        │
+21)│    --------------------   │
+22)│         predicate:        │
+23)│  ticker = A AND CAST(time │
+24)│      AS Date32) = date    │
 25)└─────────────┬─────────────┘
 26)┌─────────────┴─────────────┐
 27)│     StreamingTableExec    │
@@ -1762,20 +1762,20 @@ physical_plan
 11)│            8192           │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
-14)│         FilterExec        │
+14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│         predicate:        │
-17)│  ticker = A AND CAST(time │
-18)│      AS Date32) = date    │
-19)└─────────────┬─────────────┘
-20)┌─────────────┴─────────────┐
-21)│      RepartitionExec      │
-22)│    --------------------   │
-23)│  output_partition_count:  │
-24)│             1             │
-25)│                           │
-26)│    partitioning_scheme:   │
-27)│     RoundRobinBatch(4)    │
+16)│  output_partition_count:  │
+17)│             1             │
+18)│                           │
+19)│    partitioning_scheme:   │
+20)│     RoundRobinBatch(4)    │
+21)└─────────────┬─────────────┘
+22)┌─────────────┴─────────────┐
+23)│         FilterExec        │
+24)│    --------------------   │
+25)│         predicate:        │
+26)│  ticker = A AND CAST(time │
+27)│      AS Date32) = date    │
 28)└─────────────┬─────────────┘
 29)┌─────────────┴─────────────┐
 30)│     StreamingTableExec    │
@@ -1807,19 +1807,19 @@ physical_plan
 11)│            8192           │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
-14)│         FilterExec        │
+14)│      RepartitionExec      │
 15)│    --------------------   │
-16)│         predicate:        │
-17)│     date = 2006-01-02     │
-18)└─────────────┬─────────────┘
-19)┌─────────────┴─────────────┐
-20)│      RepartitionExec      │
-21)│    --------------------   │
-22)│  output_partition_count:  │
-23)│             1             │
-24)│                           │
-25)│    partitioning_scheme:   │
-26)│     RoundRobinBatch(4)    │
+16)│  output_partition_count:  │
+17)│             1             │
+18)│                           │
+19)│    partitioning_scheme:   │
+20)│     RoundRobinBatch(4)    │
+21)└─────────────┬─────────────┘
+22)┌─────────────┴─────────────┐
+23)│         FilterExec        │
+24)│    --------------------   │
+25)│         predicate:        │
+26)│     date = 2006-01-02     │
 27)└─────────────┬─────────────┘
 28)┌─────────────┴─────────────┐
 29)│     StreamingTableExec    │
@@ -1862,18 +1862,18 @@ physical_plan
 18)-----------------------------│            8192           │
 19)-----------------------------└─────────────┬─────────────┘
 20)-----------------------------┌─────────────┴─────────────┐
-21)-----------------------------│         FilterExec        │
+21)-----------------------------│      RepartitionExec      │
 22)-----------------------------│    --------------------   │
-23)-----------------------------│     predicate: id < 10    │
-24)-----------------------------└─────────────┬─────────────┘
-25)-----------------------------┌─────────────┴─────────────┐
-26)-----------------------------│      RepartitionExec      │
-27)-----------------------------│    --------------------   │
-28)-----------------------------│  output_partition_count:  │
-29)-----------------------------│             1             │
-30)-----------------------------│                           │
-31)-----------------------------│    partitioning_scheme:   │
-32)-----------------------------│     RoundRobinBatch(4)    │
+23)-----------------------------│  output_partition_count:  │
+24)-----------------------------│             1             │
+25)-----------------------------│                           │
+26)-----------------------------│    partitioning_scheme:   │
+27)-----------------------------│     RoundRobinBatch(4)    │
+28)-----------------------------└─────────────┬─────────────┘
+29)-----------------------------┌─────────────┴─────────────┐
+30)-----------------------------│         FilterExec        │
+31)-----------------------------│    --------------------   │
+32)-----------------------------│     predicate: id < 10    │
 33)-----------------------------└─────────────┬─────────────┘
 34)-----------------------------┌─────────────┴─────────────┐
 35)-----------------------------│       WorkTableExec       │
@@ -2055,18 +2055,18 @@ physical_plan
 12)│            8192           │
 13)└─────────────┬─────────────┘
 14)┌─────────────┴─────────────┐
-15)│         FilterExec        │
+15)│      RepartitionExec      │
 16)│    --------------------   │
-17)│     predicate: c3 > 0     │
-18)└─────────────┬─────────────┘
-19)┌─────────────┴─────────────┐
-20)│      RepartitionExec      │
-21)│    --------------------   │
-22)│  output_partition_count:  │
-23)│             1             │
-24)│                           │
-25)│    partitioning_scheme:   │
-26)│     RoundRobinBatch(4)    │
+17)│  output_partition_count:  │
+18)│             1             │
+19)│                           │
+20)│    partitioning_scheme:   │
+21)│     RoundRobinBatch(4)    │
+22)└─────────────┬─────────────┘
+23)┌─────────────┴─────────────┐
+24)│         FilterExec        │
+25)│    --------------------   │
+26)│     predicate: c3 > 0     │
 27)└─────────────┬─────────────┘
 28)┌─────────────┴─────────────┐
 29)│     StreamingTableExec    │

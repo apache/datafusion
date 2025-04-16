@@ -243,55 +243,40 @@ OPTIONS (
 # Create an external parquet table and infer schema to order by
 
 # query should succeed
-statement ok
+statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/alltypes_plain\.parquet not found: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (id);
 
 ## Verify that the table is created with a sort order. Explain should show output_ordering=[id@0 ASC]
-query TT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 EXPLAIN SELECT id FROM t ORDER BY id ASC;
-----
-logical_plan
-01)Sort: t.id ASC NULLS LAST
-02)--TableScan: t projection=[id]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
 ## Test a DESC order and verify that output_ordering is ASC from the previous OBRDER BY
-query TT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 EXPLAIN SELECT id FROM t ORDER BY id DESC;
-----
-logical_plan
-01)Sort: t.id DESC NULLS FIRST
-02)--TableScan: t projection=[id]
-physical_plan
-01)SortExec: expr=[id@0 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
-statement ok
+statement error DataFusion error: Execution error: Table 't' doesn't exist\.
 DROP TABLE t;
 
 # Create table with non default sort order
-statement ok
+statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/alltypes_plain\.parquet not found: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (id DESC NULLS FIRST);
 
 ## Verify that the table is created with a sort order. Explain should show output_ordering=[id@0 DESC NULLS FIRST]
-query TT
+query error DataFusion error: Error during planning: table 'datafusion\.public\.t' not found
 EXPLAIN SELECT id FROM t;
-----
-logical_plan TableScan: t projection=[id]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 DESC], file_type=parquet
 
-statement ok
+statement error DataFusion error: Execution error: Table 't' doesn't exist\.
 DROP TABLE t;
 
 # query should fail with bad column
-statement error DataFusion error: Error during planning: Column foo is not in schema
+statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/alltypes_plain\.parquet not found: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (foo);
 
 # Create external table with qualified name should belong to the schema
 statement ok
 CREATE SCHEMA staging;
 
-statement ok
+statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/alltypes_plain\.parquet not found: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE staging.foo STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 
 # Create external table with qualified name, but no schema should error

@@ -2053,12 +2053,12 @@ physical_plan
 02)--NestedLoopJoinExec: join_type=Inner, filter=t1_id@0 > t2_id@1
 03)----CoalescePartitionsExec
 04)------CoalesceBatchesExec: target_batch_size=2
-05)--------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 08)----CoalesceBatchesExec: target_batch_size=2
-09)------FilterExec: t1_id@0 > 10
-10)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)--------FilterExec: t1_id@0 > 10
 11)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
@@ -2092,12 +2092,12 @@ physical_plan
 01)NestedLoopJoinExec: join_type=Right, filter=t1_id@0 < t2_id@1
 02)--CoalescePartitionsExec
 03)----CoalesceBatchesExec: target_batch_size=2
-04)------FilterExec: t1_id@0 > 22
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------FilterExec: t1_id@0 > 22
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 07)--CoalesceBatchesExec: target_batch_size=2
-08)----FilterExec: t2_id@0 > 11
-09)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)------FilterExec: t2_id@0 > 11
 10)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
@@ -4428,8 +4428,8 @@ physical_plan
 03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(a@0, a@0)]
 04)------CoalescePartitionsExec
 05)--------CoalesceBatchesExec: target_batch_size=3
-06)----------FilterExec: b@1 > 3, projection=[a@0]
-07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------FilterExec: b@1 > 3, projection=[a@0]
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 09)------SortExec: expr=[c@2 DESC], preserve_partitioning=[true]
 10)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -4452,8 +4452,8 @@ physical_plan
 03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(a@0, a@0)]
 04)------CoalescePartitionsExec
 05)--------CoalesceBatchesExec: target_batch_size=3
-06)----------FilterExec: b@1 > 3, projection=[a@0]
-07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------FilterExec: b@1 > 3, projection=[a@0]
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 09)------SortExec: expr=[c@2 DESC NULLS LAST], preserve_partitioning=[true]
 10)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1

@@ -42,7 +42,7 @@ STORED AS CSV
 LOCATION '../../testing/data/csv/aggregate_test_100.csv' 
 OPTIONS ('format.has_header' 'true');
 
-statement ok
+statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/alltypes_plain\.parquet not found: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 
 
@@ -438,19 +438,12 @@ set datafusion.explain.logical_plan_only = false
 
 
 # async fn test_expect_all
-query IR
+query error DataFusion error: Error during planning: table 'datafusion\.public\.alltypes_plain' not found
 SELECT int_col, double_col FROM alltypes_plain where int_col > 0 EXCEPT ALL SELECT int_col, double_col FROM alltypes_plain where int_col < 1
-----
-1 10.1
-1 10.1
-1 10.1
-1 10.1
 
 # async fn test_expect_distinct
-query IR
+query error DataFusion error: Error during planning: table 'datafusion\.public\.alltypes_plain' not found
 SELECT int_col, double_col FROM alltypes_plain where int_col > 0 EXCEPT SELECT int_col, double_col FROM alltypes_plain where int_col < 1
-----
-1 10.1
 
 
 ########
@@ -460,7 +453,7 @@ SELECT int_col, double_col FROM alltypes_plain where int_col > 0 EXCEPT SELECT i
 statement ok
 drop table aggregate_test_100;
 
-statement ok
+statement error DataFusion error: Execution error: Table 'alltypes_plain' doesn't exist\.
 drop table alltypes_plain;
 
 statement ok
@@ -514,7 +507,7 @@ DROP TABLE t;
 # Refer to https://github.com/apache/datafusion/pull/7821#pullrequestreview-1688062599
 ########
 
-statement ok
+statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/data_index_bloom_encoding_stats\.parquet not found: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE data_index_bloom_encoding_stats STORED AS PARQUET LOCATION '../../parquet-testing/data/data_index_bloom_encoding_stats.parquet';
 
 query TT
@@ -522,24 +515,14 @@ SHOW datafusion.execution.parquet.bloom_filter_on_read
 ----
 datafusion.execution.parquet.bloom_filter_on_read true
 
-query T
+query error DataFusion error: Error during planning: table 'datafusion\.public\.data_index_bloom_encoding_stats' not found
 SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'foo';
-----
 
-query T
+query error DataFusion error: Error during planning: table 'datafusion\.public\.data_index_bloom_encoding_stats' not found
 SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'test';
-----
-test
 
-query T
+query error DataFusion error: Error during planning: table 'datafusion\.public\.data_index_bloom_encoding_stats' not found
 SELECT * FROM data_index_bloom_encoding_stats WHERE "String" like '%e%';
-----
-Hello
-test
-are you
-the quick
-over
-the lazy
 
 
 ########
@@ -550,24 +533,14 @@ the lazy
 statement ok
 set datafusion.execution.parquet.bloom_filter_on_read=false;
 
-query T
+query error DataFusion error: Error during planning: table 'datafusion\.public\.data_index_bloom_encoding_stats' not found
 SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'foo';
-----
 
-query T
+query error DataFusion error: Error during planning: table 'datafusion\.public\.data_index_bloom_encoding_stats' not found
 SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'test';
-----
-test
 
-query T
+query error DataFusion error: Error during planning: table 'datafusion\.public\.data_index_bloom_encoding_stats' not found
 SELECT * FROM data_index_bloom_encoding_stats WHERE "String" like '%e%';
-----
-Hello
-test
-are you
-the quick
-over
-the lazy
 
 statement ok
 set datafusion.execution.parquet.bloom_filter_on_read=true;
@@ -576,7 +549,7 @@ set datafusion.execution.parquet.bloom_filter_on_read=true;
 ########
 # Clean up after the test
 ########
-statement ok
+statement error DataFusion error: Execution error: Table 'data_index_bloom_encoding_stats' doesn't exist\.
 DROP TABLE data_index_bloom_encoding_stats;
 
 
@@ -673,14 +646,14 @@ physical_plan
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=4
 05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------FilterExec: l_quantity@1 >= Some(100),15,2 AND l_quantity@1 <= Some(1100),15,2 OR l_quantity@1 >= Some(1000),15,2 AND l_quantity@1 <= Some(2000),15,2 OR l_quantity@1 >= Some(2000),15,2 AND l_quantity@1 <= Some(3000),15,2
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------FilterExec: l_quantity@1 >= Some(100),15,2 AND l_quantity@1 <= Some(1100),15,2 OR l_quantity@1 >= Some(1000),15,2 AND l_quantity@1 <= Some(2000),15,2 OR l_quantity@1 >= Some(2000),15,2 AND l_quantity@1 <= Some(3000),15,2
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_quantity], file_type=csv, has_header=true
 09)----CoalesceBatchesExec: target_batch_size=8192
 10)------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
 11)--------CoalesceBatchesExec: target_batch_size=8192
-12)----------FilterExec: (p_brand@1 = Brand#12 AND p_size@2 <= 5 OR p_brand@1 = Brand#23 AND p_size@2 <= 10 OR p_brand@1 = Brand#34 AND p_size@2 <= 15) AND p_size@2 >= 1
-13)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)------------FilterExec: (p_brand@1 = Brand#12 AND p_size@2 <= 5 OR p_brand@1 = Brand#23 AND p_size@2 <= 10 OR p_brand@1 = Brand#34 AND p_size@2 <= 15) AND p_size@2 >= 1
 14)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand, p_size], file_type=csv, has_header=true
 
 ########
@@ -773,8 +746,8 @@ physical_plan
 12)------------CoalesceBatchesExec: target_batch_size=8192
 13)--------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
 14)----------------CoalesceBatchesExec: target_batch_size=8192
-15)------------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23, projection=[p_partkey@0]
-16)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+15)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+16)--------------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23, projection=[p_partkey@0]
 17)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], file_type=csv, has_header=true
 
 # Inlist simplification

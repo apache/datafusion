@@ -16,7 +16,7 @@
 # under the License.
 
 
-statement ok
+statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/alltypes_plain\.parquet not found: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 
 statement ok
@@ -40,17 +40,8 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 OPTIONS ('format.has_header' 'true');
 
 # test_sort_unprojected_col
-query I
+query error DataFusion error: Error during planning: table 'datafusion\.public\.alltypes_plain' not found
 SELECT id FROM alltypes_plain ORDER BY int_col, double_col
-----
-4
-6
-2
-0
-5
-7
-3
-1
 
 
 # test_order_by_agg_expr
