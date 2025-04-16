@@ -23,7 +23,7 @@ use std::{
 };
 
 use crate::PhysicalExpr;
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
     Result,
@@ -290,6 +290,10 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // Return the current expression as a snapshot.
         Ok(Some(self.current()?))
+    }
+
+    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
+        Ok(None)
     }
 }
 
