@@ -299,8 +299,8 @@ fn test_filter_with_projection() {
         -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
       output:
         Ok:
-          - FilterExec: a@1 = foo, projection=[b@1, a@0]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=true
+          - ProjectionExec: expr=[b@1 as b, a@0 as a]
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@1 = foo
     ",
     );
 
@@ -322,8 +322,8 @@ fn test_filter_with_projection() {
         -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
       output:
         Ok:
-          - FilterExec: a@0 = foo, projection=[b@1]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=true
+          - ProjectionExec: expr=[b@1 as b]
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
     "
     );
 }
