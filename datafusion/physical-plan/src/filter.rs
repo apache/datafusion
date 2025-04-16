@@ -52,7 +52,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     analyze, split_conjunction, AcrossPartitions, AnalysisContext, ConstExpr,
     ExprBoundaries, PhysicalExpr,
@@ -440,6 +440,7 @@ impl ExecutionPlan for FilterExec {
 
     fn try_pushdown_filters(
         &self,
+        node: Arc<dyn ExecutionPlan>,
         mut fd: FilterDescription,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
@@ -457,7 +458,7 @@ impl ExecutionPlan for FilterExec {
         Ok(FilterPushdownResult {
             support: FilterPushdownSupport::Supported {
                 child_descriptions,
-                op: Arc::new(self.clone()),
+                op: Arc::clone(&node),
                 retry: false,
             },
             remaining_description,

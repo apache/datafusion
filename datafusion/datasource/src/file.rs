@@ -31,7 +31,6 @@ use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
     filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
 };
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;

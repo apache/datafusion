@@ -730,6 +730,7 @@ impl ExecutionPlan for RepartitionExec {
 
     fn try_pushdown_filters(
         &self,
+        node: Arc<dyn ExecutionPlan>,
         fd: FilterDescription,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
@@ -739,7 +740,7 @@ impl ExecutionPlan for RepartitionExec {
         Ok(FilterPushdownResult {
             support: FilterPushdownSupport::Supported {
                 child_descriptions,
-                op: Arc::new(self.clone()),
+                op: Arc::clone(&node),
                 retry: false,
             },
             remaining_description,
