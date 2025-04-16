@@ -679,7 +679,8 @@ impl AggregateExec {
         if group_expr_mapping.map.is_empty() {
             let mut constants = eq_properties.constants().to_vec();
             let new_constants = aggr_exprs.iter().enumerate().map(|(idx, func)| {
-                ConstExpr::new(Arc::new(Column::new(func.name(), idx)))
+                let column = Arc::new(Column::new(func.name(), idx));
+                ConstExpr::from(column as Arc<dyn PhysicalExpr>)
             });
             constants.extend(new_constants);
             eq_properties = eq_properties.with_constants(constants);

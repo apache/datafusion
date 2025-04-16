@@ -252,9 +252,8 @@ impl EquivalenceProperties {
     /// Removes constant expressions that may change across partitions.
     /// This method should be used when data from different partitions are merged.
     pub fn clear_per_partition_constants(&mut self) {
-        self.constants.retain(|item| {
-            matches!(item.across_partitions(), AcrossPartitions::Uniform(_))
-        })
+        self.constants
+            .retain(|item| matches!(item.across_partitions, AcrossPartitions::Uniform(_)))
     }
 
     /// Extends this `EquivalenceProperties` by adding the orderings inside the
@@ -297,15 +296,15 @@ impl EquivalenceProperties {
         if self.is_expr_constant(left) {
             // Left expression is constant, add right as constant
             if !const_exprs_contains(&self.constants, right) {
-                let const_expr = ConstExpr::from(right)
-                    .with_across_partitions(self.get_expr_constant_value(left));
+                let across_parts = self.get_expr_constant_value(left);
+                let const_expr = ConstExpr::new(Arc::clone(right), across_parts);
                 self.constants.push(const_expr);
             }
         } else if self.is_expr_constant(right) {
             // Right expression is constant, add left as constant
             if !const_exprs_contains(&self.constants, left) {
-                let const_expr = ConstExpr::from(left)
-                    .with_across_partitions(self.get_expr_constant_value(right));
+                let across_parts = self.get_expr_constant_value(right);
+                let const_expr = ConstExpr::new(Arc::clone(left), across_parts);
                 self.constants.push(const_expr);
             }
         }
@@ -326,12 +325,9 @@ impl EquivalenceProperties {
         let normalized_constants = constants
             .into_iter()
             .filter_map(|c| {
-                let across_partitions = c.across_partitions();
                 let normalized_expr = self.eq_group.normalize_expr(c.expr);
-                (!const_exprs_contains(&self.constants, &normalized_expr)).then(|| {
-                    let const_expr = ConstExpr::from(normalized_expr);
-                    const_expr.with_across_partitions(across_partitions)
-                })
+                (!const_exprs_contains(&self.constants, &normalized_expr))
+                    .then(|| ConstExpr::new(normalized_expr, c.across_partitions))
             })
             .collect::<Vec<_>>();
 
@@ -1076,12 +1072,14 @@ impl EquivalenceProperties {
             .constants
             .iter()
             .flat_map(|const_expr| {
-                const_expr
-                    .map(|expr| self.eq_group.project_expr(mapping, expr))
-                    .map(|projected_expr| {
-                        projected_expr
-                            .with_across_partitions(const_expr.across_partitions())
-                    })
+                self.eq_group.project_expr(mapping, &const_expr.expr).map(
+                    |projected_expr| {
+                        ConstExpr::new(
+                            projected_expr,
+                            const_expr.across_partitions.clone(),
+                        )
+                    },
+                )
             })
             .collect::<Vec<_>>();
 
@@ -1095,7 +1093,7 @@ impl EquivalenceProperties {
                 } else {
                     AcrossPartitions::Heterogeneous
                 };
-                let const_expr = ConstExpr::from(target).with_across_partitions(uniform);
+                let const_expr = ConstExpr::new(Arc::clone(target), uniform);
                 projected_constants.push(const_expr);
             }
         }
@@ -1256,7 +1254,7 @@ impl EquivalenceProperties {
             .filter(|const_expr| {
                 !across_partitions
                     || matches!(
-                        const_expr.across_partitions(),
+                        const_expr.across_partitions,
                         AcrossPartitions::Uniform { .. }
                     )
             })
@@ -1311,7 +1309,7 @@ impl EquivalenceProperties {
 
         for const_expr in self.constants.iter() {
             if normalized_expr.eq(&const_expr.expr) {
-                return const_expr.across_partitions();
+                return const_expr.across_partitions.clone();
             }
         }
 

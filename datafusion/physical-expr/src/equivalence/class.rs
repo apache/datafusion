@@ -29,16 +29,16 @@ use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
 
-/// A structure representing a expression known to be constant in a physical execution plan.
+/// A structure representing a expression known to be constant in a physical
+/// execution plan.
 ///
-/// The `ConstExpr` struct encapsulates an expression that is constant during the execution
-/// of a query. For example if a predicate like `A = 5` applied earlier in the plan `A` would
-/// be known constant
+/// The `ConstExpr` struct encapsulates an expression that is constant during
+/// the execution of a query. For example if a filter like `A = 5` appears
+/// earlier in the plan, `A` would become a constant in subsequent operations.
 ///
 /// # Fields
 ///
 /// - `expr`: Constant expression for a node in the physical plan.
-///
 /// - `across_partitions`: A boolean flag indicating whether the constant
 ///   expression is the same across partitions. If set to `true`, the constant
 ///   expression has same value for all partitions. If set to `false`, the
@@ -58,10 +58,10 @@ use indexmap::{IndexMap, IndexSet};
 #[derive(Debug, Clone)]
 pub struct ConstExpr {
     /// The expression that is known to be constant (e.g. a `Column`)
-    pub(crate) expr: Arc<dyn PhysicalExpr>,
+    pub expr: Arc<dyn PhysicalExpr>,
     /// Does the constant have the same value across all partitions? See
     /// struct docs for more details
-    across_partitions: AcrossPartitions,
+    pub across_partitions: AcrossPartitions,
 }
 
 /// Represents whether a constant expression's value is uniform or varies across
@@ -70,7 +70,7 @@ pub struct ConstExpr {
 ///   different partitions.
 /// - `Uniform(Option<ScalarValue>)`: The constant expression has the same value
 ///   across all partitions, or is `None` if the value is unknown.
-#[derive(PartialEq, Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AcrossPartitions {
     Heterogeneous,
     Uniform(Option<ScalarValue>),
@@ -91,39 +91,14 @@ impl PartialEq for ConstExpr {
 impl ConstExpr {
     /// Create a new constant expression from a physical expression.
     ///
-    /// Note you can also use `ConstExpr::from` to create a constant expression
-    /// from a reference as well.
-    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
+    /// Note that you can also use `ConstExpr::from` to create a constant
+    /// expression from just a physical expression, with the *safe* assumption
+    /// of heterogenous values across partitions.
+    pub fn new(expr: Arc<dyn PhysicalExpr>, across_partitions: AcrossPartitions) -> Self {
         Self {
             expr,
-            // By default, assume constant expressions are not same across partitions.
-            across_partitions: Default::default(),
+            across_partitions,
         }
-    }
-
-    /// Sets the `across_partitions` flag.
-    pub fn with_across_partitions(mut self, across_partitions: AcrossPartitions) -> Self {
-        self.across_partitions = across_partitions;
-        self
-    }
-
-    /// Indicates whther the expression the same across all partitions.
-    pub fn across_partitions(&self) -> AcrossPartitions {
-        self.across_partitions.clone()
-    }
-
-    pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
-        &self.expr
-    }
-
-    pub fn map<F>(&self, f: F) -> Option<Self>
-    where
-        F: Fn(&Arc<dyn PhysicalExpr>) -> Option<Arc<dyn PhysicalExpr>>,
-    {
-        f(&self.expr).map(|expr| Self {
-            expr,
-            across_partitions: self.across_partitions.clone(),
-        })
     }
 
     /// Returns a [`Display`]able list of `ConstExpr`.
@@ -168,13 +143,17 @@ impl Display for ConstExpr {
 
 impl From<Arc<dyn PhysicalExpr>> for ConstExpr {
     fn from(expr: Arc<dyn PhysicalExpr>) -> Self {
-        Self::new(expr)
+        Self {
+            expr,
+            // By default, assume constant expressions are not same across partitions.
+            across_partitions: Default::default(),
+        }
     }
 }
 
 impl From<&Arc<dyn PhysicalExpr>> for ConstExpr {
     fn from(expr: &Arc<dyn PhysicalExpr>) -> Self {
-        Self::new(Arc::clone(expr))
+        Self::from(Arc::clone(expr))
     }
 }
 

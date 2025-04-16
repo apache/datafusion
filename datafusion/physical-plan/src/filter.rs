@@ -228,19 +228,15 @@ impl FilterExec {
                             binary.right(),
                             input_eqs.get_expr_constant_value(binary.right()),
                         );
-                        res_constants.push(
-                            ConstExpr::new(Arc::clone(expr))
-                                .with_across_partitions(across_parts),
-                        );
+                        res_constants
+                            .push(ConstExpr::new(Arc::clone(expr), across_parts));
                     } else if input_eqs.is_expr_constant(binary.right()) {
                         let (expr, across_parts) = (
                             binary.left(),
                             input_eqs.get_expr_constant_value(binary.left()),
                         );
-                        res_constants.push(
-                            ConstExpr::new(Arc::clone(expr))
-                                .with_across_partitions(across_parts),
-                        );
+                        res_constants
+                            .push(ConstExpr::new(Arc::clone(expr), across_parts));
                     }
                 }
             }
@@ -272,8 +268,7 @@ impl FilterExec {
                     .min_value
                     .get_value();
                 let expr = Arc::new(column) as _;
-                ConstExpr::new(expr)
-                    .with_across_partitions(AcrossPartitions::Uniform(value.cloned()))
+                ConstExpr::new(expr, AcrossPartitions::Uniform(value.cloned()))
             });
         // This is for statistics
         eq_properties = eq_properties.with_constants(constants);

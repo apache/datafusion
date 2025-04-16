@@ -376,7 +376,7 @@ pub fn generate_table_for_eq_properties(
 
     // Fill constant columns
     for constant in eq_properties.constants() {
-        let col = constant.expr().as_any().downcast_ref::<Column>().unwrap();
+        let col = constant.expr.as_any().downcast_ref::<Column>().unwrap();
         let (idx, _field) = schema.column_with_name(col.name()).unwrap();
         let arr =
             Arc::new(Float64Array::from_iter_values(vec![0 as f64; n_elem])) as ArrayRef;

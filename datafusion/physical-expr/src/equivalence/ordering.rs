@@ -663,8 +663,7 @@ mod tests {
             eq_properties.add_equivalence_group(eq_group);
 
             let constants = constants.into_iter().map(|expr| {
-                ConstExpr::from(expr)
-                    .with_across_partitions(AcrossPartitions::Uniform(None))
+                ConstExpr::new(Arc::clone(expr), AcrossPartitions::Uniform(None))
             });
             eq_properties = eq_properties.with_constants(constants);
 

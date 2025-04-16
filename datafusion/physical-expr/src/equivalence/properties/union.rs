@@ -57,13 +57,13 @@ fn calculate_union_binary(
                 .iter()
                 .find(|rhs_const| rhs_const.expr.eq(&lhs_const.expr))
                 .map(|rhs_const| {
-                    let const_expr = lhs_const.clone();
-                    // If both sides have matching constant values, preserve the value:
-                    if lhs_const.across_partitions() == rhs_const.across_partitions() {
-                        const_expr
-                    } else {
-                        const_expr.with_across_partitions(AcrossPartitions::Heterogeneous)
+                    let mut const_expr = lhs_const.clone();
+                    // If both sides have matching constant values, preserve it.
+                    // Otherwise, set fall back to heterogeneous values.
+                    if lhs_const.across_partitions != rhs_const.across_partitions {
+                        const_expr.across_partitions = AcrossPartitions::Heterogeneous;
                     }
+                    const_expr
                 })
         })
         .collect::<Vec<_>>();
@@ -791,7 +791,7 @@ mod tests {
             let rhs_constants = rhs.constants();
             for rhs_constant in rhs_constants {
                 assert!(
-                    const_exprs_contains(lhs_constants, rhs_constant.expr()),
+                    const_exprs_contains(lhs_constants, &rhs_constant.expr),
                     "{err_msg}\nlhs: {lhs}\nrhs: {rhs}"
                 );
             }
@@ -839,7 +839,7 @@ mod tests {
 
             let constants = constants
                 .iter()
-                .map(|col_name| ConstExpr::new(col(col_name, schema).unwrap()))
+                .map(|col_name| ConstExpr::from(col(col_name, schema).unwrap()))
                 .collect::<Vec<_>>();
 
             EquivalenceProperties::new_with_orderings(Arc::clone(schema), orderings)
@@ -858,14 +858,18 @@ mod tests {
         let literal_10 = ScalarValue::Int32(Some(10));
 
         // Create first input with a=10
-        let const_expr1 = ConstExpr::new(Arc::clone(&col_a))
-            .with_across_partitions(AcrossPartitions::Uniform(Some(literal_10.clone())));
+        let const_expr1 = ConstExpr::new(
+            Arc::clone(&col_a),
+            AcrossPartitions::Uniform(Some(literal_10.clone())),
+        );
         let input1 = EquivalenceProperties::new(Arc::clone(&schema))
             .with_constants(vec![const_expr1]);
 
         // Create second input with a=10
-        let const_expr2 = ConstExpr::new(Arc::clone(&col_a))
-            .with_across_partitions(AcrossPartitions::Uniform(Some(literal_10.clone())));
+        let const_expr2 = ConstExpr::new(
+            Arc::clone(&col_a),
+            AcrossPartitions::Uniform(Some(literal_10.clone())),
+        );
         let input2 = EquivalenceProperties::new(Arc::clone(&schema))
             .with_constants(vec![const_expr2]);
 
@@ -874,9 +878,9 @@ mod tests {
 
         // Verify column 'a' remains constant with value 10
         let const_a = &union_props.constants()[0];
-        assert!(const_a.expr().eq(&col_a));
+        assert!(const_a.expr.eq(&col_a));
         assert_eq!(
-            const_a.across_partitions(),
+            const_a.across_partitions,
             AcrossPartitions::Uniform(Some(literal_10))
         );
 

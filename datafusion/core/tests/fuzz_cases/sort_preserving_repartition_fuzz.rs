@@ -150,7 +150,7 @@ mod sp_repartition_fuzz_tests {
 
         // Fill constant columns
         for constant in eq_properties.constants() {
-            let col = constant.expr().as_any().downcast_ref::<Column>().unwrap();
+            let col = constant.expr.as_any().downcast_ref::<Column>().unwrap();
             let (idx, _field) = schema.column_with_name(col.name()).unwrap();
             let arr =
                 Arc::new(UInt64Array::from_iter_values(vec![0; n_elem])) as ArrayRef;

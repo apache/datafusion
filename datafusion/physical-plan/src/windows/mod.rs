@@ -22,7 +22,6 @@ mod utils;
 mod window_agg_exec;
 
 use std::borrow::Borrow;
-use std::iter;
 use std::sync::Arc;
 
 use crate::{
@@ -387,17 +386,18 @@ pub(crate) fn window_equivalence_properties(
             // unbounded starting point.
             // First, check if the frame covers the whole table:
             if plain_expr.get_window_frame().end_bound.is_unbounded() {
-                let window_col = Column::new(expr.name(), i + input_schema_len);
+                let window_col =
+                    Arc::new(Column::new(expr.name(), i + input_schema_len)) as _;
                 if no_partitioning {
                     // Window function has a constant result across the table:
                     window_eq_properties = window_eq_properties
-                        .with_constants(iter::once(ConstExpr::new(Arc::new(window_col))))
+                        .with_constants(std::iter::once(ConstExpr::from(window_col)))
                 } else {
                     // Window function results in a partial constant value in
                     // some ordering. Adjust the ordering equivalences accordingly:
                     let new_lexs = all_satisfied_lexs.into_iter().flat_map(|lex| {
                         let new_partial_consts =
-                            sort_options_resolving_constant(Arc::new(window_col.clone()));
+                            sort_options_resolving_constant(Arc::clone(&window_col));
 
                         new_partial_consts.into_iter().map(move |partial| {
                             let mut existing = lex.clone();
