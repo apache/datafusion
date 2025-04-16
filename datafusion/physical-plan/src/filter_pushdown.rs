@@ -33,7 +33,7 @@ impl Default for FilterDescription {
 
 impl FilterDescription {
     /// Takes the filters out of the struct, leaving an empty vector in its place.
-    pub fn take_filters(&mut self) -> Vec<Arc<dyn PhysicalExpr>> {
+    pub fn take_description(&mut self) -> Vec<Arc<dyn PhysicalExpr>> {
         std::mem::take(&mut self.filters)
     }
 

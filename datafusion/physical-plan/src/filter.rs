@@ -458,7 +458,7 @@ impl ExecutionPlan for FilterExec {
             support: FilterPushdownSupport::Supported {
                 child_descriptions,
                 op: Arc::new(self.clone()),
-                retry: false,
+                retry: true,
             },
             remaining_description,
         })

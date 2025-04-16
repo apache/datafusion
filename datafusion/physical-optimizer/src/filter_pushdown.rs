@@ -414,7 +414,7 @@ impl PushdownFilter {
     ) -> Result<Transformed<FilterDescriptionContext>> {
         let initial_plan = Arc::clone(&node.plan);
         let initial_description = FilterDescription {
-            filters: node.data.take_filters(),
+            filters: node.data.take_description(),
         };
 
         let FilterPushdownResult {
@@ -442,8 +442,13 @@ impl PushdownFilter {
                     node.plan = op;
                     // Operators having 2 children cannot be removed
                     node.data = child_descriptions.swap_remove(0);
-                    node.children = node.children.swap_remove(0).children;
-                    Self::try_pushdown(node, config)
+                    if !node.children.is_empty() {
+                        node.children = node.children.swap_remove(0).children;
+                        Self::try_pushdown(node, config)
+                    } else {
+                        node.children = vec![];
+                        Ok(Transformed::yes(node))
+                    }
                 } else {
                     if remaining_description.filters.is_empty() {
                         node.plan = op;
@@ -463,13 +468,17 @@ impl PushdownFilter {
                 }
             }
             FilterPushdownSupport::NotSupported => {
-                let children_len = node.children.len();
-                node = insert_filter_exec(
-                    node,
-                    vec![FilterDescription::default(); children_len],
-                    remaining_description,
-                )?;
-                Ok(Transformed::yes(node))
+                if remaining_description.filters.is_empty() {
+                    Ok(Transformed::no(node))
+                } else {
+                    let children_len = node.children.len();
+                    node = insert_filter_exec(
+                        node,
+                        vec![FilterDescription::default(); children_len],
+                        remaining_description,
+                    )?;
+                    Ok(Transformed::yes(node))
+                }
             }
         }
     }
@@ -483,7 +492,9 @@ fn insert_filter_exec(
     let mut new_child_node = node;
 
     // Filter has one child
-    new_child_node.data = child_descriptions.swap_remove(0);
+    if !child_descriptions.is_empty() {
+        new_child_node.data = child_descriptions.swap_remove(0);
+    }
     let new_plan = Arc::new(FilterExec::try_new(
         conjunction(remaining_description.filters),
         Arc::clone(&new_child_node.plan),
