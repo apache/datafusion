@@ -4742,3 +4742,51 @@ drop table person;
 
 statement count 0
 drop table orders;
+
+# Create tables for testing compound field access in JOIN conditions
+statement ok
+CREATE TABLE compound_field_table_t
+AS VALUES
+({r: 'a', c: 1}),
+({r: 'b', c: 2.3});
+
+statement ok
+CREATE TABLE compound_field_table_u
+AS VALUES
+({r: 'a', c: 1}),
+({r: 'b', c: 2.3});
+
+# Test compound field access in JOIN condition with table aliases
+query ??
+SELECT * FROM compound_field_table_t tee JOIN compound_field_table_u you ON tee.column1['r'] = you.column1['r']
+----
+{r: a, c: 1.0} {r: a, c: 1.0}
+{r: b, c: 2.3} {r: b, c: 2.3}
+
+# Test compound field access in JOIN condition without table aliases
+query ??
+SELECT * FROM compound_field_table_t JOIN compound_field_table_u ON compound_field_table_t.column1['r'] = compound_field_table_u.column1['r']
+----
+{r: a, c: 1.0} {r: a, c: 1.0}
+{r: b, c: 2.3} {r: b, c: 2.3}
+
+# Test compound field access with numeric field access
+query ??
+SELECT * FROM compound_field_table_t tee JOIN compound_field_table_u you ON tee.column1['c'] = you.column1['c']
+----
+{r: a, c: 1.0} {r: a, c: 1.0}
+{r: b, c: 2.3} {r: b, c: 2.3}
+
+# Test compound field access with mixed field types
+query ??
+SELECT * FROM compound_field_table_t tee JOIN compound_field_table_u you ON tee.column1['r'] = you.column1['r'] AND tee.column1['c'] = you.column1['c']
+----
+{r: a, c: 1.0} {r: a, c: 1.0}
+{r: b, c: 2.3} {r: b, c: 2.3}
+
+# Clean up compound field tables
+statement ok
+DROP TABLE compound_field_table_t;
+
+statement ok
+DROP TABLE compound_field_table_u;

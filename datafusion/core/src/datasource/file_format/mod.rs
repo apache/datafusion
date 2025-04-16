@@ -36,19 +36,20 @@ pub use datafusion_datasource::write;
 
 #[cfg(test)]
 pub(crate) mod test_util {
-    use std::sync::Arc;
-
+    use arrow_schema::SchemaRef;
     use datafusion_catalog::Session;
     use datafusion_common::Result;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::{file_format::FileFormat, PartitionedFile};
     use datafusion_execution::object_store::ObjectStoreUrl;
+    use std::sync::Arc;
 
     use crate::test::object_store::local_unpartitioned_file;
 
     pub async fn scan_format(
         state: &dyn Session,
         format: &dyn FileFormat,
+        schema: Option<SchemaRef>,
         store_root: &str,
         file_name: &str,
         projection: Option<Vec<usize>>,
@@ -57,9 +58,13 @@ pub(crate) mod test_util {
         let store = Arc::new(object_store::local::LocalFileSystem::new()) as _;
         let meta = local_unpartitioned_file(format!("{store_root}/{file_name}"));
 
-        let file_schema = format
-            .infer_schema(state, &store, std::slice::from_ref(&meta))
-            .await?;
+        let file_schema = if let Some(file_schema) = schema {
+            file_schema
+        } else {
+            format
+                .infer_schema(state, &store, std::slice::from_ref(&meta))
+                .await?
+        };
 
         let statistics = format
             .infer_stats(state, &store, file_schema.clone(), &meta)
@@ -127,7 +132,7 @@ mod tests {
             .write_parquet(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value d for column 0 at line 4");
+        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'");
         Ok(())
     }
 }
