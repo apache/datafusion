@@ -596,7 +596,7 @@ pub fn get_window_mode(
         })
         .collect::<Vec<_>>();
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
-    let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
+    let const_exprs = partitionby_exprs.iter().cloned().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
     let reverse_orderby_keys =
         orderby_keys.iter().map(|e| e.reverse()).collect::<Vec<_>>();

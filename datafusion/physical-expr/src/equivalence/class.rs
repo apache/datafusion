@@ -151,12 +151,6 @@ impl From<Arc<dyn PhysicalExpr>> for ConstExpr {
     }
 }
 
-impl From<&Arc<dyn PhysicalExpr>> for ConstExpr {
-    fn from(expr: &Arc<dyn PhysicalExpr>) -> Self {
-        Self::from(Arc::clone(expr))
-    }
-}
-
 /// Checks whether `expr` is among in the `const_exprs`.
 pub fn const_exprs_contains(
     const_exprs: &[ConstExpr],

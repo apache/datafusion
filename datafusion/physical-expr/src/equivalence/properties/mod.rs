@@ -1212,8 +1212,8 @@ impl EquivalenceProperties {
             // Note that these expressions are not properly "constants". This is just
             // an implementation strategy confined to this function.
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
-                eq_properties =
-                    eq_properties.with_constants(std::iter::once(ConstExpr::from(expr)));
+                eq_properties = eq_properties
+                    .with_constants(std::iter::once(ConstExpr::from(Arc::clone(expr))));
                 search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.
