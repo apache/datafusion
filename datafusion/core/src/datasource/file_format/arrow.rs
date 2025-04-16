@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use super::file_compression_type::FileCompressionType;
 use super::write::demux::DemuxedStreamReceiver;
-use super::write::{create_writer, SharedBuffer};
+use super::write::{create_writer_with_size, SharedBuffer};
 use super::FileFormatFactory;
 use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::file_format::FileFormat;
@@ -223,7 +223,7 @@ impl FileSink for ArrowFileSink {
 
     async fn spawn_writer_tasks_and_join(
         &self,
-        _context: &Arc<TaskContext>,
+        context: &Arc<TaskContext>,
         demux_task: SpawnedTask<Result<()>>,
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
@@ -241,10 +241,15 @@ impl FileSink for ArrowFileSink {
                 &get_writer_schema(&self.config),
                 ipc_options.clone(),
             )?;
-            let mut object_store_writer = create_writer(
+            let mut object_store_writer = create_writer_with_size(
                 FileCompressionType::UNCOMPRESSED,
                 &path,
                 Arc::clone(&object_store),
+                context
+                    .session_config()
+                    .options()
+                    .execution
+                    .objectstore_writer_buffer_size,
             )
             .await?;
             file_write_tasks.spawn(async move {

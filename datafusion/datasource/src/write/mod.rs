@@ -88,6 +88,20 @@ pub async fn create_writer(
     file_compression_type.convert_async_writer(buf_writer)
 }
 
+/// Returns an [`AsyncWrite`] which writes to the given object store location
+/// with the specified compression and writer buffer size.
+/// We drop the `AbortableWrite` struct and the writer will not try to cleanup on failure.
+/// Users can configure automatic cleanup with their cloud provider.
+pub async fn create_writer_with_size(
+    file_compression_type: FileCompressionType,
+    location: &Path,
+    object_store: Arc<dyn ObjectStore>,
+    capacity: usize,
+) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
+    let buf_writer = BufWriter::with_capacity(object_store, location.clone(), capacity);
+    file_compression_type.convert_async_writer(buf_writer)
+}
+
 /// Converts table schema to writer schema, which may differ in the case
 /// of hive style partitioning where some columns are removed from the
 /// underlying files.

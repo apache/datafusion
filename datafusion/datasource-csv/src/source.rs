@@ -743,6 +743,11 @@ pub async fn plan_to_csv(
     let parsed = ListingTableUrl::parse(path)?;
     let object_store_url = parsed.object_store();
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
+    let writer_buffer_size = task_ctx
+        .session_config()
+        .options()
+        .execution
+        .objectstore_writer_buffer_size;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let storeref = Arc::clone(&store);
@@ -752,7 +757,8 @@ pub async fn plan_to_csv(
 
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {
-            let mut buf_writer = BufWriter::new(storeref, file.clone());
+            let mut buf_writer =
+                BufWriter::with_capacity(storeref, file.clone(), writer_buffer_size);
             let mut buffer = Vec::with_capacity(1024);
             //only write headers on first iteration
             let mut write_headers = true;
