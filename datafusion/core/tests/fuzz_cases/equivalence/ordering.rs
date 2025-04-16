@@ -62,11 +62,7 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
             for exprs in col_exprs.iter().combinations(n_req) {
                 let sort_exprs = exprs
                     .into_iter()
-                    .map(|expr| PhysicalSortExpr {
-                        expr: Arc::clone(expr),
-                        options: SORT_OPTIONS,
-                    })
-                    .collect::<Vec<_>>();
+                    .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS));
                 let Some(ordering) = LexOrdering::new(sort_exprs) else {
                     unreachable!("Test should always produce non-degenerate orderings");
                 };
@@ -137,11 +133,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
             for exprs in exprs.iter().combinations(n_req) {
                 let sort_exprs = exprs
                     .into_iter()
-                    .map(|expr| PhysicalSortExpr {
-                        expr: Arc::clone(expr),
-                        options: SORT_OPTIONS,
-                    })
-                    .collect::<Vec<_>>();
+                    .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS));
                 let Some(ordering) = LexOrdering::new(sort_exprs) else {
                     unreachable!("Test should always produce non-degenerate orderings");
                 };

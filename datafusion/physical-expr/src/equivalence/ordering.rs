@@ -103,12 +103,10 @@ impl OrderingEquivalenceClass {
     /// Adds new orderings into this ordering equivalence class
     pub fn add_new_orderings(
         &mut self,
-        orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
+        sort_exprs: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) {
-        self.orderings.extend(orderings.into_iter().filter_map(|o| {
-            let sort_exprs = o.into_iter().collect::<Vec<_>>();
-            LexOrdering::new(sort_exprs)
-        }));
+        self.orderings
+            .extend(sort_exprs.into_iter().filter_map(LexOrdering::new));
         // Make sure that there are no redundant orderings:
         self.remove_redundant_entries();
     }

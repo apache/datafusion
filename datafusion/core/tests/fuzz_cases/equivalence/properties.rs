@@ -75,9 +75,8 @@ fn test_find_longest_permutation_random() -> Result<()> {
                 let ordering2 = indices
                     .iter()
                     .zip(ordering.iter())
-                    .map(|(&idx, sort_expr)| PhysicalSortExpr {
-                        expr: Arc::clone(&exprs[idx]),
-                        options: sort_expr.options,
+                    .map(|(&idx, sort_expr)| {
+                        PhysicalSortExpr::new(Arc::clone(&exprs[idx]), sort_expr.options)
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(

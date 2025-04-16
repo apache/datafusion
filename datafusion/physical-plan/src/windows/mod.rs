@@ -47,7 +47,7 @@ use datafusion_physical_expr::window::{
 };
 use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, OrderingRequirements, PhysicalSortRequirement,
+    LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -303,12 +303,8 @@ pub(crate) fn calc_requirements<
     }
 
     let mut alternatives = vec![];
-    if !sort_reqs_with_partition.is_empty() {
-        alternatives.push(sort_reqs_with_partition.into());
-    }
-    if !sort_reqs.is_empty() {
-        alternatives.push(sort_reqs.into());
-    }
+    alternatives.extend(LexRequirement::new(sort_reqs_with_partition));
+    alternatives.extend(LexRequirement::new(sort_reqs));
 
     OrderingRequirements::new(alternatives, false)
 }
@@ -760,30 +756,25 @@ mod tests {
             let mut orderbys = vec![];
             for (col_name, descending, nulls_first) in ob_params {
                 let expr = col(col_name, &schema)?;
-                let options = SortOptions {
-                    descending,
-                    nulls_first,
-                };
-                orderbys.push(PhysicalSortExpr { expr, options });
+                let options = SortOptions::new(descending, nulls_first);
+                orderbys.push(PhysicalSortExpr::new(expr, options));
             }
 
             let mut expected: Option<OrderingRequirements> = None;
             for expected_param in expected_params.clone() {
                 let mut requirements = vec![];
                 for (col_name, reqs) in expected_param {
-                    let options = reqs.map(|(descending, nulls_first)| SortOptions {
-                        descending,
-                        nulls_first,
+                    let options = reqs.map(|(descending, nulls_first)| {
+                        SortOptions::new(descending, nulls_first)
                     });
                     let expr = col(col_name, &schema)?;
                     requirements.push(PhysicalSortRequirement::new(expr, options));
                 }
-                if !requirements.is_empty() {
+                if let Some(requirements) = LexRequirement::new(requirements) {
                     if let Some(alts) = expected.as_mut() {
-                        alts.add_alternative(requirements.into());
+                        alts.add_alternative(requirements);
                     } else {
-                        expected =
-                            Some(OrderingRequirements::new_single(requirements.into()));
+                        expected = Some(OrderingRequirements::new_single(requirements));
                     }
                 }
             }

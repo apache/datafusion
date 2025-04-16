@@ -31,18 +31,16 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
-use datafusion_physical_expr_common::sort_expr::{
-    OrderingRequirements, PhysicalSortRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use datafusion_physical_plan::projection::{
     make_with_child, update_expr, ProjectionExec,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    SendableRecordBatchStream,
 };
-use datafusion_physical_plan::{ExecutionPlanProperties, PlanProperties};
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
 /// plan according to its `mode` attribute, which is set by the constructors
@@ -211,22 +209,21 @@ impl ExecutionPlan for OutputRequirementExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // If the projection does not narrow the schema, we should not try to push it down:
-        if projection.expr().len() >= projection.input().schema().fields().len() {
+        let proj_exprs = projection.expr();
+        if proj_exprs.len() >= projection.input().schema().fields().len() {
             return Ok(None);
         }
 
-        let mut updated_sort_reqs = vec![];
-        // None or empty_vec can be treated in the same way.
-        if let Some(reqs) = self.required_input_ordering().swap_remove(0) {
-            for req in reqs.into_single().iter() {
-                let Some(new_expr) = update_expr(&req.expr, projection.expr(), false)?
-                else {
-                    return Ok(None);
-                };
-                updated_sort_reqs.push(PhysicalSortRequirement {
-                    expr: new_expr,
-                    options: req.options,
-                });
+        let mut requirements = self.required_input_ordering().swap_remove(0);
+        if let Some(reqs) = requirements.as_mut() {
+            for lex in reqs.iter_mut() {
+                for item in lex.iter_mut() {
+                    let Some(new_expr) = update_expr(&item.expr, proj_exprs, false)?
+                    else {
+                        return Ok(None);
+                    };
+                    item.expr = new_expr;
+                }
             }
         }
 
@@ -245,15 +242,10 @@ impl ExecutionPlan for OutputRequirementExec {
             dist => dist.clone(),
         };
 
-        make_with_child(projection, &self.input())
-            .map(|input| {
-                OutputRequirementExec::new(
-                    input,
-                    Some(OrderingRequirements::new_single(updated_sort_reqs.into())),
-                    dist_req,
-                )
-            })
-            .map(|e| Some(Arc::new(e) as _))
+        make_with_child(projection, &self.input()).map(|input| {
+            let e = OutputRequirementExec::new(input, requirements, dist_req);
+            Some(Arc::new(e) as _)
+        })
     }
 }
 

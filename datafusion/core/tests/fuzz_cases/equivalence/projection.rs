@@ -163,13 +163,9 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
 
                 for n_req in 1..=projected_exprs.len() {
                     for exprs in projected_exprs.iter().combinations(n_req) {
-                        let sort_exprs = exprs
-                            .into_iter()
-                            .map(|expr| PhysicalSortExpr {
-                                expr: Arc::clone(expr),
-                                options: SORT_OPTIONS,
-                            })
-                            .collect::<Vec<_>>();
+                        let sort_exprs = exprs.into_iter().map(|expr| {
+                            PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS)
+                        });
                         let Some(ordering) = LexOrdering::new(sort_exprs) else {
                             unreachable!(
                                 "Test should always produce non-degenerate orderings"

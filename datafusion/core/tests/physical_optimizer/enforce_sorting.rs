@@ -70,7 +70,6 @@ fn csv_exec_sorted(
     schema: &SchemaRef,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect::<Vec<_>>();
     let mut builder = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),

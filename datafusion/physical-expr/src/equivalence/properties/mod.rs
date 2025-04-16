@@ -505,9 +505,8 @@ impl EquivalenceProperties {
         let reqs = sort_reqs
             .into_iter()
             .map(|req| self.eq_group.normalize_sort_requirement(req.clone()))
-            .filter(|order| !self.is_normalized_expr_constant(&order.expr, false))
-            .collect::<Vec<_>>();
-        (!reqs.is_empty()).then(|| LexRequirement::new(reqs).collapse())
+            .filter(|order| !self.is_normalized_expr_constant(&order.expr, false));
+        LexRequirement::new(reqs).map(|r| r.collapse())
     }
 
     /// Checks whether the given ordering is satisfied by any of the existing

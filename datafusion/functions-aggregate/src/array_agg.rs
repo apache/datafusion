@@ -168,12 +168,11 @@ impl AggregateUDFImpl for ArrayAgg {
             )?));
         }
 
-        let order_bys = acc_args.order_bys;
-        if order_bys.is_empty() {
+        let Some(ordering) = LexOrdering::new(acc_args.order_bys.to_vec()) else {
             return Ok(Box::new(ArrayAggAccumulator::try_new(&data_type)?));
         };
 
-        let ordering_dtypes = order_bys
+        let ordering_dtypes = ordering
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
@@ -181,7 +180,7 @@ impl AggregateUDFImpl for ArrayAgg {
         OrderSensitiveArrayAggAccumulator::try_new(
             &data_type,
             &ordering_dtypes,
-            LexOrdering::new(order_bys.to_vec()).unwrap(),
+            ordering,
             acc_args.is_reversed,
         )
         .map(|acc| Box::new(acc) as _)

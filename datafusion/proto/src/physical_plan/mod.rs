@@ -1637,9 +1637,12 @@ impl protobuf::PhysicalPlanNode {
                     &sink_schema,
                     extension_codec,
                 )
-                .map(LexRequirement::from)
+                .map(|sort_exprs| {
+                    LexRequirement::new(sort_exprs.into_iter().map(Into::into))
+                })
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(data_sink),
@@ -1672,9 +1675,12 @@ impl protobuf::PhysicalPlanNode {
                     &sink_schema,
                     extension_codec,
                 )
-                .map(LexRequirement::from)
+                .map(|sort_exprs| {
+                    LexRequirement::new(sort_exprs.into_iter().map(Into::into))
+                })
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(data_sink),
@@ -1710,9 +1716,12 @@ impl protobuf::PhysicalPlanNode {
                         &sink_schema,
                         extension_codec,
                     )
-                    .map(LexRequirement::from)
+                    .map(|sort_exprs| {
+                        LexRequirement::new(sort_exprs.into_iter().map(Into::into))
+                    })
                 })
-                .transpose()?;
+                .transpose()?
+                .flatten();
             Ok(Arc::new(DataSinkExec::new(
                 input,
                 Arc::new(data_sink),

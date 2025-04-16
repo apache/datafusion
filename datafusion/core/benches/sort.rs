@@ -274,8 +274,7 @@ fn make_sort_exprs(schema: &Schema) -> LexOrdering {
     let sort_exprs = schema
         .fields()
         .iter()
-        .map(|f| PhysicalSortExpr::new_default(col(f.name(), schema).unwrap()))
-        .collect::<Vec<_>>();
+        .map(|f| PhysicalSortExpr::new_default(col(f.name(), schema).unwrap()));
     LexOrdering::new(sort_exprs).unwrap()
 }
 

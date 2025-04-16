@@ -1396,10 +1396,10 @@ fn get_projected_output_ordering(
                 let name = col.name();
                 if let Some((idx, _)) = projected_schema.column_with_name(name) {
                     // Compute the new sort expression (with correct index) after projection:
-                    new_ordering.push(PhysicalSortExpr {
-                        expr: Arc::new(Column::new(name, idx)),
-                        options: *options,
-                    });
+                    new_ordering.push(PhysicalSortExpr::new(
+                        Arc::new(Column::new(name, idx)),
+                        *options,
+                    ));
                     continue;
                 }
             }

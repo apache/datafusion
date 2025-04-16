@@ -292,7 +292,7 @@ fn pushdown_requirement_to_children(
                 let right_offset =
                     smj.schema().fields.len() - smj.right().schema().fields.len();
                 let new_right_required =
-                    shift_right_required(parent_required.first(), right_offset)?;
+                    shift_right_required(parent_required.first().clone(), right_offset)?;
                 let new_right_required_expr = LexOrdering::from(new_right_required);
                 try_pushdown_requirements_to_join(
                     smj,
@@ -524,26 +524,19 @@ fn expr_source_side(
 }
 
 fn shift_right_required(
-    parent_required: &LexRequirement,
+    mut parent_required: LexRequirement,
     left_columns_len: usize,
 ) -> Result<LexRequirement> {
-    let new_right_required = parent_required
-        .iter()
-        .filter_map(|r| {
-            let col = r.expr.as_any().downcast_ref::<Column>()?;
-            col.index().checked_sub(left_columns_len).map(|offset| {
-                r.clone()
-                    .with_expr(Arc::new(Column::new(col.name(), offset)))
-            })
-        })
-        .collect::<Vec<_>>();
-    if new_right_required.len() == parent_required.len() {
-        Ok(new_right_required.into())
-    } else {
-        plan_err!(
-            "Expect to shift all the parent required column indexes for SortMergeJoin"
-        )
+    for req in parent_required.iter_mut() {
+        let Some(col) = req.expr.as_any().downcast_ref::<Column>() else {
+            return plan_err!(
+                "Expect to shift all the parent required column indexes for SortMergeJoin"
+            );
+        };
+        let offset = col.index() - left_columns_len;
+        req.expr = Arc::new(Column::new(col.name(), offset));
     }
+    Ok(parent_required)
 }
 
 /// Handles the custom pushdown of parent-required sorting requirements down to
@@ -642,9 +635,12 @@ fn handle_custom_pushdown(
         let result = maintains_input_order
             .iter()
             .map(|&maintains_order| {
-                maintains_order.then(|| {
-                    OrderingRequirements::new_single(updated_parent_req.clone().into())
-                })
+                if maintains_order {
+                    LexRequirement::new(updated_parent_req.clone())
+                        .map(OrderingRequirements::new_single)
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -719,7 +715,7 @@ fn handle_hash_join(
         // Populating with the updated requirements for children that maintain order
         Ok(Some(vec![
             None,
-            Some(OrderingRequirements::new_single(updated_parent_req.into())),
+            LexRequirement::new(updated_parent_req).map(OrderingRequirements::new_single),
         ]))
     } else {
         Ok(None)

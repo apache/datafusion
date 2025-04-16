@@ -61,10 +61,7 @@ pub fn convert_to_sort_exprs<T: Borrow<Arc<dyn PhysicalExpr>>>(
     args: &[(T, SortOptions)],
 ) -> Vec<PhysicalSortExpr> {
     args.iter()
-        .map(|(expr, options)| PhysicalSortExpr {
-            expr: Arc::clone(expr.borrow()),
-            options: *options,
-        })
+        .map(|(expr, options)| PhysicalSortExpr::new(Arc::clone(expr.borrow()), *options))
         .collect()
 }
 
@@ -213,11 +210,10 @@ mod tests {
     pub fn convert_to_sort_reqs(
         args: &[(&Arc<dyn PhysicalExpr>, Option<SortOptions>)],
     ) -> LexRequirement {
-        args.iter()
-            .map(|(expr, options)| {
-                PhysicalSortRequirement::new(Arc::clone(*expr), *options)
-            })
-            .collect()
+        let exprs = args.iter().map(|(expr, options)| {
+            PhysicalSortRequirement::new(Arc::clone(*expr), *options)
+        });
+        LexRequirement::new(exprs).unwrap()
     }
 
     #[test]

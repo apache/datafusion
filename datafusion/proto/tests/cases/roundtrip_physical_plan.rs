@@ -60,7 +60,7 @@ use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
-    LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
+    LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
 };
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -1324,13 +1324,14 @@ fn roundtrip_json_sink() -> Result<()> {
         file_sink_config,
         JsonWriterOptions::new(CompressionTypeVariant::UNCOMPRESSED),
     ));
-    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
+    let sort_order = [PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )]);
+    )]
+    .into();
 
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
@@ -1361,13 +1362,14 @@ fn roundtrip_csv_sink() -> Result<()> {
         file_sink_config,
         CsvWriterOptions::new(WriterBuilder::default(), CompressionTypeVariant::ZSTD),
     ));
-    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
+    let sort_order = [PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )]);
+    )]
+    .into();
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
@@ -1417,13 +1419,14 @@ fn roundtrip_parquet_sink() -> Result<()> {
         file_sink_config,
         TableParquetOptions::default(),
     ));
-    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
+    let sort_order = [PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )]);
+    )]
+    .into();
 
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
@@ -1465,7 +1468,7 @@ fn roundtrip_sym_hash_join() -> Result<()> {
                     options: Default::default(),
                 }]),
             ] {
-                for right_order in &[
+                for right_order in [
                     None,
                     LexOrdering::new(vec![PhysicalSortExpr {
                         expr: Arc::new(Column::new("col", schema_right.index_of("col")?)),
@@ -1480,7 +1483,7 @@ fn roundtrip_sym_hash_join() -> Result<()> {
                         join_type,
                         false,
                         left_order.clone(),
-                        right_order.clone(),
+                        right_order,
                         *partition_mode,
                     )?))?;
                 }

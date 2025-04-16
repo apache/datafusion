@@ -136,29 +136,9 @@ impl PhysicalSortExpr {
             to_str(&self.options)
         )
     }
-}
 
-impl PartialEq for PhysicalSortExpr {
-    fn eq(&self, other: &Self) -> bool {
-        self.options == other.options && self.expr.eq(&other.expr)
-    }
-}
-
-impl Hash for PhysicalSortExpr {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.expr.hash(state);
-        self.options.hash(state);
-    }
-}
-
-impl Display for PhysicalSortExpr {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{} {}", self.expr, to_str(&self.options))
-    }
-}
-
-impl PhysicalSortExpr {
-    /// evaluate the sort expression into SortColumn that can be passed into arrow sort kernel
+    /// Evaluates the sort expression into a `SortColumn` that can be passed
+    /// into the arrow sort kernel.
     pub fn evaluate_to_sort_column(&self, batch: &RecordBatch) -> Result<SortColumn> {
         let array_to_sort = match self.expr.evaluate(batch)? {
             ColumnarValue::Array(array) => array,
@@ -197,6 +177,25 @@ impl PhysicalSortExpr {
                 // If the column is not nullable, NULLS FIRST/LAST is not important.
                 self.options.descending == sort_expr.options.descending
             }
+    }
+}
+
+impl PartialEq for PhysicalSortExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.options == other.options && self.expr.eq(&other.expr)
+    }
+}
+
+impl Hash for PhysicalSortExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.options.hash(state);
+    }
+}
+
+impl Display for PhysicalSortExpr {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{} {}", self.expr, to_str(&self.options))
     }
 }
 
@@ -277,12 +276,6 @@ impl PhysicalSortRequirement {
     /// See [`PhysicalSortRequirement`] for examples.
     pub fn new(expr: Arc<dyn PhysicalExpr>, options: Option<SortOptions>) -> Self {
         Self { expr, options }
-    }
-
-    /// Replace the required expression for this requirement with the new one
-    pub fn with_expr(mut self, expr: Arc<dyn PhysicalExpr>) -> Self {
-        self.expr = expr;
-        self
     }
 
     /// Returns whether this requirement is equal or more specific than `other`.
@@ -372,14 +365,15 @@ impl LexOrdering {
     ///
     /// For example, `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a
     /// Some(ASC)]`.
-    pub fn collapse(self) -> Self {
+    pub fn collapse(mut self) -> Self {
         let mut orderings = Vec::<PhysicalSortExpr>::new();
-        for element in self {
+        for element in self.inner {
             if !orderings.iter().any(|item| item.expr.eq(&element.expr)) {
                 orderings.push(element);
             }
         }
-        Self { inner: orderings }
+        self.inner = orderings;
+        self
     }
 
     /// Truncates the `LexOrdering`, keeping only the first `len` elements.
@@ -474,11 +468,11 @@ pub struct LexRequirement {
 }
 
 impl LexRequirement {
-    /// Creates a new [`LexOrdering`] from the given vector of sort requirements.
-    /// The vector must not be empty.
-    pub fn new(inner: Vec<PhysicalSortRequirement>) -> Self {
-        debug_assert!(!inner.is_empty());
-        Self { inner }
+    /// Creates a new [`LexRequirement`] from the given vector of sort expressions.
+    /// If the vector is empty, returns `None`.
+    pub fn new(inner: impl IntoIterator<Item = PhysicalSortRequirement>) -> Option<Self> {
+        let inner = inner.into_iter().collect::<Vec<_>>();
+        (!inner.is_empty()).then(|| Self { inner })
     }
 
     /// Appends an element to the back of the `LexRequirement`.
@@ -508,20 +502,15 @@ impl LexRequirement {
     ///
     /// For example, `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a
     /// Some(ASC)]`.
-    pub fn collapse(self) -> Self {
+    pub fn collapse(mut self) -> Self {
         let mut reqs = Vec::<PhysicalSortRequirement>::new();
-        for element in self {
+        for element in self.inner {
             if !reqs.iter().any(|item| item.expr.eq(&element.expr)) {
                 reqs.push(element);
             }
         }
-        Self::new(reqs)
-    }
-}
-
-impl From<Vec<PhysicalSortRequirement>> for LexRequirement {
-    fn from(value: Vec<PhysicalSortRequirement>) -> Self {
-        Self::new(value)
+        self.inner = reqs;
+        self
     }
 }
 
@@ -547,12 +536,6 @@ impl Deref for LexRequirement {
 impl DerefMut for LexRequirement {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.inner.as_mut_slice()
-    }
-}
-
-impl FromIterator<PhysicalSortRequirement> for LexRequirement {
-    fn from_iter<T: IntoIterator<Item = PhysicalSortRequirement>>(iter: T) -> Self {
-        Self::new(iter.into_iter().collect())
     }
 }
 
@@ -584,24 +567,12 @@ impl From<LexOrdering> for LexRequirement {
     }
 }
 
-impl From<Vec<PhysicalSortExpr>> for LexRequirement {
-    fn from(value: Vec<PhysicalSortExpr>) -> Self {
-        Self::new(value.into_iter().map(Into::into).collect())
-    }
-}
-
 impl From<LexRequirement> for LexOrdering {
     fn from(value: LexRequirement) -> Self {
         // Can construct directly as `value` is non-degenerate:
         Self {
             inner: value.into_iter().map(Into::into).collect(),
         }
-    }
-}
-
-impl From<Vec<PhysicalSortRequirement>> for LexOrdering {
-    fn from(value: Vec<PhysicalSortRequirement>) -> Self {
-        Self::new(value.into_iter().map(Into::into)).unwrap()
     }
 }
 
@@ -632,6 +603,11 @@ impl OrderingRequirements {
     /// Creates a new instance with a single hard requirement.
     pub fn new_single(requirement: LexRequirement) -> Self {
         Self::Hard(vec![requirement])
+    }
+
+    /// Creates a new instance with a single soft requirement.
+    pub fn new_single_soft(requirement: LexRequirement) -> Self {
+        Self::Soft(vec![requirement])
     }
 
     /// Adds an alternative requirement to the list of alternatives.
@@ -667,5 +643,23 @@ impl From<LexRequirement> for OrderingRequirements {
 impl From<LexOrdering> for OrderingRequirements {
     fn from(ordering: LexOrdering) -> Self {
         Self::new_single(ordering.into())
+    }
+}
+
+impl Deref for OrderingRequirements {
+    type Target = [LexRequirement];
+
+    fn deref(&self) -> &Self::Target {
+        match &self {
+            Self::Hard(alts) | Self::Soft(alts) => alts.as_slice(),
+        }
+    }
+}
+
+impl DerefMut for OrderingRequirements {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Hard(alts) | Self::Soft(alts) => alts.as_mut_slice(),
+        }
     }
 }

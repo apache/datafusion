@@ -1084,13 +1084,10 @@ pub(crate) mod tests {
         let mut sort_info = vec![];
         for name in sorted_column_names {
             let index = schema.index_of(name).unwrap();
-            let sort_expr = PhysicalSortExpr {
-                expr: Arc::new(Column::new(name, index)),
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            };
+            let sort_expr = PhysicalSortExpr::new(
+                Arc::new(Column::new(name, index)),
+                SortOptions::new(false, false),
+            );
             sort_info.push(sort_expr);
         }
         let mut source = TestMemoryExec::try_new(&[batches], schema, None).unwrap();
