@@ -483,9 +483,8 @@ impl AggregateExec {
         let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
         let mut new_requirements = indices
             .iter()
-            .map(|&idx| PhysicalSortRequirement {
-                expr: Arc::clone(&groupby_exprs[idx]),
-                options: None,
+            .map(|&idx| {
+                PhysicalSortRequirement::new(Arc::clone(&groupby_exprs[idx]), None)
             })
             .collect::<Vec<_>>();
 
@@ -2388,14 +2387,8 @@ mod tests {
         ];
 
         let common_requirement = vec![
-            PhysicalSortRequirement {
-                expr: Arc::clone(col_a),
-                options: Some(options),
-            },
-            PhysicalSortRequirement {
-                expr: Arc::clone(col_c),
-                options: Some(options),
-            },
+            PhysicalSortRequirement::new(Arc::clone(col_a), Some(options)),
+            PhysicalSortRequirement::new(Arc::clone(col_c), Some(options)),
         ];
         let mut aggr_exprs = order_by_exprs
             .into_iter()

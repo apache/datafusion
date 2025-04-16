@@ -973,13 +973,10 @@ async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_
         partition_bys2,
         bounded_window,
     );
-    let requirement = [PhysicalSortRequirement {
-        expr: col("non_nullable_col", &schema)?,
-        options: Some(SortOptions {
-            descending: false,
-            nulls_first: true,
-        }),
-    }]
+    let requirement = [PhysicalSortRequirement::new(
+        col("non_nullable_col", &schema)?,
+        Some(SortOptions(false, true)),
+    )]
     .into();
     let physical_plan = Arc::new(OutputRequirementExec::new(
         bounded_window2,

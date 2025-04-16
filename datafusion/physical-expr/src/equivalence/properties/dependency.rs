@@ -1284,27 +1284,14 @@ mod tests {
         let col_c = col("c", &schema)?;
 
         let eq_properties = EquivalenceProperties::new(schema);
-        let lex_a: LexRequirement = [PhysicalSortRequirement {
-            expr: Arc::clone(&col_a),
-            options: None,
-        }]
-        .into();
+        let lex_a: LexRequirement =
+            [PhysicalSortRequirement::new(Arc::clone(&col_a), None)].into();
         let lex_a_b: LexRequirement = [
-            PhysicalSortRequirement {
-                expr: col_a,
-                options: None,
-            },
-            PhysicalSortRequirement {
-                expr: col_b,
-                options: None,
-            },
+            PhysicalSortRequirement::new(col_a, None),
+            PhysicalSortRequirement::new(col_b, None),
         ]
         .into();
-        let lex_c = [PhysicalSortRequirement {
-            expr: col_c,
-            options: None,
-        }]
-        .into();
+        let lex_c = [PhysicalSortRequirement::new(col_c, None)].into();
 
         assert!(eq_properties.requirements_compatible(lex_a.clone(), lex_a.clone()));
         assert!(!eq_properties.requirements_compatible(lex_a.clone(), lex_a_b.clone()));
