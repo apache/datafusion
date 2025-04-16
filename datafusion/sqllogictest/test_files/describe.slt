@@ -67,8 +67,22 @@ DESCRIBE '../core/tests/data/aggregate_simple.csv';
 # Describe command
 ##########
 
-statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/alltypes_tiny_pages\.parquet not found: No such file or directory \(os error 2\)
+statement ok
 CREATE EXTERNAL TABLE alltypes_tiny_pages STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_tiny_pages.parquet';
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.alltypes_tiny_pages' not found
+query TTT
 describe alltypes_tiny_pages;
+----
+id Int32 YES
+bool_col Boolean YES
+tinyint_col Int8 YES
+smallint_col Int16 YES
+int_col Int32 YES
+bigint_col Int64 YES
+float_col Float32 YES
+double_col Float64 YES
+date_string_col Utf8View YES
+string_col Utf8View YES
+timestamp_col Timestamp(Nanosecond, None) YES
+year Int32 YES
+month Int32 YES

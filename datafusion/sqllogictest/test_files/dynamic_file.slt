@@ -254,5 +254,14 @@ SELECT a, b FROM '../core/tests/data/2.json'
 5 -3.5
 7 -3.5
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.\.\./\.\./parquet\-testing/data/alltypes_plain\.parquet' not found
+query IT
 SELECT id, CAST(string_col AS varchar) FROM '../../parquet-testing/data/alltypes_plain.parquet';
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1

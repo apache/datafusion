@@ -190,8 +190,17 @@ STORED AS PARQUET
 LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 
 # Test a basic query with a CAST:
-query error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/alltypes_plain\.parquet not found: No such file or directory \(os error 2\)
+query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
 
 # Ensure that local files can not be read by default (a potential security issue)
 # (url table is only supported when DynamicFileCatalog is enabled)
@@ -300,32 +309,40 @@ statement ok
 DROP TABLE timestamp_with_tz;
 
 # Test a query from the single_nan data set:
-statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/single_nan\.parquet not found: No such file or directory \(os error 2\)
+statement ok
 CREATE EXTERNAL TABLE single_nan
 STORED AS PARQUET
 LOCATION '../../parquet-testing/data/single_nan.parquet';
 
 # Check table size:
-query error DataFusion error: Error during planning: table 'datafusion\.public\.single_nan' not found
+query I
 SELECT COUNT(*) FROM single_nan;
+----
+1
 
 # Query for the single NULL:
-query error DataFusion error: Error during planning: table 'datafusion\.public\.single_nan' not found
+query R
 SELECT mycol FROM single_nan;
+----
+NULL
 
 # Clean up
-statement error DataFusion error: Execution error: Table 'single_nan' doesn't exist\.
+statement ok
 DROP TABLE single_nan;
 
-statement error DataFusion error: Object Store error: Object at location /Users/adriangb/GitHub/datafusion/parquet\-testing/data/list_columns\.parquet not found: No such file or directory \(os error 2\)
+statement ok
 CREATE EXTERNAL TABLE list_columns
 STORED AS PARQUET
 LOCATION '../../parquet-testing/data/list_columns.parquet';
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.list_columns' not found
+query ??
 SELECT int64_list, utf8_list FROM list_columns
+----
+[1, 2, 3] [abc, efg, hij]
+[NULL, 1] NULL
+[4] [efg, NULL, hij, xyz]
 
-statement error DataFusion error: Execution error: Table 'list_columns' doesn't exist\.
+statement ok
 DROP TABLE list_columns;
 
 # Clean up
