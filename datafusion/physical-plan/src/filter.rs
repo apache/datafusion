@@ -50,7 +50,7 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
@@ -444,25 +444,48 @@ impl ExecutionPlan for FilterExec {
         mut fd: FilterDescription,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
-        if self.projection.is_some() {
-            return Ok(FilterPushdownResult {
-                support: FilterPushdownSupport::NotSupported,
-                remaining_description: fd,
-            });
-        };
-
-        fd.filters.push(self.predicate.clone());
+        fd.filters.push(Arc::clone(&self.predicate));
         let child_descriptions = vec![fd];
         let remaining_description = FilterDescription { filters: vec![] };
+        let filter_child = Arc::clone(node.children()[0]);
 
-        Ok(FilterPushdownResult {
-            support: FilterPushdownSupport::Supported {
-                child_descriptions,
-                op: Arc::clone(self.input()),
-                retry: true,
-            },
-            remaining_description,
-        })
+        if self.projection.is_some() {
+            let filter_child_schema = filter_child.schema();
+            let proj_exprs = self
+                .projection
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|p| {
+                    let col_name = filter_child_schema.field(*p).clone();
+                    (
+                        Arc::new(Column::new(col_name.name(), *p))
+                            as Arc<dyn PhysicalExpr>,
+                        col_name.name().to_string(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let projection_exec =
+                Arc::new(ProjectionExec::try_new(proj_exprs, filter_child)?) as _;
+
+            Ok(FilterPushdownResult {
+                support: FilterPushdownSupport::Supported {
+                    child_descriptions,
+                    op: projection_exec,
+                    retry: false,
+                },
+                remaining_description,
+            })
+        } else {
+            Ok(FilterPushdownResult {
+                support: FilterPushdownSupport::Supported {
+                    child_descriptions,
+                    op: filter_child,
+                    retry: true,
+                },
+                remaining_description,
+            })
+        }
     }
 }
 
