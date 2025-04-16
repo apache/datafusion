@@ -149,6 +149,39 @@ drop table t
 statement ok
 drop table t2
 
+
+############
+## 0 to represent the default value (target_partitions and planning_concurrency)
+###########
+
+statement ok
+SET datafusion.execution.target_partitions = 3;
+
+statement ok
+SET datafusion.execution.planning_concurrency = 3;
+
+# when setting target_partitions and planning_concurrency to 3, their values will be 3
+query TB rowsort
+SELECT name, value = 3 FROM information_schema.df_settings WHERE name IN ('datafusion.execution.target_partitions', 'datafusion.execution.planning_concurrency');
+----
+datafusion.execution.planning_concurrency true
+datafusion.execution.target_partitions true
+
+statement ok
+SET datafusion.execution.target_partitions = 0;
+
+statement ok
+SET datafusion.execution.planning_concurrency = 0;
+
+# when setting target_partitions and planning_concurrency to 0, their values will be equal to the
+# default values, which are different from 0 (which is invalid)
+query TB rowsort
+SELECT name, value = 0 FROM information_schema.df_settings WHERE name IN ('datafusion.execution.target_partitions', 'datafusion.execution.planning_concurrency');
+----
+datafusion.execution.planning_concurrency false
+datafusion.execution.target_partitions false
+
+
 ############
 ## SHOW VARIABLES should work
 ###########
