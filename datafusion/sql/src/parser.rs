@@ -360,7 +360,7 @@ impl<'a> DFParserBuilder<'a> {
         // Convert TokenizerError -> ParserError
         let tokens = tokenizer
             .tokenize_with_location()
-            .map_err(|e| ParserError::TokenizerError(e.to_string()))?;
+            .map_err(|e| ParserError::from(e))?;
 
         Ok(DFParser {
             parser: Parser::new(self.dialect)
@@ -447,7 +447,7 @@ impl<'a> DFParser<'a> {
             found.span.start
         ))
         .map_err(|e| {
-            let e: DataFusionError = e.into();
+            let e = DataFusionError::from(e);
             let span = Span::try_from_sqlparser_span(sql_parser_span);
             let diagnostic = Diagnostic::new_error(
                 format!("Expected: {expected}, found: {found}{}", found.span.start),
@@ -577,13 +577,13 @@ impl<'a> DFParser<'a> {
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
-                    return parser_err!(format!("Unexpected token {token}"))?;
+                    return self.expected("end of statement or ;", token)?;
                 }
             }
         }
 
         let Some(target) = builder.target else {
-            return parser_err!(format!("Missing TO clause in COPY statement"))?;
+            return parser_err!("Missing TO clause in COPY statement")?;
         };
 
         Ok(Statement::CopyTo(CopyToStatement {
@@ -929,9 +929,7 @@ impl<'a> DFParser<'a> {
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
-                    return sql_err!(ParserError::ParserError(format!(
-                        "Unexpected token {token}"
-                    )));
+                    return self.expected("end of statement or ;", token)?;
                 }
             }
         }
