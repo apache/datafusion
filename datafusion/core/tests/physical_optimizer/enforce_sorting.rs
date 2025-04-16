@@ -975,7 +975,7 @@ async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_
     );
     let requirement = [PhysicalSortRequirement::new(
         col("non_nullable_col", &schema)?,
-        Some(SortOptions(false, true)),
+        Some(SortOptions::new(false, true)),
     )]
     .into();
     let physical_plan = Arc::new(OutputRequirementExec::new(
