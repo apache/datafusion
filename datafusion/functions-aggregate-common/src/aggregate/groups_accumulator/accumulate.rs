@@ -930,7 +930,7 @@ mod test {
 
     use arrow::array::{Int32Array, UInt32Array};
     use rand::{rngs::ThreadRng, Rng};
-    use std::collections::HashSet;
+    use std::{cmp, collections::HashSet};
 
     #[test]
     fn accumulate() {
@@ -956,12 +956,14 @@ mod test {
             })
             .collect();
 
+        // Test flat style
         Fixture {
             group_indices,
             values,
             values_with_nulls,
             filter,
-            block_size: None,
+            block_size: 3,
+            acc_rounds: 5,
         }
         .run()
     }
@@ -989,8 +991,10 @@ mod test {
         /// filter (defaults to None)
         filter: BooleanArray,
 
-        ///
-        block_size: Option<usize>,
+        /// block size for testing [`BlockedNullState`]
+        block_size: usize,
+
+        acc_rounds: usize,
     }
 
     impl Fixture {
@@ -1006,6 +1010,12 @@ mod test {
                 .collect();
 
             let values: Vec<u32> = (0..num_values).map(|_| rng.gen()).collect();
+
+            // random block size
+            let block_size = rng.gen_range(1..num_groups);
+
+            // random acc rounds
+            let acc_rounds = rng.gen_range(1..=group_indices.len());
 
             // 10% chance of false
             // 10% change of null
@@ -1042,7 +1052,8 @@ mod test {
                 values,
                 values_with_nulls,
                 filter,
-                block_size: None,
+                block_size,
+                acc_rounds,
             }
         }
 
@@ -1073,6 +1084,7 @@ mod test {
                 None,
                 total_num_groups,
                 self.block_size,
+                self.acc_rounds,
             );
 
             // nulls, no filters
@@ -1082,6 +1094,7 @@ mod test {
                 None,
                 total_num_groups,
                 self.block_size,
+                self.acc_rounds,
             );
 
             // no nulls, filters
@@ -1091,6 +1104,7 @@ mod test {
                 Some(filter),
                 total_num_groups,
                 self.block_size,
+                self.acc_rounds,
             );
 
             // nulls, filters
@@ -1100,6 +1114,7 @@ mod test {
                 Some(filter),
                 total_num_groups,
                 self.block_size,
+                self.acc_rounds,
             );
         }
 
@@ -1111,28 +1126,97 @@ mod test {
             values: &UInt32Array,
             opt_filter: Option<&BooleanArray>,
             total_num_groups: usize,
-            block_size: Option<usize>,
+            block_size: usize,
+            acc_rounds: usize,
         ) {
+            // Test `accumulate` of `FlatNullState` + accumulate in once
             Self::accumulate_values_test(
                 group_indices,
                 values,
                 opt_filter,
                 total_num_groups,
-                block_size,
+                None,
+                None,
             );
-            Self::accumulate_indices_test(group_indices, values.nulls(), opt_filter);
+
+            // Test `accumulate` of `FlatNullState` + accumulate in multiple times
+            Self::accumulate_values_test(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                None,
+                Some(acc_rounds),
+            );
+
+            // Test `accumulate` of `BlockedNullState` + accumulate in once
+            Self::accumulate_values_test(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                Some(block_size),
+                None,
+            );
+
+            // Test `accumulate` of `BlockedNullState` + accumulate in multiple times
+            Self::accumulate_values_test(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                Some(block_size),
+                Some(acc_rounds),
+            );
 
             // Convert values into a boolean array (anything above the
             // average is true, otherwise false)
             let avg: usize = values.iter().filter_map(|v| v.map(|v| v as usize)).sum();
             let boolean_values: BooleanArray =
                 values.iter().map(|v| v.map(|v| v as usize > avg)).collect();
+
+            // Test `accumulate_boolean` of `FlatNullState` + accumulate in once
             Self::accumulate_boolean_test(
                 group_indices,
                 &boolean_values,
                 opt_filter,
                 total_num_groups,
+                None,
+                None,
             );
+
+            // Test `accumulate_boolean` of `FlatNullState` + accumulate in multiple times
+            Self::accumulate_boolean_test(
+                group_indices,
+                &boolean_values,
+                opt_filter,
+                total_num_groups,
+                None,
+                Some(acc_rounds),
+            );
+
+            // Test `accumulate_boolean` of `BlockedNullState` + accumulate in once
+            Self::accumulate_boolean_test(
+                group_indices,
+                &boolean_values,
+                opt_filter,
+                total_num_groups,
+                Some(block_size),
+                None,
+            );
+
+            // Test `accumulate_boolean` of `BlockedNullState` + accumulate in multiple times
+            Self::accumulate_boolean_test(
+                group_indices,
+                &boolean_values,
+                opt_filter,
+                total_num_groups,
+                Some(block_size),
+                Some(acc_rounds),
+            );
+
+            // Test `accumulate_indices`
+            Self::accumulate_indices_test(group_indices, values.nulls(), opt_filter);
         }
 
         /// This is effectively a different implementation of
@@ -1143,45 +1227,105 @@ mod test {
             opt_filter: Option<&BooleanArray>,
             total_num_groups: usize,
             block_size: Option<usize>,
+            acc_rounds: Option<usize>,
         ) {
-            let mut accumulated_values = vec![];
-            let (mut null_state, block_size, acc_group_indices) = if let Some(blk_size) =
-                block_size
-            {
-                let acc_group_indices = group_indices
-                    .iter()
-                    .copied()
-                    .map(|index| {
-                        let block_id = (index / blk_size) as u32;
-                        let block_offset = (index % blk_size) as u64;
-                        BlockedGroupIndexOperations::pack_index(block_id, block_offset)
-                            as usize
-                    })
-                    .collect::<Vec<_>>();
-                (
-                    NullStateAdapter::new(Some(blk_size)),
-                    blk_size,
-                    acc_group_indices,
-                )
-            } else {
-                (
-                    NullStateAdapter::new(None),
-                    0,
-                    group_indices.iter().copied().collect(),
-                )
-            };
+            // Chunking `group_indices`, `values`, `opt_filter`, and we also need to generate
+            // `chunked acc_group_indices` basing on `group_indices`
+            let (group_indices_chunks, values_chunks, opt_filter_chunks) =
+                if let Some(rounds) = acc_rounds {
+                    let chunk_size = group_indices.len() / rounds;
 
-            null_state.accumulate(
-                &acc_group_indices,
-                values,
-                opt_filter,
-                total_num_groups,
-                |block_id, block_offset, value| {
-                    let flatten_index =
-                        ((block_id as u64 * block_size as u64) + block_offset) as usize;
-                    accumulated_values.push((flatten_index as usize, value));
-                },
-            );
+                    let group_indices_chunks = group_indices
+                        .chunks(chunk_size)
+                        .into_iter()
+                        .map(|chunk| chunk.to_vec())
+                        .collect::<Vec<_>>();
+
+                    let values_chunks = values
+                        .iter()
+                        .collect::<Vec<_>>()
+                        .chunks(chunk_size)
+                        .map(|chunk| UInt32Array::from_iter(chunk.iter().copied()))
+                        .collect::<Vec<_>>();
+
+                    let opt_filter_chunks = if let Some(filter) = opt_filter {
+                        filter
+                            .iter()
+                            .collect::<Vec<_>>()
+                            .chunks(chunk_size)
+                            .map(|chunk| Some(BooleanArray::from_iter(chunk.iter())))
+                            .collect::<Vec<_>>()
+                    } else {
+                        vec![None; values_chunks.len()]
+                    };
+
+                    (group_indices_chunks, values_chunks, opt_filter_chunks)
+                } else {
+                    (
+                        vec![group_indices.to_vec()],
+                        vec![values.clone()],
+                        vec![opt_filter.cloned()],
+                    )
+                };
+
+            let mut total_num_groups_chunks = vec![];
+            let mut cur_total_num_groups = usize::MIN;
+            for group_indices in &group_indices_chunks {
+                let num_groups = *group_indices.iter().max().unwrap() + 1;
+                cur_total_num_groups = cmp::max(cur_total_num_groups, num_groups);
+                total_num_groups_chunks.push(cur_total_num_groups);
+            }
+
+            // Build needed test contexts
+            let (mut null_state, block_size, acc_group_indices_chunks) =
+                if let Some(blk_size) = block_size {
+                    let mut acc_group_indices_chunks = vec![];
+                    for group_indices in group_indices_chunks {
+                        let acc_group_indices = group_indices
+                            .into_iter()
+                            .map(|index| {
+                                let block_id = (index / blk_size) as u32;
+                                let block_offset = (index % blk_size) as u64;
+                                BlockedGroupIndexOperations::pack_index(
+                                    block_id,
+                                    block_offset,
+                                ) as usize
+                            })
+                            .collect::<Vec<_>>();
+                        acc_group_indices_chunks.push(acc_group_indices);
+                    }
+
+                    (
+                        NullStateAdapter::new(Some(blk_size)),
+                        blk_size,
+                        acc_group_indices_chunks,
+                    )
+                } else {
+                    (NullStateAdapter::new(None), 0, group_indices_chunks)
+                };
+
+            // Start the test
+            let mut accumulated_values = vec![];
+            for (((acc_group_indices, values), total_num_groups), cur_opt_filter) in
+                acc_group_indices_chunks
+                    .into_iter()
+                    .zip(values_chunks)
+                    .zip(total_num_groups_chunks)
+                    .zip(opt_filter_chunks)
+            {
+                null_state.accumulate(
+                    &acc_group_indices,
+                    &values,
+                    cur_opt_filter.as_ref(),
+                    total_num_groups,
+                    |block_id, block_offset, value| {
+                        let flatten_index = ((block_id as u64 * block_size as u64)
+                            + block_offset)
+                            as usize;
+                        accumulated_values.push((flatten_index as usize, value));
+                    },
+                );
+            }
 
             // Figure out the expected values
             let mut expected_values = vec![];
@@ -1285,19 +1429,106 @@ mod test {
             values: &BooleanArray,
             opt_filter: Option<&BooleanArray>,
             total_num_groups: usize,
+            block_size: Option<usize>,
+            acc_rounds: Option<usize>,
         ) {
-            let mut accumulated_values = vec![];
-            let mut null_state = FlatNullState::new();
+            // Chunking `group_indices`, `values`, `opt_filter`, and we also need to generate
+            // `chunked acc_group_indices` basing on `group_indices`
+            let (group_indices_chunks, values_chunks, opt_filter_chunks) =
+                if let Some(rounds) = acc_rounds {
+                    let chunk_size = group_indices.len() / rounds;
 
-            null_state.accumulate_boolean(
-                group_indices,
-                values,
-                opt_filter,
-                total_num_groups,
-                |_, group_index, value| {
-                    accumulated_values.push((group_index as usize, value));
-                },
-            );
+                    let group_indices_chunks = group_indices
+                        .chunks(chunk_size)
+                        .into_iter()
+                        .map(|chunk| chunk.to_vec())
+                        .collect::<Vec<_>>();
+
+                    let values_chunks = values
+                        .iter()
+                        .collect::<Vec<_>>()
+                        .chunks(chunk_size)
+                        .map(|chunk| BooleanArray::from_iter(chunk.iter().copied()))
+                        .collect::<Vec<_>>();
+
+                    let opt_filter_chunks = if let Some(filter) = opt_filter {
+                        filter
+                            .iter()
+                            .collect::<Vec<_>>()
+                            .chunks(chunk_size)
+                            .map(|chunk| Some(BooleanArray::from_iter(chunk.iter())))
+                            .collect::<Vec<_>>()
+                    } else {
+                        vec![None; values_chunks.len()]
+                    };
+
+                    (group_indices_chunks, values_chunks, opt_filter_chunks)
+                } else {
+                    (
+                        vec![group_indices.to_vec()],
+                        vec![values.clone()],
+                        vec![opt_filter.cloned()],
+                    )
+                };
+
+            let mut total_num_groups_chunks = vec![];
+            let mut cur_total_num_groups = usize::MIN;
+            for group_indices in &group_indices_chunks {
+                let num_groups = *group_indices.iter().max().unwrap() + 1;
+                cur_total_num_groups = cmp::max(cur_total_num_groups, num_groups);
+                total_num_groups_chunks.push(cur_total_num_groups);
+            }
+
+            // Build needed test contexts
+            let (mut null_state, block_size, acc_group_indices_chunks) =
+                if let Some(blk_size) = block_size {
+                    let mut acc_group_indices_chunks = vec![];
+                    for group_indices in group_indices_chunks {
+                        let acc_group_indices = group_indices
+                            .into_iter()
+                            .map(|index| {
+                                let block_id = (index / blk_size) as u32;
+                                let block_offset = (index % blk_size) as u64;
+                                BlockedGroupIndexOperations::pack_index(
+                                    block_id,
+                                    block_offset,
+                                ) as usize
+                            })
+                            .collect::<Vec<_>>();
+                        acc_group_indices_chunks.push(acc_group_indices);
+                    }
+
+                    (
+                        NullStateAdapter::new(Some(blk_size)),
+                        blk_size,
+                        acc_group_indices_chunks,
+                    )
+                } else {
+                    (NullStateAdapter::new(None), 0, group_indices_chunks)
+                };
+
+            // Start the test
+            let mut accumulated_values = vec![];
+            for (((acc_group_indices, values), total_num_groups), opt_filter) in
+                acc_group_indices_chunks
+                    .into_iter()
+                    .zip(values_chunks)
+                    .zip(total_num_groups_chunks)
+                    .zip(opt_filter_chunks)
+            {
+                null_state.accumulate_boolean(
+                    &acc_group_indices,
+                    &values,
+                    opt_filter.as_ref(),
+                    total_num_groups,
+                    |block_id, block_offset, value| {
+                        let flatten_index = ((block_id as u64 * block_size as u64)
+                            + block_offset)
+                            as usize;
+                        accumulated_values.push((flatten_index as usize, value));
+                    },
+                );
+            }
 
             // Figure out the expected values
             let mut expected_values = vec![];
@@ -1332,13 +1563,13 @@ mod test {
             assert_eq!(accumulated_values, expected_values,
                        "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
 
-            let seen_values = null_state.seen_values.builder.finish_cloned();
+            let seen_values = null_state.build_cloned_seen_values();
             mock.validate_seen_values(&seen_values);
 
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
 
-            let null_buffer = null_state.build(EmitTo::All);
+            let null_buffer = null_state.build_all_in_once();
 
             assert_eq!(null_buffer, expected_null_buffer);
         }
