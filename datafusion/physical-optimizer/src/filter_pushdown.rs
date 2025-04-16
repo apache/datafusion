@@ -66,17 +66,6 @@ use datafusion_physical_plan::ExecutionPlan;
 /// amounts of data being read from the source (the projection is `*` so all
 /// matching columns are read).
 ///
-/// In this simple case we:
-/// 1. Enter the recursion with no filters.
-/// 2. We find the [`FilterExec`] node and call [`ExecutionPlan::try_pushdown_filters`] on it.
-/// 3. The [`FilterExec`] node tries to push it's filters + the filters from the parent nodes (in this case empty)
-///    down into it's input, which is the `DataSourceExec` node.
-/// 4. The `DataSourceExec` node accepts the filter and returns a [`FilterPushdownResult`] with a new copy of itself
-///    and [`FilterPushdown::Exact`] to indicate that the filter was pushed down and the caller no longer
-///    needs to handle it.
-/// 5. The [`FilterExec`] seeing that all filters were pushed down returns a [`FilterPushdownResult`] that directly
-///    returns the new `DataSourceExec` node, effectively removing the [`FilterExec`] node from the plan.
-///
 /// The new plan looks like:
 ///
 /// ```text
@@ -367,9 +356,10 @@ use datafusion_physical_plan::ExecutionPlan;
 /// This is not yet implemented in DataFusion. See
 /// <https://github.com/apache/datafusion/issues/15037>
 ///
+/// [`PhysicalExpr`]: datafusion_physical_plan::PhysicalExpr
 /// [`FilterExec`]: datafusion_physical_plan::filter::FilterExec
-/// [`ProjectionExec`]: datafusion_phyiscal_plan::projection::ProjectionExec
-/// [`AggregateExec`]: datafusion_phyiscal_plan::aggregates::AggregateExec
+/// [`ProjectionExec`]: datafusion_physical_plan::projection::ProjectionExec
+/// [`AggregateExec`]: datafusion_physical_plan::aggregates::AggregateExec
 #[derive(Debug)]
 pub struct PushdownFilter {}
 
