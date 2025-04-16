@@ -209,6 +209,7 @@ impl FileFormat for JsonFormat {
 
             let r = store.as_ref().get(&object.location).await?;
             let schema = match r.payload {
+                #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(file, _) => {
                     let decoder = file_compression_type.convert_read(file)?;
                     let mut reader = BufReader::new(decoder);
