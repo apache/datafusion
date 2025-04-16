@@ -42,7 +42,6 @@ use crate::{
     PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
@@ -996,16 +995,13 @@ impl EquivalenceProperties {
                     }
                 })
                 .flat_map(|(options, relevant_deps)| {
-                    let sort_expr = PhysicalSortExpr {
-                        expr: Arc::clone(target),
-                        options,
-                    };
+                    let sort_expr = PhysicalSortExpr::new(Arc::clone(target), options);
                     // Generate dependent orderings (i.e. prefixes for `sort_expr`):
                     let mut dependency_orderings =
                         generate_dependency_orderings(&relevant_deps, &dependency_map);
                     // Append `sort_expr` to the dependent orderings:
                     if dependency_orderings.is_empty() {
-                        dependency_orderings.push([sort_expr.clone()].into());
+                        dependency_orderings.push([sort_expr].into());
                     } else {
                         for ordering in dependency_orderings.iter_mut() {
                             ordering.push(sort_expr.clone());
@@ -1067,7 +1063,7 @@ impl EquivalenceProperties {
         let mut projected_constants = self
             .constants
             .iter()
-            .flat_map(|const_expr| {
+            .filter_map(|const_expr| {
                 self.eq_group.project_expr(mapping, &const_expr.expr).map(
                     |projected_expr| {
                         ConstExpr::new(
@@ -1165,32 +1161,23 @@ impl EquivalenceProperties {
         // This algorithm should reach a fixed point in at most `exprs.len()`
         // iterations.
         let mut search_indices = (0..exprs.len()).collect::<IndexSet<_>>();
-        for _idx in 0..exprs.len() {
+        for _ in 0..exprs.len() {
             // Get ordered expressions with their indices.
             let ordered_exprs = search_indices
                 .iter()
-                .flat_map(|&idx| {
+                .filter_map(|&idx| {
                     let ExprProperties {
                         sort_properties, ..
                     } = eq_properties.get_expr_properties(Arc::clone(&exprs[idx]));
                     match sort_properties {
-                        SortProperties::Ordered(options) => Some((
-                            PhysicalSortExpr {
-                                expr: Arc::clone(&exprs[idx]),
-                                options,
-                            },
-                            idx,
-                        )),
+                        SortProperties::Ordered(options) => {
+                            let expr = Arc::clone(&exprs[idx]);
+                            Some((PhysicalSortExpr::new(expr, options), idx))
+                        }
                         SortProperties::Singleton => {
-                            // Assign default ordering to constant expressions
-                            let options = SortOptions::default();
-                            Some((
-                                PhysicalSortExpr {
-                                    expr: Arc::clone(&exprs[idx]),
-                                    options,
-                                },
-                                idx,
-                            ))
+                            // Assign default ordering to constant expressions:
+                            let expr = Arc::clone(&exprs[idx]);
+                            Some((PhysicalSortExpr::new_default(expr), idx))
                         }
                         SortProperties::Unordered => None,
                     }
@@ -1208,8 +1195,8 @@ impl EquivalenceProperties {
             // Note that these expressions are not properly "constants". This is just
             // an implementation strategy confined to this function.
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
-                eq_properties
-                    .add_constants(std::iter::once(ConstExpr::from(Arc::clone(expr))));
+                let const_expr = ConstExpr::from(Arc::clone(expr));
+                eq_properties.add_constants(std::iter::once(const_expr));
                 search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.
@@ -1387,7 +1374,7 @@ impl EquivalenceProperties {
             let new_eq_exprs = eq_class
                 .into_iter()
                 .map(|expr| with_new_schema(expr, &schema))
-                .collect::<Result<_>>()?;
+                .collect::<Result<Vec<_>>>()?;
             eq_classes.push(EquivalenceClass::new(new_eq_exprs));
         }
 
@@ -1600,7 +1587,6 @@ impl Hash for ExprWrapper {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::expressions::{col, BinaryExpr};
 
@@ -1623,7 +1609,7 @@ mod tests {
             Arc::clone(&col_b),
             Operator::Plus,
             Arc::clone(&col_d),
-        )) as Arc<dyn PhysicalExpr>;
+        )) as _;
 
         let constants = vec![Arc::clone(&col_a), Arc::clone(&col_b)];
         let expr = Arc::clone(&b_plus_d);

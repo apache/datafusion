@@ -50,9 +50,7 @@ use indexmap::{IndexMap, IndexSet};
 /// # use datafusion_physical_expr::ConstExpr;
 /// # use datafusion_physical_expr::expressions::lit;
 /// let col = lit(5);
-/// // Create a constant expression from a physical expression ref
-/// let const_expr = ConstExpr::from(&col);
-/// // create a constant expression from a physical expression
+/// // Create a constant expression from a physical expression:
 /// let const_expr = ConstExpr::from(col);
 /// ```
 #[derive(Debug, Clone)]
@@ -183,8 +181,8 @@ impl EquivalenceClass {
         }
     }
 
-    // Create a new equivalence class from a pre-existing `Vec`.
-    pub fn new(exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+    // Create a new equivalence class from a pre-existing collection.
+    pub fn new(exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>) -> Self {
         Self {
             exprs: exprs.into_iter().collect(),
         }
@@ -240,8 +238,7 @@ impl EquivalenceClass {
             .exprs
             .iter()
             .cloned()
-            .map(|e| add_offset_to_expr(e, offset))
-            .collect();
+            .map(|e| add_offset_to_expr(e, offset));
         Self::new(new_exprs)
     }
 }
