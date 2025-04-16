@@ -637,7 +637,7 @@ fn handle_custom_pushdown(
             .map(|&maintains_order| {
                 if maintains_order {
                     LexRequirement::new(updated_parent_req.clone())
-                        .map(OrderingRequirements::new_single)
+                        .map(OrderingRequirements::new)
                 } else {
                     None
                 }
@@ -715,7 +715,7 @@ fn handle_hash_join(
         // Populating with the updated requirements for children that maintain order
         Ok(Some(vec![
             None,
-            LexRequirement::new(updated_parent_req).map(OrderingRequirements::new_single),
+            LexRequirement::new(updated_parent_req).map(OrderingRequirements::new),
         ]))
     } else {
         Ok(None)

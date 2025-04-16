@@ -306,7 +306,7 @@ pub(crate) fn calc_requirements<
     alternatives.extend(LexRequirement::new(sort_reqs_with_partition));
     alternatives.extend(LexRequirement::new(sort_reqs));
 
-    OrderingRequirements::new(alternatives, false)
+    OrderingRequirements::new_alternatives(alternatives, false)
 }
 
 /// This function calculates the indices such that when partition by expressions reordered with the indices
@@ -774,7 +774,7 @@ mod tests {
                     if let Some(alts) = expected.as_mut() {
                         alts.add_alternative(requirements);
                     } else {
-                        expected = Some(OrderingRequirements::new_single(requirements));
+                        expected = Some(OrderingRequirements::new(requirements));
                     }
                 }
             }

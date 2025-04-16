@@ -590,7 +590,10 @@ pub enum OrderingRequirements {
 impl OrderingRequirements {
     /// Creates a new instance from the given alternatives. If an empty list of
     /// alternatives are given, returns `None`.
-    pub fn new(alternatives: Vec<LexRequirement>, soft: bool) -> Option<Self> {
+    pub fn new_alternatives(
+        alternatives: Vec<LexRequirement>,
+        soft: bool,
+    ) -> Option<Self> {
         (!alternatives.is_empty()).then(|| {
             if soft {
                 Self::Soft(alternatives)
@@ -601,12 +604,12 @@ impl OrderingRequirements {
     }
 
     /// Creates a new instance with a single hard requirement.
-    pub fn new_single(requirement: LexRequirement) -> Self {
+    pub fn new(requirement: LexRequirement) -> Self {
         Self::Hard(vec![requirement])
     }
 
     /// Creates a new instance with a single soft requirement.
-    pub fn new_single_soft(requirement: LexRequirement) -> Self {
+    pub fn new_soft(requirement: LexRequirement) -> Self {
         Self::Soft(vec![requirement])
     }
 
@@ -636,13 +639,13 @@ impl OrderingRequirements {
 
 impl From<LexRequirement> for OrderingRequirements {
     fn from(requirement: LexRequirement) -> Self {
-        Self::new_single(requirement)
+        Self::new(requirement)
     }
 }
 
 impl From<LexOrdering> for OrderingRequirements {
     fn from(ordering: LexOrdering) -> Self {
-        Self::new_single(ordering.into())
+        Self::new(ordering.into())
     }
 }
 

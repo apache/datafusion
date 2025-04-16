@@ -655,7 +655,7 @@ fn test_output_req_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
     let sort_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
         csv,
-        Some(OrderingRequirements::new_single(
+        Some(OrderingRequirements::new(
             [
                 PhysicalSortRequirement::new(
                     Arc::new(Column::new("b", 1)),
@@ -704,7 +704,7 @@ fn test_output_req_after_projection() -> Result<()> {
         ];
 
     assert_eq!(get_plan_string(&after_optimize), expected);
-    let expected_reqs = OrderingRequirements::new_single(
+    let expected_reqs = OrderingRequirements::new(
         [
             PhysicalSortRequirement::new(
                 Arc::new(Column::new("b", 2)),
