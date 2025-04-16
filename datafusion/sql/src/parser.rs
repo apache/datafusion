@@ -427,6 +427,10 @@ impl<'a> DFParser<'a> {
             }
 
             let statement = self.parse_statement()?;
+            // change to alias if no from and there is projection has unamed expression with cast
+            println!("check statement!");
+            dbg!(&statement);
+
             stmts.push_back(statement);
             expecting_statement_delimiter = true;
         }
@@ -469,9 +473,101 @@ impl<'a> DFParser<'a> {
                     }
                     _ => {
                         // use sqlparser-rs parser
-                        Ok(Statement::Statement(Box::from(
-                            self.parser.parse_statement()?,
-                        )))
+                        let mut stmt = self.parser.parse_statement()?;
+
+                        use sqlparser::ast::{DataType, Expr, Spanned, Value};
+
+                        if let sqlparser::ast::Statement::Query(query) = &mut stmt {
+                            if let sqlparser::ast::SetExpr::Select(select) =
+                                &mut *query.body
+                            {
+                                // if missing from
+                                if select.from.is_empty() {
+                                    let mut new_projection = Vec::new();
+
+                                    for expr in &select.projection {
+                                        match expr {
+                                            sqlparser::ast::SelectItem::UnnamedExpr(
+                                                cast_expr,
+                                            ) => {
+                                                if let Expr::Cast {
+                                                    expr: inner_expr,
+                                                    data_type,
+                                                    ..
+                                                } = cast_expr
+                                                {
+                                                    let inner_str = match &**inner_expr {
+                                                            Expr::Value(sqlparser::ast::ValueWithSpan { value: Value::SingleQuotedString(s), .. }) => {
+                                                                format!("'{}'", s)
+                                                            },
+                                                            Expr::Value(sqlparser::ast::ValueWithSpan { value: Value::Number(n, _), .. }) => {
+                                                                n.clone()
+                                                            },
+                                                            // TODO: need to take care of other types of values, like TimeStamp, etc...
+                                                            _ => format!("{:?}", inner_expr),
+                                                        };
+
+                                                    // get cast to type string
+                                                    let type_str = match data_type {
+                                                        DataType::Int(_) => "INT",
+                                                        DataType::BigInt(_) => "BIGINT",
+                                                        DataType::SmallInt(_) => {
+                                                            "SMALLINT"
+                                                        }
+                                                        DataType::Boolean => "BOOLEAN",
+                                                        DataType::Varchar(_) => "VARCHAR",
+                                                        DataType::Float(_) => "FLOAT",
+                                                        DataType::Double(_) => "DOUBLE",
+                                                        DataType::Text => "TEXT",
+                                                        // TODO: need to support more DataType, probably use an Extension Trait
+                                                        _ => &format!("{:?}", data_type),
+                                                    };
+
+                                                    let cast_str = format!(
+                                                        "cast({} as {})",
+                                                        inner_str, type_str
+                                                    );
+                                                    println!(
+                                                        "Generated alias: {}",
+                                                        cast_str
+                                                    );
+
+                                                    // create identifier
+                                                    let alias = sqlparser::ast::Ident {
+                                                        value: cast_str,
+                                                        quote_style: None,
+                                                        span: inner_expr.span().clone(),
+                                                    };
+
+                                                    // create new expression
+                                                    let new_expr = sqlparser::ast::SelectItem::ExprWithAlias {
+                                                            expr: cast_expr.clone(),
+                                                            alias,
+                                                        };
+
+                                                    new_projection.push(new_expr);
+                                                } else {
+                                                    // not Cast expression, keep as is
+                                                    new_projection.push(expr.clone());
+                                                }
+                                            }
+                                            // other types of SelectItem, keep as is
+                                            _ => new_projection.push(expr.clone()),
+                                        }
+                                    }
+
+                                    // replace projection
+                                    select.projection = new_projection;
+                                }
+                            }
+                        }
+
+                        dbg!(&stmt);
+                        Ok(Statement::Statement(Box::from(stmt)))
+
+                        // Ok(Statement::Statement(Box::from(
+                        //     self.parser.parse_statement()?,
+                        // )))
                     }
                 }
             }
