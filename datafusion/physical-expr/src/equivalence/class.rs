@@ -190,8 +190,8 @@ impl EquivalenceClass {
 
     /// Return the "canonical" expression for this class (the first element)
     /// if non-empty.
-    fn canonical_expr(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.exprs.iter().next().cloned()
+    pub fn canonical_expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
+        self.exprs.iter().next()
     }
 
     /// Insert the expression into this class, meaning it is known to be equal to
@@ -398,10 +398,12 @@ impl EquivalenceGroup {
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         expr.transform(|expr| {
             for cls in self.iter() {
-                if cls.contains(&expr) {
-                    // The unwrap below is safe because the guard above ensures
-                    // that the class is not empty.
-                    return Ok(Transformed::yes(cls.canonical_expr().unwrap()));
+                // If the equivalence class is non-empty, and it contains this
+                // expression, use its canonical version:
+                if let Some(canonical) = cls.canonical_expr() {
+                    if cls.contains(&expr) {
+                        return Ok(Transformed::yes(Arc::clone(canonical)));
+                    }
                 }
             }
             Ok(Transformed::no(expr))
