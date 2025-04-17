@@ -462,13 +462,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .table_partition_cols
                     .iter()
                     .map(|col| {
-                        let arrow_type =
-                            col.arrow_type.as_ref().unwrap().try_into().map_err(|e| {
-                                proto_error(format!(
-                                    "Received an unknown ArrowType: {}",
-                                    e
-                                ))
-                            })?;
+                        let Some(arrow_type) = col.arrow_type.as_ref() else {
+                            return Err(proto_error(format!(
+                                "Missing Arrow type in partition columns"
+                            )));
+                        };
+                       let arrow_type = DataType::try_from(arrow_type).map_err(|e| {
+                            proto_error(format!("Received an unknown ArrowType: {}", e))
+                        })?;
                         Ok((col.name.clone(), arrow_type))
                     })
                     .collect::<Result<Vec<_>>>()?;
