@@ -22,14 +22,15 @@ use std::sync::Arc;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
-    apply_file_schema_type_coercions, row_filter, should_enable_page_index,
-    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
+    apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
+    should_enable_page_index, ParquetAccessPlan, ParquetFileMetrics,
+    ParquetFileReaderFactory,
 };
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, Result};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -79,6 +80,8 @@ pub(super) struct ParquetOpener {
     pub schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
     /// Should row group pruning be applied
     pub enable_row_group_stats_pruning: bool,
+    /// Coerce INT96 timestamps to specific TimeUnit
+    pub coerce_int96: Option<TimeUnit>,
 }
 
 impl FileOpener for ParquetOpener {
@@ -111,6 +114,7 @@ impl FileOpener for ParquetOpener {
         let table_schema = Arc::clone(&self.table_schema);
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
+        let coerce_int96 = self.coerce_int96;
         let enable_bloom_filter = self.enable_bloom_filter;
         let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
         let limit = self.limit;
@@ -155,6 +159,21 @@ impl FileOpener for ParquetOpener {
                     Arc::clone(reader_metadata.metadata()),
                     options.clone(),
                 )?;
+            }
+
+            if coerce_int96.is_some() {
+                if let Some(merged) = coerce_int96_to_resolution(
+                    reader_metadata.parquet_schema(),
+                    &physical_file_schema,
+                    &(coerce_int96.unwrap()),
+                ) {
+                    physical_file_schema = Arc::new(merged);
+                    options = options.with_schema(Arc::clone(&physical_file_schema));
+                    reader_metadata = ArrowReaderMetadata::try_new(
+                        Arc::clone(reader_metadata.metadata()),
+                        options.clone(),
+                    )?;
+                }
             }
 
             // Build predicates for this specific file

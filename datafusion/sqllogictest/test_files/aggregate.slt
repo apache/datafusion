@@ -5620,6 +5620,11 @@ SELECT STRING_AGG(column1, '|') FROM (values (''), (null), (''));
 ----
 |
 
+query T
+SELECT STRING_AGG(DISTINCT column1, '|') FROM (values (''), (null), (''));
+----
+(empty)
+
 statement ok
 CREATE TABLE strings(g INTEGER, x VARCHAR, y VARCHAR)
 
@@ -5641,6 +5646,22 @@ SELECT STRING_AGG(x,',') FROM strings WHERE g > 100
 ----
 NULL
 
+query T
+SELECT STRING_AGG(DISTINCT x,',') FROM strings WHERE g > 100
+----
+NULL
+
+query T
+SELECT STRING_AGG(DISTINCT x,'|' ORDER BY x) FROM strings
+----
+a|b|i|j|p|x|y|z
+
+query error This feature is not implemented: The second argument of the string_agg function must be a string literal
+SELECT STRING_AGG(DISTINCT x,y) FROM strings
+
+query error Execution error: In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
+SELECT STRING_AGG(DISTINCT x,'|' ORDER BY y) FROM strings
+
 statement ok
 drop table strings
 
@@ -5657,6 +5678,17 @@ text1, text1, text1
 
 query T
 WITH my_data as (
+SELECT 'text1'::varchar(1000) as my_column union all
+SELECT 'text1'::varchar(1000) as my_column union all
+SELECT 'text1'::varchar(1000) as my_column
+)
+SELECT string_agg(DISTINCT my_column,', ') as my_string_agg
+FROM my_data
+----
+text1
+
+query T
+WITH my_data as (
 SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
 SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
 SELECT 1 as dummy,  'text1'::varchar(1000) as my_column
@@ -5666,6 +5698,18 @@ FROM my_data
 GROUP BY dummy
 ----
 text1, text1, text1
+
+query T
+WITH my_data as (
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column
+)
+SELECT string_agg(DISTINCT my_column,', ') as my_string_agg
+FROM my_data
+GROUP BY dummy
+----
+text1
 
 # Tests for aggregating with NaN values
 statement ok
@@ -6751,4 +6795,3 @@ select c2, count(*) from test WHERE 1 = 1 group by c2;
 4 1
 5 1
 6 1
-

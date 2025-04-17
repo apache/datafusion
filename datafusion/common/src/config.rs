@@ -300,7 +300,7 @@ config_namespace! {
         /// concurrency.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub target_partitions: usize, default = get_available_parallelism()
+        pub target_partitions: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// The default time zone
         ///
@@ -316,7 +316,7 @@ config_namespace! {
         /// This is mostly use to plan `UNION` children in parallel.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub planning_concurrency: usize, default = get_available_parallelism()
+        pub planning_concurrency: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// When set to true, skips verifying that the schema produced by
         /// planning the input of `LogicalPlan::Aggregate` exactly matches the
@@ -458,6 +458,14 @@ config_namespace! {
         /// the UTF8 flag for strings, causing string columns to be loaded as
         /// BLOB instead.
         pub binary_as_string: bool, default = false
+
+        /// (reading) If true, parquet reader will read columns of
+        /// physical type int96 as originating from a different resolution
+        /// than nanosecond. This is useful for reading data from systems like Spark
+        /// which stores microsecond resolution timestamps in an int96 allowing it
+        /// to write values with a larger date range than 64-bit timestamps with
+        /// nanosecond resolution.
+        pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -728,6 +736,19 @@ config_namespace! {
         /// Display format of explain. Default is "indent".
         /// When set to "tree", it will print the plan in a tree-rendered format.
         pub format: String, default = "indent".to_string()
+    }
+}
+
+impl ExecutionOptions {
+    /// Returns the correct parallelism based on the provided `value`.
+    /// If `value` is `"0"`, returns the default available parallelism, computed with
+    /// `get_available_parallelism`. Otherwise, returns `value`.
+    fn normalized_parallelism(value: &str) -> String {
+        if value.parse::<usize>() == Ok(0) {
+            get_available_parallelism().to_string()
+        } else {
+            value.to_owned()
+        }
     }
 }
 
