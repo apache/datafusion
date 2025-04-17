@@ -44,8 +44,13 @@ use crate::{
     Statistics,
 };
 
-use arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, StringViewArray, UInt32Array};
-use arrow::compute::{concat, concat_batches, interleave_record_batch, lexsort_to_indices, take_arrays, SortColumn};
+use arrow::array::{
+    Array, ArrayRef, RecordBatch, RecordBatchOptions, StringViewArray, UInt32Array,
+};
+use arrow::compute::{
+    concat, concat_batches, interleave_record_batch, lexsort_to_indices, take_arrays,
+    SortColumn,
+};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{
@@ -661,8 +666,10 @@ impl ExternalSorter {
         let _timer = elapsed_compute.timer();
 
         if self.expr.len() <= 2 {
-            let interleave_indices = self
-                .build_sorted_indices(self.in_mem_batches.as_slice(), Arc::clone(&self.expr))?;
+            let interleave_indices = self.build_sorted_indices(
+                self.in_mem_batches.as_slice(),
+                Arc::clone(&self.expr),
+            )?;
 
             let batches: Vec<&RecordBatch> = self.in_mem_batches.iter().collect();
             let sorted_batch = interleave_record_batch(&batches, &interleave_indices)?;
@@ -676,8 +683,6 @@ impl ExternalSorter {
                 futures::stream::once(async { Ok(sorted_batch) }),
             )) as SendableRecordBatchStream)
         } else {
-
-
             // Please pay attention that any operation inside of `in_mem_sort_stream` will
             // not perform any memory reservation. This is for avoiding the need of handling
             // reservation failure and spilling in the middle of the sort/merge. The memory
@@ -727,8 +732,6 @@ impl ExternalSorter {
                 .build()
         }
     }
-
-
 
     fn build_sorted_indices(
         &self,
@@ -801,8 +804,6 @@ impl ExternalSorter {
 
         Ok(interleave_indices)
     }
-
-
 
     /// Sorts a single `RecordBatch` into a single stream.
     ///
