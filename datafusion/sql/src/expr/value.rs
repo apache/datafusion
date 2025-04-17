@@ -486,7 +486,7 @@ mod tests {
         ];
         for (input, expect) in cases {
             let output = parse_decimal(input, true).unwrap();
-            assert_eq!(output, Expr::Literal(expect.arithmetic_negate().unwrap()));
+            assert_eq!(output, Expr::Literal(expect.negate().unwrap()));
 
             let output = parse_decimal(input, false).unwrap();
             assert_eq!(output, Expr::Literal(expect));

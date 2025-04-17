@@ -152,22 +152,23 @@ use crate::expressions::Literal;
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
 use datafusion_expr::Operator;
 
+use datafusion_expr::type_coercion::{is_datetime, is_interval};
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
 use petgraph::Outgoing;
-
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute ranges for expressions through interval arithmetic.
 #[derive(Clone, Debug)]
 pub struct ExprIntervalGraph {
     graph: StableGraph<ExprIntervalGraphNode, usize>,
     root: NodeIndex,
+    schema: SchemaRef,
 }
 
 /// This object encapsulates all possible constraint propagation results.
@@ -256,42 +257,27 @@ pub fn propagate_arithmetic(
     right_child: &Interval,
 ) -> Result<Option<(Interval, Interval)>> {
     let inverse_op = get_inverse_op(*op)?;
-    match (left_child.data_type(), right_child.data_type()) {
-        // If we have a child whose type is a time interval (i.e. DataType::Interval),
-        // we need special handling since timestamp differencing results in a
-        // Duration type.
-        (DataType::Timestamp(..), DataType::Interval(_)) => {
-            propagate_time_interval_at_right(
-                left_child,
-                right_child,
-                parent,
-                op,
-                &inverse_op,
-            )
-        }
-        (DataType::Interval(_), DataType::Timestamp(..)) => {
-            propagate_time_interval_at_left(
-                left_child,
-                right_child,
-                parent,
-                op,
-                &inverse_op,
-            )
-        }
-        _ => {
-            // First, propagate to the left:
-            match apply_operator(&inverse_op, parent, right_child)?
-                .intersect(left_child)?
-            {
-                // Left is feasible:
-                Some(value) => Ok(
-                    // Propagate to the right using the new left.
-                    propagate_right(&value, parent, right_child, op, &inverse_op)?
-                        .map(|right| (value, right)),
-                ),
-                // If the left child is infeasible, short-circuit.
-                None => Ok(None),
-            }
+
+    // If we have a child whose data type is datetime (i.e. timestamp),
+    // we need special handling since timestamp differencing results in
+    // a Duration type.
+    if is_datetime(&left_child.data_type()) && is_interval(&right_child.data_type()) {
+        propagate_time_interval_at_right(left_child, right_child, parent, op, &inverse_op)
+    } else if is_interval(&left_child.data_type())
+        && is_datetime(&right_child.data_type())
+    {
+        propagate_time_interval_at_left(left_child, right_child, parent, op, &inverse_op)
+    } else {
+        // First, propagate to the left:
+        match apply_operator(&inverse_op, parent, right_child)?.intersect(left_child)? {
+            // Left is feasible:
+            Some(value) => Ok(
+                // Propagate to the right using the new left.
+                propagate_right(&value, parent, right_child, op, &inverse_op)?
+                    .map(|right| (value, right)),
+            ),
+            // If the left child is infeasible, short-circuit.
+            None => Ok(None),
         }
     }
 }
@@ -347,9 +333,14 @@ pub fn propagate_comparison(
 ) -> Result<Option<(Interval, Interval)>> {
     if parent == &Interval::CERTAINLY_TRUE {
         match op {
-            Operator::Eq => left_child.intersect(right_child).map(|result| {
-                result.map(|intersection| (intersection.clone(), intersection))
-            }),
+            Operator::Eq | Operator::IsNotDistinctFrom => {
+                left_child.intersect(right_child).map(|result| {
+                    result.map(|intersection| (intersection.clone(), intersection))
+                })
+            }
+            Operator::NotEq | Operator::IsDistinctFrom => left_child
+                .union(right_child)
+                .map(|union| Some((union.clone(), union.clone()))),
             Operator::Gt => satisfy_greater(left_child, right_child, true),
             Operator::GtEq => satisfy_greater(left_child, right_child, false),
             Operator::Lt => satisfy_greater(right_child, left_child, true)
@@ -362,7 +353,10 @@ pub fn propagate_comparison(
         }
     } else if parent == &Interval::CERTAINLY_FALSE {
         match op {
-            Operator::Eq => {
+            Operator::Eq
+            | Operator::IsNotDistinctFrom
+            | Operator::NotEq
+            | Operator::IsDistinctFrom => {
                 // TODO: Propagation is not possible until we support interval sets.
                 Ok(None)
             }
@@ -387,7 +381,11 @@ impl ExprIntervalGraph {
         // Build the full graph:
         let (root, graph) =
             build_dag(expr, &|node| ExprIntervalGraphNode::make_node(node, schema))?;
-        Ok(Self { graph, root })
+        Ok(Self {
+            graph,
+            root,
+            schema: Arc::new(schema.clone()),
+        })
     }
 
     pub fn node_count(&self) -> usize {
@@ -608,8 +606,14 @@ impl ExprIntervalGraph {
             if !children_intervals.is_empty() {
                 // Reverse to align with `PhysicalExpr`'s children:
                 children_intervals.reverse();
-                self.graph[node].interval =
-                    self.graph[node].expr.evaluate_bounds(&children_intervals)?;
+                let physical_expr = &self.graph[node].expr;
+                if let Some(interval) = physical_expr
+                    .evaluate_bounds_checked(&children_intervals, &self.schema)?
+                {
+                    self.graph[node].interval = interval;
+                } else {
+                    return internal_err!("bounds evaluation is not supported for this expression: {physical_expr}");
+                }
             }
         }
         Ok(self.graph[self.root].interval())
