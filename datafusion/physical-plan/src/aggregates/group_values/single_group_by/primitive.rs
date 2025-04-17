@@ -156,7 +156,6 @@ where
     }
 
     fn size(&self) -> usize {
-        todo!()
         // self.map.capacity() * size_of::<usize>() + self.values.len
     }
 
@@ -169,55 +168,72 @@ where
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        todo!()
-        // fn build_primitive<T: ArrowPrimitiveType>(
-        //     values: Vec<T::Native>,
-        //     null_idx: Option<usize>,
-        // ) -> PrimitiveArray<T> {
-        //     let nulls = null_idx.map(|null_idx| {
-        //         let mut buffer = NullBufferBuilder::new(values.len());
-        //         buffer.append_n_non_nulls(null_idx);
-        //         buffer.append_null();
-        //         buffer.append_n_non_nulls(values.len() - null_idx - 1);
-        //         // NOTE: The inner builder must be constructed as there is at least one null
-        //         buffer.finish().unwrap()
-        //     });
-        //     PrimitiveArray::<T>::new(values.into(), nulls)
-        // }
+        fn build_primitive<T: ArrowPrimitiveType>(
+            values: Vec<T::Native>,
+            null_idx: Option<usize>,
+        ) -> PrimitiveArray<T> {
+            let nulls = null_idx.map(|null_idx| {
+                let mut buffer = NullBufferBuilder::new(values.len());
+                buffer.append_n_non_nulls(null_idx);
+                buffer.append_null();
+                buffer.append_n_non_nulls(values.len() - null_idx - 1);
+                // NOTE: The inner builder must be constructed as there is at least one null
+                buffer.finish().unwrap()
+            });
+            PrimitiveArray::<T>::new(values.into(), nulls)
+        }
 
-        // let array: PrimitiveArray<T> = match emit_to {
-        //     EmitTo::All => {
-        //         self.map.clear();
-        //         build_primitive(std::mem::take(&mut self.values), self.null_group.take())
-        //     }
-        //     EmitTo::First(n) => {
-        //         self.map.retain(|group_idx| {
-        //             // Decrement group index by n
-        //             match group_idx.checked_sub(n) {
-        //                 // Group index was >= n, shift value down
-        //                 Some(sub) => {
-        //                     *group_idx = sub;
-        //                     true
-        //                 }
-        //                 // Group index was < n, so remove from table
-        //                 None => false,
-        //             }
-        //         });
-        //         let null_group = match &mut self.null_group {
-        //             Some(v) if *v >= n => {
-        //                 *v -= n;
-        //                 None
-        //             }
-        //             Some(_) => self.null_group.take(),
-        //             None => None,
-        //         };
-        //         let mut split = self.values.split_off(n);
-        //         std::mem::swap(&mut self.values, &mut split);
-        //         build_primitive(split, null_group)
-        //     }
-        // };
+        let array: PrimitiveArray<T> = match emit_to {
+            EmitTo::All => {
+                assert!(
+                    self.block_size.is_none(),
+                    "only support EmitTo::All in flat group values"
+                );
 
-        // Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
+                self.map.clear();
+                build_primitive(
+                    std::mem::take(self.values.back_mut().unwrap()),
+                    self.null_group.take(),
+                )
+            }
+            EmitTo::First(n) => {
+                assert!(
+                    self.block_size.is_none(),
+                    "only support EmitTo::First in flat group values"
+                );
+
+                self.map.retain(|group_idx| {
+                    // Decrement group index by n
+                    match group_idx.checked_sub(n) {
+                        // Group index was >= n, shift value down
+                        Some(sub) => {
+                            *group_idx = sub;
+                            true
+                        }
+                        // Group index was < n, so remove from table
+                        None => false,
+                    }
+                });
+                let null_group = match &mut self.null_group {
+                    Some(v) if *v >= n => {
+                        *v -= n;
+                        None
+                    }
+                    Some(_) => self.null_group.take(),
+                    None => None,
+                };
+
+                let single_block = self.values.back_mut().unwrap();
+                let mut split = single_block.split_off(n);
+                std::mem::swap(single_block, &mut split);
+                build_primitive(split, null_group)
+            }
+            EmitTo::NextBlock(_) => {
+                
+            }
+        };
+
+        Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {
