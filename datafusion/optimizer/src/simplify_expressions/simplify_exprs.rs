@@ -123,14 +123,11 @@ impl SimplifyExpressions {
         let name_preserver = NamePreserver::new(&plan);
         let mut rewrite_expr = |expr: Expr| {
             let name = name_preserver.save(&expr);
-            let original = expr.clone();
-            let expr = simplifier.simplify(expr)?;
-            let transformed = if original == expr {
-                Transformed::no(original)
-            } else {
-                Transformed::yes(name.restore(expr))
-            };
-            Ok(transformed)
+            let expr = simplifier.simplify_with_cycle_count_transformed(expr)?.0;
+            Ok(Transformed::new_transformed(
+                name.restore(expr.data),
+                expr.transformed,
+            ))
         };
 
         plan.map_expressions(|expr| {
