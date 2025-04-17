@@ -523,7 +523,7 @@ impl OptimizerRule for TopKOptimizerRule {
         }) = limit.input.as_ref()
         {
             if expr.len() == 1 {
-                // we found a sort with a single sort expr, replace with a a TopK
+                // we found a sort with a single sort expr, replace with a TopK
                 return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                     node: Arc::new(TopKPlanNode {
                         k: fetch,

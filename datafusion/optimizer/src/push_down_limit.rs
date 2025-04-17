@@ -128,7 +128,11 @@ impl OptimizerRule for PushDownLimit {
                 let original_sort_fetch = sort.fetch;
                 let new_fetch = {
                     let sort_fetch = skip + fetch;
-                    Some(original_sort_fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
+                    Some(
+                        original_sort_fetch
+                            .map(|f| f.min(sort_fetch))
+                            .unwrap_or(sort_fetch),
+                    )
                 };
                 if new_fetch == sort.fetch {
                     if skip > 0 {
@@ -634,7 +638,6 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Limit: skip=0, fetch=10
           Sort: test.a ASC NULLS LAST, fetch=10
             TableScan: test
         "
@@ -1040,7 +1043,7 @@ mod test {
             plan,
             @r"
         Limit: skip=0, fetch=1000
-          Cross Join: 
+          Cross Join:
             Limit: skip=0, fetch=1000
               TableScan: test, fetch=1000
             Limit: skip=0, fetch=1000
@@ -1063,7 +1066,7 @@ mod test {
             plan,
             @r"
         Limit: skip=1000, fetch=1000
-          Cross Join: 
+          Cross Join:
             Limit: skip=0, fetch=2000
               TableScan: test, fetch=2000
             Limit: skip=0, fetch=2000
