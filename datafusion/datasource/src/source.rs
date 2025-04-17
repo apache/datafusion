@@ -220,18 +220,18 @@ impl ExecutionPlan for DataSourceExec {
             FilterPushdownSupport::Supported {
                 child_descriptions,
                 op,
-                revisit: retry,
+                revisit,
             } => {
                 let new_exec = Arc::new(DataSourceExec::new(op));
 
                 debug_assert!(child_descriptions.is_empty());
-                debug_assert!(!retry);
+                debug_assert!(!revisit);
 
                 Ok(FilterPushdownResult {
                     support: FilterPushdownSupport::Supported {
                         child_descriptions,
                         op: new_exec,
-                        revisit: retry,
+                        revisit,
                     },
                     remaining_description,
                 })
