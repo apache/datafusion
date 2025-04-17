@@ -678,6 +678,8 @@ impl ExternalSorter {
                 .try_resize(get_reserved_byte_for_record_batch(&sorted_batch))
                 .map_err(Self::err_with_oom_context)?;
 
+            metrics.record_output(sorted_batch.num_rows());
+
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&self.schema),
                 futures::stream::once(async { Ok(sorted_batch) }),
