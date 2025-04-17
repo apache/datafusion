@@ -406,7 +406,7 @@ config_namespace! {
         /// tables with a highly-selective join filter, but is also slightly slower.
         pub enforce_batch_size_in_joins: bool, default = false
 
-        /// Size (bytes) of output data buffer DataFusion uses when writing output files.
+        /// Size (bytes) of data buffer DataFusion uses when writing output files.
         /// This affects the size of the data chunks that are uploaded to remote
         /// object stores (e.g. AWS S3). If very large (>= 100 GiB) output files are being
         /// written, it may be necessary to increase this size to avoid errors from
