@@ -23,7 +23,7 @@
 
 This section calls out some of the major changes in the `47.0.0` release of DataFusion.
 
-Here are some example upgrade PRs that demonstrate some changed required when upgrading from DataFusion 46.0.0:
+Here are some example upgrade PRs that demonstrate changes required when upgrading from DataFusion 46.0.0:
 
 - [delta-rs Upgrade to `47.0.0`](https://github.com/delta-io/delta-rs/pull/3378)
 - [DataFusion Comet Upgrade to `47.0.0`](https://github.com/apache/datafusion-comet/pull/1563)
