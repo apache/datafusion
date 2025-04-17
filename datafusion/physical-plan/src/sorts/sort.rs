@@ -668,7 +668,9 @@ impl ExternalSorter {
         // Note, in theory in memory batches should have limited size, but some testing
         // cases testing the memory limit use `sort_in_place_threshold_bytes` to, so here we
         // set a larger limit to avoid testing failure.
-        if self.expr.len() <= 2 && self.reservation.size() < 1000 * self.sort_in_place_threshold_bytes {
+        if self.expr.len() <= 2
+            && self.reservation.size() < 1000 * self.sort_in_place_threshold_bytes
+        {
             let interleave_indices = self.build_sorted_indices(
                 self.in_mem_batches.as_slice(),
                 Arc::clone(&self.expr),
