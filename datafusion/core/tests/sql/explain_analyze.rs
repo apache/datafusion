@@ -609,8 +609,8 @@ async fn test_physical_plan_display_indent() {
         "          RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
         "            AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]",
         "              CoalesceBatchesExec: target_batch_size=4096",
-        "                RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "                  FilterExec: c12@1 < 10",
+        "                FilterExec: c12@1 < 10",
+        "                  RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
         "                    DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], file_type=csv, has_header=true",
     ];
 
