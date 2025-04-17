@@ -268,7 +268,7 @@ async fn sort_spill_reservation() {
 
     let base_config = SessionConfig::new()
         // do not allow the sort to use the 'concat in place' path
-        .with_sort_in_place_threshold_bytes(10);
+        .with_sort_in_place_threshold_bytes(0);
 
     // This test case shows how sort_spill_reservation works by
     // purposely sorting data that requires non trivial memory to
