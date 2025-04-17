@@ -321,10 +321,9 @@ impl EquivalenceProperties {
     pub fn add_constants(&mut self, constants: impl IntoIterator<Item = ConstExpr>) {
         let normalized_constants = constants
             .into_iter()
-            .filter_map(|c| {
-                let normalized_expr = self.eq_group.normalize_expr(c.expr);
-                (!const_exprs_contains(&self.constants, &normalized_expr))
-                    .then(|| ConstExpr::new(normalized_expr, c.across_partitions))
+            .filter_map(|mut c| {
+                c.expr = self.eq_group.normalize_expr(c.expr);
+                (!const_exprs_contains(&self.constants, &c.expr)).then_some(c)
             })
             .collect::<Vec<_>>();
 

@@ -29,6 +29,19 @@ use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
 
+/// Represents whether a constant expression's value is uniform or varies across
+/// partitions. Has two variants:
+/// - `Heterogeneous`: The constant expression may have different values for
+///   different partitions.
+/// - `Uniform(Option<ScalarValue>)`: The constant expression has the same value
+///   across all partitions, or is `None` if the value is unknown.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum AcrossPartitions {
+    #[default]
+    Heterogeneous,
+    Uniform(Option<ScalarValue>),
+}
+
 /// A structure representing a expression known to be constant in a physical
 /// execution plan.
 ///
@@ -53,7 +66,7 @@ use indexmap::{IndexMap, IndexSet};
 /// // Create a constant expression from a physical expression:
 /// let const_expr = ConstExpr::from(col);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ConstExpr {
     /// The expression that is known to be constant (e.g. a `Column`)
     pub expr: Arc<dyn PhysicalExpr>,
@@ -62,42 +75,22 @@ pub struct ConstExpr {
     pub across_partitions: AcrossPartitions,
 }
 
-/// Represents whether a constant expression's value is uniform or varies across
-/// partitions. Has two variants:
-/// - `Heterogeneous`: The constant expression may have different values for
-///   different partitions.
-/// - `Uniform(Option<ScalarValue>)`: The constant expression has the same value
-///   across all partitions, or is `None` if the value is unknown.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AcrossPartitions {
-    Heterogeneous,
-    Uniform(Option<ScalarValue>),
-}
-
-impl Default for AcrossPartitions {
-    fn default() -> Self {
-        Self::Heterogeneous
-    }
-}
-
-impl PartialEq for ConstExpr {
-    fn eq(&self, other: &Self) -> bool {
-        self.across_partitions == other.across_partitions && self.expr.eq(&other.expr)
-    }
-}
-
 impl ConstExpr {
-    /// Create a new constant expression from a physical expression.
+    /// Create a new constant expression from a physical expression, specifying
+    /// whether the constant expression is the same across partitions.
     ///
     /// Note that you can also use `ConstExpr::from` to create a constant
     /// expression from just a physical expression, with the *safe* assumption
     /// of heterogenous values across partitions unless the expression is a
     /// literal.
     pub fn new(expr: Arc<dyn PhysicalExpr>, across_partitions: AcrossPartitions) -> Self {
-        Self {
-            expr,
-            across_partitions,
+        let mut result = ConstExpr::from(expr);
+        // Override the across partitions specification if the expression is not
+        // a literal.
+        if result.across_partitions == AcrossPartitions::Heterogeneous {
+            result.across_partitions = across_partitions;
         }
+        result
     }
 
     /// Returns a [`Display`]able list of `ConstExpr`.
@@ -118,6 +111,12 @@ impl ConstExpr {
             }
         }
         DisplayableList(input)
+    }
+}
+
+impl PartialEq for ConstExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.across_partitions == other.across_partitions && self.expr.eq(&other.expr)
     }
 }
 
