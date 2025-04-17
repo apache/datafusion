@@ -19,6 +19,90 @@
 
 # Upgrade Guides
 
+## DataFusion `47.0.0`
+
+### Specifying nullable arguments for coercible signatures in UDFs
+
+DataFusion 47 changes how UDFs handle nullable arguments in [`TypeSignatureClass`] (primarily used in coercible signatures).
+
+Previously, DataFusion treated [`NativeType::Null`] as a special case when matching native types to a signature class.
+However, this led to inconsistent behavior and internal errors — when the signature class was not `TypeSignatureClass::Native`, passing `NULL` to a UDF would result in an error such as:
+
+```text
+May miss the matching logic in `matches_native_type`
+```
+
+If your function uses a coercible signature ([`Signature::Coercible`]) and should accept `NULL` as a valid input, you need to convert it to use [`Coercion::Implicit`] (if it doesn't already) and explicitly include `TypeSignatureClass::Native(logical_null())` in the `allowed_source_types`.
+
+---
+
+#### Example: Updating an exact coercible signature
+
+Before:
+
+```rust
+# /* comment out so they don't run
+pub fn new() -> Self {
+    Self {
+        signature: Signature::coercible(
+            vec![Coercion::new_exact(TypeSignatureClass::Native(
+                logical_string(),
+            ))],
+            Volatility::Immutable,
+        ),
+    }
+}
+# */
+```
+
+After:
+
+```rust
+# /* comment out so they don't run
+use datafusion_common::types::{logical_null, NativeType};
+
+pub fn new() -> Self {
+    Self {
+        signature: Signature::coercible(
+            vec![Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_string()),
+                vec![TypeSignatureClass::Native(logical_null())],
+                NativeType::String,
+            )],
+            Volatility::Immutable,
+        ),
+    }
+}
+# */
+```
+
+---
+
+#### Example: Updating an existing implicit coercion
+
+Even if you're already using `Coercion::Implicit`, you still need to explicitly allow `NULL` values.  
+Without this, passing `NULL` will fail to match the signature and result in an internal error.
+
+```diff
+TypeSignature::Coercible(vec![Coercion::new_implicit(
+    TypeSignatureClass::Native(logical_binary()),
+-   vec![TypeSignatureClass::Native(logical_string())],
++   vec![
++       TypeSignatureClass::Native(logical_string()),
++       TypeSignatureClass::Native(logical_null()),
++   ],
+    NativeType::String,
+)])
+```
+
+You can view [PR #15404] for more examples and implementation details.
+
+[`typesignatureclass`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/enum.TypeSignatureClass.html
+[`nativetype::null`]: https://docs.rs/datafusion-common/latest/datafusion_common/types/enum.NativeType.html#variant.Null
+[`signature::coercible`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/enum.TypeSignature.html#variant.Coercible
+[`coercion::implicit`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/enum.Coercion.html#variant.Implicit
+[`pr #15404`]: https://github.com/apache/datafusion/pull/15404
+
 ## DataFusion `46.0.0`
 
 ### Use `invoke_with_args` instead of `invoke()` and `invoke_batch()`

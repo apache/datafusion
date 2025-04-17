@@ -22,7 +22,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
 use crate::utils::make_scalar_function;
-use datafusion_common::types::logical_string;
+use datafusion_common::types::{logical_null, logical_string, NativeType};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
 use datafusion_expr::{
@@ -68,8 +68,16 @@ impl EndsWithFunc {
         Self {
             signature: Signature::coercible(
                 vec![
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Native(logical_null())],
+                        NativeType::String,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Native(logical_null())],
+                        NativeType::String,
+                    ),
                 ],
                 Volatility::Immutable,
             ),
