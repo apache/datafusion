@@ -89,7 +89,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location: Path::from(path),
             last_modified,
-            size: size as usize, // Convert u64 to usize
+            size,
             e_tag: None,
             version: None,
         };
