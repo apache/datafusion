@@ -138,6 +138,9 @@ pub struct FileScanConfig {
     /// Schema before `projection` is applied. It contains the all columns that may
     /// appear in the files. It does not include table partition columns
     /// that may be added.
+    /// Note that this is **not** the schema of the physical files.
+    /// This is the schema that the physical file schema will be
+    /// mapped onto, and the schema that the [`DataSourceExec`] will return.
     pub file_schema: SchemaRef,
     /// List of files to be processed, grouped into partitions
     ///
@@ -224,6 +227,10 @@ pub struct FileScanConfig {
 #[derive(Clone)]
 pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
+    /// Table schema before any projections or partition columns are applied.
+    /// This schema is used to read the files, but is **not** necessarily the schema of the physical files.
+    /// Rather this is the schema that the physical file schema will be mapped onto, and the schema that the
+    /// [`DataSourceExec`] will return.
     file_schema: SchemaRef,
     file_source: Arc<dyn FileSource>,
 
@@ -467,7 +474,8 @@ impl DataSource for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let (schema, _, _, orderings) = self.project();
+                let schema = self.projected_schema();
+                let orderings = get_projected_output_ordering(self, &schema);
 
                 write!(f, "file_groups=")?;
                 FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -648,7 +656,7 @@ impl FileScanConfig {
         }
     }
 
-    fn projected_stats(&self) -> Statistics {
+    pub fn projected_stats(&self) -> Statistics {
         let statistics = self.file_source.statistics().unwrap();
 
         let table_cols_stats = self
@@ -672,7 +680,7 @@ impl FileScanConfig {
         }
     }
 
-    fn projected_schema(&self) -> Arc<Schema> {
+    pub fn projected_schema(&self) -> Arc<Schema> {
         let table_fields: Vec<_> = self
             .projection_indices()
             .into_iter()
@@ -692,7 +700,7 @@ impl FileScanConfig {
         ))
     }
 
-    fn projected_constraints(&self) -> Constraints {
+    pub fn projected_constraints(&self) -> Constraints {
         let indexes = self.projection_indices();
 
         self.constraints
@@ -1044,7 +1052,8 @@ impl Debug for FileScanConfig {
 
 impl DisplayAs for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let (schema, _, _, orderings) = self.project();
+        let schema = self.projected_schema();
+        let orderings = get_projected_output_ordering(self, &schema);
 
         write!(f, "file_groups=")?;
         FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -1557,7 +1566,7 @@ mod tests {
         );
 
         // verify the proj_schema includes the last column and exactly the same the field it is defined
-        let (proj_schema, _, _, _) = conf.project();
+        let proj_schema = conf.projected_schema();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             *proj_schema.field(file_schema.fields().len()),
@@ -1663,7 +1672,7 @@ mod tests {
         assert_eq!(source_statistics, statistics);
         assert_eq!(source_statistics.column_statistics.len(), 3);
 
-        let (proj_schema, ..) = conf.project();
+        let proj_schema = conf.projected_schema();
         // created a projector for that projected schema
         let mut proj = PartitionColumnProjector::new(
             proj_schema,

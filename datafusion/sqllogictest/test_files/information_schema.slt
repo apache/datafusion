@@ -149,6 +149,39 @@ drop table t
 statement ok
 drop table t2
 
+
+############
+## 0 to represent the default value (target_partitions and planning_concurrency)
+###########
+
+statement ok
+SET datafusion.execution.target_partitions = 3;
+
+statement ok
+SET datafusion.execution.planning_concurrency = 3;
+
+# when setting target_partitions and planning_concurrency to 3, their values will be 3
+query TB rowsort
+SELECT name, value = 3 FROM information_schema.df_settings WHERE name IN ('datafusion.execution.target_partitions', 'datafusion.execution.planning_concurrency');
+----
+datafusion.execution.planning_concurrency true
+datafusion.execution.target_partitions true
+
+statement ok
+SET datafusion.execution.target_partitions = 0;
+
+statement ok
+SET datafusion.execution.planning_concurrency = 0;
+
+# when setting target_partitions and planning_concurrency to 0, their values will be equal to the
+# default values, which are different from 0 (which is invalid)
+query TB rowsort
+SELECT name, value = 0 FROM information_schema.df_settings WHERE name IN ('datafusion.execution.target_partitions', 'datafusion.execution.planning_concurrency');
+----
+datafusion.execution.planning_concurrency false
+datafusion.execution.target_partitions false
+
+
 ############
 ## SHOW VARIABLES should work
 ###########
@@ -197,6 +230,7 @@ datafusion.execution.parquet.bloom_filter_fpp NULL
 datafusion.execution.parquet.bloom_filter_ndv NULL
 datafusion.execution.parquet.bloom_filter_on_read true
 datafusion.execution.parquet.bloom_filter_on_write false
+datafusion.execution.parquet.coerce_int96 NULL
 datafusion.execution.parquet.column_index_truncate_length 64
 datafusion.execution.parquet.compression zstd(3)
 datafusion.execution.parquet.created_by datafusion
@@ -297,6 +331,7 @@ datafusion.execution.parquet.bloom_filter_fpp NULL (writing) Sets bloom filter f
 datafusion.execution.parquet.bloom_filter_ndv NULL (writing) Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_on_read true (writing) Use any available bloom filters when reading parquet files
 datafusion.execution.parquet.bloom_filter_on_write false (writing) Write bloom filters for all columns when creating parquet files
+datafusion.execution.parquet.coerce_int96 NULL (reading) If true, parquet reader will read columns of physical type int96 as originating from a different resolution than nanosecond. This is useful for reading data from systems like Spark which stores microsecond resolution timestamps in an int96 allowing it to write values with a larger date range than 64-bit timestamps with nanosecond resolution.
 datafusion.execution.parquet.column_index_truncate_length 64 (writing) Sets column index truncate length
 datafusion.execution.parquet.compression zstd(3) (writing) Sets default parquet compression codec. Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting Note that this default setting is not the same as the default parquet writer setting.
 datafusion.execution.parquet.created_by datafusion (writing) Sets "created by" property
@@ -651,7 +686,7 @@ datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestam
 datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
 datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
 datafusion public rank datafusion public rank FUNCTION true NULL WINDOW Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values. rank()
-datafusion public string_agg datafusion public string_agg FUNCTION true LargeUtf8 AGGREGATE Concatenates the values of string expressions and places separator values between them. string_agg(expression, delimiter)
+datafusion public string_agg datafusion public string_agg FUNCTION true LargeUtf8 AGGREGATE Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression. string_agg([DISTINCT] expression, delimiter [ORDER BY expression])
 
 query B
 select is_deterministic from information_schema.routines where routine_name = 'now';
@@ -719,6 +754,15 @@ datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 1
 datafusion public string_agg 1 IN expression LargeUtf8 NULL false 2
 datafusion public string_agg 2 IN delimiter Null NULL false 2
 datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 2
+datafusion public string_agg 1 IN expression Utf8 NULL false 3
+datafusion public string_agg 2 IN delimiter Utf8 NULL false 3
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 3
+datafusion public string_agg 1 IN expression Utf8 NULL false 4
+datafusion public string_agg 2 IN delimiter LargeUtf8 NULL false 4
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 4
+datafusion public string_agg 1 IN expression Utf8 NULL false 5
+datafusion public string_agg 2 IN delimiter Null NULL false 5
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 5
 
 # test variable length arguments
 query TTTBI rowsort

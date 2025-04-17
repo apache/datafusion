@@ -27,10 +27,9 @@ use datafusion_common::Result;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::SendableRecordBatchStream;
 
-use crate::metrics::SpillMetrics;
-use crate::stream::RecordBatchReceiverStream;
+use crate::{common::spawn_buffered, metrics::SpillMetrics};
 
-use super::{in_progress_spill_file::InProgressSpillFile, read_spill};
+use super::{in_progress_spill_file::InProgressSpillFile, SpillReaderStream};
 
 /// The `SpillManager` is responsible for the following tasks:
 /// - Reading and writing `RecordBatch`es to raw files based on the provided configurations.
@@ -126,14 +125,11 @@ impl SpillManager {
         &self,
         spill_file_path: RefCountedTempFile,
     ) -> Result<SendableRecordBatchStream> {
-        let mut builder = RecordBatchReceiverStream::builder(
+        let stream = Box::pin(SpillReaderStream::new(
             Arc::clone(&self.schema),
-            self.batch_read_buffer_capacity,
-        );
-        let sender = builder.tx();
+            spill_file_path,
+        ));
 
-        builder.spawn_blocking(move || read_spill(sender, spill_file_path.path()));
-
-        Ok(builder.build())
+        Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
     }
 }

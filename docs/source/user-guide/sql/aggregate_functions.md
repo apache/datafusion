@@ -371,10 +371,10 @@ min(expression)
 
 ### `string_agg`
 
-Concatenates the values of string expressions and places separator values between them.
+Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression.
 
 ```sql
-string_agg(expression, delimiter)
+string_agg([DISTINCT] expression, delimiter [ORDER BY expression])
 ```
 
 #### Arguments
@@ -390,7 +390,21 @@ string_agg(expression, delimiter)
 +--------------------------+
 | names_list               |
 +--------------------------+
-| Alice, Bob, Charlie      |
+| Alice, Bob, Bob, Charlie |
++--------------------------+
+> SELECT string_agg(name, ', ' ORDER BY name DESC) AS names_list
+  FROM employee;
++--------------------------+
+| names_list               |
++--------------------------+
+| Charlie, Bob, Bob, Alice |
++--------------------------+
+> SELECT string_agg(DISTINCT name, ', ' ORDER BY name DESC) AS names_list
+  FROM employee;
++--------------------------+
+| names_list               |
++--------------------------+
+| Charlie, Bob, Alice |
 +--------------------------+
 ```
 

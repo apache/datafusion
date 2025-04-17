@@ -54,7 +54,6 @@ use datafusion_physical_expr::{
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_common::stats::Precision;
-use datafusion_datasource::add_row_stats;
 use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -716,9 +715,13 @@ impl ListingOptions {
 #[derive(Debug)]
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
-    /// File fields only
+    /// `file_schema` contains only the columns physically stored in the data files themselves.
+    ///     - Represents the actual fields found in files like Parquet, CSV, etc.
+    ///     - Used when reading the raw data from files
     file_schema: SchemaRef,
-    /// File fields + partition columns
+    /// `table_schema` combines `file_schema` + partition columns
+    ///     - Partition columns are derived from directory paths (not stored in files)
+    ///     - These are columns like "year=2022/month=01" in paths like `/data/year=2022/month=01/file.parquet`
     table_schema: SchemaRef,
     options: ListingOptions,
     definition: Option<String>,
@@ -1183,7 +1186,7 @@ impl ListingTable {
 /// # Arguments
 /// * `files` - A stream of `Result<PartitionedFile>` items to process
 /// * `limit` - An optional row count limit. If provided, the function will stop collecting files
-///             once the accumulated number of rows exceeds this limit
+///   once the accumulated number of rows exceeds this limit
 /// * `collect_stats` - Whether to collect and accumulate statistics from the files
 ///
 /// # Returns
@@ -1226,7 +1229,7 @@ async fn get_files_with_limit(
                     file_stats.num_rows
                 } else {
                     // For subsequent files, accumulate the counts
-                    add_row_stats(num_rows, file_stats.num_rows)
+                    num_rows.add(&file_stats.num_rows)
                 };
             }
         }

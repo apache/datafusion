@@ -155,6 +155,11 @@ impl SelectBuilder {
         self.projection = value;
         self
     }
+    pub fn pop_projections(&mut self) -> Vec<ast::SelectItem> {
+        let ret = self.projection.clone();
+        self.projection.clear();
+        ret
+    }
     pub fn already_projected(&self) -> bool {
         !self.projection.is_empty()
     }

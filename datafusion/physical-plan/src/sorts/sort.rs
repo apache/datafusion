@@ -50,7 +50,8 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{
-    config_err, exec_datafusion_err, internal_datafusion_err, internal_err, Result,
+    config_err, exec_datafusion_err, internal_datafusion_err, internal_err,
+    DataFusionError, Result,
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -88,8 +89,9 @@ impl ExternalSorterMetrics {
 /// 1. get a non-empty new batch from input
 ///
 /// 2. check with the memory manager there is sufficient space to
-///    buffer the batch in memory 2.1 if memory sufficient, buffer
-///    batch in memory, go to 1.
+///    buffer the batch in memory.
+///
+/// 2.1 if memory is sufficient, buffer batch in memory, go to 1.
 ///
 /// 2.2 if no more memory is available, sort all buffered batches and
 ///     spill to file.  buffer the next batch in memory, go to 1.
@@ -322,13 +324,8 @@ impl ExternalSorter {
         }
 
         self.reserve_memory_for_merge()?;
-
-        let size = get_reserved_byte_for_record_batch(&input);
-        if self.reservation.try_grow(size).is_err() {
-            self.sort_and_spill_in_mem_batches().await?;
-            // After spilling all in-memory batches, the retry should succeed
-            self.reservation.try_grow(size)?;
-        }
+        self.reserve_memory_for_batch_and_maybe_spill(&input)
+            .await?;
 
         self.in_mem_batches.push(input);
         Ok(())
@@ -455,6 +452,12 @@ impl ExternalSorter {
     /// Sorts the in-memory batches and merges them into a single sorted run, then writes
     /// the result to spill files.
     async fn sort_and_spill_in_mem_batches(&mut self) -> Result<()> {
+        if self.in_mem_batches.is_empty() {
+            return internal_err!(
+                "in_mem_batches must not be empty when attempting to sort and spill"
+            );
+        }
+
         // Release the memory reserved for merge back to the pool so
         // there is some left when `in_mem_sort_stream` requests an
         // allocation. At the end of this function, memory will be
@@ -812,7 +815,8 @@ impl ExternalSorter {
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
             self.reservation
-                .try_resize(get_reserved_byte_for_record_batch(&batch))?;
+                .try_resize(get_reserved_byte_for_record_batch(&batch))
+                .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation);
         }
@@ -893,11 +897,50 @@ impl ExternalSorter {
         if self.runtime.disk_manager.tmp_files_enabled() {
             let size = self.sort_spill_reservation_bytes;
             if self.merge_reservation.size() != size {
-                self.merge_reservation.try_resize(size)?;
+                self.merge_reservation
+                    .try_resize(size)
+                    .map_err(Self::err_with_oom_context)?;
             }
         }
 
         Ok(())
+    }
+
+    /// Reserves memory to be able to accommodate the given batch.
+    /// If memory is scarce, tries to spill current in-memory batches to disk first.
+    async fn reserve_memory_for_batch_and_maybe_spill(
+        &mut self,
+        input: &RecordBatch,
+    ) -> Result<()> {
+        let size = get_reserved_byte_for_record_batch(input);
+
+        match self.reservation.try_grow(size) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                if self.in_mem_batches.is_empty() {
+                    return Err(Self::err_with_oom_context(e));
+                }
+
+                // Spill and try again.
+                self.sort_and_spill_in_mem_batches().await?;
+                self.reservation
+                    .try_grow(size)
+                    .map_err(Self::err_with_oom_context)
+            }
+        }
+    }
+
+    /// Wraps the error with a context message suggesting settings to tweak.
+    /// This is meant to be used with DataFusionError::ResourcesExhausted only.
+    fn err_with_oom_context(e: DataFusionError) -> DataFusionError {
+        match e {
+            DataFusionError::ResourcesExhausted(_) => e.context(
+                "Not enough memory to continue external sort. \
+                    Consider increasing the memory limit, or decreasing sort_spill_reservation_bytes"
+            ),
+            // This is not an OOM error, so just return it as is.
+            _ => e,
+        }
     }
 }
 
@@ -1062,6 +1105,8 @@ pub struct SortExec {
     preserve_partitioning: bool,
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
+    /// Normalized common sort prefix between the input and the sort expressions (only used with fetch)
+    common_sort_prefix: LexOrdering,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
 }
@@ -1071,13 +1116,15 @@ impl SortExec {
     /// sorted output partition.
     pub fn new(expr: LexOrdering, input: Arc<dyn ExecutionPlan>) -> Self {
         let preserve_partitioning = false;
-        let cache = Self::compute_properties(&input, expr.clone(), preserve_partitioning);
+        let (cache, sort_prefix) =
+            Self::compute_properties(&input, expr.clone(), preserve_partitioning);
         Self {
             expr,
             input,
             metrics_set: ExecutionPlanMetricsSet::new(),
             preserve_partitioning,
             fetch: None,
+            common_sort_prefix: sort_prefix,
             cache,
         }
     }
@@ -1129,6 +1176,7 @@ impl SortExec {
             expr: self.expr.clone(),
             metrics_set: self.metrics_set.clone(),
             preserve_partitioning: self.preserve_partitioning,
+            common_sort_prefix: self.common_sort_prefix.clone(),
             fetch,
             cache,
         }
@@ -1162,19 +1210,21 @@ impl SortExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    /// It also returns the common sort prefix between the input and the sort expressions.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         sort_exprs: LexOrdering,
         preserve_partitioning: bool,
-    ) -> PlanProperties {
+    ) -> (PlanProperties, LexOrdering) {
         // Determine execution mode:
         let requirement = LexRequirement::from(sort_exprs);
-        let sort_satisfied = input
+
+        let (sort_prefix, sort_satisfied) = input
             .equivalence_properties()
-            .ordering_satisfy_requirement(&requirement);
+            .extract_common_sort_prefix(&requirement);
 
         // The emission type depends on whether the input is already sorted:
-        // - If already sorted, we can emit results in the same way as the input
+        // - If already fully sorted, we can emit results in the same way as the input
         // - If not sorted, we must wait until all data is processed to emit results (Final)
         let emission_type = if sort_satisfied {
             input.pipeline_behavior()
@@ -1210,11 +1260,14 @@ impl SortExec {
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);
 
-        PlanProperties::new(
-            eq_properties,
-            output_partitioning,
-            emission_type,
-            boundedness,
+        (
+            PlanProperties::new(
+                eq_properties,
+                output_partitioning,
+                emission_type,
+                boundedness,
+            ),
+            LexOrdering::from(sort_prefix),
         )
     }
 }
@@ -1226,7 +1279,12 @@ impl DisplayAs for SortExec {
                 let preserve_partitioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)
+                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
+                        if !self.common_sort_prefix.is_empty() {
+                            write!(f, ", sort_prefix=[{}]", self.common_sort_prefix)
+                        } else {
+                            Ok(())
+                        }
                     }
                     None => write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr),
                 }
@@ -1302,10 +1360,12 @@ impl ExecutionPlan for SortExec {
 
         trace!("End SortExec's input.execute for partition: {}", partition);
 
+        let requirement = &LexRequirement::from(self.expr.clone());
+
         let sort_satisfied = self
             .input
             .equivalence_properties()
-            .ordering_satisfy_requirement(&LexRequirement::from(self.expr.clone()));
+            .ordering_satisfy_requirement(requirement);
 
         match (sort_satisfied, self.fetch.as_ref()) {
             (true, Some(fetch)) => Ok(Box::pin(LimitStream::new(
@@ -1319,6 +1379,7 @@ impl ExecutionPlan for SortExec {
                 let mut topk = TopK::try_new(
                     partition,
                     input.schema(),
+                    self.common_sort_prefix.clone(),
                     self.expr.clone(),
                     *fetch,
                     context.session_config().batch_size(),
@@ -1331,6 +1392,9 @@ impl ExecutionPlan for SortExec {
                         while let Some(batch) = input.next().await {
                             let batch = batch?;
                             topk.insert_batch(batch)?;
+                            if topk.finished {
+                                break;
+                            }
                         }
                         topk.emit()
                     })
@@ -1451,7 +1515,7 @@ mod tests {
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::RecordBatchStream;
@@ -1671,6 +1735,69 @@ mod tests {
             task_ctx.runtime_env().memory_pool.reserved(),
             0,
             "The sort should have returned all memory used back to the memory manager"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_reservation_error() -> Result<()> {
+        // Pick a memory limit and sort_spill_reservation that make the first batch reservation fail.
+        // These values assume that the ExternalSorter will reserve 800 bytes for the first batch.
+        let expected_batch_reservation = 800;
+        let merge_reservation: usize = 0; // Set to 0 for simplicity
+        let memory_limit: usize = expected_batch_reservation + merge_reservation - 1; // Just short of what we need
+
+        let session_config =
+            SessionConfig::new().with_sort_spill_reservation_bytes(merge_reservation);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime),
+        );
+
+        let plan = test::scan_partitioned(1);
+
+        // Read the first record batch to assert that our memory limit and sort_spill_reservation
+        // settings trigger the test scenario.
+        {
+            let mut stream = plan.execute(0, Arc::clone(&task_ctx))?;
+            let first_batch = stream.next().await.unwrap()?;
+            let batch_reservation = get_reserved_byte_for_record_batch(&first_batch);
+
+            assert_eq!(batch_reservation, expected_batch_reservation);
+            assert!(memory_limit < (merge_reservation + batch_reservation));
+        }
+
+        let sort_exec = Arc::new(SortExec::new(
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: col("i", &plan.schema())?,
+                options: SortOptions::default(),
+            }]),
+            plan,
+        ));
+
+        let result = collect(
+            Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&task_ctx),
+        )
+        .await;
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Context(..)),
+            "Assertion failed: expected a Context error, but got: {:?}",
+            err
+        );
+
+        // Assert that the context error is wrapping a resources exhausted error.
+        assert!(
+            matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "Assertion failed: expected a ResourcesExhausted error, but got: {:?}",
+            err
         );
 
         Ok(())
