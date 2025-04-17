@@ -77,9 +77,9 @@ pub trait BatchSerializer: Sync + Send {
 
 /// Returns an [`AsyncWrite`] which writes to the given object store location
 /// with the specified compression.
-/// 
+///
 /// The writer will have a default buffer size as chosen by [`BufWriter::new`].
-/// 
+///
 /// We drop the `AbortableWrite` struct and the writer will not try to cleanup on failure.
 /// Users can configure automatic cleanup with their cloud provider.
 pub async fn create_writer(
@@ -93,7 +93,7 @@ pub async fn create_writer(
 
 /// Returns an [`AsyncWrite`] which writes to the given object store location
 /// with the specified compression and buffer size.
-/// 
+///
 /// We drop the `AbortableWrite` struct and the writer will not try to cleanup on failure.
 /// Users can configure automatic cleanup with their cloud provider.
 pub async fn create_writer_with_size(

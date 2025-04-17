@@ -411,8 +411,6 @@ config_namespace! {
         /// object stores (e.g. AWS S3). If very large (>= 100 GiB) output files are being
         /// written, it may be necessary to increase this size to avoid errors from
         /// the remote end point.
-        /// 
-        /// Default is 10 MiB.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
     }
 }

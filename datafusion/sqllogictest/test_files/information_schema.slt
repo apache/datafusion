@@ -191,6 +191,7 @@ datafusion.execution.listing_table_ignore_subdirectory true
 datafusion.execution.max_buffered_batches_per_output_file 2
 datafusion.execution.meta_fetch_concurrency 32
 datafusion.execution.minimum_parallel_output_files 4
+datafusion.execution.objectstore_writer_buffer_size 10485760
 datafusion.execution.parquet.allow_single_file_parallelism true
 datafusion.execution.parquet.binary_as_string false
 datafusion.execution.parquet.bloom_filter_fpp NULL
