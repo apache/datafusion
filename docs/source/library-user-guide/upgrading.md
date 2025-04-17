@@ -43,6 +43,7 @@ Additionally `ObjectStore::list` and `ObjectStore::list_with_offset` have been c
 This requires converting from `usize` to `u64` occasionally as well as changes to `ObjectStore` implementations such as
 
 ```rust
+# /*
 impl Objectstore {
     ...
     // The range is now a u64 instead of usize
@@ -56,6 +57,7 @@ impl Objectstore {
         self.inner.list(prefix)
     }
 }
+# */
 ```
 
 The `ParquetObjectReader` has been updated to no longer require the object size
@@ -66,16 +68,20 @@ The `ParquetObjectReader` has been updated to no longer require the object size
 Pattern in DataFusion `46.0.0`:
 
 ```rust
+# /*
 let meta: ObjectMeta = ...;
 let reader = ParquetObjectReader::new(store, meta);
+# */
 ```
 
 Pattern in DataFusion `47.0.0`:
 
 ```rust
+# /*
 let meta: ObjectMeta = ...;
 let reader = ParquetObjectReader::new(store, location)
   .with_file_size(meta.size);
+# */
 ```
 
 ### `DisplayFormatType::TreeRender`
