@@ -474,7 +474,8 @@ impl DataSource for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let (schema, _, _, orderings) = self.project();
+                let schema = self.projected_schema();
+                let orderings = get_projected_output_ordering(self, &schema);
 
                 write!(f, "file_groups=")?;
                 FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -1051,7 +1052,8 @@ impl Debug for FileScanConfig {
 
 impl DisplayAs for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let (schema, _, _, orderings) = self.project();
+        let schema = self.projected_schema();
+        let orderings = get_projected_output_ordering(self, &schema);
 
         write!(f, "file_groups=")?;
         FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -1564,7 +1566,7 @@ mod tests {
         );
 
         // verify the proj_schema includes the last column and exactly the same the field it is defined
-        let (proj_schema, _, _, _) = conf.project();
+        let proj_schema = conf.projected_schema();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             *proj_schema.field(file_schema.fields().len()),
@@ -1670,7 +1672,7 @@ mod tests {
         assert_eq!(source_statistics, statistics);
         assert_eq!(source_statistics.column_statistics.len(), 3);
 
-        let (proj_schema, ..) = conf.project();
+        let proj_schema = conf.projected_schema();
         // created a projector for that projected schema
         let mut proj = PartitionColumnProjector::new(
             proj_schema,
