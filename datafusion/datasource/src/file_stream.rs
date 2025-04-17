@@ -79,7 +79,7 @@ impl FileStream {
         file_opener: Arc<dyn FileOpener>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        let (projected_schema, ..) = config.project();
+        let projected_schema = config.projected_schema();
         let col_projector = ExtendedColumnProjector::new(
             Arc::clone(&projected_schema),
             &config
