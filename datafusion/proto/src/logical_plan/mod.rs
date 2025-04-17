@@ -467,7 +467,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 "Missing Arrow type in partition columns"
                             )));
                         };
-                       let arrow_type = DataType::try_from(arrow_type).map_err(|e| {
+                        let arrow_type = DataType::try_from(arrow_type).map_err(|e| {
                             proto_error(format!("Received an unknown ArrowType: {}", e))
                         })?;
                         Ok((col.name.clone(), arrow_type))
