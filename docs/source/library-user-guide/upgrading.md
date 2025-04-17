@@ -24,13 +24,14 @@
 This section calls out some of the major changes in the `47.0.0` release of DataFusion.
 
 Here are some example upgrade PRs that demonstrate some changed required when upgrading from DataFusion 46.0.0:
-* [delta-rs Upgrade to `47.0.0`](https://github.com/delta-io/delta-rs/pull/3378)
-* [DataFusion Comet Upgrade to `47.0.0`](https://github.com/apache/datafusion-comet/pull/1563)
-* [Sail Upgrade to `47.0.0`](https://github.com/lakehq/sail/pull/434)
+
+- [delta-rs Upgrade to `47.0.0`](https://github.com/delta-io/delta-rs/pull/3378)
+- [DataFusion Comet Upgrade to `47.0.0`](https://github.com/apache/datafusion-comet/pull/1563)
+- [Sail Upgrade to `47.0.0`](https://github.com/lakehq/sail/pull/434)
 
 ### Upgrades to `arrow` and `parquet` 55.0.0 and `object_store` 0.12.0
 
-Several APIs are changed in the underlying arrow and parquet libraries to use  a
+Several APIs are changed in the underlying arrow and parquet libraries to use a
 `u64` instead of `usize` to better support WASM (See [#7371] and [#6961])
 
 Additionally `ObjectStore::list` and `ObjectStore::list_with_offset` have been changed to return `static` lifetimes (See [#6619])
@@ -70,6 +71,7 @@ let reader = ParquetObjectReader::new(store, meta);
 ```
 
 Pattern in DataFusion `47.0.0`:
+
 ```rust
 let meta: ObjectMeta = ...;
 let reader = ParquetObjectReader::new(store, location)
@@ -100,11 +102,12 @@ details.
 
 Previously, `FileScanConfig::build()` directly created ExecutionPlans. In
 DataFusion 47.0.0 this has been changed to use `FileScanConfigBuilder`. See
-[#15352] for details. 
+[#15352] for details.
 
 [#15352]: https://github.com/apache/datafusion/pull/15352
 
 Pattern in DataFusion `46.0.0`:
+
 ```rust
 let plan = FileScanConfig::new(url, schema, Arc::new(file_source))
   .with_statistics(stats)
@@ -113,6 +116,7 @@ let plan = FileScanConfig::new(url, schema, Arc::new(file_source))
 ```
 
 Pattern in DataFusion `47.0.0`:
+
 ```rust
 let config = FileScanConfigBuilder::new(url, schema, Arc::new(file_source))
   .with_statistics(stats)
@@ -120,8 +124,6 @@ let config = FileScanConfigBuilder::new(url, schema, Arc::new(file_source))
   .build();
 let scan = DataSourceExec::from_data_source(config);
 ```
-
-
 
 ## DataFusion `46.0.0`
 
