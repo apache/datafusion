@@ -492,10 +492,9 @@ impl PushdownFilter {
                         tnr: TreeNodeRecursion::Stop,
                     })
                 } else {
-                    let children_len = node.children.len();
                     node = insert_filter_exec(
                         node,
-                        vec![FilterDescription::empty(); children_len],
+                        vec![FilterDescription::empty(); 1],
                         remaining_description,
                     )?;
                     Ok(Transformed {
