@@ -146,7 +146,8 @@ impl ScalarUDFImpl for GetFieldFunc {
                         // instead, we assume that the second column is the "value" column both here and in
                         // execution.
                         let value_field = fields.get(1).expect("fields should have exactly two members");
-                        Ok(value_field.as_ref().clone())
+
+                        Ok(value_field.as_ref().clone().with_nullable(true))
                     },
                     _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
                 }
@@ -159,7 +160,16 @@ impl ScalarUDFImpl for GetFieldFunc {
                     fields.iter().find(|f| f.name() == field_name)
                     .ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
                     .map(|f| {
-                        f.as_ref().clone()})
+                        let mut child_field = f.as_ref().clone();
+
+                        // If the parent is nullable, then getting the child must be nullable,
+                        // so potentially override the return value
+
+                        if args.arg_fields[0].is_nullable() {
+                            child_field = child_field.with_nullable(true);
+                        }
+                        child_field
+                    })
                 })
             },
             (DataType::Null, _) => Ok(Field::new(self.name(), DataType::Null, true)),
