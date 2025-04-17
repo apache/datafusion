@@ -24,7 +24,10 @@ use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION,
 };
 use arrow::util::pretty::pretty_format_batches;
-use datafusion::datasource::file_format::json::JsonFormatFactory;
+use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
 use datafusion::optimizer::Optimizer;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -2557,5 +2560,35 @@ async fn roundtrip_union_query() -> Result<()> {
         format!("{}", plan.display_indent_schema()),
         format!("{}", unnested.display_indent_schema()),
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
+    let ctx = SessionContext::new();
+    // Make sure during round-trip, constraint information is preserved
+    let file_format = JsonFormat::default();
+    let table_partition_cols = vec![("part".to_owned(), DataType::Int64)];
+    let data = "../core/tests/data/partitioned_table_json";
+    let listing_table_url = ListingTableUrl::parse(data)?;
+    let listing_options = ListingOptions::new(Arc::new(file_format))
+        .with_table_partition_cols(table_partition_cols);
+
+    let config = ListingTableConfig::new(listing_table_url)
+        .with_listing_options(listing_options)
+        .infer_schema(&ctx.state())
+        .await?;
+
+    ctx.register_table("hive_style", Arc::new(ListingTable::try_new(config)?))?;
+
+    let plan = ctx
+        .sql("SELECT part, value FROM hive_style LIMIT 1")
+        .await?
+        .logical_plan()
+        .clone();
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let new_plan = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(plan, new_plan);
     Ok(())
 }
