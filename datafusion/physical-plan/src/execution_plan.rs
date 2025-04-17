@@ -473,15 +473,31 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 
     /// Attempts to recursively push given filters from the top of the tree into leafs.
     ///
+    /// This is used for various optimizations, such as:
+    ///
+    /// * Pushing down filters into scans in general to minimize the amount of data that needs to be materialzied.
+    /// * Pushing down dynamic filters from operators like TopK and Joins into scans.
+    ///
+    /// Generally the further down (closer to leaf nodes) that filters can be pushed, the better.
+    ///
+    /// Consider the case of a query such as `SELECT * FROM t WHERE a = 1 AND b = 2`.
+    /// With no filter pushdown the scan needs to read and materialize all the data from `t` and then filter based on `a` and `b`.
+    /// With filter pushdown into the scan it can first read only `a`, then `b` and keep track of
+    /// which rows match the filter.
+    /// Then only for rows that match the filter does it have to materialize the rest of the columns.
+    ///
     /// # Default Implementation
     ///
     /// The default implementation assumes:
     /// * Parent filters can't be passed onto children.
     /// * This node has no filters to contribute.
     ///
+    /// # Implementation Notes
+    ///
+    /// Most of the actual logic is implemented as a Physical Optimizer rule.
     /// See [`PushdownFilter`] for more details.
     ///
-    /// [`PushdownFilter`]: datafusion_physical_optimizer::filter_pushdown::PushdownFilter
+    /// [`PushdownFilter`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/filter_pushdown/struct.PushdownFilter.html
     fn try_pushdown_filters(
         &self,
         fd: FilterDescription,

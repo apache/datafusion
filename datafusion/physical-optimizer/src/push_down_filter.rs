@@ -238,8 +238,8 @@ use datafusion_physical_plan::ExecutionPlan;
 /// ```
 ///
 /// The point here is that:
-/// 1. We cannot push down `sum > 10` through the `AggregateExec` node into the `DataSourceExec` node.
-///    Any filters above the `AggregateExec` node are not pushed down.
+/// 1. We cannot push down `sum > 10` through the [`AggregateExec`] node into the `DataSourceExec` node.
+///    Any filters above the [`AggregateExec`] node are not pushed down.
 ///    This is determined by calling [`ExecutionPlan::try_pushdown_filters`] on the [`AggregateExec`] node.
 /// 2. We need to keep recursing into the tree so that we can discover the other [`FilterExec`] node and push
 ///    down the `id=1` filter.
@@ -307,8 +307,7 @@ use datafusion_physical_plan::ExecutionPlan;
 /// building a specialized [`PhysicalExpr`] that can be evaluated at runtime
 /// and internally maintains a reference to the hash table or other state.
 ///
-/// To make working with these sorts of dynamic filters more tractable we have the method `PhysicalExpr::snapshot`
-/// (TODO: add reference after <https://github.com/apache/datafusion/pull/15568> is merged)
+/// To make working with these sorts of dynamic filters more tractable we have the method [`PhysicalExpr::snapshot`]
 /// which attempts to simplify a dynamic filter into a "basic" non-dynamic filter.
 /// For a join this could mean converting it to an `InList` filter or a min/max filter for example.
 /// See `datafusion/physical-plan/src/dynamic_filters.rs` for more details.
@@ -358,6 +357,7 @@ use datafusion_physical_plan::ExecutionPlan;
 /// <https://github.com/apache/datafusion/issues/15037>
 ///
 /// [`PhysicalExpr`]: datafusion_physical_plan::PhysicalExpr
+/// [`PhysicalExpr::snapshot`]: datafusion_physical_plan::PhysicalExpr::snapshot
 /// [`FilterExec`]: datafusion_physical_plan::filter::FilterExec
 /// [`ProjectionExec`]: datafusion_physical_plan::projection::ProjectionExec
 /// [`AggregateExec`]: datafusion_physical_plan::aggregates::AggregateExec

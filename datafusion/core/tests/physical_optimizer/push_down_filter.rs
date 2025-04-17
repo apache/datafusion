@@ -44,7 +44,7 @@ use datafusion_physical_expr::{
     aggregate::AggregateExprBuilder, conjunction, Partitioning,
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use datafusion_physical_optimizer::filter_pushdown::PushdownFilter;
+use datafusion_physical_optimizer::push_down_filter::PushdownFilter;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter_pushdown::{
     filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
