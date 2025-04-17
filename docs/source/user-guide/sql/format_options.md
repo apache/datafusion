@@ -37,12 +37,14 @@ If creating an external table, table-specific format options can be specified wh
 CREATE EXTERNAL TABLE
   my_table(a bigint, b bigint)
   STORED AS csv
-  LOCATION '/test/location/my_csv_table/'
+  LOCATION '/tmp/my_csv_table/'
   OPTIONS(
     NULL_VALUE 'NAN',
     'has_header' 'true',
     'format.delimiter' ';'
   );
+-- Inserting a row creates a new file in /tmp/my_csv_table
+INSERT INTO my_table VALUES(1,2);
 ```
 
 When running `INSERT INTO my_table ...`, the options from the `CREATE TABLE` will be respected (e.g., gzip compression, special delimiter, and header row included). Note that compression, header, and delimiter settings can also be specified within the `OPTIONS` tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified, the `OPTIONS` setting will be ignored.
@@ -60,50 +62,9 @@ COPY source_table
   )
 ```
 
-In this example, we write the entirety of `source_table` out to a folder of Parquet files. One Parquet file will be written in parallel to the folder for each partition in the query. The next option `compression` set to `snappy` indicates that unless otherwise specified, all columns should use the snappy compression codec. The option `compression::col1` sets an override, so that the column `col1` in the Parquet file will use the ZSTD compression codec with compression level `5`. In general, Parquet options that support column-specific settings can be specified with the syntax `OPTION::COLUMN.NESTED.PATH`.
+In this example, we write the entire `source_table` out to a folder of Parquet files. One Parquet file will be written in parallel to the folder for each partition in the query. The next option `compression` set to `snappy` indicates that unless otherwise specified, all columns should use the snappy compression codec. The option `compression::col1` sets an override, so that the column `col1` in the Parquet file will use the ZSTD compression codec with compression level `5`. In general, Parquet options that support column-specific settings can be specified with the syntax `OPTION::COLUMN.NESTED.PATH`.
 
 # Available Options
-
-## Execution-Specific Options
-
-The following options are available when executing a `COPY` query.
-
-| Option Key                                                  | Description                                                                                                  | Default Value |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------- |
-| execution.batch_size                                        | Default batch size while creating new batches.                                                               | 8192          |
-| execution.coalesce_batches                                  | Whether to coalesce small batches into larger ones between operators.                                        | true          |
-| execution.collect_statistics                                | Should DataFusion collect statistics after listing files.                                                    | false         |
-| execution.target_partitions                                 | Number of partitions for query execution. Defaults to number of CPU cores.                                   | (num_cpus)    |
-| execution.time_zone                                         | The default time zone (e.g., "+00:00").                                                                      | "+00:00"      |
-| execution.planning_concurrency                              | Fan-out during initial physical planning. Defaults to number of CPU cores.                                   | (num_cpus)    |
-| execution.skip_physical_aggregate_schema_check              | Skip verifying that the schema produced by planning the input of `Aggregate` matches the input plan.         | false         |
-| execution.sort_spill_reservation_bytes                      | Reserved memory for each spillable sort operation (bytes).                                                   | 10485760      |
-| execution.sort_in_place_threshold_bytes                     | Below what size should data be concatenated and sorted in a single RecordBatch (bytes).                      | 1048576       |
-| execution.meta_fetch_concurrency                            | Number of files to read in parallel when inferring schema and statistics.                                    | 32            |
-| execution.minimum_parallel_output_files                     | Guarantees a minimum level of output files running in parallel.                                              | 4             |
-| execution.soft_max_rows_per_output_file                     | Target number of rows in output files when writing multiple (soft max).                                      | 50000000      |
-| execution.max_buffered_batches_per_output_file              | Maximum number of RecordBatches buffered for each output file.                                               | 2             |
-| execution.listing_table_ignore_subdirectory                 | Should subdirectories be ignored when scanning directories for data files.                                   | true          |
-| execution.enable_recursive_ctes                             | Should DataFusion support recursive CTEs.                                                                    | true          |
-| execution.split_file_groups_by_statistics                   | Attempt to eliminate sorts by packing & sorting files with non-overlapping statistics into same file groups. | false         |
-| execution.keep_partition_by_columns                         | Should DataFusion keep the columns used for partition_by in the output RecordBatches.                        | false         |
-| execution.skip_partial_aggregation_probe_ratio_threshold    | Aggregation ratio threshold for skipping partial aggregation.                                                | 0.8           |
-| execution.skip_partial_aggregation_probe_rows_threshold     | Number of input rows partial aggregation partition should process before switching mode.                     | 100000        |
-| execution.use_row_number_estimates_to_optimize_partitioning | Use row number estimates to optimize partitioning.                                                           | false         |
-| execution.enforce_batch_size_in_joins                       | Should DataFusion enforce batch size in joins.                                                               | false         |
-
-**Usage Example:**
-
-```sql
-COPY my_table TO '/tmp/output.csv'
-OPTIONS (
-  'execution.batch_size' '4096',
-  'execution.target_partitions' '8',
-  'execution.keep_partition_by_columns' 'true'
-);
-```
-
-Note: `execution.keep_partition_by_columns` flag can also be enabled through `ExecutionOptions` within `SessionConfig`.
 
 ## JSON Format Options
 
@@ -120,8 +81,6 @@ CREATE EXTERNAL TABLE t(a int)
 STORED AS JSON
 LOCATION '/tmp/foo/'
 OPTIONS('COMPRESSION' 'gzip');
--- Inserting arow creates a new file in /tmp/foo
-INSERT INTO t VALUES(1);
 ```
 
 ## CSV Format Options
