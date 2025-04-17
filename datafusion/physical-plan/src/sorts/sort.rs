@@ -1763,7 +1763,7 @@ mod tests {
     async fn test_sort_spill_utf8_strings() -> Result<()> {
         let session_config = SessionConfig::new()
             .with_batch_size(100)
-            .with_sort_in_place_threshold_bytes(20 * 1024)
+            .with_sort_in_place_threshold_bytes(0)
             .with_sort_spill_reservation_bytes(100 * 1024);
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(500 * 1024, 1.0)
