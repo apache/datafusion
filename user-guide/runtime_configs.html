@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Frequently Asked Questions &#8212; Apache DataFusion  documentation</title>
+    <title>Runtime Environment Configurations &#8212; Apache DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -33,8 +33,8 @@
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Introduction" href="../library-user-guide/index.html" />
-    <link rel="prev" title="Reading Explain Plans" href="explain-usage.html" />
+    <link rel="next" title="Reading Explain Plans" href="explain-usage.html" />
+    <link rel="prev" title="Configuration Settings" href="configs.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -294,8 +294,8 @@
    Configuration Settings
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="runtime_configs.html">
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
    Runtime Environment Configurations
   </a>
  </li>
@@ -304,8 +304,8 @@
    Reading Explain Plans
   </a>
  </li>
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
+ <li class="toctree-l1">
+  <a class="reference internal" href="faq.html">
    Frequently Asked Questions
   </a>
  </li>
@@ -521,37 +521,9 @@
               
               <div class="toc-item">
                 
-<div class="tocsection onthispage pt-5 pb-3">
-    <i class="fas fa-list"></i> On this page
-</div>
 
 <nav id="bd-toc-nav">
-    <ul class="visible nav section-nav flex-column">
- <li class="toc-h1 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#">
-   Frequently Asked Questions
-  </a>
-  <ul class="visible nav section-nav flex-column">
-   <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#what-is-the-relationship-between-apache-arrow-datafusion-and-ballista">
-     What is the relationship between Apache Arrow, DataFusion, and Ballista?
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toc-h1 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#how-does-datafusion-compare-with-xyz">
-   How does DataFusion Compare with
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     XYZ
-    </span>
-   </code>
-   ?
-  </a>
- </li>
-</ul>
-
+    
 </nav>
               </div>
               
@@ -559,7 +531,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/faq.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/runtime_configs.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -596,49 +568,33 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="frequently-asked-questions">
-<h1>Frequently Asked Questions<a class="headerlink" href="#frequently-asked-questions" title="Link to this heading">¶</a></h1>
-<section id="what-is-the-relationship-between-apache-arrow-datafusion-and-ballista">
-<h2>What is the relationship between Apache Arrow, DataFusion, and Ballista?<a class="headerlink" href="#what-is-the-relationship-between-apache-arrow-datafusion-and-ballista" title="Link to this heading">¶</a></h2>
-<p>Apache Arrow is a library which provides a standardized memory representation for columnar data. It also provides
-“kernels” for performing common operations on this data.</p>
-<p>DataFusion is a library for executing queries in-process using the Apache Arrow memory
-model and computational kernels. It is designed to run within a single process, using threads
-for parallel query execution.</p>
-<p><a class="reference external" href="https://github.com/apache/datafusion-ballista">Ballista</a> is a distributed compute platform built on DataFusion.</p>
-</section>
-</section>
-<section id="how-does-datafusion-compare-with-xyz">
-<h1>How does DataFusion Compare with <code class="docutils literal notranslate"><span class="pre">XYZ</span></code>?<a class="headerlink" href="#how-does-datafusion-compare-with-xyz" title="Link to this heading">¶</a></h1>
-<p>When compared to similar systems, DataFusion typically is:</p>
-<ol class="arabic simple">
-<li><p>Targeted at developers, rather than end users / data scientists.</p></li>
-<li><p>Designed to be embedded, rather than a complete file based SQL system.</p></li>
-<li><p>Governed by the <a class="reference external" href="https://www.apache.org/">Apache Software Foundation</a> process, rather than a single company or individual.</p></li>
-<li><p>Implemented in <code class="docutils literal notranslate"><span class="pre">Rust</span></code>, rather than <code class="docutils literal notranslate"><span class="pre">C/C++</span></code></p></li>
-</ol>
-<p>Here is a comparison with similar projects that may help understand
-when DataFusion might be suitable or unsuitable for your needs:</p>
-<ul class="simple">
-<li><p><a class="reference external" href="https://www.duckdb.org">DuckDB</a> is an open source, in process analytic database.
-Like DataFusion, it supports very fast execution, both from its custom file format
-and directly from parquet files. Unlike DataFusion, it is written in C/C++ and it
-is primarily used directly by users as a serverless database and query system rather
-than as a library for building such database systems.</p></li>
-<li><p><a class="reference external" href="http://pola.rs">Polars</a>: Polars is one of the fastest DataFrame
-libraries at the time of writing. Like DataFusion, it is also
-written in Rust and uses the Apache Arrow memory model, but unlike
-DataFusion it is not designed with as many extension points.</p></li>
-<li><p><a class="reference external" href="https://github.com/facebookincubator/velox">Facebook Velox</a>
-is an execution engine. Like DataFusion, Velox aims to
-provide a reusable foundation for building database-like systems. Unlike DataFusion,
-it is written in C/C++ and does not include a SQL frontend or planning / optimization
-framework.</p></li>
-<li><p><a class="reference external" href="https://github.com/datafuselabs/databend">Databend</a> is a complete
-database system. Like DataFusion it is also written in Rust and
-utilizes the Apache Arrow memory model, but unlike DataFusion it
-targets end-users rather than developers of other database systems.</p></li>
-</ul>
+<!---
+This file was generated by the dev/update_runtime_config_docs.sh script.
+Do not edit it manually as changes will be overwritten.
+Instead, edit dev/update_runtime_config_docs.sh or the docstrings in datafusion/execution/src/runtime_env.rs.
+-->
+<section id="runtime-environment-configurations">
+<h1>Runtime Environment Configurations<a class="headerlink" href="#runtime-environment-configurations" title="Link to this heading">¶</a></h1>
+<p>DataFusion runtime configurations can be set via SQL using the <code class="docutils literal notranslate"><span class="pre">SET</span></code> command.</p>
+<p>For example, to configure <code class="docutils literal notranslate"><span class="pre">datafusion.runtime.memory_limit</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">runtime</span><span class="p">.</span><span class="n">memory_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;2G&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The following runtime configuration settings are available:</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>key</p></th>
+<th class="head"><p>default</p></th>
+<th class="head"><p>description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>datafusion.runtime.memory_limit</p></td>
+<td><p>NULL</p></td>
+<td><p>Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: ‘2G’ for 2 gigabytes.</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 
 
@@ -647,17 +603,17 @@ targets end-users rather than developers of other database systems.</p></li>
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="explain-usage.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="configs.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Reading Explain Plans</p>
+            <p class="prev-next-title">Configuration Settings</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="../library-user-guide/index.html" title="next page">
+    <a class='right-next' id="next-link" href="explain-usage.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Introduction</p>
+        <p class="prev-next-title">Reading Explain Plans</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
