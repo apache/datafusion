@@ -43,7 +43,7 @@ Additionally `ObjectStore::list` and `ObjectStore::list_with_offset` have been c
 This requires converting from `usize` to `u64` occasionally as well as changes to `ObjectStore` implementations such as
 
 ```rust
-# /*
+# /* comment to avoid running
 impl Objectstore {
     ...
     // The range is now a u64 instead of usize
@@ -68,7 +68,7 @@ The `ParquetObjectReader` has been updated to no longer require the object size
 Pattern in DataFusion `46.0.0`:
 
 ```rust
-# /*
+# /* comment to avoid running
 let meta: ObjectMeta = ...;
 let reader = ParquetObjectReader::new(store, meta);
 # */
@@ -77,7 +77,7 @@ let reader = ParquetObjectReader::new(store, meta);
 Pattern in DataFusion `47.0.0`:
 
 ```rust
-# /*
+# /* comment to avoid running
 let meta: ObjectMeta = ...;
 let reader = ParquetObjectReader::new(store, location)
   .with_file_size(meta.size);
@@ -115,20 +115,24 @@ DataFusion 47.0.0 this has been changed to use `FileScanConfigBuilder`. See
 Pattern in DataFusion `46.0.0`:
 
 ```rust
+# /* comment to avoid running
 let plan = FileScanConfig::new(url, schema, Arc::new(file_source))
   .with_statistics(stats)
   ...
   .build()
+# */
 ```
 
 Pattern in DataFusion `47.0.0`:
 
 ```rust
+# /* comment to avoid running
 let config = FileScanConfigBuilder::new(url, schema, Arc::new(file_source))
   .with_statistics(stats)
   ...
   .build();
 let scan = DataSourceExec::from_data_source(config);
+# */
 ```
 
 ## DataFusion `46.0.0`
@@ -151,7 +155,7 @@ below. See [PR 14876] for an example.
 Given existing code like this:
 
 ```rust
-# /*
+# /* comment to avoid running
 impl ScalarUDFImpl for SparkConcat {
 ...
     fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
@@ -171,7 +175,7 @@ impl ScalarUDFImpl for SparkConcat {
 To
 
 ```rust
-# /* comment out so they don't run
+# /* comment to avoid running
 impl ScalarUDFImpl for SparkConcat {
     ...
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
