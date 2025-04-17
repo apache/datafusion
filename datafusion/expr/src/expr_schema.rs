@@ -354,6 +354,32 @@ impl ExprSchemable for Expr {
                 Ok(ret)
             }
             Expr::Cast(Cast { expr, .. }) => expr.metadata(schema),
+            Expr::ScalarFunction(func) => {
+                let arg_fields = func
+                    .args
+                    .iter()
+                    .map(|e| {
+                        e.to_field(schema).map(|(_, f)| f.as_ref().clone()).or({
+                            let (data_type, nullable) =
+                                e.data_type_and_nullable(schema)?;
+                            Ok(Field::new("arg", data_type, nullable))
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let scalar_arguments = func
+                    .args
+                    .iter()
+                    .map(|e| match e {
+                        Expr::Literal(sv) => Some(sv),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let output_field = func.func.return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &arg_fields,
+                    scalar_arguments: &scalar_arguments,
+                })?;
+                Ok(output_field.metadata().clone())
+            }
             _ => Ok(HashMap::new()),
         }
     }

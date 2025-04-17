@@ -158,7 +158,8 @@ impl ScalarUDFImpl for GetFieldFunc {
                     |field_name| {
                     fields.iter().find(|f| f.name() == field_name)
                     .ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
-                    .map(|f| f.as_ref().clone())
+                    .map(|f| {
+                        f.as_ref().clone()})
                 })
             },
             (DataType::Null, _) => Ok(Field::new(self.name(), DataType::Null, true)),
