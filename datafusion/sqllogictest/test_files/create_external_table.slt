@@ -297,3 +297,21 @@ CREATE EXTERNAL TABLE staging.foo STORED AS parquet LOCATION '../../parquet-test
 # Create external table with qualified name, but no schema should error
 statement error DataFusion error: Error during planning: failed to resolve schema: release
 CREATE EXTERNAL TABLE release.bar STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+
+
+statement ok
+set datafusion.execution.parquet.coerce_int96 = ms;
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+# Print schema
+query TTT
+describe int96_from_spark;
+----
+a Timestamp(Millisecond, None) YES
+
+statement ok
+set datafusion.execution.parquet.coerce_int96 = ns;
