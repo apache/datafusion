@@ -171,6 +171,7 @@ impl ScalarUDFImpl for ToCharFunc {
 }
 
 fn _build_format_options<'a>(
+    // todo!
     data_type: &DataType,
     format: Option<&'a str>,
 ) -> Result<FormatOptions<'a>, Result<ColumnarValue>> {

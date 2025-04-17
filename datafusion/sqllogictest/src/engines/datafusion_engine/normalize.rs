@@ -22,7 +22,7 @@ use arrow::array::{Array, AsArray};
 use arrow::datatypes::Fields;
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
-use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
+use datafusion::common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion::common::DataFusionError;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -239,8 +239,7 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
                 Ok(cell_to_string(dict.values(), key)?)
             }
             _ => {
-                let f =
-                    ArrayFormatter::try_new(col.as_ref(), &DEFAULT_CLI_FORMAT_OPTIONS);
+                let f = ArrayFormatter::try_new(col.as_ref(), &DEFAULT_FORMAT_OPTIONS);
                 Ok(f.unwrap().value(row).to_string())
             }
         }

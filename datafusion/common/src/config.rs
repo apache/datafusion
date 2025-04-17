@@ -17,16 +17,15 @@
 
 //! Runtime configuration, via [`ConfigOptions`]
 
+use crate::error::_config_err;
+use crate::parsers::CompressionTypeVariant;
+use crate::utils::get_available_parallelism;
+use crate::{DataFusionError, Result};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
-
-use crate::error::_config_err;
-use crate::parsers::CompressionTypeVariant;
-use crate::utils::get_available_parallelism;
-use crate::{DataFusionError, Result};
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -114,7 +113,7 @@ macro_rules! config_namespace {
         $(#[doc = $struct_d:tt])* // Struct-level documentation attributes
         $(#[deprecated($($struct_depr:tt)*)])? // Optional struct-level deprecated attribute
         $(#[allow($($struct_de:tt)*)])?
-        $vis:vis struct $struct_name:ident {
+        $vis:vis struct $struct_name:ident $(<$lt:lifetime>)? {
             $(
                 $(#[doc = $d:tt])* // Field-level documentation attributes
                 $(#[deprecated($($field_depr:tt)*)])? // Optional field-level deprecated attribute
@@ -130,7 +129,7 @@ macro_rules! config_namespace {
         $(#[deprecated($($struct_depr)*)])? // Apply struct deprecation
         $(#[allow($($struct_de)*)])?
         #[derive(Debug, Clone, PartialEq)]
-        $vis struct $struct_name {
+        $vis struct $struct_name $(<$lt>)? {
             $(
                 $(#[doc = $d])* // Apply field documentation
                 $(#[deprecated($($field_depr)*)])? // Apply field deprecation
@@ -139,7 +138,7 @@ macro_rules! config_namespace {
             )*
         }
 
-        impl $crate::config::ConfigField for $struct_name {
+        impl $(<$lt>)?  $crate::config::ConfigField for $struct_name $(<$lt>)? {
             fn set(&mut self, key: &str, value: &str) -> $crate::error::Result<()> {
                 let (key, rem) = key.split_once('.').unwrap_or((key, ""));
                 match key {
@@ -735,6 +734,7 @@ config_namespace! {
 
         /// Display format of explain. Default is "indent".
         /// When set to "tree", it will print the plan in a tree-rendered format.
+        /// No need to normalize because ExplainFormat is case-insensitive
         pub format: String, default = "indent".to_string()
     }
 }
@@ -749,6 +749,59 @@ impl ExecutionOptions {
         } else {
             value.to_owned()
         }
+    }
+}
+
+config_namespace! {
+    /// Options controlling the format of output when printing record batches
+    /// Copies [`arrow::util::display::FormatOptions`]
+    pub struct FormatOptions {
+        /// If set to `true` any formatting errors will be written to the output
+        /// instead of being converted into a [`std::fmt::Error`]
+        safe: bool, default = true
+        /// Format string for nulls
+        null: String, default = "NULL".into()
+        /// Date format for date arrays
+        date_format: Option<String>, default = None
+        /// Format for DateTime arrays
+        datetime_format: Option<String>, default = None
+        /// Timestamp format for timestamp arrays
+        timestamp_format: Option<String>, default = None
+        /// Timestamp format for timestamp with timezone arrays
+        timestamp_tz_format: Option<String>, default = None
+        /// Time format for time arrcays
+        time_format: Option<String>, default = None
+        /// Duration format. Can be either Pretty or ISO8601
+        duration_format: String, default = "pretty".into()
+        /// Show types in visual representation batches
+        types_info: bool, default = false
+    }
+}
+
+impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions {
+    type Error = DataFusionError;
+    fn try_into(self) -> Result<arrow::util::display::FormatOptions<'a>> {
+        let duration_format = match self.duration_format.as_str() {
+            "pretty" => arrow::util::display::DurationFormat::Pretty,
+            "iso8601" => arrow::util::display::DurationFormat::ISO8601,
+            _ => {
+                return _config_err!(
+                    "Invalid duration format: {}. Valid values are pretty or iso8601",
+                    self.duration_format
+                )
+            }
+        };
+
+        Ok(arrow::util::display::FormatOptions::new()
+            .with_display_error(self.safe)
+            .with_null(&self.null)
+            .with_date_format(self.date_format.as_deref())
+            .with_datetime_format(self.datetime_format.as_deref())
+            .with_timestamp_format(self.timestamp_format.as_deref())
+            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
+            .with_time_format(self.time_format.as_deref())
+            .with_duration_format(duration_format)
+            .with_types_info(self.types_info))
     }
 }
 
@@ -781,6 +834,8 @@ pub struct ConfigOptions {
     pub explain: ExplainOptions,
     /// Optional extensions registered using [`Extensions::insert`]
     pub extensions: Extensions,
+    /// Formatting options when printing batches
+    pub format: FormatOptions,
 }
 
 impl ConfigField for ConfigOptions {
@@ -793,6 +848,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
+            "format" => self.format.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -803,6 +859,7 @@ impl ConfigField for ConfigOptions {
         self.optimizer.visit(v, "datafusion.optimizer", "");
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
+        self.format.visit(v, "datafusion.format", "");
     }
 }
 
@@ -1995,11 +2052,11 @@ config_namespace! {
     }
 }
 
-pub trait FormatOptionsExt: Display {}
+pub trait OutputFormatExt: Display {}
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
-pub enum FormatOptions {
+pub enum OutputFormat {
     CSV(CsvOptions),
     JSON(JsonOptions),
     #[cfg(feature = "parquet")]
@@ -2008,15 +2065,15 @@ pub enum FormatOptions {
     ARROW,
 }
 
-impl Display for FormatOptions {
+impl Display for OutputFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let out = match self {
-            FormatOptions::CSV(_) => "csv",
-            FormatOptions::JSON(_) => "json",
+            OutputFormat::CSV(_) => "csv",
+            OutputFormat::JSON(_) => "json",
             #[cfg(feature = "parquet")]
-            FormatOptions::PARQUET(_) => "parquet",
-            FormatOptions::AVRO => "avro",
-            FormatOptions::ARROW => "arrow",
+            OutputFormat::PARQUET(_) => "parquet",
+            OutputFormat::AVRO => "avro",
+            OutputFormat::ARROW => "arrow",
         };
         write!(f, "{}", out)
     }

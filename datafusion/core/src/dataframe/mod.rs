@@ -1366,8 +1366,16 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn show(self) -> Result<()> {
+        let options = self.session_state.config().options().format.clone();
+        let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
+
         let results = self.collect().await?;
-        Ok(pretty::print_batches(&results)?)
+        println!(
+            "{}",
+            pretty::pretty_format_batches_with_options(&results, &arrow_options)?
+        );
+
+        Ok(())
     }
 
     /// Execute the `DataFrame` and print only the first `num` rows of the
