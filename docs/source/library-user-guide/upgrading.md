@@ -29,7 +29,7 @@ Here are some example upgrade PRs that demonstrate some changed required when up
 - [DataFusion Comet Upgrade to `47.0.0`](https://github.com/apache/datafusion-comet/pull/1563)
 - [Sail Upgrade to `47.0.0`](https://github.com/lakehq/sail/pull/434)
 
-### Upgrades to `arrow` and `parquet` 55.0.0 and `object_store` 0.12.0
+### Upgrades to `arrow-rs` and `arrow-parquet` 55.0.0 and `object_store` 0.12.0
 
 Several APIs are changed in the underlying arrow and parquet libraries to use a
 `u64` instead of `usize` to better support WASM (See [#7371] and [#6961])
