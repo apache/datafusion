@@ -43,11 +43,23 @@ CREATE EXTERNAL TABLE
     'has_header' 'true',
     'format.delimiter' ';'
   );
--- Inserting a row creates a new file in /tmp/my_csv_table
-INSERT INTO my_table VALUES(1,2);
 ```
 
 When running `INSERT INTO my_table ...`, the options from the `CREATE TABLE` will be respected (e.g., gzip compression, special delimiter, and header row included). Note that compression, header, and delimiter settings can also be specified within the `OPTIONS` tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified, the `OPTIONS` setting will be ignored.
+
+For example, with the table defined above, running the following command:
+
+```sql
+INSERT INTO my_table VALUES(1,2);
+```
+
+Results in a new CSV file with the specified options:
+
+```shell
+$ cat /tmp/my_csv_table/bmC8zWFvLMtWX68R_0.csv
+a;b
+1;2
+```
 
 Finally, options can be passed when running a `COPY` command.
 
