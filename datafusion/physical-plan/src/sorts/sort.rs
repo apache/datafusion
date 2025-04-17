@@ -89,8 +89,9 @@ impl ExternalSorterMetrics {
 /// 1. get a non-empty new batch from input
 ///
 /// 2. check with the memory manager there is sufficient space to
-///    buffer the batch in memory 2.1 if memory sufficient, buffer
-///    batch in memory, go to 1.
+///    buffer the batch in memory.
+///
+/// 2.1 if memory is sufficient, buffer batch in memory, go to 1.
 ///
 /// 2.2 if no more memory is available, sort all buffered batches and
 ///     spill to file.  buffer the next batch in memory, go to 1.
