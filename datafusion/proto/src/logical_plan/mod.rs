@@ -355,10 +355,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .as_ref()
                     .map(|expr| from_proto::parse_expr(expr, ctx, extension_codec))
                     .transpose()?
-                    .ok_or_else(|| {
-                        DataFusionError::Internal("expression required".to_string())
-                    })?;
-                // .try_into()?;
+                    .ok_or_else(|| proto_error("expression required"))?;
                 LogicalPlanBuilder::from(input).filter(expr)?.build()
             }
             LogicalPlanType::Window(window) => {
@@ -464,7 +461,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|col| {
                         let Some(arrow_type) = col.arrow_type.as_ref() else {
                             return Err(proto_error(
-                                "Missing Arrow type in partition columns".to_string(),
+                                "Missing Arrow type in partition columns",
                             ));
                         };
                         let arrow_type = DataType::try_from(arrow_type).map_err(|e| {
