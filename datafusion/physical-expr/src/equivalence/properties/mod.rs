@@ -155,10 +155,10 @@ impl EquivalenceProperties {
     /// Creates an empty `EquivalenceProperties` object.
     pub fn new(schema: SchemaRef) -> Self {
         Self {
-            eq_group: EquivalenceGroup::empty(),
-            oeq_class: OrderingEquivalenceClass::empty(),
+            eq_group: EquivalenceGroup::default(),
+            oeq_class: OrderingEquivalenceClass::default(),
             constants: vec![],
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             schema,
         }
     }
@@ -176,10 +176,10 @@ impl EquivalenceProperties {
     ) -> Self {
         let orderings = orderings.into_iter().filter_map(LexOrdering::new).collect();
         Self {
-            eq_group: EquivalenceGroup::empty(),
+            eq_group: EquivalenceGroup::default(),
             oeq_class: OrderingEquivalenceClass::new(orderings),
             constants: vec![],
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             schema,
         }
     }
@@ -1122,9 +1122,7 @@ impl EquivalenceProperties {
         let eq_group = self.eq_group.project(mapping);
         let oeq_class = OrderingEquivalenceClass::new(self.projected_orderings(mapping));
         let constants = self.projected_constants(mapping);
-        let constraints = self
-            .projected_constraints(mapping)
-            .unwrap_or_else(Constraints::empty);
+        let constraints = self.projected_constraints(mapping).unwrap_or_default();
         Self {
             schema: output_schema,
             eq_group,

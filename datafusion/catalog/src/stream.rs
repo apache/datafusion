@@ -256,7 +256,7 @@ impl StreamConfig {
         Self {
             source,
             order: vec![],
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
         }
     }
 

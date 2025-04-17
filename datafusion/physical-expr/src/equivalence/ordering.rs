@@ -40,17 +40,12 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 ///
 /// Here, both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the table
 /// ordering. In this case, we say that these orderings are equivalent.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct OrderingEquivalenceClass {
     orderings: Vec<LexOrdering>,
 }
 
 impl OrderingEquivalenceClass {
-    /// Creates new empty ordering equivalence class.
-    pub fn empty() -> Self {
-        Default::default()
-    }
-
     /// Clears (empties) this ordering equivalence class.
     pub fn clear(&mut self) {
         self.orderings.clear();

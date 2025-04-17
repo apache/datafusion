@@ -615,7 +615,7 @@ impl FileScanConfig {
             object_store_url,
             file_schema,
             file_groups: vec![],
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             projection: None,
             limit: None,
             table_partition_cols: vec![],
@@ -704,10 +704,7 @@ impl FileScanConfig {
 
     pub fn projected_constraints(&self) -> Constraints {
         let indexes = self.projection_indices();
-
-        self.constraints
-            .project(&indexes)
-            .unwrap_or_else(Constraints::empty)
+        self.constraints.project(&indexes).unwrap_or_default()
     }
 
     /// Set the projection of the files
@@ -2174,7 +2171,6 @@ mod tests {
                 wrap_partition_type_in_dict(DataType::Utf8),
                 false,
             )])
-            .with_constraints(Constraints::empty())
             .with_statistics(Statistics::new_unknown(&file_schema))
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "test.parquet".to_string(),

@@ -766,7 +766,7 @@ impl ListingTable {
             options,
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
         };
 

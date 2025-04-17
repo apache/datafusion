@@ -36,22 +36,18 @@ pub enum Constraint {
 }
 
 /// This object encapsulates a list of functional constraints:
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq, PartialOrd)]
 pub struct Constraints {
     inner: Vec<Constraint>,
 }
 
 impl Constraints {
-    /// Create empty constraints
-    pub fn empty() -> Self {
-        Constraints::new_unverified(vec![])
-    }
-
     /// Create a new [`Constraints`] object from the given `constraints`.
-    /// Users should use the [`Constraints::empty`] or [`SqlToRel::new_constraint_from_table_constraints`] functions
-    /// for constructing [`Constraints`]. This constructor is for internal
-    /// purposes only and does not check whether the argument is valid. The user
-    /// is responsible for supplying a valid vector of [`Constraint`] objects.
+    /// Users should use the [`Constraints::default`] or [`SqlToRel::new_constraint_from_table_constraints`]
+    /// functions for constructing [`Constraints`] instances. This constructor
+    /// is for internal purposes only and does not check whether the argument
+    /// is valid. The user is responsible for supplying a valid vector of
+    /// [`Constraint`] objects.
     ///
     /// [`SqlToRel::new_constraint_from_table_constraints`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/struct.SqlToRel.html#method.new_constraint_from_table_constraints
     pub fn new_unverified(constraints: Vec<Constraint>) -> Self {
@@ -90,12 +86,6 @@ impl Constraints {
             .collect::<Vec<_>>();
 
         (!projected.is_empty()).then_some(Constraints::new_unverified(projected))
-    }
-}
-
-impl Default for Constraints {
-    fn default() -> Self {
-        Constraints::empty()
     }
 }
 

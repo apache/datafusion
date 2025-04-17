@@ -86,7 +86,7 @@ impl MemTable {
                 .into_iter()
                 .map(|e| Arc::new(RwLock::new(e)))
                 .collect::<Vec<_>>(),
-            constraints: Constraints::empty(),
+            constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             sort_order: Arc::new(Mutex::new(vec![])),
         })

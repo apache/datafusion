@@ -173,7 +173,7 @@ pub fn const_exprs_contains(
 ///
 /// Two `EquivalenceClass`es are equal if they contains the same expressions in
 /// without any ordering.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EquivalenceClass {
     /// The expressions in this equivalence class. The order doesn't matter for
     /// equivalence purposes.
@@ -181,13 +181,6 @@ pub struct EquivalenceClass {
 }
 
 impl EquivalenceClass {
-    /// Create a new empty equivalence class.
-    pub fn new_empty() -> Self {
-        Self {
-            exprs: IndexSet::new(),
-        }
-    }
-
     // Create a new equivalence class from a pre-existing collection.
     pub fn new(exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>) -> Self {
         Self {
@@ -272,17 +265,12 @@ impl From<EquivalenceClass> for Vec<Arc<dyn PhysicalExpr>> {
 }
 
 /// A collection of distinct `EquivalenceClass`es
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct EquivalenceGroup {
     classes: Vec<EquivalenceClass>,
 }
 
 impl EquivalenceGroup {
-    /// Creates an empty equivalence group.
-    pub fn empty() -> Self {
-        Self { classes: vec![] }
-    }
-
     /// Creates an equivalence group from the given equivalence classes.
     pub fn new(classes: Vec<EquivalenceClass>) -> Self {
         let mut result = Self { classes };
@@ -501,7 +489,7 @@ impl EquivalenceGroup {
 
         // The key is the source expression, and the value is the equivalence
         // class that contains the corresponding target expression.
-        let mut new_classes: IndexMap<_, _> = IndexMap::new();
+        let mut new_classes = IndexMap::<_, EquivalenceClass>::new();
         for (source, target) in mapping.iter() {
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and
@@ -511,7 +499,7 @@ impl EquivalenceGroup {
             let normalized_expr = self.normalize_expr(Arc::clone(source));
             new_classes
                 .entry(normalized_expr)
-                .or_insert_with(EquivalenceClass::new_empty)
+                .or_default()
                 .push(Arc::clone(target));
         }
         // Only add equivalence classes with at least two members as singleton
@@ -970,7 +958,7 @@ mod tests {
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
         ]));
-        let mut group = EquivalenceGroup::empty();
+        let mut group = EquivalenceGroup::default();
         group.add_equal_conditions(&col("a", &schema)?, &col("b", &schema)?);
 
         let projected_schema = Arc::new(Schema::new(vec![
