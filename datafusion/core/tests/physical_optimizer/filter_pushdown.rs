@@ -154,16 +154,21 @@ impl FileSource for TestSource {
 
     fn try_pushdown_filters(
         &self,
-        fd: FilterDescription,
+        mut fd: FilterDescription,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn FileSource>>> {
         if self.support && config.execution.parquet.pushdown_filters {
+            if let Some(internal) = self.predicate.as_ref() {
+                fd.filters.push(Arc::clone(internal));
+            }
+            let all_filters = fd.take_description();
+
             Ok(FilterPushdownResult {
                 support: FilterPushdownSupport::Supported {
                     child_descriptions: vec![],
                     op: Arc::new(TestSource {
                         support: true,
-                        predicate: Some(conjunction(fd.filters)),
+                        predicate: Some(conjunction(all_filters)),
                         statistics: self.statistics.clone(), // should be updated in reality
                     }),
                     revisit: false,
@@ -201,10 +206,10 @@ fn test_pushdown_into_scan() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
-        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "
     );
 }
@@ -212,7 +217,7 @@ fn test_pushdown_into_scan() {
 /// Show that we can use config options to determine how to do pushdown.
 #[test]
 fn test_pushdown_into_scan_with_config_options() {
-    let scan = test_scan(false);
+    let scan = test_scan(true);
     let predicate = col_lit_predicate("a", "foo", schema());
     let plan = Arc::new(FilterExec::try_new(predicate, scan).unwrap()) as _;
 
@@ -227,11 +232,11 @@ fn test_pushdown_into_scan_with_config_options() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
-        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - FilterExec: a@0 = foo
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
     "
     );
 
@@ -246,11 +251,10 @@ fn test_pushdown_into_scan_with_config_options() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
-        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - FilterExec: a@0 = foo
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "
     );
 }
@@ -271,10 +275,10 @@ fn test_filter_collapse() {
       input:
         - FilterExec: b@1 = bar
         -   FilterExec: a@0 = foo
-        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=b@1 = bar AND a@0 = foo
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar AND a@0 = foo
     "
     );
 }
@@ -297,12 +301,12 @@ fn test_filter_with_projection() {
         @r"
     OptimizationTest:
       input:
-        - FilterExec: a@1 = foo, projection=[b@1, a@0]
-        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+        - FilterExec: a@0 = foo, projection=[b@1, a@0]
+        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - ProjectionExec: expr=[b@1 as b, a@0 as a]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@1 = foo
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     ",
     );
 
@@ -321,11 +325,11 @@ fn test_filter_with_projection() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo, projection=[b@1]
-        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - ProjectionExec: expr=[b@1 as b]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "
     );
 }
@@ -340,7 +344,7 @@ fn test_push_down_through_transparent_nodes() {
     let repartition = Arc::new(
         RepartitionExec::try_new(filter, Partitioning::RoundRobinBatch(1)).unwrap(),
     );
-    let predicate = col_lit_predicate("a", "bar", schema());
+    let predicate = col_lit_predicate("b", "bar", schema());
     let plan = Arc::new(FilterExec::try_new(predicate, repartition).unwrap());
 
     // expect the predicate to be pushed down into the DataSource
@@ -349,16 +353,16 @@ fn test_push_down_through_transparent_nodes() {
         @r"
     OptimizationTest:
       input:
-        - FilterExec: a@0 = bar
+        - FilterExec: b@1 = bar
         -   RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=0
         -     FilterExec: a@0 = foo
         -       CoalesceBatchesExec: target_batch_size=1
-        -         DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+        -         DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=0
           -   CoalesceBatchesExec: target_batch_size=1
-          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = bar AND a@0 = foo
+          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar AND a@0 = foo
     "
     );
 }
@@ -371,9 +375,10 @@ fn test_no_pushdown_through_aggregates() {
     // 2. The inner filter **is** pushed down into the DataSource.
     let scan = test_scan(true);
 
+    let coalesce = Arc::new(CoalesceBatchesExec::new(scan, 10));
+
     let filter = Arc::new(
-        FilterExec::try_new(col_lit_predicate("a", "foo", schema()), scan.clone())
-            .unwrap(),
+        FilterExec::try_new(col_lit_predicate("a", "foo", schema()), coalesce).unwrap(),
     );
 
     let aggregate_expr =
@@ -403,7 +408,7 @@ fn test_no_pushdown_through_aggregates() {
 
     let coalesce = Arc::new(CoalesceBatchesExec::new(aggregate, 100));
 
-    let predicate = col_lit_predicate("a", "foo", schema());
+    let predicate = col_lit_predicate("b", "bar", schema());
     let plan = Arc::new(FilterExec::try_new(predicate, coalesce).unwrap());
 
     // expect the predicate to be pushed down into the DataSource
@@ -412,15 +417,19 @@ fn test_no_pushdown_through_aggregates() {
         @r"
     OptimizationTest:
       input:
-        - FilterExec: a@0 = foo
-        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([0])
-        -     FilterExec: a@0 = foo
-        -       DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test
+        - FilterExec: b@1 = bar
+        -   CoalesceBatchesExec: target_batch_size=100
+        -     AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([0])
+        -       FilterExec: a@0 = foo
+        -         CoalesceBatchesExec: target_batch_size=10
+        -           DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - FilterExec: a@0 = foo
-          -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
-          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, predicate=a@0 = foo
+          - FilterExec: b@1 = bar
+          -   CoalesceBatchesExec: target_batch_size=100
+          -     AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
+          -       CoalesceBatchesExec: target_batch_size=10
+          -         DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "
     );
 }

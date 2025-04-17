@@ -18,7 +18,8 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_plan::filter::FilterExec;
@@ -380,7 +381,27 @@ impl PhysicalOptimizerRule for PushdownFilter {
         let context = FilterDescriptionContext::new_default(plan);
 
         context
-            .transform_down(|node| Self::try_pushdown(node, config))
+            .transform_up(|node| {
+                if node.plan.as_any().downcast_ref::<FilterExec>().is_some() {
+                    let initial_plan = Arc::clone(&node.plan);
+                    let mut accept_updated = false;
+                    let updated_node = node.transform_down(|filter_node| {
+                        Self::try_pushdown(filter_node, config, &mut accept_updated)
+                    });
+
+                    if accept_updated {
+                        updated_node
+                    } else {
+                        Ok(Transformed::no(FilterDescriptionContext::new_default(
+                            initial_plan,
+                        )))
+                    }
+                }
+                // Other filter introducing operators extends here
+                else {
+                    Ok(Transformed::no(node))
+                }
+            })
             .map(|updated| updated.data.plan)
     }
 
@@ -401,6 +422,7 @@ impl PushdownFilter {
     fn try_pushdown(
         mut node: FilterDescriptionContext,
         config: &ConfigOptions,
+        accept_updated: &mut bool,
     ) -> Result<Transformed<FilterDescriptionContext>> {
         let initial_description = FilterDescription {
             filters: node.data.take_description(),
@@ -437,15 +459,19 @@ impl PushdownFilter {
                     node.plan = op;
                     node.data = child_descriptions.swap_remove(0);
                     node.children = node.children.swap_remove(0).children;
-                    Self::try_pushdown(node, config)
+                    Self::try_pushdown(node, config, accept_updated)
                 } else {
                     if remaining_description.filters.is_empty() {
                         // Filter can be pushed down safely
                         node.plan = op;
-                        for (child, descr) in
-                            node.children.iter_mut().zip(child_descriptions)
-                        {
-                            child.data = descr;
+                        if node.children.is_empty() {
+                            *accept_updated = true;
+                        } else {
+                            for (child, descr) in
+                                node.children.iter_mut().zip(child_descriptions)
+                            {
+                                child.data = descr;
+                            }
                         }
                     } else {
                         // Filter cannot be pushed down
@@ -460,7 +486,11 @@ impl PushdownFilter {
             }
             FilterPushdownSupport::NotSupported => {
                 if remaining_description.filters.is_empty() {
-                    Ok(Transformed::no(node))
+                    Ok(Transformed {
+                        data: node,
+                        transformed: false,
+                        tnr: TreeNodeRecursion::Stop,
+                    })
                 } else {
                     let children_len = node.children.len();
                     node = insert_filter_exec(
@@ -468,7 +498,11 @@ impl PushdownFilter {
                         vec![FilterDescription::empty(); children_len],
                         remaining_description,
                     )?;
-                    Ok(Transformed::yes(node))
+                    Ok(Transformed {
+                        data: node,
+                        transformed: true,
+                        tnr: TreeNodeRecursion::Stop,
+                    })
                 }
             }
         }
