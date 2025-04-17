@@ -674,6 +674,7 @@ impl ExternalSorter {
             let batches: Vec<&RecordBatch> = self.in_mem_batches.iter().collect();
             let sorted_batch = interleave_record_batch(&batches, &interleave_indices)?;
 
+            self.in_mem_batches.clear();
             self.reservation
                 .try_resize(get_reserved_byte_for_record_batch(&sorted_batch))
                 .map_err(Self::err_with_oom_context)?;
