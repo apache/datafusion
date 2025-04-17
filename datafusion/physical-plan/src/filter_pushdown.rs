@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use crate::ExecutionPlan;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 #[derive(Clone, Debug)]
@@ -52,8 +53,8 @@ pub enum FilterPushdownSupport<T> {
         op: T,
         // Whether the node is removed from the plan and the rule should be re-run manually
         // on the new node.
-        // TODO: If TreeNodeRecursion supports Retry mechanism, this flag can be removed
-        retry: bool,
+        // TODO: If TreeNodeRecursion supports Revisit mechanism, this flag can be removed
+        revisit: bool,
     },
     NotSupported,
 }
@@ -72,6 +73,23 @@ pub fn filter_pushdown_not_supported<T>(
 ) -> FilterPushdownResult<T> {
     FilterPushdownResult {
         support: FilterPushdownSupport::NotSupported,
+        remaining_description,
+    }
+}
+
+pub fn filter_pushdown_transparent<T>(
+    plan: Arc<dyn ExecutionPlan>,
+    fd: FilterDescription,
+) -> FilterPushdownResult<Arc<dyn ExecutionPlan>> {
+    let child_descriptions = vec![fd];
+    let remaining_description = FilterDescription::empty();
+
+    FilterPushdownResult {
+        support: FilterPushdownSupport::Supported {
+            child_descriptions,
+            op: plan,
+            revisit: false,
+        },
         remaining_description,
     }
 }

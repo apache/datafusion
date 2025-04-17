@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::{Arc, OnceLock};
+use std::{
+    any::Any,
+    fmt::{Display, Formatter},
+};
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::{
     datasource::object_store::ObjectStoreUrl,
@@ -53,12 +59,8 @@ use datafusion_physical_plan::{
 use datafusion_physical_plan::{
     displayable, metrics::ExecutionPlanMetricsSet, DisplayFormatType, ExecutionPlan,
 };
+
 use object_store::ObjectStore;
-use std::sync::{Arc, OnceLock};
-use std::{
-    any::Any,
-    fmt::{Display, Formatter},
-};
 
 /// A placeholder data source that accepts filter pushdown
 #[derive(Clone, Default)]
@@ -130,16 +132,19 @@ impl FileSource for TestSource {
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let support = format!(", pushdown_supported={}", self.support);
+
                 let predicate_string = self
                     .predicate
                     .as_ref()
                     .map(|p| format!(", predicate={p}"))
                     .unwrap_or_default();
 
-                write!(f, "{}", predicate_string)
+                write!(f, "{}{}", support, predicate_string)
             }
             DisplayFormatType::TreeRender => {
                 if let Some(predicate) = &self.predicate {
+                    writeln!(f, "pushdown_supported={}", fmt_sql(predicate.as_ref()))?;
                     writeln!(f, "predicate={}", fmt_sql(predicate.as_ref()))?;
                 }
                 Ok(())
@@ -159,11 +164,11 @@ impl FileSource for TestSource {
                     op: Arc::new(TestSource {
                         support: true,
                         predicate: Some(conjunction(fd.filters)),
-                        statistics: self.statistics.clone(), // should be updated ?
+                        statistics: self.statistics.clone(), // should be updated in reality
                     }),
-                    retry: false,
+                    revisit: false,
                 },
-                remaining_description: Default::default(),
+                remaining_description: FilterDescription::empty(),
             })
         } else {
             Ok(filter_pushdown_not_supported(fd))
@@ -191,7 +196,7 @@ fn test_pushdown_into_scan() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}),
+        OptimizationTest::new(plan, PushdownFilter{}, true),
         @r"
     OptimizationTest:
       input:
@@ -212,12 +217,11 @@ fn test_pushdown_into_scan_with_config_options() {
     let plan = Arc::new(FilterExec::try_new(predicate, scan).unwrap()) as _;
 
     let mut cfg = ConfigOptions::default();
-    cfg.execution.parquet.pushdown_filters = false;
     insta::assert_snapshot!(
-        OptimizationTest::new_with_config(
+        OptimizationTest::new(
             Arc::clone(&plan),
             PushdownFilter {},
-            &cfg
+            false
         ),
         @r"
     OptimizationTest:
@@ -233,10 +237,10 @@ fn test_pushdown_into_scan_with_config_options() {
 
     cfg.execution.parquet.pushdown_filters = true;
     insta::assert_snapshot!(
-        OptimizationTest::new_with_config(
+        OptimizationTest::new(
             plan,
             PushdownFilter {},
-            &cfg
+            true
         ),
         @r"
     OptimizationTest:
@@ -261,7 +265,7 @@ fn test_filter_collapse() {
     let plan = Arc::new(FilterExec::try_new(predicate2, filter1).unwrap());
 
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}),
+        OptimizationTest::new(plan, PushdownFilter{}, true),
         @r"
     OptimizationTest:
       input:
@@ -279,19 +283,17 @@ fn test_filter_collapse() {
 fn test_filter_with_projection() {
     let scan = test_scan(true);
     let projection = vec![1, 0];
-    let projected_schema = Arc::new(schema().project(&projection).unwrap());
-    let predicate = col_lit_predicate("a", "foo", &projected_schema);
+    let predicate = col_lit_predicate("a", "foo", schema());
     let plan = Arc::new(
         FilterExec::try_new(predicate, Arc::clone(&scan))
             .unwrap()
             .with_projection(Some(projection))
             .unwrap(),
     );
-    // expect the predicate to be pushed down into the DataSource but the FilterExec to be kept for its projection
-    // the pushed down filters should have their indices adjusted
 
+    // expect the predicate to be pushed down into the DataSource but the FilterExec to be converted to ProjectionExec
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}),
+        OptimizationTest::new(plan, PushdownFilter{}, true),
         @r"
     OptimizationTest:
       input:
@@ -314,7 +316,7 @@ fn test_filter_with_projection() {
             .unwrap(),
     );
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}),
+        OptimizationTest::new(plan, PushdownFilter{},true),
         @r"
     OptimizationTest:
       input:
@@ -343,7 +345,7 @@ fn test_push_down_through_transparent_nodes() {
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}),
+        OptimizationTest::new(plan, PushdownFilter{},true),
         @r"
     OptimizationTest:
       input:
@@ -364,14 +366,16 @@ fn test_push_down_through_transparent_nodes() {
 #[test]
 fn test_no_pushdown_through_aggregates() {
     // There are 2 important points here:
-    // 1. The outer filter is not pushed down into the aggregate because we haven't
-    //    implemented that yet.
+    // 1. The outer filter **is not** pushed down at all because we haven't implemented pushdown support
+    //    yet for AggregateExec.
     // 2. The inner filter **is** pushed down into the DataSource.
     let scan = test_scan(true);
+
     let filter = Arc::new(
         FilterExec::try_new(col_lit_predicate("a", "foo", schema()), scan.clone())
             .unwrap(),
     );
+
     let aggregate_expr =
         vec![
             AggregateExprBuilder::new(count_udaf(), vec![col("a", schema()).unwrap()])
@@ -396,12 +400,15 @@ fn test_no_pushdown_through_aggregates() {
         )
         .unwrap(),
     );
+
+    let coalesce = Arc::new(CoalesceBatchesExec::new(aggregate, 100));
+
     let predicate = col_lit_predicate("a", "foo", schema());
-    let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
+    let plan = Arc::new(FilterExec::try_new(predicate, coalesce).unwrap());
 
     // expect the predicate to be pushed down into the DataSource
     insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownFilter{}),
+        OptimizationTest::new(plan, PushdownFilter{}, true),
         @r"
     OptimizationTest:
       input:
@@ -459,28 +466,22 @@ pub struct OptimizationTest {
 }
 
 impl OptimizationTest {
-    pub fn new<O>(input_plan: Arc<dyn ExecutionPlan>, opt: O) -> Self
-    where
-        O: PhysicalOptimizerRule,
-    {
-        let mut parquet_pushdown_config = ConfigOptions::default();
-        parquet_pushdown_config.execution.parquet.pushdown_filters = true;
-        Self::new_with_config(input_plan, opt, &parquet_pushdown_config)
-    }
-
-    pub fn new_with_config<O>(
+    pub fn new<O>(
         input_plan: Arc<dyn ExecutionPlan>,
         opt: O,
-        config: &ConfigOptions,
+        allow_pushdown_filters: bool,
     ) -> Self
     where
         O: PhysicalOptimizerRule,
     {
-        let input = format_execution_plan(&input_plan);
+        let mut parquet_pushdown_config = ConfigOptions::default();
+        parquet_pushdown_config.execution.parquet.pushdown_filters =
+            allow_pushdown_filters;
 
+        let input = format_execution_plan(&input_plan);
         let input_schema = input_plan.schema();
 
-        let output_result = opt.optimize(input_plan, config);
+        let output_result = opt.optimize(input_plan, &parquet_pushdown_config);
         let output = output_result
             .and_then(|plan| {
                 if opt.schema_check() && (plan.schema() != input_schema) {

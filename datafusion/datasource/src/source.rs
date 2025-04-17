@@ -208,7 +208,6 @@ impl ExecutionPlan for DataSourceExec {
 
     fn try_pushdown_filters(
         &self,
-        _node: Arc<dyn ExecutionPlan>,
         fd: FilterDescription,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
@@ -221,7 +220,7 @@ impl ExecutionPlan for DataSourceExec {
             FilterPushdownSupport::Supported {
                 child_descriptions,
                 op,
-                retry,
+                revisit: retry,
             } => {
                 let new_exec = Arc::new(DataSourceExec::new(op));
 
@@ -232,7 +231,7 @@ impl ExecutionPlan for DataSourceExec {
                     support: FilterPushdownSupport::Supported {
                         child_descriptions,
                         op: new_exec,
-                        retry,
+                        revisit: retry,
                     },
                     remaining_description,
                 })

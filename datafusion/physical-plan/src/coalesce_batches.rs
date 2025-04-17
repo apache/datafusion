@@ -36,7 +36,7 @@ use datafusion_execution::TaskContext;
 use crate::coalesce::{BatchCoalescer, CoalescerState};
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    FilterDescription, FilterPushdownResult, FilterPushdownSupport,
+    filter_pushdown_transparent, FilterDescription, FilterPushdownResult,
 };
 use datafusion_common::config::ConfigOptions;
 use futures::ready;
@@ -219,21 +219,13 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn try_pushdown_filters(
         &self,
-        node: Arc<dyn ExecutionPlan>,
         fd: FilterDescription,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
-        let child_descriptions = vec![fd];
-        let remaining_description = FilterDescription::empty();
-
-        Ok(FilterPushdownResult {
-            support: FilterPushdownSupport::Supported {
-                child_descriptions,
-                op: Arc::clone(&node),
-                retry: false,
-            },
-            remaining_description,
-        })
+        Ok(filter_pushdown_transparent::<Arc<dyn ExecutionPlan>>(
+            Arc::new(self.clone()),
+            fd,
+        ))
     }
 }
 

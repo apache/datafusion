@@ -484,7 +484,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`PushdownFilter`]: datafusion_physical_optimizer::filter_pushdown::PushdownFilter
     fn try_pushdown_filters(
         &self,
-        _node: Arc<dyn ExecutionPlan>,
         fd: FilterDescription,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {

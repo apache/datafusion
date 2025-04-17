@@ -607,7 +607,7 @@ impl DataSource for FileScanConfig {
             FilterPushdownSupport::Supported {
                 child_descriptions,
                 op,
-                retry,
+                revisit: retry,
             } => {
                 let new_data_source = Arc::new(
                     FileScanConfigBuilder::from(self.clone())
@@ -622,7 +622,7 @@ impl DataSource for FileScanConfig {
                     support: FilterPushdownSupport::Supported {
                         child_descriptions,
                         op: new_data_source,
-                        retry,
+                        revisit: retry,
                     },
                     remaining_description,
                 })

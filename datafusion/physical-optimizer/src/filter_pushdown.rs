@@ -402,7 +402,6 @@ impl PushdownFilter {
         mut node: FilterDescriptionContext,
         config: &ConfigOptions,
     ) -> Result<Transformed<FilterDescriptionContext>> {
-        let initial_plan = Arc::clone(&node.plan);
         let initial_description = FilterDescription {
             filters: node.data.take_description(),
         };
@@ -410,41 +409,38 @@ impl PushdownFilter {
         let FilterPushdownResult {
             support,
             remaining_description,
-        } = initial_plan.try_pushdown_filters(
-            Arc::clone(&initial_plan),
-            initial_description,
-            config,
-        )?;
+        } = node
+            .plan
+            .try_pushdown_filters(initial_description, config)?;
 
         match support {
             FilterPushdownSupport::Supported {
                 mut child_descriptions,
                 op,
-                retry,
+                revisit,
             } => {
-                if retry {
+                if revisit {
                     // This check handles cases where the current operator is entirely removed
                     // from the plan and replaced with its child. In such cases, to not skip
                     // over the new node, we need to explicitly re-apply this pushdown logic
                     // to the new node.
                     //
-                    // TODO: If TreeNodeRecursion supports a retry mechanism in the future,
+                    // TODO: If TreeNodeRecursion supports a Revisit mechanism in the future,
                     //       this manual recursion could be removed.
 
                     // If the operator is removed, it should not leave any filters as remaining
                     debug_assert!(remaining_description.filters.is_empty());
-                    node.plan = op;
                     // Operators having 2 children cannot be removed
+                    debug_assert_eq!(child_descriptions.len(), 1);
+                    debug_assert_eq!(node.children.len(), 1);
+
+                    node.plan = op;
                     node.data = child_descriptions.swap_remove(0);
-                    if node.children.is_empty() {
-                        node.children = vec![];
-                        Ok(Transformed::yes(node))
-                    } else {
-                        node.children = node.children.swap_remove(0).children;
-                        Self::try_pushdown(node, config)
-                    }
+                    node.children = node.children.swap_remove(0).children;
+                    Self::try_pushdown(node, config)
                 } else {
                     if remaining_description.filters.is_empty() {
+                        // Filter can be pushed down safely
                         node.plan = op;
                         for (child, descr) in
                             node.children.iter_mut().zip(child_descriptions)
@@ -452,6 +448,7 @@ impl PushdownFilter {
                             child.data = descr;
                         }
                     } else {
+                        // Filter cannot be pushed down
                         node = insert_filter_exec(
                             node,
                             child_descriptions,
@@ -468,7 +465,7 @@ impl PushdownFilter {
                     let children_len = node.children.len();
                     node = insert_filter_exec(
                         node,
-                        vec![FilterDescription::default(); children_len],
+                        vec![FilterDescription::empty(); children_len],
                         remaining_description,
                     )?;
                     Ok(Transformed::yes(node))
@@ -487,6 +484,7 @@ fn insert_filter_exec(
 
     // Filter has one child
     if !child_descriptions.is_empty() {
+        debug_assert_eq!(child_descriptions.len(), 1);
         new_child_node.data = child_descriptions.swap_remove(0);
     }
     let new_plan = Arc::new(FilterExec::try_new(
@@ -494,7 +492,7 @@ fn insert_filter_exec(
         Arc::clone(&new_child_node.plan),
     )?);
     let new_children = vec![new_child_node];
-    let new_data = FilterDescription::default();
+    let new_data = FilterDescription::empty();
 
     Ok(FilterDescriptionContext::new(
         new_plan,

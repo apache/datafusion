@@ -440,48 +440,48 @@ impl ExecutionPlan for FilterExec {
 
     fn try_pushdown_filters(
         &self,
-        node: Arc<dyn ExecutionPlan>,
         mut fd: FilterDescription,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // Extend the filter descriptions
         fd.filters.push(Arc::clone(&self.predicate));
+
+        // Extract the information
         let child_descriptions = vec![fd];
         let remaining_description = FilterDescription { filters: vec![] };
-        let filter_child = Arc::clone(node.children()[0]);
+        let filter_input = Arc::clone(self.input());
 
-        if self.projection.is_some() {
-            let filter_child_schema = filter_child.schema();
-            let proj_exprs = self
-                .projection
-                .as_ref()
-                .unwrap()
+        if let Some(projection_indices) = self.projection.as_ref() {
+            // Push the filters down, but leave a ProjectionExec behind, instead of the FilterExec
+            let filter_child_schema = filter_input.schema();
+            let proj_exprs = projection_indices
                 .iter()
                 .map(|p| {
-                    let col_name = filter_child_schema.field(*p).clone();
+                    let field = filter_child_schema.field(*p).clone();
                     (
-                        Arc::new(Column::new(col_name.name(), *p))
-                            as Arc<dyn PhysicalExpr>,
-                        col_name.name().to_string(),
+                        Arc::new(Column::new(field.name(), *p)) as Arc<dyn PhysicalExpr>,
+                        field.name().to_string(),
                     )
                 })
                 .collect::<Vec<_>>();
             let projection_exec =
-                Arc::new(ProjectionExec::try_new(proj_exprs, filter_child)?) as _;
+                Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?) as _;
 
             Ok(FilterPushdownResult {
                 support: FilterPushdownSupport::Supported {
                     child_descriptions,
                     op: projection_exec,
-                    retry: false,
+                    revisit: false,
                 },
                 remaining_description,
             })
         } else {
+            // Pull out the FilterExec, and inform the rule as it should be re-run
             Ok(FilterPushdownResult {
                 support: FilterPushdownSupport::Supported {
                     child_descriptions,
-                    op: filter_child,
-                    retry: true,
+                    op: filter_input,
+                    revisit: true,
                 },
                 remaining_description,
             })
