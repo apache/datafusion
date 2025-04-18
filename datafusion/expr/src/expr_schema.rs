@@ -426,11 +426,9 @@ impl ExprSchemable for Expr {
             | Expr::Exists { .. } => {
                 Ok(Field::new(&schema_name, DataType::Boolean, false))
             }
-            Expr::ScalarSubquery(subquery) => Ok(Field::new(
-                &schema_name,
-                subquery.subquery.schema().field(0).data_type().clone(),
-                subquery.subquery.schema().field(0).is_nullable(),
-            )),
+            Expr::ScalarSubquery(subquery) => {
+                Ok(subquery.subquery.schema().field(0).clone())
+            }
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
                 ref right,
