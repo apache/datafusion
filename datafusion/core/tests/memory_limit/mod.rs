@@ -458,7 +458,9 @@ async fn test_stringview_external_sort() {
         .with_memory_pool(Arc::new(FairSpillPool::new(60 * 1024 * 1024)));
     let runtime = builder.build_arc().unwrap();
 
-    let config = SessionConfig::new().with_sort_spill_reservation_bytes(40 * 1024 * 1024);
+    let config = SessionConfig::new()
+        .with_sort_spill_reservation_bytes(40 * 1024 * 1024)
+        .with_sort_in_place_threshold_bytes(1024 * 1024);
 
     let ctx = SessionContext::new_with_config_rt(config, runtime);
     ctx.register_table("t", Arc::new(table)).unwrap();
@@ -481,6 +483,7 @@ async fn test_stringview_external_sort() {
 async fn test_in_mem_buffer_almost_full() {
     let config = SessionConfig::new()
         .with_sort_spill_reservation_bytes(3000000)
+        .with_sort_in_place_threshold_bytes(1024 * 1024)
         .with_target_partitions(1);
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_pool(Arc::new(FairSpillPool::new(10 * 1024 * 1024)))
