@@ -33,7 +33,7 @@ use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_datafusion_err, HashMap, ScalarValue};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::Result;
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
@@ -213,40 +213,14 @@ impl TopK {
 
         let mut selected_rows = None;
 
+        let threshold0 = self
+        .thresholds
+        .read()
+        .expect("Read lock should succeed")[0].clone();
+
         // If the heap doesn't have k elements yet, we can't create thresholds
-        if let Some(max_row) = self.heap.max() {
-            // Get the batch that contains the max row
-            let Some(batch_entry) = self.heap.store.get(max_row.batch_id) else {
-                return internal_err!("Invalid batch ID in TopKRow");
-            };
-
-            // Extract threshold values for each sort expression
-            // TODO: create a filter for each key that respects lexical ordering
-            // in the form of col0 < threshold0 || col0 == threshold0 && (col1 < threshold1 || ...)
-            // This could use BinaryExpr to benefit from short circuiting and early evaluation
-            // https://github.com/apache/datafusion/issues/15698
-            // Extract the value for this column from the max row
-            let thresholds: Vec<_> = self
-                .expr
-                .iter()
-                .map(|expr| {
-                    let value = expr
-                        .expr
-                        .evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
-                    Ok(Some(match value {
-                        ColumnarValue::Array(array) => {
-                            ScalarValue::try_from_array(&array, 0)?
-                        }
-                        ColumnarValue::Scalar(scalar_value) => scalar_value,
-                    }))
-                })
-                .collect::<Result<_>>()?;
-            self.thresholds
-                .write()
-                .expect("Write lock should succeed")
-                .clone_from(&thresholds);
-            let threshold0 = thresholds[0].as_ref().unwrap();
-
+        if let Some(threshold0) = threshold0 {
+            let threshold0 = threshold0.clone();
             // skip filtering if threshold is null
             if !threshold0.is_null() {
                 // Convert to scalar value - should be a single value since we're evaluating on a single row batch
@@ -318,6 +292,34 @@ impl TopK {
         };
 
         self.metrics.row_replacements.add(replacements);
+
+        if replacements > 0 {
+            // Extract threshold values for each sort expression
+            // TODO: create a filter for each key that respects lexical ordering
+            // in the form of col0 < threshold0 || col0 == threshold0 && (col1 < threshold1 || ...)
+            // This could use BinaryExpr to benefit from short circuiting and early evaluation
+            // https://github.com/apache/datafusion/issues/15698
+            // Extract the value for this column from the max row
+            let thresholds: Vec<_> = self
+                .expr
+                .iter()
+                .map(|expr| {
+                    let value = expr
+                        .expr
+                        .evaluate(&batch_entry.batch.slice(self.heap.max().unwrap().index, 1))?;
+                    Ok(Some(match value {
+                        ColumnarValue::Array(array) => {
+                            ScalarValue::try_from_array(&array, 0)?
+                        }
+                        ColumnarValue::Scalar(scalar_value) => scalar_value,
+                    }))
+                })
+                .collect::<Result<_>>()?;
+            self.thresholds
+                .write()
+                .expect("Write lock should succeed")
+                .clone_from(&thresholds);
+        }
         self.heap.insert_batch_entry(batch_entry);
 
         // conserve memory
