@@ -198,37 +198,15 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// See [Self::simplify] for details and usage examples.
     ///
-    #[deprecated(since = "48.0.0", note = "")]
+    #[deprecated(
+        since = "48.0.0",
+        note = "Use `simplify_with_cycle_count_transformed` instead"
+    )]
+    #[allow(unused_mut)]
     pub fn simplify_with_cycle_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
-        let mut simplifier = Simplifier::new(&self.info);
-        let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
-        let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
-        let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
-
-        if self.canonicalize {
-            expr = expr.rewrite(&mut Canonicalizer::new()).data()?
-        }
-
-        // Evaluating constants can enable new simplifications and
-        // simplifications can enable new constant evaluation
-        // see `Self::with_max_cycles`
-        let mut num_cycles = 0;
-        loop {
-            let Transformed {
-                data, transformed, ..
-            } = expr
-                .rewrite(&mut const_evaluator)?
-                .transform_data(|expr| expr.rewrite(&mut simplifier))?
-                .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?;
-            expr = data;
-            num_cycles += 1;
-            if !transformed || num_cycles >= self.max_simplifier_cycles {
-                break;
-            }
-        }
-        // shorten inlist should be started after other inlist rules are applied
-        expr = expr.rewrite(&mut shorten_in_list_simplifier).data()?;
-        Ok((expr, num_cycles))
+        let (transformed, cycle_count) =
+            self.simplify_with_cycle_count_transformed(expr)?;
+        Ok((transformed.data, cycle_count))
     }
 
     /// Like [Self::simplify], simplifies this [`Expr`] as much as possible, evaluating
