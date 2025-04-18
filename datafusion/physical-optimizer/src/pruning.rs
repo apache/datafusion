@@ -1232,17 +1232,15 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
     if from_type == to_type {
         return Ok(());
     }
-    // TODO: support other data type for prunable cast or try cast
-    if matches!(
+    let supported_string_cast = (matches!(
         // String -> String casts are suppoted
         from_type,
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) && matches!(
         to_type,
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    ) {
-        return Ok(());
-    } else if matches!(
+    ));
+    let supported_numeric_cast = (matches!(
         // Numeric -> Numeric casts are supported
         from_type,
         DataType::UInt8
@@ -1271,9 +1269,8 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
             | DataType::Float16
             | DataType::Float32
             | DataType::Float64
-    ) {
-        Ok(())
-    } else if matches!(
+    ));
+    let supported_temporal_cast = (matches!(
         // Temporal -> Temporal casts are supported
         from_type,
         DataType::Date32
@@ -1288,7 +1285,10 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
             | DataType::Time32(_)
             | DataType::Time64(_)
             | DataType::Timestamp(_, _)
-    ) {
+    ));
+
+    // TODO: support other data type for prunable cast or try cast
+    if supported_string_cast || supported_numeric_cast || supported_temporal_cast {
         Ok(())
     } else {
         plan_err!(
