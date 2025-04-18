@@ -4969,7 +4969,7 @@ select count(distinct column1), count(distinct column2) from dict_test group by 
 statement ok
 drop table dict_test;
 
-# avg_duartion
+# avg_duration
 
 statement ok
 create table d as values 
@@ -4985,6 +4985,53 @@ query ????I
 SELECT avg(column1), avg(column2), avg(column3), avg(column4), column5 FROM d GROUP BY column5;
 ----
 0 days 0 hours 0 mins 6 secs 0 days 0 hours 0 mins 0.012 secs 0 days 0 hours 0 mins 0.000018 secs 0 days 0 hours 0 mins 0.000000024 secs 1
+
+statement ok
+drop table d;
+
+statement ok
+create table d as values
+  (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)'), arrow_cast(3, 'Duration(Microsecond)'), arrow_cast(4, 'Duration(Nanosecond)'), 1),
+  (arrow_cast(11, 'Duration(Second)'), arrow_cast(22, 'Duration(Millisecond)'), arrow_cast(33, 'Duration(Microsecond)'), arrow_cast(44, 'Duration(Nanosecond)'), 1),
+  (arrow_cast(5, 'Duration(Second)'), arrow_cast(10, 'Duration(Millisecond)'), arrow_cast(15, 'Duration(Microsecond)'), arrow_cast(20, 'Duration(Nanosecond)'), 2),
+  (arrow_cast(25, 'Duration(Second)'), arrow_cast(50, 'Duration(Millisecond)'), arrow_cast(75, 'Duration(Microsecond)'), arrow_cast(100, 'Duration(Nanosecond)'), 2),
+  (NULL, NULL, NULL, NULL, 1),
+  (NULL, NULL, NULL, NULL, 2);
+
+query I?
+SELECT column5, avg(column1) FROM d GROUP BY column5;
+----
+2 0 days 0 hours 0 mins 15 secs
+1 0 days 0 hours 0 mins 6 secs
+
+query I??
+SELECT column5, column1, avg(column1) OVER (PARTITION BY column5 ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as window_avg 
+FROM d WHERE column1 IS NOT NULL;
+----
+2 0 days 0 hours 0 mins 5 secs 0 days 0 hours 0 mins 5 secs
+2 0 days 0 hours 0 mins 25 secs 0 days 0 hours 0 mins 15 secs
+1 0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 1 secs
+1 0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 6 secs
+
+# Cumulative average window function
+query I??
+SELECT column5, column1, avg(column1) OVER (ORDER BY column5, column1 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as cumulative_avg
+FROM d WHERE column1 IS NOT NULL;
+----
+1 0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 1 secs
+1 0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 6 secs
+2 0 days 0 hours 0 mins 5 secs 0 days 0 hours 0 mins 5 secs
+2 0 days 0 hours 0 mins 25 secs 0 days 0 hours 0 mins 10 secs
+
+# Centered average window function
+query I??
+SELECT column5, column1, avg(column1) OVER (ORDER BY column5 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as centered_avg 
+FROM d WHERE column1 IS NOT NULL;
+----
+1 0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 6 secs
+1 0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 5 secs
+2 0 days 0 hours 0 mins 5 secs 0 days 0 hours 0 mins 13 secs
+2 0 days 0 hours 0 mins 25 secs 0 days 0 hours 0 mins 15 secs
 
 statement ok
 drop table d;
