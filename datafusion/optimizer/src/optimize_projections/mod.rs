@@ -455,6 +455,17 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
 
+    // A fast path: if the previous projection is same as the current projection
+    // we can directly remove the current projection and return child projection.
+    if prev_projection.expr == expr {
+        return Projection::try_new_with_schema(
+            expr,
+            Arc::clone(&prev_projection.input),
+            schema,
+        )
+        .map(Transformed::yes);
+    }
+
     // Count usages (referrals) of each projection expression in its input fields:
     let mut column_referral_map = HashMap::<&Column, usize>::new();
     expr.iter()
