@@ -1215,6 +1215,18 @@ fn is_compare_op(op: Operator) -> bool {
 // For example, casts from string to numbers is not correct.
 // Because the "13" is less than "3" with UTF8 comparison order.
 fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Result<()> {
+    // Unrwavel dictionaries, these are always supported
+    let from_type = match from_type {
+        DataType::Dictionary(_, t) => return verify_support_type_for_prune(t.as_ref(), to_type),
+        _ => from_type,
+    };
+    let to_type = match to_type {
+        DataType::Dictionary(_, t) => return verify_support_type_for_prune(from_type, t.as_ref()),
+        _ => to_type,
+    };
+    if from_type == to_type {
+        return Ok(());
+    }
     // TODO: support other data type for prunable cast or try cast
     if matches!(
         from_type,
@@ -1544,7 +1556,10 @@ fn build_predicate_expression(
         Ok(builder) => builder,
         // allow partial failure in predicate expression generation
         // this can still produce a useful predicate when multiple conditions are joined using AND
-        Err(_) => return unhandled_hook.handle(expr),
+        Err(e) => {
+            println!("Error building pruning expression: {e}");
+            return unhandled_hook.handle(expr)
+        },
     };
 
     build_statistics_expr(&mut expr_builder)
