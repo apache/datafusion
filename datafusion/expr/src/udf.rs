@@ -300,8 +300,9 @@ pub struct ScalarFunctionArgs<'a, 'b> {
     pub arg_fields: Vec<Option<&'b Field>>,
     /// The number of rows in record batch being evaluated
     pub number_rows: usize,
-    /// The return type of the scalar function returned (from `return_type` or `return_field_from_args`)
-    /// when creating the physical expression from the logical expression
+    /// The return field of the scalar function returned (from `return_type`
+    /// or `return_field_from_args`) when creating the physical expression
+    /// from the logical expression
     pub return_field: &'a Field,
 }
 
