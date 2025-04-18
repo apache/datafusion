@@ -269,6 +269,15 @@ impl BatchPartitioner {
                     num_partitions: partitions,
                     hash_buffer,
                 } => {
+                    if batches[0].num_columns() == 0 {
+                        // If  no columns,
+                        let it: Box<
+                            dyn Iterator<Item = Result<(usize, RecordBatch)>> + Send,
+                        > = Box::new(
+                            batches.into_iter().map(|batch| Ok((0, batch.clone()))),
+                        );
+                        return Ok(it);
+                    }
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
                     let mut indices = vec![vec![]; *partitions];
