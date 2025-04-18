@@ -17,7 +17,7 @@
 
 extern crate criterion;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::ScalarFunctionArgs;
 use datafusion_functions::string;
@@ -30,7 +30,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 args: vec![],
                 arg_fields: vec![],
                 number_rows: 1024,
-                return_type: &DataType::Utf8,
+                return_field: &Field::new("f", DataType::Utf8, true),
             }))
         })
     });

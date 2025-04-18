@@ -138,7 +138,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
@@ -161,7 +161,7 @@ mod test {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
             arg_fields: vec![None; 1],
             number_rows: array.len(),
-            return_type: &DataType::Float32,
+            return_field: &Field::new("f", DataType::Float32, true),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)
@@ -206,7 +206,7 @@ mod test {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
             arg_fields: vec![None; 1],
             number_rows: array.len(),
-            return_type: &DataType::Float64,
+            return_field: &Field::new("f", DataType::Float64, true),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)

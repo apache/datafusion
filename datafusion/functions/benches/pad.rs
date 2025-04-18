@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, OffsetSizeTrait, PrimitiveArray};
-use arrow::datatypes::{DataType, Int64Type};
+use arrow::datatypes::{DataType, Field, Int64Type};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
@@ -108,7 +108,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             arg_fields: vec![None; args.len()],
                             number_rows: size,
-                            return_type: &DataType::Utf8,
+                            return_field: &Field::new("f", DataType::Utf8, true),
                         })
                         .unwrap(),
                 )
@@ -124,7 +124,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             arg_fields: vec![None; args.len()],
                             number_rows: size,
-                            return_type: &DataType::LargeUtf8,
+                            return_field: &Field::new("f", DataType::LargeUtf8, true),
                         })
                         .unwrap(),
                 )
@@ -140,7 +140,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             arg_fields: vec![None; args.len()],
                             number_rows: size,
-                            return_type: &DataType::Utf8,
+                            return_field: &Field::new("f", DataType::Utf8, true),
                         })
                         .unwrap(),
                 )
@@ -160,7 +160,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             arg_fields: vec![None; args.len()],
                             number_rows: size,
-                            return_type: &DataType::Utf8,
+                            return_field: &Field::new("f", DataType::Utf8, true),
                         })
                         .unwrap(),
                 )
@@ -176,7 +176,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             arg_fields: vec![None; args.len()],
                             number_rows: size,
-                            return_type: &DataType::LargeUtf8,
+                            return_field: &Field::new("f", DataType::LargeUtf8, true),
                         })
                         .unwrap(),
                 )
@@ -193,7 +193,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args.clone(),
                             arg_fields: vec![None; args.len()],
                             number_rows: size,
-                            return_type: &DataType::Utf8,
+                            return_field: &Field::new("f", DataType::Utf8, true),
                         })
                         .unwrap(),
                 )

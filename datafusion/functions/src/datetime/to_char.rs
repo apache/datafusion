@@ -303,7 +303,7 @@ mod tests {
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
         TimestampSecondArray,
     };
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use chrono::{NaiveDateTime, Timelike};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -389,7 +389,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
                 arg_fields: vec![None; 2],
                 number_rows: 1,
-                return_type: &DataType::Utf8,
+                return_field: &Field::new("f", DataType::Utf8, true),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -473,7 +473,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 2],
                 number_rows: batch_len,
-                return_type: &DataType::Utf8,
+                return_field: &Field::new("f", DataType::Utf8, true),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -605,7 +605,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 2],
                 number_rows: batch_len,
-                return_type: &DataType::Utf8,
+                return_field: &Field::new("f", DataType::Utf8, true),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -628,7 +628,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 2],
                 number_rows: batch_len,
-                return_type: &DataType::Utf8,
+                return_field: &Field::new("f", DataType::Utf8, true),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -651,7 +651,7 @@ mod tests {
             args: vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
             arg_fields: vec![None; 1],
             number_rows: 1,
-            return_type: &DataType::Utf8,
+            return_field: &Field::new("f", DataType::Utf8, true),
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -667,7 +667,7 @@ mod tests {
             ],
             arg_fields: vec![None; 2],
             number_rows: 1,
-            return_type: &DataType::Utf8,
+            return_field: &Field::new("f", DataType::Utf8, true),
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(

@@ -18,7 +18,7 @@
 extern crate criterion;
 
 use arrow::array::{StringArray, StringViewArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use rand::distributions::Alphanumeric;
@@ -119,7 +119,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_ascii.clone(),
                         arg_fields: vec![None; args_string_ascii.len()],
                         number_rows: n_rows,
-                        return_type: &DataType::Int32,
+                        return_field: &Field::new("f", DataType::Int32, true),
                     }))
                 })
             },
@@ -135,7 +135,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_utf8.clone(),
                         arg_fields: vec![None; args_string_utf8.len()],
                         number_rows: n_rows,
-                        return_type: &DataType::Int32,
+                        return_field: &Field::new("f", DataType::Int32, true),
                     }))
                 })
             },
@@ -151,7 +151,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_view_ascii.clone(),
                         arg_fields: vec![None; args_string_view_ascii.len()],
                         number_rows: n_rows,
-                        return_type: &DataType::Int32,
+                        return_field: &Field::new("f", DataType::Int32, true),
                     }))
                 })
             },
@@ -167,7 +167,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_view_utf8.clone(),
                         arg_fields: vec![None; args_string_view_utf8.len()],
                         number_rows: n_rows,
-                        return_type: &DataType::Int32,
+                        return_field: &Field::new("f", DataType::Int32, true),
                     }))
                 })
             },

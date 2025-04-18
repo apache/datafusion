@@ -20,7 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, StringArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::distributions::{Alphanumeric, Uniform};
 use rand::prelude::Distribution;
@@ -98,7 +98,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         arg_fields: vec![None; args.len()],
                         number_rows: batch_len,
-                        return_type: &DataType::Utf8,
+                        return_field: &Field::new("f", DataType::Utf8, true),
                     })
                     .expect("substr_index should work on valid values"),
             )

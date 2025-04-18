@@ -97,6 +97,8 @@ impl ScalarUDFImpl for UpperFunc {
 mod tests {
     use super::*;
     use arrow::array::{Array, ArrayRef, StringArray};
+    use arrow::datatypes::DataType::Utf8;
+    use arrow::datatypes::Field;
     use std::sync::Arc;
 
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
@@ -106,7 +108,7 @@ mod tests {
             number_rows: input.len(),
             args: vec![ColumnarValue::Array(input)],
             arg_fields: vec![None; 1],
-            return_type: &DataType::Utf8,
+            return_field: &Field::new("f", Utf8, true),
         };
 
         let result = match func.invoke_with_args(args)? {

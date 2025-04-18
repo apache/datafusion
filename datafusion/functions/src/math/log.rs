@@ -256,6 +256,7 @@ mod tests {
 
     use arrow::array::{Float32Array, Float64Array, Int64Array};
     use arrow::compute::SortOptions;
+    use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
@@ -273,7 +274,7 @@ mod tests {
             ],
             arg_fields: vec![None; 2],
             number_rows: 4,
-            return_type: &DataType::Float64,
+            return_field: &Field::new("f", DataType::Float64, true),
         };
         let _ = LogFunc::new().invoke_with_args(args);
     }
@@ -286,7 +287,7 @@ mod tests {
             ],
             arg_fields: vec![None; 1],
             number_rows: 1,
-            return_type: &DataType::Float64,
+            return_field: &Field::new("f", DataType::Float64, true),
         };
 
         let result = LogFunc::new().invoke_with_args(args);
@@ -301,7 +302,7 @@ mod tests {
             ],
             arg_fields: vec![None; 1],
             number_rows: 1,
-            return_type: &DataType::Float32,
+            return_field: &Field::new("f", DataType::Float32, true),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -329,7 +330,7 @@ mod tests {
             ],
             arg_fields: vec![None; 1],
             number_rows: 1,
-            return_type: &DataType::Float64,
+            return_field: &Field::new("f", DataType::Float64, true),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -358,7 +359,7 @@ mod tests {
             ],
             arg_fields: vec![None; 2],
             number_rows: 1,
-            return_type: &DataType::Float32,
+            return_field: &Field::new("f", DataType::Float32, true),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -387,7 +388,7 @@ mod tests {
             ],
             arg_fields: vec![None; 2],
             number_rows: 1,
-            return_type: &DataType::Float64,
+            return_field: &Field::new("f", DataType::Float64, true),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -417,7 +418,7 @@ mod tests {
             ],
             arg_fields: vec![None; 1],
             number_rows: 4,
-            return_type: &DataType::Float64,
+            return_field: &Field::new("f", DataType::Float64, true),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -450,7 +451,7 @@ mod tests {
             ],
             arg_fields: vec![None; 1],
             number_rows: 4,
-            return_type: &DataType::Float32,
+            return_field: &Field::new("f", DataType::Float32, true),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -486,7 +487,7 @@ mod tests {
             ],
             arg_fields: vec![None; 2],
             number_rows: 4,
-            return_type: &DataType::Float64,
+            return_field: &Field::new("f", DataType::Float64, true),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -522,7 +523,7 @@ mod tests {
             ],
             arg_fields: vec![None; 2],
             number_rows: 4,
-            return_type: &DataType::Float32,
+            return_field: &Field::new("f", DataType::Float32, true),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)

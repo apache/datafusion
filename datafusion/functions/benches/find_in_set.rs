@@ -18,7 +18,7 @@
 extern crate criterion;
 
 use arrow::array::{StringArray, StringViewArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
@@ -159,7 +159,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args.clone(),
                     arg_fields: vec![None; args.len()],
                     number_rows: n_rows,
-                    return_type: &DataType::Int32,
+                    return_field: &Field::new("f", DataType::Int32, true),
                 }))
             })
         });
@@ -171,7 +171,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args.clone(),
                     arg_fields: vec![None; args.len()],
                     number_rows: n_rows,
-                    return_type: &DataType::Int32,
+                    return_field: &Field::new("f", DataType::Int32, true),
                 }))
             })
         });
@@ -187,7 +187,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args.clone(),
                     arg_fields: vec![None; args.len()],
                     number_rows: n_rows,
-                    return_type: &DataType::Int32,
+                    return_field: &Field::new("f", DataType::Int32, true),
                 }))
             })
         });
@@ -199,7 +199,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args.clone(),
                     arg_fields: vec![None; args.len()],
                     number_rows: n_rows,
-                    return_type: &DataType::Int32,
+                    return_field: &Field::new("f", DataType::Int32, true),
                 }))
             })
         });

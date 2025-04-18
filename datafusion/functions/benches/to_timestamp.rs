@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::array::builder::StringBuilder;
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::compute::cast;
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, Field, TimeUnit};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
@@ -109,7 +109,8 @@ fn data_with_formats() -> (StringArray, StringArray, StringArray, StringArray) {
     )
 }
 fn criterion_benchmark(c: &mut Criterion) {
-    let return_type = &DataType::Timestamp(TimeUnit::Nanosecond, None);
+    let return_field =
+        &Field::new("f", DataType::Timestamp(TimeUnit::Nanosecond, None), true);
     c.bench_function("to_timestamp_no_formats_utf8", |b| {
         let arr_data = data();
         let batch_len = arr_data.len();
@@ -122,7 +123,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![string_array.clone()],
                         arg_fields: vec![None; 1],
                         number_rows: batch_len,
-                        return_type,
+                        return_field,
                     })
                     .expect("to_timestamp should work on valid values"),
             )
@@ -141,7 +142,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![string_array.clone()],
                         arg_fields: vec![None; 1],
                         number_rows: batch_len,
-                        return_type,
+                        return_field,
                     })
                     .expect("to_timestamp should work on valid values"),
             )
@@ -160,7 +161,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![string_array.clone()],
                         arg_fields: vec![None; 1],
                         number_rows: batch_len,
-                        return_type,
+                        return_field,
                     })
                     .expect("to_timestamp should work on valid values"),
             )
@@ -184,7 +185,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         arg_fields: vec![None; args.len()],
                         number_rows: batch_len,
-                        return_type,
+                        return_field,
                     })
                     .expect("to_timestamp should work on valid values"),
             )
@@ -216,7 +217,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         arg_fields: vec![None; args.len()],
                         number_rows: batch_len,
-                        return_type,
+                        return_field,
                     })
                     .expect("to_timestamp should work on valid values"),
             )
@@ -249,7 +250,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         arg_fields: vec![None; args.len()],
                         number_rows: batch_len,
-                        return_type,
+                        return_field,
                     })
                     .expect("to_timestamp should work on valid values"),
             )

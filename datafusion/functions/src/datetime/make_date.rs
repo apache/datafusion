@@ -223,7 +223,7 @@ fn make_date_inner<F: FnMut(i32)>(
 mod tests {
     use crate::datetime::make_date::MakeDateFunc;
     use arrow::array::{Array, Date32Array, Int32Array, Int64Array, UInt32Array};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
@@ -238,7 +238,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Date32,
+            return_field: &Field::new("f", DataType::Date32, true),
         };
         let res = MakeDateFunc::new()
             .invoke_with_args(args)
@@ -258,7 +258,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Date32,
+            return_field: &Field::new("f", DataType::Date32, true),
         };
         let res = MakeDateFunc::new()
             .invoke_with_args(args)
@@ -278,7 +278,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Date32,
+            return_field: &Field::new("f", DataType::Date32, true),
         };
         let res = MakeDateFunc::new()
             .invoke_with_args(args)
@@ -302,7 +302,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: batch_len,
-            return_type: &DataType::Date32,
+            return_field: &Field::new("f", DataType::Date32, true),
         };
         let res = MakeDateFunc::new()
             .invoke_with_args(args)
@@ -329,7 +329,7 @@ mod tests {
             args: vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
             arg_fields: vec![None; 1],
             number_rows: 1,
-            return_type: &DataType::Date32,
+            return_field: &Field::new("f", DataType::Date32, true),
         };
         let res = MakeDateFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -346,7 +346,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Date32,
+            return_field: &Field::new("f", DataType::Date32, true),
         };
         let res = MakeDateFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -363,7 +363,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Date32,
+            return_field: &Field::new("f", DataType::Date32, true),
         };
         let res = MakeDateFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -380,7 +380,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Date32,
+            return_field: &Field::new("f", DataType::Date32, true),
         };
         let res = MakeDateFunc::new().invoke_with_args(args);
         assert_eq!(

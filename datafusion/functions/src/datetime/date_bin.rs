@@ -505,7 +505,7 @@ mod tests {
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-    use arrow::datatypes::{DataType, TimeUnit};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
 
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion_common::ScalarValue;
@@ -515,6 +515,9 @@ mod tests {
 
     #[test]
     fn test_date_bin() {
+        let return_field =
+            Field::new("f", DataType::Timestamp(TimeUnit::Nanosecond, None), true);
+
         let mut args = datafusion_expr::ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
@@ -528,7 +531,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert!(res.is_ok());
@@ -548,7 +551,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: batch_len,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert!(res.is_ok());
@@ -565,7 +568,7 @@ mod tests {
             ],
             arg_fields: vec![None; 2],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert!(res.is_ok());
@@ -585,7 +588,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert!(res.is_ok());
@@ -604,7 +607,7 @@ mod tests {
             )))],
             arg_fields: vec![None; 1],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -621,7 +624,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -644,7 +647,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
 
         let res = DateBinFunc::new().invoke_with_args(args);
@@ -664,7 +667,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -681,7 +684,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -698,7 +701,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -720,7 +723,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -741,7 +744,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert!(res.is_ok());
@@ -765,7 +768,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -789,7 +792,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: batch_len,
-            return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            return_field: &return_field,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -918,9 +921,10 @@ mod tests {
                     ],
                     arg_fields: vec![None; 3],
                     number_rows: batch_len,
-                    return_type: &DataType::Timestamp(
-                        TimeUnit::Nanosecond,
-                        tz_opt.clone(),
+                    return_field: &Field::new(
+                        "f",
+                        DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                        true,
                     ),
                 };
                 let result = DateBinFunc::new().invoke_with_args(args).unwrap();

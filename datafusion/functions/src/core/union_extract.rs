@@ -200,7 +200,7 @@ mod tests {
             ],
             arg_fields: vec![None; 2],
             number_rows: 1,
-            return_type: &DataType::Utf8,
+            return_field: &Field::new("f", DataType::Utf8, true),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -216,7 +216,7 @@ mod tests {
             ],
             arg_fields: vec![None; 2],
             number_rows: 1,
-            return_type: &DataType::Utf8,
+            return_field: &Field::new("f", DataType::Utf8, true),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -232,7 +232,7 @@ mod tests {
             ],
             arg_fields: vec![None; 2],
             number_rows: 1,
-            return_type: &DataType::Utf8,
+            return_field: &Field::new("f", DataType::Utf8, true),
         })?;
 
         assert_scalar(result, ScalarValue::new_utf8("42"));

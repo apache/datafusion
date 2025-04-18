@@ -163,7 +163,7 @@ impl ScalarUDFImpl for ToDateFunc {
 #[cfg(test)]
 mod tests {
     use arrow::array::{Array, Date32Array, GenericStringArray, StringViewArray};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use arrow::{compute::kernels::cast_utils::Parser, datatypes::Date32Type};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -212,7 +212,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(sv)],
                 arg_fields: vec![None; 1],
                 number_rows: 1,
-                return_type: &DataType::Date32,
+                return_field: &Field::new("f", DataType::Date32, true),
             };
             let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -239,7 +239,7 @@ mod tests {
                 args: vec![ColumnarValue::Array(Arc::new(date_array))],
                 arg_fields: vec![None; 1],
                 number_rows: batch_len,
-                return_type: &DataType::Date32,
+                return_field: &Field::new("f", DataType::Date32, true),
             };
             let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -337,7 +337,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 2],
                 number_rows: 1,
-                return_type: &DataType::Date32,
+                return_field: &Field::new("f", DataType::Date32, true),
             };
             let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -368,7 +368,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 2],
                 number_rows: batch_len,
-                return_type: &DataType::Date32,
+                return_field: &Field::new("f", DataType::Date32, true),
             };
             let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -410,7 +410,7 @@ mod tests {
             ],
             arg_fields: vec![None; 3],
             number_rows: 1,
-            return_type: &DataType::Date32,
+            return_field: &Field::new("f", DataType::Date32, true),
         };
         let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -440,7 +440,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(formatted_date_scalar)],
                 arg_fields: vec![None; 1],
                 number_rows: 1,
-                return_type: &DataType::Date32,
+                return_field: &Field::new("f", DataType::Date32, true),
             };
             let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -463,7 +463,7 @@ mod tests {
             args: vec![ColumnarValue::Scalar(date_scalar)],
             arg_fields: vec![None; 1],
             number_rows: 1,
-            return_type: &DataType::Date32,
+            return_field: &Field::new("f", DataType::Date32, true),
         };
         let to_date_result = ToDateFunc::new().invoke_with_args(args);
 
@@ -489,7 +489,7 @@ mod tests {
             args: vec![ColumnarValue::Scalar(date_scalar)],
             arg_fields: vec![None; 1],
             number_rows: 1,
-            return_type: &DataType::Date32,
+            return_field: &Field::new("f", DataType::Date32, true),
         };
         let to_date_result = ToDateFunc::new().invoke_with_args(args);
 

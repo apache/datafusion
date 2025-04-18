@@ -157,20 +157,20 @@ pub mod test {
                 .map(|(idx, (data_type, nullable))| arrow::datatypes::Field::new(format!("field_{idx}"), data_type, nullable))
                 .collect::<Vec<_>>();
 
-            let return_info = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
+            let return_field = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
                 arg_fields: &field_array,
                 scalar_arguments: &scalar_arguments_refs,
             });
 
             match expected {
                 Ok(expected) => {
-                    assert_eq!(return_info.is_ok(), true);
-                    let return_info = return_info.unwrap();
-                    let return_type = return_info.data_type();
+                    assert_eq!(return_field.is_ok(), true);
+                    let return_field = return_field.unwrap();
+                    let return_type = return_field.data_type();
                     assert_eq!(return_type, &$EXPECTED_DATA_TYPE);
 
                     let arg_fields = vec![None; $ARGS.len()];
-                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_type: &return_type});
+                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_field: &return_field});
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
                     let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
@@ -184,19 +184,18 @@ pub mod test {
                     };
                 }
                 Err(expected_error) => {
-                    if return_info.is_err() {
-                        match return_info {
+                    if return_field.is_err() {
+                        match return_field {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => { datafusion_common::assert_contains!(expected_error.strip_backtrace(), error.strip_backtrace()); }
                         }
                     }
                     else {
-                        let return_info = return_info.unwrap();
-                        let return_type = return_info.data_type();
+                        let return_field = return_field.unwrap();
 
                         let arg_fields = vec![None; $ARGS.len()];
                         // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
-                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_type: &return_type}) {
+                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_field: &return_field}) {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => {
                                 assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));

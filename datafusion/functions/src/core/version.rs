@@ -97,6 +97,7 @@ impl ScalarUDFImpl for VersionFunc {
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow::datatypes::Field;
     use datafusion_expr::ScalarUDF;
 
     #[tokio::test]
@@ -107,7 +108,7 @@ mod test {
                 args: vec![],
                 arg_fields: vec![],
                 number_rows: 0,
-                return_type: &DataType::Utf8,
+                return_field: &Field::new("f", DataType::Utf8, true),
             })
             .unwrap();
 

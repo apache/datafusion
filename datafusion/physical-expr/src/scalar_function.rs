@@ -30,7 +30,6 @@
 //! to a function that supports f64, it is coerced to f64.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -49,35 +48,12 @@ use datafusion_expr::{
 };
 
 /// Physical expression of a scalar function
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Hash)]
 pub struct ScalarFunctionExpr {
     fun: Arc<ScalarUDF>,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
-    return_type: DataType,
-    nullable: bool,
-    metadata: HashMap<String, String>,
-}
-
-impl Hash for ScalarFunctionExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Sort keys for deterministic hashing
-        let mut keys: Vec<&String> = self.metadata.keys().collect();
-        keys.sort();
-
-        for key in keys {
-            key.hash(state);
-            if let Some(value) = self.metadata.get(key) {
-                value.hash(state);
-            }
-        }
-
-        self.fun.hash(state);
-        self.name.hash(state);
-        self.args.hash(state);
-        self.return_type.hash(state);
-        self.nullable.hash(state);
-    }
+    return_field: Field,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -86,7 +62,7 @@ impl Debug for ScalarFunctionExpr {
             .field("fun", &"<FUNC>")
             .field("name", &self.name)
             .field("args", &self.args)
-            .field("return_type", &self.return_type)
+            .field("return_field", &self.return_field)
             .finish()
     }
 }
@@ -97,16 +73,13 @@ impl ScalarFunctionExpr {
         name: &str,
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
-        return_type: DataType,
-        metadata: HashMap<String, String>,
+        return_field: Field,
     ) -> Self {
         Self {
             fun,
             name: name.to_owned(),
             args,
-            return_type,
-            nullable: true,
-            metadata,
+            return_field,
         }
     }
 
@@ -157,9 +130,7 @@ impl ScalarFunctionExpr {
             fun,
             name,
             args,
-            return_type: return_field.data_type().clone(),
-            nullable: return_field.is_nullable(),
-            metadata: HashMap::new(),
+            return_field,
         })
     }
 
@@ -180,16 +151,16 @@ impl ScalarFunctionExpr {
 
     /// Data type produced by this expression
     pub fn return_type(&self) -> &DataType {
-        &self.return_type
+        self.return_field.data_type()
     }
 
     pub fn with_nullable(mut self, nullable: bool) -> Self {
-        self.nullable = nullable;
+        self.return_field = self.return_field.with_nullable(nullable);
         self
     }
 
     pub fn nullable(&self) -> bool {
-        self.nullable
+        self.return_field.is_nullable()
     }
 }
 
@@ -206,11 +177,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(self.return_type.clone())
+        Ok(self.return_field.data_type().clone())
     }
 
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        Ok(self.nullable)
+        Ok(self.return_field.is_nullable())
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -240,7 +211,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             args,
             arg_fields,
             number_rows: batch.num_rows(),
-            return_type: &self.return_type,
+            return_field: &self.return_field,
         })?;
 
         if let ColumnarValue::Array(array) = &output {
@@ -272,16 +243,12 @@ impl PhysicalExpr for ScalarFunctionExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(
-            ScalarFunctionExpr::new(
-                &self.name,
-                Arc::clone(&self.fun),
-                children,
-                self.return_type().clone(),
-                self.metadata.clone(),
-            )
-            .with_nullable(self.nullable),
-        ))
+        Ok(Arc::new(ScalarFunctionExpr::new(
+            &self.name,
+            Arc::clone(&self.fun),
+            children,
+            self.return_field.clone(),
+        )))
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {

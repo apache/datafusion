@@ -87,7 +87,7 @@ pub struct FFI_ScalarUDF {
         args: RVec<WrappedArray>,
         arg_fields: RVec<ROption<WrappedSchema>>,
         num_rows: usize,
-        return_type: WrappedSchema,
+        return_field: WrappedSchema,
     ) -> RResult<WrappedArray, RString>,
 
     /// See [`ScalarUDFImpl`] for details on short_circuits
@@ -175,7 +175,7 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
     args: RVec<WrappedArray>,
     arg_fields: RVec<ROption<WrappedSchema>>,
     number_rows: usize,
-    return_type: WrappedSchema,
+    return_field: WrappedSchema,
 ) -> RResult<WrappedArray, RString> {
     let private_data = udf.private_data as *const ScalarUDFPrivateData;
     let udf = &(*private_data).udf;
@@ -189,7 +189,7 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         .collect::<std::result::Result<_, _>>();
 
     let args = rresult_return!(args);
-    let return_type = rresult_return!(DataType::try_from(&return_type.0));
+    let return_field = rresult_return!(Field::try_from(&return_field.0));
 
     let arg_fields_owned = arg_fields
         .into_iter()
@@ -210,7 +210,7 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         args,
         arg_fields,
         number_rows,
-        return_type: &return_type,
+        return_field: &return_field,
     };
 
     let result = rresult_return!(udf
@@ -347,7 +347,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             args,
             arg_fields,
             number_rows,
-            return_type,
+            return_field,
         } = invoke_args;
 
         let args = args
@@ -374,7 +374,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             .map(|maybe_field| maybe_field.map(WrappedSchema).into())
             .collect::<RVec<_>>();
 
-        let return_type = WrappedSchema(FFI_ArrowSchema::try_from(return_type)?);
+        let return_field = WrappedSchema(FFI_ArrowSchema::try_from(return_field)?);
 
         let result = unsafe {
             (self.udf.invoke_with_args)(
@@ -382,7 +382,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
                 args,
                 arg_fields,
                 number_rows,
-                return_type,
+                return_field,
             )
         };
 

@@ -487,7 +487,7 @@ mod tests {
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{Array, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-    use arrow::datatypes::{DataType, TimeUnit};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -733,7 +733,11 @@ mod tests {
                 ],
                 arg_fields: vec![None; 2],
                 number_rows: batch_len,
-                return_type: &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                return_field: &Field::new(
+                    "f",
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                    true,
+                ),
             };
             let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
@@ -896,7 +900,11 @@ mod tests {
                 ],
                 arg_fields: vec![None; 2],
                 number_rows: batch_len,
-                return_type: &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                return_field: &Field::new(
+                    "f",
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                    true,
+                ),
             };
             let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {

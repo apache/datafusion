@@ -20,7 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int32Array};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::ThreadRng;
 use rand::Rng;
@@ -71,7 +71,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![years.clone(), months.clone(), days.clone()],
                         arg_fields: vec![None; 3],
                         number_rows: batch_len,
-                        return_type: &DataType::Date32,
+                        return_field: &Field::new("f", DataType::Date32, true),
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -93,7 +93,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![year.clone(), months.clone(), days.clone()],
                         arg_fields: vec![None; 3],
                         number_rows: batch_len,
-                        return_type: &DataType::Date32,
+                        return_field: &Field::new("f", DataType::Date32, true),
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -115,7 +115,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![year.clone(), month.clone(), days.clone()],
                         arg_fields: vec![None; 3],
                         number_rows: batch_len,
-                        return_type: &DataType::Date32,
+                        return_field: &Field::new("f", DataType::Date32, true),
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -134,7 +134,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![year.clone(), month.clone(), day.clone()],
                         arg_fields: vec![None; 3],
                         number_rows: 1,
-                        return_type: &DataType::Date32,
+                        return_field: &Field::new("f", DataType::Date32, true),
                     })
                     .expect("make_date should work on valid values"),
             )

@@ -18,7 +18,7 @@
 extern crate criterion;
 mod helper;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::ScalarFunctionArgs;
 use helper::gen_string_array;
@@ -48,7 +48,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_ascii.clone(),
                         arg_fields: vec![None; args_string_ascii.len()],
                         number_rows: N_ROWS,
-                        return_type: &DataType::Utf8,
+                        return_field: &Field::new("f", DataType::Utf8, true),
                     }))
                 })
             },
@@ -68,7 +68,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_utf8.clone(),
                         arg_fields: vec![None; args_string_utf8.len()],
                         number_rows: N_ROWS,
-                        return_type: &DataType::Utf8,
+                        return_field: &Field::new("f", DataType::Utf8, true),
                     }))
                 })
             },
@@ -90,7 +90,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_view_ascii.clone(),
                         arg_fields: vec![None; args_string_view_ascii.len()],
                         number_rows: N_ROWS,
-                        return_type: &DataType::Utf8,
+                        return_field: &Field::new("f", DataType::Utf8, true),
                     }))
                 })
             },
@@ -110,7 +110,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_view_utf8.clone(),
                         arg_fields: vec![None; args_string_view_utf8.len()],
                         number_rows: N_ROWS,
-                        return_type: &DataType::Utf8,
+                        return_field: &Field::new("f", DataType::Utf8, true),
                     }))
                 })
             },

@@ -20,6 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
+use arrow::datatypes::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use rand::rngs::ThreadRng;
@@ -47,16 +48,17 @@ fn criterion_benchmark(c: &mut Criterion) {
         let timestamps = ColumnarValue::Array(timestamps_array);
         let udf = date_trunc();
         let args = vec![precision, timestamps];
-        let return_type = &udf
+        let return_type = udf
             .return_type(&args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>())
             .unwrap();
+        let return_field = Field::new("f", return_type, true);
         b.iter(|| {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
                     arg_fields: vec![None; args.len()],
                     number_rows: batch_len,
-                    return_type,
+                    return_field: &return_field,
                 })
                 .expect("date_trunc should work on valid values"),
             )

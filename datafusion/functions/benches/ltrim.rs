@@ -18,7 +18,7 @@
 extern crate criterion;
 
 use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use criterion::{
     black_box, criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup,
     Criterion, SamplingMode,
@@ -147,7 +147,7 @@ fn run_with_string_type<M: Measurement>(
                     args: args_cloned,
                     arg_fields: vec![None; args.len()],
                     number_rows: size,
-                    return_type: &DataType::Utf8,
+                    return_field: &Field::new("f", DataType::Utf8, true),
                 }))
             })
         },

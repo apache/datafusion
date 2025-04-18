@@ -403,10 +403,10 @@ fn is_null(expr: &Expr) -> bool {
 mod tests {
     use std::sync::Arc;
 
+    use crate::string::concat_ws::ConcatWsFunc;
     use arrow::array::{Array, ArrayRef, StringArray};
     use arrow::datatypes::DataType::Utf8;
-
-    use crate::string::concat_ws::ConcatWsFunc;
+    use arrow::datatypes::Field;
     use datafusion_common::Result;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
@@ -485,7 +485,7 @@ mod tests {
             args: vec![c0, c1, c2],
             arg_fields: vec![None; 3],
             number_rows: 3,
-            return_type: &Utf8,
+            return_field: &Field::new("f", Utf8, true),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -516,7 +516,7 @@ mod tests {
             args: vec![c0, c1, c2],
             arg_fields: vec![None; 3],
             number_rows: 3,
-            return_type: &Utf8,
+            return_field: &Field::new("f", Utf8, true),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;

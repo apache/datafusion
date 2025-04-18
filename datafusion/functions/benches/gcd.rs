@@ -17,6 +17,7 @@
 
 extern crate criterion;
 
+use arrow::datatypes::Field;
 use arrow::{
     array::{ArrayRef, Int64Array},
     datatypes::DataType,
@@ -49,7 +50,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: vec![array_a.clone(), array_b.clone()],
                     arg_fields: vec![None; 2],
                     number_rows: 0,
-                    return_type: &DataType::Int64,
+                    return_field: &Field::new("f", DataType::Int64, true),
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -66,7 +67,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: vec![array_a.clone(), scalar_b.clone()],
                     arg_fields: vec![None; 2],
                     number_rows: 0,
-                    return_type: &DataType::Int64,
+                    return_field: &Field::new("f", DataType::Int64, true),
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -83,7 +84,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: vec![scalar_a.clone(), scalar_b.clone()],
                     arg_fields: vec![None; 2],
                     number_rows: 0,
-                    return_type: &DataType::Int64,
+                    return_field: &Field::new("f", DataType::Int64, true),
                 })
                 .expect("date_bin should work on valid values"),
             )

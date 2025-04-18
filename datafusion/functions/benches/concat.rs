@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use datafusion_common::ScalarValue;
@@ -47,7 +47,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args_cloned,
                             arg_fields: vec![None; args.len()],
                             number_rows: size,
-                            return_type: &DataType::Utf8,
+                            return_field: &Field::new("f", DataType::Utf8, true),
                         })
                         .unwrap(),
                 )

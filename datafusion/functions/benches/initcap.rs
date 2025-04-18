@@ -18,7 +18,7 @@
 extern crate criterion;
 
 use arrow::array::OffsetSizeTrait;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
@@ -57,7 +57,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         arg_fields: vec![None; args.len()],
                         number_rows: size,
-                        return_type: &DataType::Utf8View,
+                        return_field: &Field::new("f", DataType::Utf8View, true),
                     }))
                 })
             },
@@ -72,7 +72,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         arg_fields: vec![None; args.len()],
                         number_rows: size,
-                        return_type: &DataType::Utf8View,
+                        return_field: &Field::new("f", DataType::Utf8View, true),
                     }))
                 })
             },
@@ -85,7 +85,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args.clone(),
                     arg_fields: vec![None; args.len()],
                     number_rows: size,
-                    return_type: &DataType::Utf8,
+                    return_field: &Field::new("f", DataType::Utf8, true),
                 }))
             })
         });

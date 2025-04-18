@@ -619,6 +619,7 @@ fn count_matches(
 mod tests {
     use super::*;
     use arrow::array::{GenericStringArray, StringViewArray};
+    use arrow::datatypes::Field;
     use datafusion_expr::ScalarFunctionArgs;
 
     #[test]
@@ -661,7 +662,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
                 arg_fields: vec![None; 2],
                 number_rows: 2,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -677,7 +678,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
                 arg_fields: vec![None; 2],
                 number_rows: 2,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -693,7 +694,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
                 arg_fields: vec![None; 2],
                 number_rows: 2,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -724,7 +725,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 3],
                 number_rows: 3,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -744,7 +745,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 3],
                 number_rows: 3,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -764,7 +765,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 3],
                 number_rows: 3,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -798,7 +799,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 4],
                 number_rows: 4,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -820,7 +821,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 4],
                 number_rows: 4,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -842,7 +843,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 4],
                 number_rows: 4,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -925,7 +926,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 4],
                 number_rows: 4,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -947,7 +948,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 4],
                 number_rows: 4,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -969,7 +970,7 @@ mod tests {
                 ],
                 arg_fields: vec![None; 4],
                 number_rows: 4,
-                return_type: &Int64,
+                return_field: &Field::new("f", Int64, true),
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {

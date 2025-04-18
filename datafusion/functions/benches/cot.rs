@@ -25,7 +25,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::cot;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -41,7 +41,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: f32_args.clone(),
                             arg_fields: vec![None; f32_args.len()],
                             number_rows: size,
-                            return_type: &DataType::Float32,
+                            return_field: &Field::new("f", DataType::Float32, true),
                         })
                         .unwrap(),
                 )
@@ -57,7 +57,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: f64_args.clone(),
                             arg_fields: vec![None; f64_args.len()],
                             number_rows: size,
-                            return_type: &DataType::Float64,
+                            return_field: &Field::new("f", DataType::Float64, true),
                         })
                         .unwrap(),
                 )

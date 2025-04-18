@@ -376,6 +376,7 @@ mod tests {
     use crate::utils::test::test_function;
     use arrow::array::{Array, LargeStringArray, StringViewArray};
     use arrow::array::{ArrayRef, StringArray};
+    use arrow::datatypes::Field;
     use DataType::*;
 
     #[test]
@@ -473,7 +474,7 @@ mod tests {
             args: vec![c0, c1, c2, c3, c4],
             arg_fields: vec![None; 5],
             number_rows: 3,
-            return_type: &Utf8,
+            return_field: &Field::new("f", Utf8, true),
         };
 
         let result = ConcatFunc::new().invoke_with_args(args)?;

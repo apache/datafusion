@@ -17,7 +17,7 @@
 
 extern crate criterion;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::ScalarFunctionArgs;
 use helper::gen_string_array;
@@ -28,7 +28,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     // All benches are single batch run with 8192 rows
     let character_length = datafusion_functions::unicode::character_length();
 
-    let return_type = DataType::Utf8;
+    let return_field = Field::new("f", DataType::Utf8, true);
 
     let n_rows = 8192;
     for str_len in [8, 32, 128, 4096] {
@@ -42,7 +42,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_ascii.clone(),
                         arg_fields: vec![None; args_string_ascii.len()],
                         number_rows: n_rows,
-                        return_type: &return_type,
+                        return_field: &return_field,
                     }))
                 })
             },
@@ -58,7 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_utf8.clone(),
                         arg_fields: vec![None; args_string_utf8.len()],
                         number_rows: n_rows,
-                        return_type: &return_type,
+                        return_field: &return_field,
                     }))
                 })
             },
@@ -74,7 +74,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_view_ascii.clone(),
                         arg_fields: vec![None; args_string_view_ascii.len()],
                         number_rows: n_rows,
-                        return_type: &return_type,
+                        return_field: &return_field,
                     }))
                 })
             },
@@ -90,7 +90,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_string_view_utf8.clone(),
                         arg_fields: vec![None; args_string_view_utf8.len()],
                         number_rows: n_rows,
-                        return_type: &return_type,
+                        return_field: &return_field,
                     }))
                 })
             },

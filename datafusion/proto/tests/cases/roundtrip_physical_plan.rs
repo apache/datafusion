@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
@@ -973,8 +972,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         "dummy",
         fun_def,
         vec![col("a", &schema)?],
-        DataType::Int64,
-        HashMap::default(),
+        Field::new("f", DataType::Int64, true),
     );
 
     let project =
@@ -1102,8 +1100,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        DataType::Int64,
-        HashMap::default(),
+        Field::new("f", DataType::Int64, true),
     ));
 
     let filter = Arc::new(FilterExec::try_new(
@@ -1205,8 +1202,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        DataType::Int64,
-        HashMap::default(),
+        Field::new("f", DataType::Int64, true),
     ));
 
     let udaf = Arc::new(AggregateUDF::from(MyAggregateUDF::new(

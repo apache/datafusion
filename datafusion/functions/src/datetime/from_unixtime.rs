@@ -161,8 +161,8 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
 #[cfg(test)]
 mod test {
     use crate::datetime::from_unixtime::FromUnixtimeFunc;
-    use arrow::datatypes::DataType;
     use arrow::datatypes::TimeUnit::Second;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Int64;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -174,7 +174,7 @@ mod test {
             args: vec![ColumnarValue::Scalar(Int64(Some(1729900800)))],
             arg_fields: vec![None; 1],
             number_rows: 1,
-            return_type: &DataType::Timestamp(Second, None),
+            return_field: &Field::new("f", DataType::Timestamp(Second, None), true),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 
@@ -197,9 +197,10 @@ mod test {
             ],
             arg_fields: vec![None; 2],
             number_rows: 2,
-            return_type: &DataType::Timestamp(
-                Second,
-                Some(Arc::from("America/New_York")),
+            return_field: &Field::new(
+                "f",
+                DataType::Timestamp(Second, Some(Arc::from("America/New_York"))),
+                true,
             ),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
