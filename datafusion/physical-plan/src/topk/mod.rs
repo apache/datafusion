@@ -24,15 +24,15 @@ use arrow::{
 };
 use arrow_ord::cmp::{gt, gt_eq, lt, lt_eq};
 use datafusion_expr::ColumnarValue;
-use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
+use std::{mem::size_of, sync::RwLock};
 
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_datafusion_err, HashMap};
+use datafusion_common::{internal_datafusion_err, HashMap, ScalarValue};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
@@ -120,6 +120,8 @@ pub struct TopK {
     /// to be greater (by byte order, after row conversion) than the top K,
     /// which means the top K won't change and the computation can be finished early.
     pub(crate) finished: bool,
+
+    thresholds: Arc<RwLock<Vec<Option<ScalarValue>>>>,
 }
 
 // Guesstimate for memory allocation: estimated number of bytes used per row in the RowConverter
@@ -173,7 +175,7 @@ impl TopK {
                 build_sort_fields(&common_sort_prefix, &schema)?;
             Some(RowConverter::new(input_sort_fields)?)
         };
-
+        let num_exprs = expr.len();
         Ok(Self {
             schema: Arc::clone(&schema),
             metrics: TopKMetrics::new(metrics, partition_id),
@@ -186,6 +188,7 @@ impl TopK {
             common_sort_prefix_converter: prefix_row_converter,
             common_sort_prefix: Arc::from(common_sort_prefix),
             finished: false,
+            thresholds: Arc::new(RwLock::new(vec![None; num_exprs])),
         })
     }
 
@@ -223,19 +226,31 @@ impl TopK {
             // This could use BinaryExpr to benefit from short circuiting and early evaluation
             // https://github.com/apache/datafusion/issues/15698
             // Extract the value for this column from the max row
-            let expr = Arc::clone(&self.expr[0].expr);
-            let value = expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
-
-            let scalar_is_null = if let ColumnarValue::Scalar(scalar_value) = &value {
-                scalar_value.is_null()
-            } else {
-                false
-            };
+            let thresholds: Vec<_> = self
+                .expr
+                .iter()
+                .map(|expr| {
+                    let value = expr
+                        .expr
+                        .evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
+                    Ok(Some(match value {
+                        ColumnarValue::Array(array) => {
+                            ScalarValue::try_from_array(&array, 0)?
+                        }
+                        ColumnarValue::Scalar(scalar_value) => scalar_value,
+                    }))
+                })
+                .collect::<Result<_>>()?;
+            self.thresholds
+                .write()
+                .expect("Write lock should succeed")
+                .clone_from(&thresholds);
+            let threshold0 = thresholds[0].as_ref().unwrap();
 
             // skip filtering if threshold is null
-            if !scalar_is_null {
+            if !threshold0.is_null() {
                 // Convert to scalar value - should be a single value since we're evaluating on a single row batch
-                let threshold = Scalar::new(value.to_array(1)?);
+                let threshold = Scalar::new(threshold0.to_array_of_size(1)?);
 
                 // Create a filter for each sort key
                 let is_multi_col = self.expr.len() > 1;
@@ -429,6 +444,7 @@ impl TopK {
             common_sort_prefix_converter: _,
             common_sort_prefix: _,
             finished: _,
+            thresholds: _,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
@@ -460,6 +476,10 @@ impl TopK {
             + self.row_converter.size()
             + self.scratch_rows.size()
             + self.heap.size()
+    }
+
+    pub fn thresholds(&self) -> &Arc<RwLock<Vec<Option<ScalarValue>>>> {
+        &self.thresholds
     }
 }
 
