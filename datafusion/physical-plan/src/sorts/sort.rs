@@ -48,8 +48,7 @@ use arrow::array::{
     Array, ArrayRef, RecordBatch, RecordBatchOptions, StringViewArray, UInt32Array,
 };
 use arrow::compute::{
-    concat, concat_batches, interleave_record_batch, lexsort_to_indices, take_arrays,
-    SortColumn,
+    concat, interleave_record_batch, lexsort_to_indices, take_arrays, SortColumn,
 };
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
@@ -665,11 +664,27 @@ impl ExternalSorter {
         let elapsed_compute = metrics.elapsed_compute().clone();
         let _timer = elapsed_compute.timer();
 
-        // Note, in theory in memory batches should have limited size, but some testing
-        // cases testing the memory limit use `sort_in_place_threshold_bytes` to, so here we
-        // set a larger limit to avoid testing failure.
+        // Please pay attention that any operation inside of `in_mem_sort_stream` will
+        // not perform any memory reservation. This is for avoiding the need of handling
+        // reservation failure and spilling in the middle of the sort/merge. The memory
+        // space for batches produced by the resulting stream will be reserved by the
+        // consumer of the stream.
+
+        if self.in_mem_batches.len() == 1 {
+            let batch = self.in_mem_batches.swap_remove(0);
+            let reservation = self.reservation.take();
+            return self.sort_batch_stream(batch, metrics, reservation);
+        }
+
+        // If less than sort_in_place_threshold_bytes, we sort in memory.
+        // Note:
+        // In theory we should always be able to sort in place, but some corner cases for merging testing
+        // failed, so we set a large threshold to avoid that.
+        // Also, we only support sort expressions with less than 3 columns for now. Because from testing, when
+        // columns > 3, the performance of in-place sort is worse than sort/merge.
+        // Need to further investigate the performance of in-place sort when columns > 3.
         if self.expr.len() <= 2
-            && self.reservation.size() < 1000 * self.sort_in_place_threshold_bytes
+            && self.reservation.size() < self.sort_in_place_threshold_bytes
         {
             let interleave_indices = self.build_sorted_indices(
                 self.in_mem_batches.as_slice(),
@@ -686,59 +701,35 @@ impl ExternalSorter {
 
             metrics.record_output(sorted_batch.num_rows());
 
-            Ok(Box::pin(RecordBatchStreamAdapter::new(
+            return Ok(Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&self.schema),
                 futures::stream::once(async { Ok(sorted_batch) }),
-            )) as SendableRecordBatchStream)
-        } else {
-            // Please pay attention that any operation inside of `in_mem_sort_stream` will
-            // not perform any memory reservation. This is for avoiding the need of handling
-            // reservation failure and spilling in the middle of the sort/merge. The memory
-            // space for batches produced by the resulting stream will be reserved by the
-            // consumer of the stream.
-
-            if self.in_mem_batches.len() == 1 {
-                let batch = self.in_mem_batches.swap_remove(0);
-                let reservation = self.reservation.take();
-                return self.sort_batch_stream(batch, metrics, reservation);
-            }
-
-            // If less than sort_in_place_threshold_bytes, concatenate and sort in place
-            if self.reservation.size() < self.sort_in_place_threshold_bytes {
-                // Concatenate memory batches together and sort
-                let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
-                self.in_mem_batches.clear();
-                self.reservation
-                    .try_resize(get_reserved_byte_for_record_batch(&batch))
-                    .map_err(Self::err_with_oom_context)?;
-                let reservation = self.reservation.take();
-                return self.sort_batch_stream(batch, metrics, reservation);
-            }
-
-            let streams = std::mem::take(&mut self.in_mem_batches)
-                .into_iter()
-                .map(|batch| {
-                    let metrics = self.metrics.baseline.intermediate();
-                    let reservation = self
-                        .reservation
-                        .split(get_reserved_byte_for_record_batch(&batch));
-                    let input = self.sort_batch_stream(batch, metrics, reservation)?;
-                    Ok(spawn_buffered(input, 1))
-                })
-                .collect::<Result<_>>()?;
-
-            let expressions: LexOrdering = self.expr.iter().cloned().collect();
-
-            StreamingMergeBuilder::new()
-                .with_streams(streams)
-                .with_schema(Arc::clone(&self.schema))
-                .with_expressions(expressions.as_ref())
-                .with_metrics(metrics)
-                .with_batch_size(self.batch_size)
-                .with_fetch(None)
-                .with_reservation(self.merge_reservation.new_empty())
-                .build()
+            )) as SendableRecordBatchStream);
         }
+
+        let streams = std::mem::take(&mut self.in_mem_batches)
+            .into_iter()
+            .map(|batch| {
+                let metrics = self.metrics.baseline.intermediate();
+                let reservation = self
+                    .reservation
+                    .split(get_reserved_byte_for_record_batch(&batch));
+                let input = self.sort_batch_stream(batch, metrics, reservation)?;
+                Ok(spawn_buffered(input, 1))
+            })
+            .collect::<Result<_>>()?;
+
+        let expressions: LexOrdering = self.expr.iter().cloned().collect();
+
+        StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_schema(Arc::clone(&self.schema))
+            .with_expressions(expressions.as_ref())
+            .with_metrics(metrics)
+            .with_batch_size(self.batch_size)
+            .with_fetch(None)
+            .with_reservation(self.merge_reservation.new_empty())
+            .build()
     }
 
     fn build_sorted_indices(
