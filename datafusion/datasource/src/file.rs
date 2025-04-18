@@ -37,9 +37,14 @@ use datafusion_physical_plan::DisplayFormatType;
 
 use object_store::ObjectStore;
 
-/// Common file format behaviors needs to implement.
+/// file format specific behaviors for elements in [`DataSource`]
 ///
-/// See implementation examples such as `ParquetSource`, `CsvSource`
+/// See more details on specific implementations:
+/// * [`ArrowSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ArrowSource.html)
+/// * [`AvroSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.AvroSource.html)
+/// * [`CsvSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.CsvSource.html)
+/// * [`JsonSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.JsonSource.html)
+/// * [`ParquetSource`](https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.ParquetSource.html)
 pub trait FileSource: Send + Sync {
     /// Creates a `dyn FileOpener` based on given parameters
     fn create_file_opener(

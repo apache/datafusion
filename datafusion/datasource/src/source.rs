@@ -40,15 +40,26 @@ use datafusion_physical_plan::filter_pushdown::{
     FilterPushdownSupport,
 };
 
-/// Common behaviors in Data Sources for both from Files and Memory.
+/// A source of data, typically a list of files or memory
+///
+/// This trait provides common behaviors for abstract sources of data. It has
+/// two common implementations:
+///
+/// 1. [`FileScanConfig`]: lists of files
+/// 2. [`MemorySourceConfig`]: in memory list of `RecordBatch`
+///
+/// File format specific behaviors are defined by [`FileSource`]
 ///
 /// # See Also
-/// * [`DataSourceExec`] for physical plan implementation
-/// * [`FileSource`] for file format implementations (Parquet, Json, etc)
+/// * [`DataSourceExec`]: The [`ExecutionPlan`] that reads from a `DataSource`
+/// * [`FileSource`] for file format specific implementations (Parquet, Json, etc)
 ///
 /// # Notes
+///
 /// Requires `Debug` to assist debugging
 ///
+/// [`FileScanConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html
+/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest//datafusion/datasource/memory/struct.MemorySourceConfig.html
 /// [`FileSource`]: crate::file::FileSource
 pub trait DataSource: Send + Sync + Debug {
     fn open(
