@@ -6795,4 +6795,3 @@ select c2, count(*) from test WHERE 1 = 1 group by c2;
 4 1
 5 1
 6 1
-
