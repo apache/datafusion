@@ -1215,29 +1215,79 @@ fn is_compare_op(op: Operator) -> bool {
 // For example, casts from string to numbers is not correct.
 // Because the "13" is less than "3" with UTF8 comparison order.
 fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Result<()> {
-    // Unrwavel dictionaries, these are always supported
+    // Dictionary casts are always supported as long as the value types are supported
     let from_type = match from_type {
-        DataType::Dictionary(_, t) => return verify_support_type_for_prune(t.as_ref(), to_type),
+        DataType::Dictionary(_, t) => {
+            return verify_support_type_for_prune(t.as_ref(), to_type)
+        }
         _ => from_type,
     };
     let to_type = match to_type {
-        DataType::Dictionary(_, t) => return verify_support_type_for_prune(from_type, t.as_ref()),
+        DataType::Dictionary(_, t) => {
+            return verify_support_type_for_prune(from_type, t.as_ref())
+        }
         _ => to_type,
     };
+    // If the types are the same (e.g. after unpacking a dictionary) they are supported
     if from_type == to_type {
         return Ok(());
     }
     // TODO: support other data type for prunable cast or try cast
     if matches!(
+        // String -> String casts are suppoted
         from_type,
-        DataType::Int8
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) && matches!(
+        to_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        return Ok(());
+    } else if matches!(
+        // Numeric -> Numeric casts are supported
+        from_type,
+        DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
             | DataType::Decimal128(_, _)
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
     ) && matches!(
         to_type,
-        DataType::Int8 | DataType::Int32 | DataType::Int64 | DataType::Decimal128(_, _)
+        DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Decimal128(_, _)
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+    ) {
+        Ok(())
+    } else if matches!(
+        // Temporal -> Temporal casts are supported
+        from_type,
+        DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _)
+    ) && matches!(
+        to_type,
+        DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _)
     ) {
         Ok(())
     } else {
@@ -1558,8 +1608,8 @@ fn build_predicate_expression(
         // this can still produce a useful predicate when multiple conditions are joined using AND
         Err(e) => {
             println!("Error building pruning expression: {e}");
-            return unhandled_hook.handle(expr)
-        },
+            return unhandled_hook.handle(expr);
+        }
     };
 
     build_statistics_expr(&mut expr_builder)
