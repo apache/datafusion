@@ -1448,9 +1448,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.35"
+version = "4.5.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8aa86934b44c19c50f87cc2790e19f54f7a67aedb64101c2e1a2e5ecfb73944"
+checksum = "2df961d8c8a0d08aa9945718ccf584145eee3f3aa06cddbeac12933781102e04"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1458,9 +1458,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.35"
+version = "4.5.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2414dbb2dd0695280da6ea9261e327479e9d37b0630f6b53ba2a11c60c679fd9"
+checksum = "132dbda40fb6753878316a489d5a1242a8ef2f0d9e47ba01c951ea8aa7d013a5"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1642,7 +1642,7 @@ dependencies = [
  "anes",
  "cast",
  "ciborium",
- "clap 4.5.35",
+ "clap 4.5.36",
  "criterion-plot",
  "futures",
  "is-terminal",
@@ -1809,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -1879,7 +1879,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-benchmarks"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "datafusion",
@@ -1903,7 +1903,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1927,7 +1927,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog-listing"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1949,14 +1949,14 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "assert_cmd",
  "async-trait",
  "aws-config",
  "aws-credential-types",
- "clap 4.5.35",
+ "clap 4.5.36",
  "ctor",
  "datafusion",
  "dirs",
@@ -1978,7 +1978,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "ahash 0.8.11",
  "apache-avro",
@@ -2005,7 +2005,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common-runtime"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "futures",
  "log",
@@ -2014,7 +2014,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "async-compression",
@@ -2049,7 +2049,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-avro"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -2074,7 +2074,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-csv"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2097,7 +2097,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-json"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2120,7 +2120,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-datasource-parquet"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2150,11 +2150,11 @@ dependencies = [
 
 [[package]]
 name = "datafusion-doc"
-version = "46.0.1"
+version = "47.0.0"
 
 [[package]]
 name = "datafusion-examples"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -2184,7 +2184,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -2202,7 +2202,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -2223,7 +2223,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr-common"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2234,7 +2234,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-ffi"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "abi_stable",
  "arrow",
@@ -2253,7 +2253,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -2282,7 +2282,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2303,7 +2303,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate-common"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2316,7 +2316,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-nested"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "arrow-ord",
@@ -2337,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-table"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2351,7 +2351,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2367,7 +2367,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window-common"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -2375,7 +2375,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-macros"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "datafusion-expr",
  "quote",
@@ -2384,7 +2384,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2409,7 +2409,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2434,7 +2434,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-common"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2446,7 +2446,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-optimizer"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2465,7 +2465,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
@@ -2501,7 +2501,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -2524,7 +2524,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-proto-common"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-session"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2559,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "bigdecimal",
@@ -2583,14 +2583,14 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sqllogictest"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "arrow",
  "async-trait",
  "bigdecimal",
  "bytes",
  "chrono",
- "clap 4.5.35",
+ "clap 4.5.36",
  "datafusion",
  "env_logger",
  "futures",
@@ -2614,7 +2614,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-substrait"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2634,7 +2634,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-wasmtest"
-version = "46.0.1"
+version = "47.0.0"
 dependencies = [
  "chrono",
  "console_error_panic_hook",
@@ -3877,9 +3877,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.171"
+version = "0.2.172"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c19937216e9d3aa9956d9bb8dfc0b0c8beb6058fc4f7a4dc4d850edf86a237d6"
+checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
 
 [[package]]
 name = "libflate"
@@ -3960,7 +3960,7 @@ checksum = "5297962ef19edda4ce33aaa484386e0a5b3d7f2f4e037cbeee00503ef6b29d33"
 dependencies = [
  "anstream",
  "anstyle",
- "clap 4.5.35",
+ "clap 4.5.36",
  "escape8259",
 ]
 

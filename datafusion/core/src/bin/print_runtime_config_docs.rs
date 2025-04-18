@@ -15,17 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical Optimizer integration tests
+use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
-mod aggregate_statistics;
-mod combine_partial_final_agg;
-mod enforce_distribution;
-mod enforce_sorting;
-mod join_selection;
-mod limit_pushdown;
-mod limited_distinct_aggregation;
-mod projection_pushdown;
-mod push_down_filter;
-mod replace_with_order_preserving_variants;
-mod sanity_checker;
-mod test_utils;
+fn main() {
+    let docs = RuntimeEnvBuilder::generate_config_markdown();
+    println!("{}", docs);
+}

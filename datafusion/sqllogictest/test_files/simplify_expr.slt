@@ -107,4 +107,3 @@ query B
 SELECT a / NULL::DECIMAL(4,3) > 1.2::decimal(2,1) FROM VALUES (1) AS t(a);
 ----
 NULL
-
