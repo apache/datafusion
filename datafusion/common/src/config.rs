@@ -343,6 +343,10 @@ config_namespace! {
         /// When sorting, below what size should data be concatenated
         /// and sorted in a single RecordBatch rather than sorted in
         /// batches and merged.
+        /// Note:
+        /// In theory we should always be able to sort in place, but some corner cases for merging testing
+        /// failed, so we set a large threshold to avoid that.
+        /// Future work: potential remove this option and always sort in place.
         pub sort_in_place_threshold_bytes: usize, default = 1000 * 1024 * 1024
 
         /// Number of files to read in parallel when inferring schema and statistics
