@@ -477,13 +477,22 @@ impl<'a> DFParser<'a> {
                         if let Token::Word(w) = self.parser.peek_nth_token(1).token {
                             // use native parser for COPY INTO
                             if w.keyword == Keyword::INTO {
-                                return match self.parser.parse_statement() {
-                                    Ok(stmt) => Ok(Statement::Statement(Box::from(stmt))),
-                                    Err(ParserError::RecursionLimitExceeded) => {
-                                        Err(DataFusionError::from(ParserError::RecursionLimitExceeded))
-                                    }
-                                    Err(e) => Err(e.into()),
-                                };
+                                return self
+                                    .parser
+                                    .parse_statement()
+                                    .map(|stmt| Statement::Statement(Box::from(stmt)))
+                                    .map_err(|e| match e {
+                                        ParserError::RecursionLimitExceeded => {
+                                            DataFusionError::SQL(
+                                                ParserError::RecursionLimitExceeded,
+                                                Some(format!(
+                                                    " (current limit: {})",
+                                                    self.options.recursion_limit
+                                                )),
+                                            )
+                                        }
+                                        other => DataFusionError::SQL(other, None),
+                                    });
                             }
                         }
                         self.parser.next_token(); // COPY
@@ -495,25 +504,39 @@ impl<'a> DFParser<'a> {
                     }
                     _ => {
                         // use sqlparser-rs parser
-                        match self.parser.parse_statement() {
-                            Ok(stmt) => Ok(Statement::Statement(Box::from(stmt))),
-                            Err(ParserError::RecursionLimitExceeded) => {
-                                Err(DataFusionError::from(ParserError::RecursionLimitExceeded))
-                            }
-                            Err(e) => Err(e.into()),
-                        }
+                        self.parser
+                            .parse_statement()
+                            .map(|stmt| Statement::Statement(Box::from(stmt)))
+                            .map_err(|e| match e {
+                                ParserError::RecursionLimitExceeded => {
+                                    DataFusionError::SQL(
+                                        ParserError::RecursionLimitExceeded,
+                                        Some(format!(
+                                            " (current limit: {})",
+                                            self.options.recursion_limit
+                                        )),
+                                    )
+                                }
+                                other => DataFusionError::SQL(other, None),
+                            })
                     }
                 }
             }
             _ => {
                 // use the native parser
-                match self.parser.parse_statement() {
-                    Ok(stmt) => Ok(Statement::Statement(Box::from(stmt))),
-                    Err(ParserError::RecursionLimitExceeded) => {
-                        Err(DataFusionError::from(ParserError::RecursionLimitExceeded))
-                    }
-                    Err(e) => Err(e.into()),
-                }
+                self.parser
+                    .parse_statement()
+                    .map(|stmt| Statement::Statement(Box::from(stmt)))
+                    .map_err(|e| match e {
+                        ParserError::RecursionLimitExceeded => DataFusionError::SQL(
+                            ParserError::RecursionLimitExceeded,
+                            Some(format!(
+                                " (current limit: {})",
+                                self.options.recursion_limit
+                            )),
+                        ),
+                        other => DataFusionError::SQL(other, None),
+                    })
             }
         }
     }
@@ -1780,7 +1803,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "sql parser error: recursion limit exceeded (current limit: 1)"
+            "SQL error: RecursionLimitExceeded (current limit: 1)"
         );
     }
 }
