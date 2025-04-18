@@ -40,9 +40,9 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
-use arrow::compute::take_arrays;
-use arrow::datatypes::{SchemaRef, UInt32Type};
+use arrow::array::RecordBatch;
+use arrow::compute::interleave_record_batch;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -229,11 +229,11 @@ impl BatchPartitioner {
     ///
     /// The time spent repartitioning, not including time spent in `f` will be recorded
     /// to the [`metrics::Time`] provided on construction
-    pub fn partition<F>(&mut self, batch: RecordBatch, mut f: F) -> Result<()>
+    pub fn partition<F>(&mut self, batches: Vec<RecordBatch>, mut f: F) -> Result<()>
     where
         F: FnMut(usize, RecordBatch) -> Result<()>,
     {
-        self.partition_iter(batch)?.try_for_each(|res| match res {
+        self.partition_iter(batches)?.try_for_each(|res| match res {
             Ok((partition, batch)) => f(partition, batch),
             Err(e) => Err(e),
         })
@@ -246,8 +246,9 @@ impl BatchPartitioner {
     /// this (so we don't need to clone the entire implementation).
     fn partition_iter(
         &mut self,
-        batch: RecordBatch,
+        mut batches: Vec<RecordBatch>,
     ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {
+
         let it: Box<dyn Iterator<Item = Result<(usize, RecordBatch)>> + Send> =
             match &mut self.state {
                 BatchPartitionerState::RoundRobin {
@@ -256,7 +257,8 @@ impl BatchPartitioner {
                 } => {
                     let idx = *next_idx;
                     *next_idx = (*next_idx + 1) % *num_partitions;
-                    Box::new(std::iter::once(Ok((idx, batch))))
+                    assert_eq!(batches.len(), 1);
+                    Box::new(std::iter::once(Ok((idx, batches.swap_remove(0)))))
                 }
                 BatchPartitionerState::Hash {
                     random_state,
@@ -266,53 +268,44 @@ impl BatchPartitioner {
                 } => {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
+                    let mut indices = vec![vec![]; *partitions];
 
-                    let arrays = exprs
-                        .iter()
-                        .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
-                        .collect::<Result<Vec<_>>>()?;
+                    for (i, batch) in batches.iter().enumerate() {
+                        let arrays = exprs
+                            .iter()
+                            .map(|expr| {
+                                expr.evaluate(&batch)?.into_array(batch.num_rows())
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        hash_buffer.clear();
+                        hash_buffer.resize(batch.num_rows(), 0);
+                        create_hashes(&arrays, random_state, hash_buffer)?;
 
-                    hash_buffer.clear();
-                    hash_buffer.resize(batch.num_rows(), 0);
-
-                    create_hashes(&arrays, random_state, hash_buffer)?;
-
-                    let mut indices: Vec<_> = (0..*partitions)
-                        .map(|_| Vec::with_capacity(batch.num_rows()))
-                        .collect();
-
-                    for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize].push(index as u32);
+                        for (index, hash) in hash_buffer.iter().enumerate() {
+                            let p = *hash % *partitions as u64;
+                            indices[p as usize].push((i, index))
+                        }
                     }
 
                     // Finished building index-arrays for output partitions
                     timer.done();
+
 
                     // Borrowing partitioner timer to prevent moving `self` to closure
                     let partitioner_timer = &self.timer;
                     let it = indices
                         .into_iter()
                         .enumerate()
-                        .filter_map(|(partition, indices)| {
-                            let indices: PrimitiveArray<UInt32Type> = indices.into();
-                            (!indices.is_empty()).then_some((partition, indices))
-                        })
+                        // .filter_map(|(partition, indices)| {                            let indices: PrimitiveArray<UInt32Type> = indices.into();
+                        //     (!indices.is_empty()).then_some((partition, indices))
+                        // })
                         .map(move |(partition, indices)| {
                             // Tracking time required for repartitioned batches construction
                             let _timer = partitioner_timer.timer();
+                            let b: Vec<&RecordBatch> = batches.iter().collect();
 
                             // Produce batches based on indices
-                            let columns = take_arrays(batch.columns(), &indices, None)?;
-
-                            let mut options = RecordBatchOptions::new();
-                            options = options.with_row_count(Some(indices.len()));
-                            let batch = RecordBatch::try_new_with_options(
-                                batch.schema(),
-                                columns,
-                                &options,
-                            )
-                            .unwrap();
-
+                            let batch = interleave_record_batch(&b, &indices)?;
                             Ok((partition, batch))
                         });
 
@@ -828,13 +821,16 @@ impl RepartitionExec {
         metrics: RepartitionMetrics,
         context: Arc<TaskContext>,
     ) -> Result<()> {
+        let is_hash_partitioning = matches!(partitioning, Partitioning::Hash(_, _));
+
         let mut partitioner =
             BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
-
         // execute the child operator
         let timer = metrics.fetch_time.timer();
         let mut stream = input.execute(partition, context)?;
         timer.done();
+
+        let mut batches_buffer = Vec::with_capacity(partitioner.num_partitions());
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
@@ -845,12 +841,20 @@ impl RepartitionExec {
             timer.done();
 
             // Input is done
-            let batch = match result {
-                Some(result) => result?,
-                None => break,
+            let _ = match result {
+                Some(result) => {
+                    batches_buffer.push(result?);
+                    if is_hash_partitioning
+                        && batches_buffer.len() < partitioner.num_partitions()
+                    {
+                        // Keep buffering batches
+                        continue;
+                    }
+                }
+                None if batches_buffer.is_empty() => break,
+                None => {}
             };
-
-            for res in partitioner.partition_iter(batch)? {
+            for res in partitioner.partition_iter(batches_buffer.clone())? {
                 let (partition, batch) = res?;
                 let size = batch.get_array_memory_size();
 
@@ -867,6 +871,7 @@ impl RepartitionExec {
                 }
                 timer.done();
             }
+            batches_buffer.clear();
 
             // If the input stream is endless, we may spin forever and
             // never yield back to tokio.  See
