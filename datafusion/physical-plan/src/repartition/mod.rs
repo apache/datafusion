@@ -248,7 +248,6 @@ impl BatchPartitioner {
         &mut self,
         mut batches: Vec<RecordBatch>,
     ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {
-
         let it: Box<dyn Iterator<Item = Result<(usize, RecordBatch)>> + Send> =
             match &mut self.state {
                 BatchPartitionerState::RoundRobin {
@@ -290,15 +289,14 @@ impl BatchPartitioner {
                     // Finished building index-arrays for output partitions
                     timer.done();
 
-
                     // Borrowing partitioner timer to prevent moving `self` to closure
                     let partitioner_timer = &self.timer;
                     let it = indices
                         .into_iter()
                         .enumerate()
-                        // .filter_map(|(partition, indices)| {                            let indices: PrimitiveArray<UInt32Type> = indices.into();
-                        //     (!indices.is_empty()).then_some((partition, indices))
-                        // })
+                        .filter_map(|(partition, indices)| {
+                            (!indices.is_empty()).then_some((partition, indices))
+                        })
                         .map(move |(partition, indices)| {
                             // Tracking time required for repartitioned batches construction
                             let _timer = partitioner_timer.timer();
