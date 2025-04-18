@@ -51,8 +51,8 @@ use datafusion_physical_plan::filter_pushdown::{
 /// File format specific behaviors are defined by [`FileSource`]
 ///
 /// # See Also
-/// * [`DataSourceExec`]: The [`ExecutionPlan`] that reads from a `DataSource`
 /// * [`FileSource`] for file format specific implementations (Parquet, Json, etc)
+/// * [`DataSourceExec`]: The [`ExecutionPlan`] that reads from a `DataSource`
 ///
 /// # Notes
 ///
@@ -105,14 +105,16 @@ pub trait DataSource: Send + Sync + Debug {
     }
 }
 
-/// [`ExecutionPlan`] handles different file formats like JSON, CSV, AVRO, ARROW, PARQUET
+/// [`ExecutionPlan`] that reads one or more files
 ///
-/// `DataSourceExec` implements common functionality such as applying projections,
-/// and caching plan properties.
+/// `DataSourceExec` implements common functionality such as applying
+/// projections, and caching plan properties.
 ///
-/// The [`DataSource`] trait describes where to find the data for this data
-/// source (for example what files or what in memory partitions). Format
-/// specifics are implemented with the [`FileSource`] trait.
+/// The [`DataSource`] describes where to find the data for this data source
+/// (for example in files or what in memory partitions).
+///
+/// For file based [`DataSource`]s, format specific behavior is implemented in
+/// the [`FileSource`] trait.
 ///
 /// [`FileSource`]: crate::file::FileSource
 #[derive(Clone, Debug)]

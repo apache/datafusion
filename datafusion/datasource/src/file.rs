@@ -74,10 +74,12 @@ pub trait FileSource: Send + Sync {
         Ok(())
     }
 
-    /// If supported by the [`FileSource`], redistribute files across partitions according to their size.
-    /// Allows custom file formats to implement their own repartitioning logic.
+    /// If supported by the [`FileSource`], redistribute files across partitions
+    /// according to their size. Allows custom file formats to implement their
+    /// own repartitioning logic.
     ///
-    /// Provides a default repartitioning behavior, see comments on [`FileGroupPartitioner`] for more detail.
+    /// The default implementation uses [`FileGroupPartitioner`]. See that
+    /// struct for more details.
     fn repartitioned(
         &self,
         target_partitions: usize,
