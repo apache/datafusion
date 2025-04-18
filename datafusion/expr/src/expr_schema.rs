@@ -439,6 +439,11 @@ impl ExprSchemable for Expr {
                             "{} {}",
                             match err {
                                 DataFusionError::Plan(msg) => msg,
+                                DataFusionError::Diagnostic(_, boxed_err) =>
+                                    match *boxed_err {
+                                        DataFusionError::Plan(msg) => msg,
+                                        _ => boxed_err.to_string(),
+                                    },
                                 err => err.to_string(),
                             },
                             utils::generate_signature_error_msg(
