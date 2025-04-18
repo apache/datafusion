@@ -277,7 +277,7 @@ impl BatchPartitioner {
                         let arrays = exprs
                             .iter()
                             .map(|expr| {
-                                expr.evaluate(&batch)?.into_array(batch.num_rows())
+                                expr.evaluate(batch)?.into_array(batch.num_rows())
                             })
                             .collect::<Result<Vec<_>>>()?;
                         hash_buffer.clear();
@@ -861,7 +861,7 @@ impl RepartitionExec {
             timer.done();
 
             // Input is done
-            let _ = match result {
+            match result {
                 Some(result) => {
                     batches_buffer.push(result?);
                     if is_hash_partitioning
@@ -874,7 +874,8 @@ impl RepartitionExec {
                 None if batches_buffer.is_empty() => break,
                 None => {}
             };
-            for res in partitioner.partition_iter(batches_buffer.clone())? {
+            let batches_buffer = std::mem::take(&mut batches_buffer);
+            for res in partitioner.partition_iter(batches_buffer)? {
                 let (partition, batch) = res?;
                 let size = batch.get_array_memory_size();
 
@@ -891,7 +892,6 @@ impl RepartitionExec {
                 }
                 timer.done();
             }
-            batches_buffer.clear();
 
             // If the input stream is endless, we may spin forever and
             // never yield back to tokio.  See
