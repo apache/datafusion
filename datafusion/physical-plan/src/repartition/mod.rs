@@ -40,9 +40,9 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{BooleanArray, PrimitiveArray, RecordBatch, RecordBatchOptions};
-use arrow::compute::take_arrays;
-use arrow::datatypes::{SchemaRef, UInt32Type};
+use arrow::array::{BooleanArray, PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
+use arrow::compute::{kernels, take_arrays};
+use arrow::datatypes::{BooleanType, SchemaRef, UInt32Type, UInt64Type};
 use arrow_schema::{DataType, Field};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
@@ -344,22 +344,20 @@ impl BatchPartitioner {
                     random_state,
                     exprs,
                     num_partitions,
-                    hash_buffer,
+                    ..
                 } => {
+                    let mut hash_buffer = vec![];
                     let timer = self.timer.timer();
                     let arrays = exprs
                         .iter()
                         .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
                         .collect::<Result<Vec<_>>>()?;
 
-                    hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
-                    create_hashes(&arrays, random_state, hash_buffer)?;
+                    create_hashes(&arrays, random_state, &mut hash_buffer)?;
 
-                    let hash_vector = hash_buffer
-                        .iter()
-                        .map(|hash| *hash % *num_partitions as u64)
-                        .collect::<Vec<_>>();
+                    let hash_vector = UInt64Array::from(hash_buffer).unary_mut(|a| a % *num_partitions as u64).unwrap();
+        
                     let mut fields = batch
                         .schema()
                         .fields()
@@ -381,12 +379,11 @@ impl BatchPartitioner {
                     let it = (0..*num_partitions).map(move |partition| {
                         // Tracking time required for repartitioned batches construction
                         let _timer = partitioner_timer.timer();
-                        let selection_vector = Arc::new(
-                            hash_vector
-                                .iter()
-                                .map(|&hash| Some(hash == partition as u64))
-                                .collect::<BooleanArray>(),
-                        );
+                        let selection_array = arrow_ord::cmp::eq(
+                            &hash_vector,
+                            &UInt64Array::from(vec![partition as u64; batch.num_rows()]),
+                        ).unwrap();
+                        let selection_vector = Arc::new(selection_array);
                         let mut columns = batch.columns().to_vec();
                         columns.push(selection_vector);
                         let mut options = RecordBatchOptions::new();
