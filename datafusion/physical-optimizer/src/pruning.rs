@@ -1232,6 +1232,7 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
     if from_type == to_type {
         return Ok(());
     }
+    // TODO: add an `is_string()` method to DataType
     let supported_string_cast = (matches!(
         // String -> String casts are suppoted
         from_type,
@@ -1240,55 +1241,10 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
         to_type,
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ));
-    let supported_numeric_cast = (matches!(
-        // Numeric -> Numeric casts are supported
-        from_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Decimal128(_, _)
-            | DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
-    ) && matches!(
-        to_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Decimal128(_, _)
-            | DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
-    ));
-    let supported_temporal_cast = (matches!(
-        // Temporal -> Temporal casts are supported
-        from_type,
-        DataType::Date32
-            | DataType::Date64
-            | DataType::Time32(_)
-            | DataType::Time64(_)
-            | DataType::Timestamp(_, _)
-    ) && matches!(
-        to_type,
-        DataType::Date32
-            | DataType::Date64
-            | DataType::Time32(_)
-            | DataType::Time64(_)
-            | DataType::Timestamp(_, _)
-    ));
+    let supported_integer_cast = from_type.is_integer() && to_type.is_integer();
 
     // TODO: support other data type for prunable cast or try cast
-    if supported_string_cast || supported_numeric_cast || supported_temporal_cast {
+    if supported_string_cast || supported_integer_cast {
         Ok(())
     } else {
         plan_err!(
