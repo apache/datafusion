@@ -1241,10 +1241,20 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
         to_type,
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ));
-    let supported_integer_cast = from_type.is_integer() && to_type.is_integer();
+    let supported_numeric_cast = matches!(
+        from_type,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Decimal128(_, _)
+    ) && matches!(
+        to_type,
+        DataType::Int8 | DataType::Int32 | DataType::Int64 | DataType::Decimal128(_, _)
+    );
 
     // TODO: support other data type for prunable cast or try cast
-    if supported_string_cast || supported_integer_cast {
+    if supported_string_cast || supported_numeric_cast {
         Ok(())
     } else {
         plan_err!(
@@ -3065,29 +3075,6 @@ mod tests {
     }
 
     #[test]
-    fn row_group_predicate_cast_int_float() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Float64) <= 1 AND 1 <= CAST(c1_max@1 AS Float64)";
-
-        // test cast(c1 as float64) = 1
-        // test column on the left
-        let expr =
-            cast(col("c1"), DataType::Float64).eq(lit(ScalarValue::Float64(Some(1.0))));
-        let predicate_expr =
-            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
-        assert_eq!(predicate_expr.to_string(), expected_expr);
-
-        // test column on the right
-        let expr =
-            lit(ScalarValue::Float64(Some(1.0))).eq(cast(col("c1"), DataType::Float64));
-        let predicate_expr =
-            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
-        assert_eq!(predicate_expr.to_string(), expected_expr);
-
-        Ok(())
-    }
-
-    #[test]
     fn row_group_predicate_cast_string_string() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Utf8) <= 1 AND 1 <= CAST(c1_max@1 AS Utf8)";
@@ -3102,60 +3089,6 @@ mod tests {
 
         // test column on the right
         let expr = lit(ScalarValue::Utf8(Some("1".to_string())))
-            .eq(cast(col("c1"), DataType::Utf8));
-        let predicate_expr =
-            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
-        assert_eq!(predicate_expr.to_string(), expected_expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn row_group_predicate_cast_timestamp_date() -> Result<()> {
-        let schema = Schema::new(vec![Field::new(
-            "c1",
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            false,
-        )]);
-        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Date32) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Date32)";
-
-        // test cast(c1 as date) = '1970-01-01'
-        // test column on the left
-        let expr =
-            cast(col("c1"), DataType::Date32).eq(lit(ScalarValue::Date32(Some(0))));
-        let predicate_expr =
-            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
-        assert_eq!(predicate_expr.to_string(), expected_expr);
-
-        // test column on the right
-        let expr =
-            lit(ScalarValue::Date32(Some(0))).eq(cast(col("c1"), DataType::Date32));
-        let predicate_expr =
-            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
-        assert_eq!(predicate_expr.to_string(), expected_expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn row_group_predicate_cast_timestamp_string() -> Result<()> {
-        let schema = Schema::new(vec![Field::new(
-            "c1",
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            false,
-        )]);
-        let expected_expr = "true";
-
-        // test cast(c1 as string) = '1970-01-01'
-        // test column on the left
-        let expr = cast(col("c1"), DataType::Utf8)
-            .eq(lit(ScalarValue::Utf8(Some("1970-01-01".to_string()))));
-        let predicate_expr =
-            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
-        assert_eq!(predicate_expr.to_string(), expected_expr);
-
-        // test column on the right
-        let expr = lit(ScalarValue::Utf8(Some("1970-01-01".to_string())))
             .eq(cast(col("c1"), DataType::Utf8));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
