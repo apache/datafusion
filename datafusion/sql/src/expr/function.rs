@@ -22,7 +22,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Diagnostic, Result, Span,
 };
-use datafusion_expr::expr::{ScalarFunction, Unnest, WildcardOptions};
+use datafusion_expr::expr::{OrderByExprs, ScalarFunction, Unnest, WildcardOptions};
 use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
 use datafusion_expr::{
     expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
@@ -276,7 +276,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
             let mut order_by = self.order_by_to_sort_expr(
-                window.order_by,
+                OrderByExprs::OrderByExprVec(window.order_by),
                 schema,
                 planner_context,
                 // Numeric literals in window function ORDER BY are treated as constants
@@ -357,7 +357,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
                 let order_by = self.order_by_to_sort_expr(
-                    order_by,
+                    OrderByExprs::OrderByExprVec(order_by),
                     schema,
                     planner_context,
                     true,

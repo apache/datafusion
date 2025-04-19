@@ -19,7 +19,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema, Result,
 };
-use datafusion_expr::expr::Sort;
+use datafusion_expr::expr::{OrderByExprs, Sort};
 use datafusion_expr::{Expr, SortExpr};
 use sqlparser::ast::{
     Expr as SQLExpr, OrderByExpr, OrderByOptions, Value, ValueWithSpan,
@@ -41,16 +41,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// If false, interpret numeric literals as constant values.
     pub(crate) fn order_by_to_sort_expr(
         &self,
-        exprs: Vec<OrderByExpr>,
+        order_by_exprs: OrderByExprs,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
         literal_to_column: bool,
         additional_schema: Option<&DFSchema>,
     ) -> Result<Vec<SortExpr>> {
-        if exprs.is_empty() {
-            return Ok(vec![]);
-        }
-
         let mut combined_schema;
         let order_by_schema = match additional_schema {
             Some(schema) => {
@@ -61,56 +57,78 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             None => input_schema,
         };
 
-        let mut expr_vec = vec![];
-        for e in exprs {
-            let OrderByExpr {
-                expr,
-                options: OrderByOptions { asc, nulls_first },
-                with_fill,
-            } = e;
+        if order_by_exprs.is_empty() {
+            return Ok(vec![]);
+        }
 
-            if let Some(with_fill) = with_fill {
-                return not_impl_err!("ORDER BY WITH FILL is not supported: {with_fill}");
-            }
+        let mut sort_expr_vec = vec![];
 
-            let expr = match expr {
-                SQLExpr::Value(ValueWithSpan {
-                    value: Value::Number(v, _),
-                    span: _,
-                }) if literal_to_column => {
-                    let field_index = v
-                        .parse::<usize>()
-                        .map_err(|err| plan_datafusion_err!("{}", err))?;
+        let make_sort_expr =
+            |expr: Expr, asc: Option<bool>, nulls_first: Option<bool>| {
+                let asc = asc.unwrap_or(true);
+                // When asc is true, by default nulls last to be consistent with postgres
+                // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
+                let nulls_first = nulls_first.unwrap_or(!asc);
+                Sort::new(expr, asc, nulls_first)
+            };
 
-                    if field_index == 0 {
-                        return plan_err!(
-                            "Order by index starts at 1 for column indexes"
-                        );
-                    } else if input_schema.fields().len() < field_index {
-                        return plan_err!(
-                            "Order by column out of bounds, specified: {}, max: {}",
-                            field_index,
-                            input_schema.fields().len()
+        match order_by_exprs {
+            OrderByExprs::OrderByExprVec(expressions) => {
+                for e in expressions {
+                    let OrderByExpr {
+                        expr,
+                        options: OrderByOptions { asc, nulls_first },
+                        with_fill,
+                    } = e;
+
+                    if let Some(with_fill) = with_fill {
+                        return not_impl_err!(
+                            "ORDER BY WITH FILL is not supported: {with_fill}"
                         );
                     }
 
-                    Expr::Column(Column::from(
-                        input_schema.qualified_field(field_index - 1),
-                    ))
+                    let expr = match expr {
+                        SQLExpr::Value(ValueWithSpan {
+                            value: Value::Number(v, _),
+                            span: _,
+                        }) if literal_to_column => {
+                            let field_index = v
+                                .parse::<usize>()
+                                .map_err(|err| plan_datafusion_err!("{}", err))?;
+
+                            if field_index == 0 {
+                                return plan_err!(
+                                    "Order by index starts at 1 for column indexes"
+                                );
+                            } else if input_schema.fields().len() < field_index {
+                                return plan_err!(
+                                    "Order by column out of bounds, specified: {}, max: {}",
+                                    field_index,
+                                    input_schema.fields().len()
+                                );
+                            }
+
+                            Expr::Column(Column::from(
+                                input_schema.qualified_field(field_index - 1),
+                            ))
+                        }
+                        e => self.sql_expr_to_logical_expr(
+                            e,
+                            order_by_schema,
+                            planner_context,
+                        )?,
+                    };
+                    sort_expr_vec.push(make_sort_expr(expr, asc, nulls_first));
                 }
-                e => {
-                    self.sql_expr_to_logical_expr(e, order_by_schema, planner_context)?
+            }
+            OrderByExprs::All { exprs, options } => {
+                let OrderByOptions { asc, nulls_first } = options;
+                for expr in exprs {
+                    sort_expr_vec.push(make_sort_expr(expr, asc, nulls_first));
                 }
-            };
-            let asc = asc.unwrap_or(true);
-            expr_vec.push(Sort::new(
-                expr,
-                asc,
-                // When asc is true, by default nulls last to be consistent with postgres
-                // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
-                nulls_first.unwrap_or(!asc),
-            ))
-        }
-        Ok(expr_vec)
+            }
+        };
+
+        Ok(sort_expr_vec)
     }
 }
