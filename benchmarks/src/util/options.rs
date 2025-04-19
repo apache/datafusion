@@ -65,8 +65,8 @@ pub struct CommonOpt {
 
 impl CommonOpt {
     /// Return an appropriately configured `SessionConfig`
-    pub fn config(&self) -> SessionConfig {
-        self.update_config(SessionConfig::new())
+    pub fn config(&self) -> Result<SessionConfig> {
+        SessionConfig::from_env().map(|config| self.update_config(config))
     }
 
     /// Modify the existing config appropriately

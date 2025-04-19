@@ -123,7 +123,7 @@ impl RunOpt {
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let mut config = self
             .common
-            .config()
+            .config()?
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
         let rt_builder = self.common.runtime_env_builder()?;
