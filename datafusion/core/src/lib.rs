@@ -1027,8 +1027,8 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/user-guide/sql/write_options.md",
-    user_guide_sql_write_options
+    "../../../docs/source/user-guide/sql/format_options.md",
+    user_guide_sql_format_options
 );
 
 #[cfg(doctest)]
