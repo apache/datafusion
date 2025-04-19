@@ -839,13 +839,11 @@ async fn fetch_schema(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
-    let schema = match coerce_int96 {
-        Some(time_unit) => {
+    let schema = coerce_int96
+        .and_then(|time_unit| {
             coerce_int96_to_resolution(file_metadata.schema_descr(), &schema, &time_unit)
-                .unwrap_or(schema)
-        }
-        None => schema,
-    };
+        })
+        .unwrap_or(schema);
     Ok(schema)
 }
 
