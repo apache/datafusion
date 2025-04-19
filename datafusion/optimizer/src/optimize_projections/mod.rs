@@ -786,8 +786,12 @@ fn rewrite_projection_given_requirements(
 /// - input schema of the projection, output schema of the projection are same, and
 /// - all projection expressions are either Column or Literal
 fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result<bool> {
+    // First check if all expressions are trivial (cheaper operation than `projection_schema`)
+    if !proj_exprs.iter().all(is_expr_trivial) {
+        return Ok(false);
+    }
     let proj_schema = projection_schema(input, proj_exprs)?;
-    Ok(&proj_schema == input.schema() && proj_exprs.iter().all(is_expr_trivial))
+    Ok(&proj_schema == input.schema())
 }
 
 #[cfg(test)]
