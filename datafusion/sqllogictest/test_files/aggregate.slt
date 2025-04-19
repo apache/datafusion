@@ -2271,7 +2271,7 @@ drop table t;
 
 # test count with largeutf8
 statement ok
-create table t (c string) as values 
+create table t (c string) as values
   (arrow_cast('a', 'LargeUtf8')),
   (arrow_cast('b', 'LargeUtf8')),
   (arrow_cast(null, 'LargeUtf8')),
@@ -4797,7 +4797,7 @@ statement ok
 create table t (c1 decimal(10, 0), c2 int) as values (null, null), (null, null), (null, null);
 
 query RTIT
-select 
+select
   sum(c1), arrow_typeof(sum(c1)),
   sum(c2), arrow_typeof(sum(c2))
 from t;
@@ -5033,7 +5033,7 @@ drop table dict_test;
 # avg_duration
 
 statement ok
-create table d as values 
+create table d as values
   (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)'), arrow_cast(3, 'Duration(Microsecond)'), arrow_cast(4, 'Duration(Nanosecond)'), 1),
   (arrow_cast(11, 'Duration(Second)'), arrow_cast(22, 'Duration(Millisecond)'), arrow_cast(33, 'Duration(Microsecond)'), arrow_cast(44, 'Duration(Nanosecond)'), 1);
 
@@ -5087,7 +5087,7 @@ FROM d WHERE column1 IS NOT NULL;
 
 # Centered average window function
 query I??
-SELECT column5, column1, avg(column1) OVER (ORDER BY column5 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as centered_avg 
+SELECT column5, column1, avg(column1) OVER (ORDER BY column5 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as centered_avg
 FROM d WHERE column1 IS NOT NULL;
 ----
 1 0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 6 secs
@@ -5516,7 +5516,7 @@ NULL NULL 3 NULL 1 4 0 8 0
 
 # regr_*() basic tests
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5531,7 +5531,7 @@ from (values (1,2), (2,4), (3,6));
 2 0 3 1 2 4 2 8 4
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5549,7 +5549,7 @@ from aggregate_test_100;
 
 # regr_*() functions ignore NULLs
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5564,7 +5564,7 @@ from (values (1,NULL), (2,4), (3,6));
 2 0 2 1 2.5 5 0.5 2 1
 
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5579,7 +5579,7 @@ from (values (1,NULL), (NULL,4), (3,6));
 NULL NULL 1 NULL 3 6 0 0 0
 
 query RRIRRRRRR
-select 
+select
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5594,8 +5594,8 @@ from (values (1,NULL), (NULL,4), (NULL,NULL));
 NULL NULL 0 NULL NULL NULL NULL NULL NULL
 
 query TRRIRRRRRR rowsort
-select 
-    column3, 
+select
+    column3,
     regr_slope(column2, column1),
     regr_intercept(column2, column1),
     regr_count(column2, column1),
@@ -5619,7 +5619,7 @@ statement ok
 set datafusion.execution.batch_size = 1;
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5637,7 +5637,7 @@ statement ok
 set datafusion.execution.batch_size = 2;
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5655,7 +5655,7 @@ statement ok
 set datafusion.execution.batch_size = 3;
 
 query RRIRRRRRR
-select 
+select
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
     regr_count(c12, c11),
@@ -5853,7 +5853,7 @@ CREATE TABLE float_table (
 
 # Test string_agg with largeutf8
 statement ok
-create table string_agg_large_utf8 (c string) as values 
+create table string_agg_large_utf8 (c string) as values
   (arrow_cast('a', 'LargeUtf8')),
   (arrow_cast('b', 'LargeUtf8')),
   (arrow_cast('c', 'LargeUtf8'))
@@ -5908,7 +5908,7 @@ select count(*) from (select count(*) a, count(*) b from (select 1));
 
 # UTF8 string matters for string to &[u8] conversion, add it to prevent regression
 statement ok
-create table distinct_count_string_table as values 
+create table distinct_count_string_table as values
     (1, 'a', 'longstringtest_a', '台灣'),
     (2, 'b', 'longstringtest_b1', '日本'),
     (2, 'b', 'longstringtest_b2', '中國'),

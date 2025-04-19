@@ -142,7 +142,7 @@ impl OptimizerRule for PushDownLimit {
                     }
                 } else {
                     sort.fetch = new_fetch;
-                    if skip == 0 && original_sort_fetch.is_none() {
+                    if skip == 0 {
                         return Ok(Transformed::yes(LogicalPlan::Sort(sort)));
                     }
                     limit.input = Arc::new(LogicalPlan::Sort(sort));
