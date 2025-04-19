@@ -292,6 +292,42 @@ pub fn is_integer_arg_type(arg_type: &DataType) -> bool {
     arg_type.is_integer()
 }
 
+/// Performs type coercion for correlation aggregate functions like 'corr'.
+/// All numeric inputs are coerced to Float64 since correlation requires floating-point
+/// operations.
+///
+/// This is similar to coerce_avg_type but specifically for correlation functions.
+/// Non-numeric inputs will result in an error.
+pub fn coerce_correlation_type(
+    func_name: &str,
+    arg_types: &[DataType],
+) -> Result<Vec<DataType>> {
+    if arg_types.len() != 2 {
+        return plan_err!(
+            "The function {:?} expects 2 arguments, but {:?} were provided",
+            func_name,
+            arg_types.len()
+        );
+    }
+
+    fn coerce_to_float64(func_name: &str, data_type: &DataType) -> Result<DataType> {
+        match data_type {
+            d if d.is_numeric() => Ok(DataType::Float64),
+            DataType::Dictionary(_, v) => coerce_to_float64(func_name, v.as_ref()),
+            _ => plan_err!(
+                "The function {:?} does not support inputs of type {:?}.",
+                func_name,
+                data_type
+            ),
+        }
+    }
+
+    Ok(vec![
+        coerce_to_float64(func_name, &arg_types[0])?,
+        coerce_to_float64(func_name, &arg_types[1])?,
+    ])
+}
+
 pub fn coerce_avg_type(func_name: &str, arg_types: &[DataType]) -> Result<Vec<DataType>> {
     // Supported types smallint, int, bigint, real, double precision, decimal, or interval
     // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc

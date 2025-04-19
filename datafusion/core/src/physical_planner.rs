@@ -35,7 +35,9 @@ use crate::logical_expr::{
     Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType, Repartition,
     UserDefinedLogicalNode,
 };
-use crate::physical_expr::{create_physical_expr, create_physical_exprs};
+use crate::physical_expr::{
+    apply_aggregate_coercion, create_physical_expr, create_physical_exprs,
+};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
@@ -1636,8 +1638,16 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 physical_name(e)?
             };
 
-            let physical_args =
+            // Create base physical expressions (without coercion)
+            let base_physical_args =
                 create_physical_exprs(args, logical_input_schema, execution_props)?;
+
+            // Apply type coercion based on the aggregate function's rules
+            let physical_args = apply_aggregate_coercion(
+                func,
+                &base_physical_args,
+                physical_input_schema,
+            )?;
             let filter = match filter {
                 Some(e) => Some(create_physical_expr(
                     e,

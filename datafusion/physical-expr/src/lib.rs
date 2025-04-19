@@ -27,6 +27,7 @@
 // Backward compatibility
 pub mod aggregate;
 pub mod analysis;
+pub mod coercion;
 pub mod binary_map {
     pub use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
 }
@@ -71,6 +72,8 @@ pub use datafusion_physical_expr_common::sort_expr::{
 pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
 pub use schema_rewriter::PhysicalExprSchemaRewriter;
+
+pub use datafusion_physical_expr_common::utils::reverse_order_bys;
 pub use utils::{conjunction, conjunction_opt, split_conjunction};
 
 // For backwards compatibility
