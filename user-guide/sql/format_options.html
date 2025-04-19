@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Format Options &#8212; Apache DataFusion  documentation</title>
+    
+    <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+  
+    
+    <link rel="stylesheet"
+      href="../../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+  
+    
+      
+  
+    
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=c6d785ac" />
+    
+    <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+  
+    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Prepared Statements" href="prepared_statements.html" />
+    <link rel="prev" title="Special Functions" href="special_functions.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+
+    <div class="container-xl">
+      <div class="row">
+          
+            
+            <!-- Only show if we have sidebars configured, else just a small margin  -->
+            <div class="col-12 col-md-3 bd-sidebar">
+              <div class="sidebar-start-items">
+
+<form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+</form>
+
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  ASF Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://apache.org">
+   Apache Software Foundation
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/licenses/">
+   License
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">
+   Donate
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/thanks.html">
+   Thanks
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/security/">
+   Security
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion">
+   GitHub and Issue Tracker
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://crates.io/crates/datafusion">
+   crates.io
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">
+   API Docs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/blog/">
+   Blog
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
+   Code of conduct
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../download.html">
+   Download
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User Guide
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../introduction.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../example-usage.html">
+   Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../features.html">
+   Features
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../concepts-readings-events.html">
+   Concepts, Readings, Events
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../crate-configuration.html">
+   Crate Configuration
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../cli/index.html">
+   DataFusion CLI
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../cli/overview.html">
+     Overview
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../cli/installation.html">
+     Installation
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../cli/usage.html">
+     Usage
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../cli/datasources.html">
+     Local Files / Directories
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../dataframe.html">
+   DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../expressions.html">
+   Expression API
+  </a>
+ </li>
+ <li class="toctree-l1 current active has-children">
+  <a class="reference internal" href="index.html">
+   SQL Reference
+  </a>
+  <input checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul class="current">
+   <li class="toctree-l2">
+    <a class="reference internal" href="data_types.html">
+     Data Types
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="select.html">
+     SELECT syntax
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="subqueries.html">
+     Subqueries
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="ddl.html">
+     DDL
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="dml.html">
+     DML
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="explain.html">
+     EXPLAIN
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="information_schema.html">
+     Information Schema
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="operators.html">
+     Operators and Literals
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="aggregate_functions.html">
+     Aggregate Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="window_functions.html">
+     Window Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="scalar_functions.html">
+     Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="special_functions.html">
+     Special Functions
+    </a>
+   </li>
+   <li class="toctree-l2 current active">
+    <a class="current reference internal" href="#">
+     Format Options
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="prepared_statements.html">
+     Prepared Statements
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../configs.html">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../runtime_configs.html">
+   Runtime Environment Configurations
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../explain-usage.html">
+   Reading Explain Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../faq.html">
+   Frequently Asked Questions
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Library User Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/extensions.html">
+   Extensions List
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/using-the-sql-api.html">
+   Using the SQL API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/working-with-exprs.html">
+   Working with
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     Expr
+    </span>
+   </code>
+   s
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/using-the-dataframe-api.html">
+   Using the DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/building-logical-plans.html">
+   Building Logical Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/catalogs.html">
+   Catalogs, Schemas, and Tables
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/adding-udfs.html">
+   Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/custom-table-providers.html">
+   Custom Table Provider
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/extending-operators.html">
+   Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/profiling.html">
+   Profiling Cookbook
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/query-optimizer.html">
+   DataFusion Query Optimizer
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/upgrading.html">
+   Upgrade Guides
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Contributor Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/communication.html">
+   Communication
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/development_environment.html">
+   Development Environment
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/architecture.html">
+   Architecture
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/testing.html">
+   Testing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/api-health.html">
+   API health policy
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/howtos.html">
+   HOWTOs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/roadmap.html">
+   Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/governance.html">
+   Governance
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/inviting.html">
+   Inviting New Committers and PMC Members
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../contributor-guide/specification/index.html">
+   Specifications
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/invariants.html">
+     Invariants
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">
+     Output field name semantics
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/gsoc_application_guidelines.html">
+   GSoC Application Guidelines
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/gsoc_project_ideas.html">
+   GSoC Project Ideas
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  DataFusion Subprojects
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://arrow.apache.org/ballista/">
+   DataFusion Ballista
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/comet/">
+   DataFusion Comet
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/python/">
+   DataFusion Python
+  </a>
+ </li>
+</ul>
+
+    
+  </div>
+
+  <a class="navbar-brand" href="../../index.html">
+    <img src="../../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
+  </a>
+</nav>
+
+              </div>
+              <div class="sidebar-end-items">
+              </div>
+            </div>
+            
+          
+
+          
+          <div class="d-none d-xl-block col-xl-2 bd-toc">
+            
+              
+              <div class="toc-item">
+                
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
+
+<nav id="bd-toc-nav">
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h1 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#">
+   Format Options
+  </a>
+  <ul class="visible nav section-nav flex-column">
+   <li class="toc-h2 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#specifying-options-and-order-of-precedence">
+     Specifying Options and Order of Precedence
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h1 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#available-options">
+   Available Options
+  </a>
+  <ul class="visible nav section-nav flex-column">
+   <li class="toc-h2 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#json-format-options">
+     JSON Format Options
+    </a>
+   </li>
+   <li class="toc-h2 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#csv-format-options">
+     CSV Format Options
+    </a>
+   </li>
+   <li class="toc-h2 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#parquet-format-options">
+     Parquet Format Options
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+</nav>
+              </div>
+              
+              <div class="toc-item">
+                
+
+<div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/format_options.md">
+        <i class="fas fa-pencil-alt"></i> Edit this page
+    </a>
+</div>
+
+              </div>
+              
+            
+          </div>
+          
+
+          
+          
+            
+          
+          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
+              
+              <div>
+                
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="format-options">
+<h1>Format Options<a class="headerlink" href="#format-options" title="Link to this heading">¶</a></h1>
+<p>DataFusion supports customizing how data is read from or written to disk as a result of a <code class="docutils literal notranslate"><span class="pre">COPY</span></code>, <code class="docutils literal notranslate"><span class="pre">INSERT</span> <span class="pre">INTO</span></code>, or <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> statements. There are a few special options, file format (e.g., CSV or Parquet) specific options, and Parquet column-specific options. In some cases, Options can be specified in multiple ways with a set order of precedence.</p>
+<section id="specifying-options-and-order-of-precedence">
+<h2>Specifying Options and Order of Precedence<a class="headerlink" href="#specifying-options-and-order-of-precedence" title="Link to this heading">¶</a></h2>
+<p>Format-related options can be specified in three ways, in decreasing order of precedence:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> syntax</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">COPY</span></code> option tuples</p></li>
+<li><p>Session-level config defaults</p></li>
+</ul>
+<p>For a list of supported session-level config defaults, see <a class="reference internal" href="../configs.html"><span class="doc std std-doc">Configuration Settings</span></a>. These defaults apply to all operations but have the lowest level of precedence.</p>
+<p>If creating an external table, table-specific format options can be specified when the table is created using the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> clause:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span>
+<span class="w">  </span><span class="n">my_table</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="nb">bigint</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">bigint</span><span class="p">)</span>
+<span class="w">  </span><span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">csv</span>
+<span class="w">  </span><span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/tmp/my_csv_table/&#39;</span>
+<span class="w">  </span><span class="k">OPTIONS</span><span class="p">(</span>
+<span class="w">    </span><span class="n">NULL_VALUE</span><span class="w"> </span><span class="s1">&#39;NAN&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;has_header&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;format.delimiter&#39;</span><span class="w"> </span><span class="s1">&#39;;&#39;</span>
+<span class="w">  </span><span class="p">);</span>
+</pre></div>
+</div>
+<p>When running <code class="docutils literal notranslate"><span class="pre">INSERT</span> <span class="pre">INTO</span> <span class="pre">my_table</span> <span class="pre">...</span></code>, the options from the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span></code> will be respected (e.g., gzip compression, special delimiter, and header row included). Note that compression, header, and delimiter settings can also be specified within the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified, the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> setting will be ignored.</p>
+<p>For example, with the table defined above, running the following command:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">INSERT</span><span class="w"> </span><span class="k">INTO</span><span class="w"> </span><span class="n">my_table</span><span class="w"> </span><span class="k">VALUES</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Results in a new CSV file with the specified options:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>cat<span class="w"> </span>/tmp/my_csv_table/bmC8zWFvLMtWX68R_0.csv
+a<span class="p">;</span>b
+<span class="m">1</span><span class="p">;</span><span class="m">2</span>
+</pre></div>
+</div>
+<p>Finally, options can be passed when running a <code class="docutils literal notranslate"><span class="pre">COPY</span></code> command.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span>
+<span class="w">  </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;test/table_with_options&#39;</span>
+<span class="w">  </span><span class="n">PARTITIONED</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="p">(</span><span class="n">column3</span><span class="p">,</span><span class="w"> </span><span class="n">column4</span><span class="p">)</span>
+<span class="w">  </span><span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="n">format</span><span class="w"> </span><span class="n">parquet</span><span class="p">,</span>
+<span class="w">    </span><span class="n">compression</span><span class="w"> </span><span class="n">snappy</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;compression::column1&#39;</span><span class="w"> </span><span class="s1">&#39;zstd(5)&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="p">)</span>
+</pre></div>
+</div>
+<p>In this example, we write the entire <code class="docutils literal notranslate"><span class="pre">source_table</span></code> out to a folder of Parquet files. One Parquet file will be written in parallel to the folder for each partition in the query. The next option <code class="docutils literal notranslate"><span class="pre">compression</span></code> set to <code class="docutils literal notranslate"><span class="pre">snappy</span></code> indicates that unless otherwise specified, all columns should use the snappy compression codec. The option <code class="docutils literal notranslate"><span class="pre">compression::col1</span></code> sets an override, so that the column <code class="docutils literal notranslate"><span class="pre">col1</span></code> in the Parquet file will use the ZSTD compression codec with compression level <code class="docutils literal notranslate"><span class="pre">5</span></code>. In general, Parquet options that support column-specific settings can be specified with the syntax <code class="docutils literal notranslate"><span class="pre">OPTION::COLUMN.NESTED.PATH</span></code>.</p>
+</section>
+</section>
+<section id="available-options">
+<h1>Available Options<a class="headerlink" href="#available-options" title="Link to this heading">¶</a></h1>
+<section id="json-format-options">
+<h2>JSON Format Options<a class="headerlink" href="#json-format-options" title="Link to this heading">¶</a></h2>
+<p>The following options are available when reading or writing JSON files. Note: If any unsupported option is specified, an error will be raised and the query will fail.</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Default Value</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>COMPRESSION</p></td>
+<td><p>Sets the compression that should be applied to the entire JSON file. Supported values are GZIP, BZIP2, XZ, ZSTD, and UNCOMPRESSED.</p></td>
+<td><p>UNCOMPRESSED</p></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example:</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="nb">int</span><span class="p">)</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">JSON</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/tmp/foo/&#39;</span>
+<span class="k">OPTIONS</span><span class="p">(</span><span class="s1">&#39;COMPRESSION&#39;</span><span class="w"> </span><span class="s1">&#39;gzip&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="csv-format-options">
+<h2>CSV Format Options<a class="headerlink" href="#csv-format-options" title="Link to this heading">¶</a></h2>
+<p>The following options are available when reading or writing CSV files. Note: If any unsupported option is specified, an error will be raised and the query will fail.</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Default Value</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>COMPRESSION</p></td>
+<td><p>Sets the compression that should be applied to the entire CSV file. Supported values are GZIP, BZIP2, XZ, ZSTD, and UNCOMPRESSED.</p></td>
+<td><p>UNCOMPRESSED</p></td>
+</tr>
+<tr class="row-odd"><td><p>HAS_HEADER</p></td>
+<td><p>Sets if the CSV file should include column headers. If not set, uses session or system default.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-even"><td><p>DELIMITER</p></td>
+<td><p>Sets the character which should be used as the column delimiter within the CSV file.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">,</span></code> (comma)</p></td>
+</tr>
+<tr class="row-odd"><td><p>QUOTE</p></td>
+<td><p>Sets the character which should be used for quoting values within the CSV file.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&quot;</span></code> (double quote)</p></td>
+</tr>
+<tr class="row-even"><td><p>TERMINATOR</p></td>
+<td><p>Sets the character which should be used as the line terminator within the CSV file.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-odd"><td><p>ESCAPE</p></td>
+<td><p>Sets the character which should be used for escaping special characters within the CSV file.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-even"><td><p>DOUBLE_QUOTE</p></td>
+<td><p>Sets if quotes within quoted fields should be escaped by doubling them (e.g., <code class="docutils literal notranslate"><span class="pre">&quot;aaa&quot;&quot;bbb&quot;</span></code>).</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-odd"><td><p>NEWLINES_IN_VALUES</p></td>
+<td><p>Sets if newlines in quoted values are supported. If not set, uses session or system default.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-even"><td><p>DATE_FORMAT</p></td>
+<td><p>Sets the format that dates should be encoded in within the CSV file.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-odd"><td><p>DATETIME_FORMAT</p></td>
+<td><p>Sets the format that datetimes should be encoded in within the CSV file.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-even"><td><p>TIMESTAMP_FORMAT</p></td>
+<td><p>Sets the format that timestamps should be encoded in within the CSV file.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-odd"><td><p>TIMESTAMP_TZ_FORMAT</p></td>
+<td><p>Sets the format that timestamps with timezone should be encoded in within the CSV file.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-even"><td><p>TIME_FORMAT</p></td>
+<td><p>Sets the format that times should be encoded in within the CSV file.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-odd"><td><p>NULL_VALUE</p></td>
+<td><p>Sets the string which should be used to indicate null values within the CSV file.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-even"><td><p>NULL_REGEX</p></td>
+<td><p>Sets the regex pattern to match null values when loading CSVs.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-odd"><td><p>SCHEMA_INFER_MAX_REC</p></td>
+<td><p>Sets the maximum number of records to scan to infer the schema.</p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-even"><td><p>COMMENT</p></td>
+<td><p>Sets the character which should be used to indicate comment lines in the CSV file.</p></td>
+<td><p>None</p></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example:</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="p">(</span><span class="n">col1</span><span class="w"> </span><span class="nb">varchar</span><span class="p">,</span><span class="w"> </span><span class="n">col2</span><span class="w"> </span><span class="nb">int</span><span class="p">,</span><span class="w"> </span><span class="n">col3</span><span class="w"> </span><span class="nb">boolean</span><span class="p">)</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/tmp/foo/&#39;</span>
+<span class="k">OPTIONS</span><span class="p">(</span><span class="s1">&#39;DELIMITER&#39;</span><span class="w"> </span><span class="s1">&#39;|&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;HAS_HEADER&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;NEWLINES_IN_VALUES&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="parquet-format-options">
+<h2>Parquet Format Options<a class="headerlink" href="#parquet-format-options" title="Link to this heading">¶</a></h2>
+<p>The following options are available when reading or writing Parquet files. If any unsupported option is specified, an error will be raised and the query will fail. If a column-specific option is specified for a column that does not exist, the option will be ignored without error.</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Can be Column Specific?</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>OPTIONS Key</p></th>
+<th class="head"><p>Default Value</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>COMPRESSION</p></td>
+<td><p>Yes</p></td>
+<td><p>Sets the internal Parquet <strong>compression codec</strong> for data pages, optionally including the compression level. Applies globally if set without <code class="docutils literal notranslate"><span class="pre">::col</span></code>, or specifically to a column if set using <code class="docutils literal notranslate"><span class="pre">'compression::column_name'</span></code>. Valid values: <code class="docutils literal notranslate"><span class="pre">uncompressed</span></code>, <code class="docutils literal notranslate"><span class="pre">snappy</span></code>, <code class="docutils literal notranslate"><span class="pre">gzip(level)</span></code>, <code class="docutils literal notranslate"><span class="pre">lzo</span></code>, <code class="docutils literal notranslate"><span class="pre">brotli(level)</span></code>, <code class="docutils literal notranslate"><span class="pre">lz4</span></code>, <code class="docutils literal notranslate"><span class="pre">zstd(level)</span></code>, <code class="docutils literal notranslate"><span class="pre">lz4_raw</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'compression'</span></code> or <code class="docutils literal notranslate"><span class="pre">'compression::col'</span></code></p></td>
+<td><p>zstd(3)</p></td>
+</tr>
+<tr class="row-odd"><td><p>ENCODING</p></td>
+<td><p>Yes</p></td>
+<td><p>Sets the <strong>encoding</strong> scheme for data pages. Valid values: <code class="docutils literal notranslate"><span class="pre">plain</span></code>, <code class="docutils literal notranslate"><span class="pre">plain_dictionary</span></code>, <code class="docutils literal notranslate"><span class="pre">rle</span></code>, <code class="docutils literal notranslate"><span class="pre">bit_packed</span></code>, <code class="docutils literal notranslate"><span class="pre">delta_binary_packed</span></code>, <code class="docutils literal notranslate"><span class="pre">delta_length_byte_array</span></code>, <code class="docutils literal notranslate"><span class="pre">delta_byte_array</span></code>, <code class="docutils literal notranslate"><span class="pre">rle_dictionary</span></code>, <code class="docutils literal notranslate"><span class="pre">byte_stream_split</span></code>. Use key <code class="docutils literal notranslate"><span class="pre">'encoding'</span></code> or <code class="docutils literal notranslate"><span class="pre">'encoding::col'</span></code> in OPTIONS.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'encoding'</span></code> or <code class="docutils literal notranslate"><span class="pre">'encoding::col'</span></code></p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-even"><td><p>DICTIONARY_ENABLED</p></td>
+<td><p>Yes</p></td>
+<td><p>Sets whether dictionary encoding should be enabled globally or for a specific column.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'dictionary_enabled'</span></code> or <code class="docutils literal notranslate"><span class="pre">'dictionary_enabled::col'</span></code></p></td>
+<td><p>true</p></td>
+</tr>
+<tr class="row-odd"><td><p>STATISTICS_ENABLED</p></td>
+<td><p>Yes</p></td>
+<td><p>Sets the level of statistics to write (<code class="docutils literal notranslate"><span class="pre">none</span></code>, <code class="docutils literal notranslate"><span class="pre">chunk</span></code>, <code class="docutils literal notranslate"><span class="pre">page</span></code>).</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'statistics_enabled'</span></code> or <code class="docutils literal notranslate"><span class="pre">'statistics_enabled::col'</span></code></p></td>
+<td><p>page</p></td>
+</tr>
+<tr class="row-even"><td><p>BLOOM_FILTER_ENABLED</p></td>
+<td><p>Yes</p></td>
+<td><p>Sets whether a bloom filter should be written for a specific column.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'bloom_filter_enabled::column_name'</span></code></p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-odd"><td><p>BLOOM_FILTER_FPP</p></td>
+<td><p>Yes</p></td>
+<td><p>Sets bloom filter false positive probability (global or per column).</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'bloom_filter_fpp'</span></code> or <code class="docutils literal notranslate"><span class="pre">'bloom_filter_fpp::col'</span></code></p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-even"><td><p>BLOOM_FILTER_NDV</p></td>
+<td><p>Yes</p></td>
+<td><p>Sets bloom filter number of distinct values (global or per column).</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'bloom_filter_ndv'</span></code> or <code class="docutils literal notranslate"><span class="pre">'bloom_filter_ndv::col'</span></code></p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-odd"><td><p>MAX_ROW_GROUP_SIZE</p></td>
+<td><p>No</p></td>
+<td><p>Sets the maximum number of rows per row group. Larger groups require more memory but can improve compression and scan efficiency.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'max_row_group_size'</span></code></p></td>
+<td><p>1048576</p></td>
+</tr>
+<tr class="row-even"><td><p>ENABLE_PAGE_INDEX</p></td>
+<td><p>No</p></td>
+<td><p>If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce I/O and decoding.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'enable_page_index'</span></code></p></td>
+<td><p>true</p></td>
+</tr>
+<tr class="row-odd"><td><p>PRUNING</p></td>
+<td><p>No</p></td>
+<td><p>If true, enables row group pruning based on min/max statistics.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'pruning'</span></code></p></td>
+<td><p>true</p></td>
+</tr>
+<tr class="row-even"><td><p>SKIP_METADATA</p></td>
+<td><p>No</p></td>
+<td><p>If true, skips optional embedded metadata in the file schema.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'skip_metadata'</span></code></p></td>
+<td><p>true</p></td>
+</tr>
+<tr class="row-odd"><td><p>METADATA_SIZE_HINT</p></td>
+<td><p>No</p></td>
+<td><p>Sets the size hint (in bytes) for fetching Parquet file metadata.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'metadata_size_hint'</span></code></p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-even"><td><p>PUSHDOWN_FILTERS</p></td>
+<td><p>No</p></td>
+<td><p>If true, enables filter pushdown during Parquet decoding.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'pushdown_filters'</span></code></p></td>
+<td><p>false</p></td>
+</tr>
+<tr class="row-odd"><td><p>REORDER_FILTERS</p></td>
+<td><p>No</p></td>
+<td><p>If true, enables heuristic reordering of filters during Parquet decoding.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'reorder_filters'</span></code></p></td>
+<td><p>false</p></td>
+</tr>
+<tr class="row-even"><td><p>SCHEMA_FORCE_VIEW_TYPES</p></td>
+<td><p>No</p></td>
+<td><p>If true, reads Utf8/Binary columns as view types.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'schema_force_view_types'</span></code></p></td>
+<td><p>true</p></td>
+</tr>
+<tr class="row-odd"><td><p>BINARY_AS_STRING</p></td>
+<td><p>No</p></td>
+<td><p>If true, reads Binary columns as strings.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'binary_as_string'</span></code></p></td>
+<td><p>false</p></td>
+</tr>
+<tr class="row-even"><td><p>DATA_PAGESIZE_LIMIT</p></td>
+<td><p>No</p></td>
+<td><p>Sets best effort maximum size of data page in bytes.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'data_pagesize_limit'</span></code></p></td>
+<td><p>1048576</p></td>
+</tr>
+<tr class="row-odd"><td><p>DATA_PAGE_ROW_COUNT_LIMIT</p></td>
+<td><p>No</p></td>
+<td><p>Sets best effort maximum number of rows in data page.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'data_page_row_count_limit'</span></code></p></td>
+<td><p>20000</p></td>
+</tr>
+<tr class="row-even"><td><p>DICTIONARY_PAGE_SIZE_LIMIT</p></td>
+<td><p>No</p></td>
+<td><p>Sets best effort maximum dictionary page size, in bytes.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'dictionary_page_size_limit'</span></code></p></td>
+<td><p>1048576</p></td>
+</tr>
+<tr class="row-odd"><td><p>WRITE_BATCH_SIZE</p></td>
+<td><p>No</p></td>
+<td><p>Sets write_batch_size in bytes.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'write_batch_size'</span></code></p></td>
+<td><p>1024</p></td>
+</tr>
+<tr class="row-even"><td><p>WRITER_VERSION</p></td>
+<td><p>No</p></td>
+<td><p>Sets the Parquet writer version (<code class="docutils literal notranslate"><span class="pre">1.0</span></code> or <code class="docutils literal notranslate"><span class="pre">2.0</span></code>).</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'writer_version'</span></code></p></td>
+<td><p>1.0</p></td>
+</tr>
+<tr class="row-odd"><td><p>SKIP_ARROW_METADATA</p></td>
+<td><p>No</p></td>
+<td><p>If true, skips writing Arrow schema information into the Parquet file metadata.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'skip_arrow_metadata'</span></code></p></td>
+<td><p>false</p></td>
+</tr>
+<tr class="row-even"><td><p>CREATED_BY</p></td>
+<td><p>No</p></td>
+<td><p>Sets the “created by” string in the Parquet file metadata.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'created_by'</span></code></p></td>
+<td><p>datafusion version X.Y.Z</p></td>
+</tr>
+<tr class="row-odd"><td><p>COLUMN_INDEX_TRUNCATE_LENGTH</p></td>
+<td><p>No</p></td>
+<td><p>Sets the length (in bytes) to truncate min/max values in column indexes.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'column_index_truncate_length'</span></code></p></td>
+<td><p>64</p></td>
+</tr>
+<tr class="row-even"><td><p>STATISTICS_TRUNCATE_LENGTH</p></td>
+<td><p>No</p></td>
+<td><p>Sets statistics truncate length.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'statistics_truncate_length'</span></code></p></td>
+<td><p>None</p></td>
+</tr>
+<tr class="row-odd"><td><p>BLOOM_FILTER_ON_WRITE</p></td>
+<td><p>No</p></td>
+<td><p>Sets whether bloom filters should be written for all columns by default (can be overridden per column).</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'bloom_filter_on_write'</span></code></p></td>
+<td><p>false</p></td>
+</tr>
+<tr class="row-even"><td><p>ALLOW_SINGLE_FILE_PARALLELISM</p></td>
+<td><p>No</p></td>
+<td><p>Enables parallel serialization of columns in a single file.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'allow_single_file_parallelism'</span></code></p></td>
+<td><p>true</p></td>
+</tr>
+<tr class="row-odd"><td><p>MAXIMUM_PARALLEL_ROW_GROUP_WRITERS</p></td>
+<td><p>No</p></td>
+<td><p>Maximum number of parallel row group writers.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'maximum_parallel_row_group_writers'</span></code></p></td>
+<td><p>1</p></td>
+</tr>
+<tr class="row-even"><td><p>MAXIMUM_BUFFERED_RECORD_BATCHES_PER_STREAM</p></td>
+<td><p>No</p></td>
+<td><p>Maximum number of buffered record batches per stream.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'maximum_buffered_record_batches_per_stream'</span></code></p></td>
+<td><p>2</p></td>
+</tr>
+<tr class="row-odd"><td><p>KEY_VALUE_METADATA</p></td>
+<td><p>No (Key is specific)</p></td>
+<td><p>Adds custom key-value pairs to the file metadata. Use the format <code class="docutils literal notranslate"><span class="pre">'metadata::your_key_name'</span> <span class="pre">'your_value'</span></code>. Multiple entries allowed.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'metadata::key_name'</span></code></p></td>
+<td><p>None</p></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Example:</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">bigint</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="n">double</span><span class="p">,</span><span class="w"> </span><span class="n">category</span><span class="w"> </span><span class="nb">varchar</span><span class="p">)</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/tmp/parquet_data/&#39;</span>
+<span class="k">OPTIONS</span><span class="p">(</span>
+<span class="w">  </span><span class="s1">&#39;COMPRESSION::user_id&#39;</span><span class="w"> </span><span class="s1">&#39;snappy&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;ENCODING::col_a&#39;</span><span class="w"> </span><span class="s1">&#39;delta_binary_packed&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;MAX_ROW_GROUP_SIZE&#39;</span><span class="w"> </span><span class="s1">&#39;1000000&#39;</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;BLOOM_FILTER_ENABLED::id&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+              </div>
+              
+              
+              <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="special_functions.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">Special Functions</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="prepared_statements.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Prepared Statements</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
+</div>
+              
+          </main>
+          
+
+      </div>
+    </div>
+  
+    <script src="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+  
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p class="copyright">
+    &copy; Copyright 2019-2025, Apache Software Foundation.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p class="sphinx-version">
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 8.2.3.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>
