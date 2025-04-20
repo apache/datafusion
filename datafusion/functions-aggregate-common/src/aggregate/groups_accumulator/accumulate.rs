@@ -20,7 +20,7 @@
 //! [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 
 use std::collections::VecDeque;
-use std::fmt::{self, Debug};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
@@ -401,6 +401,7 @@ impl SeenValues for BlockedSeenValues {
 
 /// Adapter for supporting dynamic dispatching of [`FlatNullState`] and [`BlockedNullState`].
 /// For performance, the cost of batch-level dynamic dispatching is acceptable.
+#[derive(Debug)]
 pub enum NullStateAdapter {
     Flat(FlatNullState),
     Blocked(BlockedNullState),
@@ -476,6 +477,13 @@ impl NullStateAdapter {
         match self {
             NullStateAdapter::Flat(null_state) => null_state.build(emit_to),
             NullStateAdapter::Blocked(null_state) => null_state.build(emit_to),
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        match self {
+            NullStateAdapter::Flat(null_state) => null_state.size(),
+            NullStateAdapter::Blocked(null_state) => null_state.size(),
         }
     }
 
