@@ -1235,10 +1235,6 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
         }
         _ => to_type,
     };
-    // If the types are the same (e.g. after unpacking a dictionary) they are supported
-    if from_type == to_type {
-        return Ok(());
-    }
     // If both types are strings or both are not strings (number, timestamp, etc)
     // then we can compare them.
     // PruningPredicate does not support casting of strings to numbers and such.
