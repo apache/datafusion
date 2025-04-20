@@ -40,11 +40,9 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{
-    BooleanArray, PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array,
-};
-use arrow::compute::{kernels, take_arrays};
-use arrow::datatypes::{BooleanType, SchemaRef, UInt32Type, UInt64Type};
+use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
+use arrow::compute::take_arrays;
+use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow_schema::{DataType, Field};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
@@ -204,7 +202,6 @@ enum BatchPartitionerState {
         random_state: ahash::RandomState,
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
-        hash_buffer: Vec<u64>,
     },
 }
 
@@ -235,7 +232,6 @@ impl BatchPartitioner {
                     num_partitions,
                     // Use fixed random hash
                     random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
-                    hash_buffer: vec![],
                 }
             }
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
@@ -346,7 +342,6 @@ impl BatchPartitioner {
                     random_state,
                     exprs,
                     num_partitions,
-                    ..
                 } => {
                     let mut hash_buffer = vec![];
                     let timer = self.timer.timer();
