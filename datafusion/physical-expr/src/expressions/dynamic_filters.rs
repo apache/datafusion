@@ -334,11 +334,13 @@ mod test {
         // Each ParquetExec calls `with_new_children` on the DynamicFilterPhysicalExpr
         // and remaps the children to the file schema.
         let filter = Arc::clone(&dynamic_filter);
-        let dynamic_filter_1 = transform_physical_expr_with_schema(filter, &filter_schema_1).unwrap();
+        let dynamic_filter_1 =
+            transform_physical_expr_with_schema(filter, &filter_schema_1).unwrap();
         let snap = dynamic_filter_1.snapshot().unwrap().unwrap();
         insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 0 }, op: Eq, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
         let filter = Arc::clone(&dynamic_filter);
-        let dynamic_filter_2 = transform_physical_expr_with_schema(filter, &filter_schema_2).unwrap();
+        let dynamic_filter_2 =
+            transform_physical_expr_with_schema(filter, &filter_schema_2).unwrap();
         let snap = dynamic_filter_2.snapshot().unwrap().unwrap();
         insta::assert_snapshot!(format!("{snap:?}"), @r#"BinaryExpr { left: Column { name: "a", index: 1 }, op: Eq, right: Literal { value: Int32(42) }, fail_on_overflow: false }"#);
         // Both filters allow evaluating the same expression

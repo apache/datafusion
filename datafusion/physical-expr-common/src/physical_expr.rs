@@ -337,10 +337,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Adapt this [`PhysicalExpr`] to a new schema.
     /// For example, `Column("b", 1)` can be adapted to `Column("b", 0)`
     /// given the schema `Schema::new(vec![("b", DataType::Int32)])`.
-    fn with_schema(
-        &self,
-        _schema: &Schema,
-    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    fn with_schema(&self, _schema: &Schema) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // By default, we return the same expression.
         // This is a safe default behavior.
         Ok(None)

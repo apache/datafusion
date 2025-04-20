@@ -120,7 +120,8 @@ impl DatafusionArrowPredicate {
         time: metrics::Time,
     ) -> Result<Self> {
         let projected_schema = Arc::clone(&candidate.filter_schema);
-        let physical_expr = transform_physical_expr_with_schema(candidate.expr, &projected_schema)?;
+        let physical_expr =
+            transform_physical_expr_with_schema(candidate.expr, &projected_schema)?;
 
         Ok(Self {
             physical_expr,

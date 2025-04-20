@@ -142,10 +142,7 @@ impl PhysicalExpr for Column {
         write!(f, "{}", self.name)
     }
 
-    fn with_schema(
-            &self,
-            schema: &Schema,
-        ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    fn with_schema(&self, schema: &Schema) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // Find our index in the new schema
         let new_index = schema.index_of(&self.name)?;
         // If the index is the same return None to indicate no change
