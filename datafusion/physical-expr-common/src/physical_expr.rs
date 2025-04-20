@@ -333,6 +333,18 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
         // This is a safe default behavior.
         Ok(None)
     }
+
+    /// Adapt this [`PhysicalExpr`] to a new schema.
+    /// For example, `Column("b", 1)` can be adapted to `Column("b", 0)`
+    /// given the schema `Schema::new(vec![("b", DataType::Int32)])`.
+    fn with_schema(
+        &self,
+        _schema: &Schema,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        // By default, we return the same expression.
+        // This is a safe default behavior.
+        Ok(None)
+    }
 }
 
 /// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
@@ -517,6 +529,23 @@ pub fn snapshot_physical_expr(
     expr.transform_up(|e| {
         if let Some(snapshot) = e.snapshot()? {
             Ok(Transformed::yes(snapshot))
+        } else {
+            Ok(Transformed::no(Arc::clone(&e)))
+        }
+    })
+    .data()
+}
+
+/// Transform a [`PhysicalExpr`] with a new schema.
+/// For example, `Column("b", 1)` can be adapted to `Column("b", 0)`
+/// given the schema `Schema::new(vec![("b", DataType::Int32)])`.
+pub fn transform_physical_expr_with_schema(
+    expr: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_up(|e| {
+        if let Some(new_expr) = e.with_schema(schema)? {
+            Ok(Transformed::yes(new_expr))
         } else {
             Ok(Transformed::no(Arc::clone(&e)))
         }

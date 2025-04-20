@@ -26,7 +26,6 @@ use crate::tree_node::ExprContext;
 use crate::PhysicalExpr;
 use crate::PhysicalSortExpr;
 
-use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -240,32 +239,6 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     columns
 }
 
-/// Re-assign column indices referenced in predicate according to given schema.
-/// This may be helpful when dealing with projections.
-pub fn reassign_predicate_columns(
-    pred: Arc<dyn PhysicalExpr>,
-    schema: &SchemaRef,
-    ignore_not_found: bool,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    pred.transform_down(|expr| {
-        let expr_any = expr.as_any();
-
-        if let Some(column) = expr_any.downcast_ref::<Column>() {
-            let index = match schema.index_of(column.name()) {
-                Ok(idx) => idx,
-                Err(_) if ignore_not_found => usize::MAX,
-                Err(e) => return Err(e.into()),
-            };
-            return Ok(Transformed::yes(Arc::new(Column::new(
-                column.name(),
-                index,
-            ))));
-        }
-        Ok(Transformed::no(expr))
-    })
-    .data()
-}
-
 /// Merge left and right sort expressions, checking for duplicates.
 pub fn merge_vectors(left: &LexOrdering, right: &LexOrdering) -> LexOrdering {
     left.iter()
@@ -291,6 +264,7 @@ pub(crate) mod tests {
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
     };
 
+    use datafusion_physical_expr_common::physical_expr::transform_physical_expr_with_schema;
     use petgraph::visit::Bfs;
 
     #[derive(Debug, Clone)]
@@ -537,7 +511,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let actual = reassign_predicate_columns(pred, &schema_small, false).unwrap();
+        let actual = transform_physical_expr_with_schema(pred, &schema_small).unwrap();
 
         let expected = in_list(
             Arc::new(Column::new_with_schema("id", &schema_small).unwrap()),

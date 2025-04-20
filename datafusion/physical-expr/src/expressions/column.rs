@@ -141,6 +141,21 @@ impl PhysicalExpr for Column {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
     }
+
+    fn with_schema(
+            &self,
+            schema: &Schema,
+        ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        // Find our index in the new schema
+        let new_index = schema.index_of(&self.name)?;
+        // If the index is the same return None to indicate no change
+        if new_index == self.index {
+            Ok(None)
+        } else {
+            // Otherwise, create a new column expression with the new index
+            Ok(Some(Arc::new(Column::new(&self.name, new_index))))
+        }
+    }
 }
 
 impl Column {

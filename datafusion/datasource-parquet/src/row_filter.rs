@@ -67,6 +67,7 @@ use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
+use datafusion_physical_expr_common::physical_expr::transform_physical_expr_with_schema;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
@@ -76,7 +77,6 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor}
 use datafusion_common::Result;
 use datafusion_datasource::schema_adapter::{SchemaAdapterFactory, SchemaMapper};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::reassign_predicate_columns;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 
 use datafusion_physical_plan::metrics;
@@ -120,8 +120,7 @@ impl DatafusionArrowPredicate {
         time: metrics::Time,
     ) -> Result<Self> {
         let projected_schema = Arc::clone(&candidate.filter_schema);
-        let physical_expr =
-            reassign_predicate_columns(candidate.expr, &projected_schema, true)?;
+        let physical_expr = transform_physical_expr_with_schema(candidate.expr, &projected_schema)?;
 
         Ok(Self {
             physical_expr,
