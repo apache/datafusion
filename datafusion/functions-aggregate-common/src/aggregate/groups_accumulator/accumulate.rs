@@ -30,7 +30,8 @@ use arrow::datatypes::ArrowPrimitiveType;
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
 use crate::aggregate::groups_accumulator::{
-    BlockedGroupIndexOperations, FlatGroupIndexOperations, GroupIndexOperations,
+    ensure_room_enough_for_blocks, Block, BlockedGroupIndexOperations,
+    FlatGroupIndexOperations, GroupIndexOperations,
 };
 
 /// Track the accumulator null state per row: if any values for that
@@ -347,67 +348,31 @@ impl BlockedSeenValues {
     }
 }
 
+impl Block for BooleanBufferBuilder {
+    type T = bool;
+
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
+        self.append_n(fill_len, default_value);
+    }
+}
+
 impl SeenValues for BlockedSeenValues {
     fn resize(&mut self, total_num_groups: usize, default_value: bool) {
         let block_size = self.block_size;
-        let blocked_builder = &mut self.blocked_builders;
+        let blocked_builders = &mut self.blocked_builders;
+        let new_block = |block_size: usize| BooleanBufferBuilder::new(block_size);
 
-        // For resize, we need to:
-        //   1. Ensure the blks are enough first
-        //   2. and then ensure slots in blks are enough
-        let (mut cur_blk_idx, exist_slots) = if blocked_builder.len() > 0 {
-            let cur_blk_idx = blocked_builder.len() - 1;
-            let exist_slots = (blocked_builder.len() - 1) * block_size
-                + blocked_builder.back().unwrap().len();
-
-            (cur_blk_idx, exist_slots)
-        } else {
-            (0, 0)
-        };
-
-        // No new groups, don't need to expand, just return
-        if exist_slots >= total_num_groups {
-            return;
-        }
-
-        // 1. Ensure blks are enough
-        let exist_blks = blocked_builder.len();
-        let new_blks = ((total_num_groups + block_size - 1) / block_size) - exist_blks;
-        if new_blks > 0 {
-            for _ in 0..new_blks {
-                blocked_builder.push_back(BooleanBufferBuilder::new(block_size));
-            }
-        }
-
-        // 2. Ensure slots are enough
-        let mut new_slots = total_num_groups - exist_slots;
-
-        // 2.1 Only fill current blk if it may be already enough
-        let cur_blk_rest_slots = block_size - blocked_builder[cur_blk_idx].len();
-        if cur_blk_rest_slots >= new_slots {
-            blocked_builder[cur_blk_idx].append_n(new_slots, default_value);
-            return;
-        }
-
-        // 2.2 Fill current blk to full
-        blocked_builder[cur_blk_idx].append_n(cur_blk_rest_slots, default_value);
-        new_slots -= cur_blk_rest_slots;
-
-        // 2.3 Fill complete blks
-        let complete_blks = new_slots / block_size;
-        for _ in 0..complete_blks {
-            cur_blk_idx += 1;
-            blocked_builder[cur_blk_idx].append_n(block_size, default_value);
-        }
-
-        // 2.4 Fill last blk if needed
-        let rest_slots = new_slots % block_size;
-        if rest_slots > 0 {
-            blocked_builder
-                .back_mut()
-                .unwrap()
-                .append_n(rest_slots, default_value);
-        }
+        ensure_room_enough_for_blocks(
+            blocked_builders,
+            total_num_groups,
+            block_size,
+            new_block,
+            default_value,
+        );
     }
 
     fn set_bit(&mut self, block_id: u32, block_offset: u64, value: bool) {

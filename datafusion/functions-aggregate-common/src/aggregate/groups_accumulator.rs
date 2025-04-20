@@ -23,6 +23,7 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::mem::{size_of, size_of_val};
 
@@ -509,6 +510,10 @@ pub(crate) fn slice_and_maybe_filter(
     }
 }
 
+// ===============================================
+// Useful tools for group index
+// ===============================================
+
 /// Blocked style group index used in blocked mode group values and accumulators
 ///   - High 32 bits represent `block_id`
 ///   - Low 32 bits represent `block_offset`
@@ -553,4 +558,83 @@ impl GroupIndexOperations for FlatGroupIndexOperations {
     fn get_block_offset(packed_index: u64) -> u64 {
         packed_index
     }
+}
+
+// ===============================================
+// Useful tools for block
+// ===============================================
+pub(crate) fn ensure_room_enough_for_blocks<B, F>(
+    blocks: &mut VecDeque<B>,
+    total_num_groups: usize,
+    block_size: usize,
+    new_block: F,
+    default_value: B::T,
+) where
+    B: Block,
+    F: Fn(usize) -> B,
+{
+    // For resize, we need to:
+    //   1. Ensure the blks are enough first
+    //   2. and then ensure slots in blks are enough
+    let (mut cur_blk_idx, exist_slots) = if blocks.len() > 0 {
+        let cur_blk_idx = blocks.len() - 1;
+        let exist_slots = (blocks.len() - 1) * block_size + blocks.back().unwrap().len();
+
+        (cur_blk_idx, exist_slots)
+    } else {
+        (0, 0)
+    };
+
+    // No new groups, don't need to expand, just return
+    if exist_slots >= total_num_groups {
+        return;
+    }
+
+    // 1. Ensure blks are enough
+    let exist_blks = blocks.len();
+    let new_blks = ((total_num_groups + block_size - 1) / block_size) - exist_blks;
+    if new_blks > 0 {
+        for _ in 0..new_blks {
+            let block = new_block(block_size);
+            blocks.push_back(block);
+        }
+    }
+
+    // 2. Ensure slots are enough
+    let mut new_slots = total_num_groups - exist_slots;
+
+    // 2.1 Only fill current blk if it may be already enough
+    let cur_blk_rest_slots = block_size - blocks[cur_blk_idx].len();
+    if cur_blk_rest_slots >= new_slots {
+        blocks[cur_blk_idx].fill_default_value(new_slots, default_value.clone());
+        return;
+    }
+
+    // 2.2 Fill current blk to full
+    blocks[cur_blk_idx].fill_default_value(cur_blk_rest_slots, default_value.clone());
+    new_slots -= cur_blk_rest_slots;
+
+    // 2.3 Fill complete blks
+    let complete_blks = new_slots / block_size;
+    for _ in 0..complete_blks {
+        cur_blk_idx += 1;
+        blocks[cur_blk_idx].fill_default_value(block_size, default_value.clone());
+    }
+
+    // 2.4 Fill last blk if needed
+    let rest_slots = new_slots % block_size;
+    if rest_slots > 0 {
+        blocks
+            .back_mut()
+            .unwrap()
+            .fill_default_value(rest_slots, default_value);
+    }
+}
+
+pub(crate) trait Block {
+    type T: Clone;
+
+    fn len(&self) -> usize;
+
+    fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T);
 }
