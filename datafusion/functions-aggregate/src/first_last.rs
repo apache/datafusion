@@ -436,7 +436,7 @@ where
                 self.size_of_orderings -=
                     result.iter().map(ScalarValue::size_of_vec).sum::<usize>()
             }
-            EmitTo::NextBlock(_) => {
+            EmitTo::NextBlock => {
                 unreachable!("this accumulator still not support blocked groups")
             }
         }
@@ -463,7 +463,7 @@ where
                 }
                 first_n
             }
-            EmitTo::NextBlock(_) => {
+            EmitTo::NextBlock => {
                 unreachable!("this group values still not support blocked groups")
             }
         }

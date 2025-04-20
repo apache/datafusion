@@ -229,7 +229,7 @@ impl GroupValues for GroupValuesRows {
                 });
                 output
             }
-            EmitTo::NextBlock(_) => {
+            EmitTo::NextBlock => {
                 unreachable!("this group values still not support blocked groups")
             }
         };

@@ -116,7 +116,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
 
                 emit_group_values
             }
-            EmitTo::NextBlock(_) => {
+            EmitTo::NextBlock => {
                 unreachable!("this group values still not support blocked groups")
             }
         };

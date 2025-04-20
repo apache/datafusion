@@ -115,6 +115,9 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
     pub fn new(data_type: DataType) -> Self {
         assert!(PrimitiveArray::<T>::is_compatible(&data_type));
+
+        // As a optimization, we ensure the `single block` always exist
+        // in flat mode, it can eliminate an expansive row-level empty checking
         let mut values = VecDeque::new();
         values.push_back(Vec::new());
 
@@ -245,74 +248,15 @@ where
             // ===============================================
             // Emitting in blocked mode
             // ===============================================
-            // TODO: we should consider if it is necessary to support indices modifying
-            // in `EmitTo::NextBlock`. It is only used in spilling case, maybe we can
-            // always emit all in blocked mode. So, we just need to clear the map rather
-            // than doing expansive modification for each buck in it.
-            EmitTo::NextBlock(true) => {
+            EmitTo::NextBlock => {
                 assert!(
                     self.block_size.is_some(),
                     "only support EmitTo::Next in blocked group values"
                 );
 
-                // We only emit the first block(`block_id == 0`),
-                // so erase the entries with `block_id == 0`, and decrease entries with `block_id > 0`
-                self.map.retain(|packed_idx| {
-                    let old_blk_id =
-                        BlockedGroupIndexOperations::get_block_id(*packed_idx);
-                    match old_blk_id.checked_sub(1) {
-                        // `block_id > 0`, shift `block_id` down
-                        Some(new_blk_id) => {
-                            let blk_offset =
-                                BlockedGroupIndexOperations::get_block_offset(
-                                    *packed_idx,
-                                );
-                            let new_packed_idx = BlockedGroupIndexOperations::pack_index(
-                                new_blk_id as u32,
-                                blk_offset,
-                            );
-                            *packed_idx = new_packed_idx;
-
-                            true
-                        }
-
-                        // `block_id == 0`, so remove from table
-                        None => false,
-                    }
-                });
-
-                // Similar as `non-nulls`, if `block_id > 0` we decrease, and if `block_id == 0` we erase
-                let null_block_pair_opt = self.null_group.map(|packed_idx| {
-                    (
-                        BlockedGroupIndexOperations::get_block_id(packed_idx),
-                        BlockedGroupIndexOperations::get_block_offset(packed_idx),
-                    )
-                });
-                let null_idx = match null_block_pair_opt {
-                    Some((blk_id, blk_offset)) if blk_id > 0 => {
-                        let new_blk_id = blk_id - 1;
-                        let new_packed_idx = BlockedGroupIndexOperations::pack_index(
-                            new_blk_id, blk_offset,
-                        );
-                        self.null_group = Some(new_packed_idx);
-                        None
-                    }
-                    Some((_, blk_offset)) => {
-                        self.null_group = None;
-                        Some(blk_offset as usize)
-                    }
-                    None => None,
-                };
-
-                let emit_blk = self.values.pop_front().unwrap();
-                build_primitive(emit_blk, null_idx)
-            }
-
-            EmitTo::NextBlock(false) => {
-                assert!(
-                    self.block_size.is_some(),
-                    "only support EmitTo::Next in blocked group values"
-                );
+                // Similar as `EmitTo:All`, we will clear the old index infos both
+                // in `map` and `null_group`
+                self.map.clear();
 
                 let null_block_pair_opt = self.null_group.map(|packed_idx| {
                     (
@@ -358,6 +302,25 @@ where
 
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
+    }
+
+    fn supports_blocked_groups(&self) -> bool {
+        true
+    }
+
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        self.map.clear();
+        self.values.clear();
+        self.null_group = None;
+        self.block_size = block_size;
+
+        // As mentioned above, we ensure the `single block` always exist
+        // in `flat mode`
+        if block_size.is_none() {
+            self.values.push_back(Vec::new());
+        }
+
+        Ok(())
     }
 }
 

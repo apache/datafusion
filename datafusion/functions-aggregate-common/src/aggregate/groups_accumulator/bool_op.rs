@@ -118,7 +118,7 @@ where
                 }
                 first_n
             }
-            EmitTo::NextBlock(_) => {
+            EmitTo::NextBlock => {
                 unreachable!("this accumulator still not support blocked groups")
             }
         };

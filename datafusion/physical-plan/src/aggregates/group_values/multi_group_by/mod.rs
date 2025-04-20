@@ -1154,7 +1154,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
 
                 output
             }
-            EmitTo::NextBlock(_) => {
+            EmitTo::NextBlock => {
                 unreachable!("this group values still not support blocked groups")
             }
         };

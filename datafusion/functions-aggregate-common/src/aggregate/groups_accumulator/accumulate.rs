@@ -303,7 +303,7 @@ impl SeenValues for FlatSeenValues {
                 }
                 first_n_null
             }
-            EmitTo::NextBlock(_) => {
+            EmitTo::NextBlock => {
                 unreachable!("not support block emit in flat seen values")
             }
         };
@@ -415,7 +415,7 @@ impl SeenValues for BlockedSeenValues {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> NullBuffer {
-        assert!(matches!(emit_to, EmitTo::NextBlock(_)));
+        assert!(matches!(emit_to, EmitTo::NextBlock));
 
         let mut block = self
             .blocked_builders
@@ -542,7 +542,7 @@ impl NullStateAdapter {
                 let mut return_builder = BooleanBufferBuilder::new(0);
                 let num_blocks = null_state.seen_values.blocked_builders.len();
                 for _ in 0..num_blocks {
-                    let blocked_nulls = null_state.build(EmitTo::NextBlock(true));
+                    let blocked_nulls = null_state.build(EmitTo::NextBlock);
                     for bit in blocked_nulls.inner().iter() {
                         return_builder.append(bit);
                     }

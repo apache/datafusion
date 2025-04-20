@@ -448,7 +448,7 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let n = match emit_to {
             EmitTo::All => self.count.len(),
             EmitTo::First(n) => n,
-            EmitTo::NextBlock(_) => {
+            EmitTo::NextBlock => {
                 unreachable!("this accumulator still not support blocked groups")
             }
         };
@@ -504,7 +504,7 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let n = match emit_to {
             EmitTo::All => self.count.len(),
             EmitTo::First(n) => n,
-            EmitTo::NextBlock(_) => {
+            EmitTo::NextBlock => {
                 unreachable!("this accumulator still not support blocked groups")
             }
         };

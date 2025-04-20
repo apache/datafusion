@@ -511,7 +511,7 @@ impl MinMaxBytesState {
                 self.total_data_bytes -= first_data_capacity;
                 (first_data_capacity, first_min_maxes)
             }
-            EmitTo::NextBlock(_) => {
+            EmitTo::NextBlock => {
                 unreachable!("this accumulator still not support blocked groups")
             }
         }

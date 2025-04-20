@@ -36,7 +36,7 @@ pub enum EmitTo {
     /// Emit next block in the blocked managed groups
     ///
     /// Similar as `Emit::All`, will also clear all existing group indexes
-    NextBlock(bool),
+    NextBlock,
 }
 
 impl EmitTo {
@@ -75,7 +75,7 @@ impl EmitTo {
                 std::mem::swap(v, &mut t);
                 t
             }
-            Self::NextBlock(_) => unreachable!("don't support take block in take_needed"),
+            Self::NextBlock => unreachable!("don't support take block in take_needed"),
         }
     }
 
@@ -85,7 +85,7 @@ impl EmitTo {
     ///
     fn take_needed_block<T>(&self, blocks: &mut VecDeque<Vec<T>>) -> Vec<T> {
         assert!(
-            matches!(self, Self::NextBlock(_)),
+            matches!(self, Self::NextBlock),
             "only support take block in take_needed_block"
         );
         blocks
