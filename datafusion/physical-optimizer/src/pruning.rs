@@ -1210,6 +1210,13 @@ fn is_compare_op(op: Operator) -> bool {
     )
 }
 
+fn is_string_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}
+
 // The pruning logic is based on the comparing the min/max bounds.
 // Must make sure the two type has order.
 // For example, casts from string to numbers is not correct.
@@ -1232,29 +1239,10 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
     if from_type == to_type {
         return Ok(());
     }
-    // TODO: add an `is_string()` method to DataType
-    let supported_string_cast = (matches!(
-        // String -> String casts are suppoted
-        from_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    ) && matches!(
-        to_type,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    ));
-    let supported_numeric_cast = matches!(
-        from_type,
-        DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Decimal128(_, _)
-    ) && matches!(
-        to_type,
-        DataType::Int8 | DataType::Int32 | DataType::Int64 | DataType::Decimal128(_, _)
-    );
-
-    // TODO: support other data type for prunable cast or try cast
-    if supported_string_cast || supported_numeric_cast {
+    // If both types are strings or both are not strings (number, timestamp, etc)
+    // then we can compare them.
+    // PruningPredicate does not support casting of strings to numbers and such.
+    if is_string_type(from_type) == is_string_type(to_type) {
         Ok(())
     } else {
         plan_err!(
@@ -3079,7 +3067,6 @@ mod tests {
         let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Utf8) <= 1 AND 1 <= CAST(c1_max@1 AS Utf8)";
 
-        // test cast(c1 as string) = '1'
         // test column on the left
         let expr = cast(col("c1"), DataType::Utf8)
             .eq(lit(ScalarValue::Utf8(Some("1".to_string()))));
@@ -3102,7 +3089,6 @@ mod tests {
         let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
         let expected_expr = "true";
 
-        // test cast(c1 as int) = 1
         // test column on the left
         let expr = cast(col("c1"), DataType::Int32).eq(lit(ScalarValue::Int32(Some(1))));
         let predicate_expr =
@@ -3123,7 +3109,6 @@ mod tests {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         let expected_expr = "true";
 
-        // test cast(c1 as string) = '1'
         // test column on the left
         let expr = cast(col("c1"), DataType::Utf8)
             .eq(lit(ScalarValue::Utf8(Some("1".to_string()))));
@@ -3133,6 +3118,72 @@ mod tests {
 
         // test column on the right
         let expr = lit(ScalarValue::Utf8(Some("1".to_string())))
+            .eq(cast(col("c1"), DataType::Utf8));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_date_date() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Date64) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Date64)";
+
+        // test column on the left
+        let expr = cast(col("c1"), DataType::Date64)
+            .eq(lit(ScalarValue::Date64(Some(123))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr = lit(ScalarValue::Date64(Some(123)))
+            .eq(cast(col("c1"), DataType::Date64));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_date_string() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8, false)]);
+        let expected_expr = "true";
+
+        // test column on the left
+        let expr = cast(col("c1"), DataType::Date32)
+            .eq(lit(ScalarValue::Date32(Some(123))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr = lit(ScalarValue::Date32(Some(123)))
+            .eq(cast(col("c1"), DataType::Date32));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_string_date() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
+        let expected_expr = "true";
+
+        // test column on the left
+        let expr = cast(col("c1"), DataType::Utf8)
+            .eq(lit(ScalarValue::Utf8(Some("2024-01-01".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr = lit(ScalarValue::Utf8(Some("2024-01-01".to_string())))
             .eq(cast(col("c1"), DataType::Utf8));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
