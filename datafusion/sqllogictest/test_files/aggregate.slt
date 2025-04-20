@@ -5036,6 +5036,77 @@ FROM d WHERE column1 IS NOT NULL;
 statement ok
 drop table d;
 
+# avg_duration (GroupsAccumulator)
+
+statement ok
+create table duration as values
+  (arrow_cast(10, 'Duration(Second)'), arrow_cast(100, 'Duration(Millisecond)'), 'a', 1),
+  (arrow_cast(20, 'Duration(Second)'), arrow_cast(200, 'Duration(Millisecond)'), 'a', 2),
+  (arrow_cast(30, 'Duration(Second)'), arrow_cast(300, 'Duration(Millisecond)'), 'b', 1),
+  (arrow_cast(40, 'Duration(Second)'), arrow_cast(400, 'Duration(Millisecond)'), 'b', 2),
+  (arrow_cast(50, 'Duration(Second)'), arrow_cast(500, 'Duration(Millisecond)'), 'c', 1),
+  (arrow_cast(60, 'Duration(Second)'), arrow_cast(600, 'Duration(Millisecond)'), 'c', 2);
+
+query T??I
+SELECT column3, avg(column1), avg(column2), column4 FROM duration GROUP BY column3, column4 ORDER BY column3, column4;
+----
+a 0 days 0 hours 0 mins 10 secs 0 days 0 hours 0 mins 0.100 secs 1
+a 0 days 0 hours 0 mins 20 secs 0 days 0 hours 0 mins 0.200 secs 2
+b 0 days 0 hours 0 mins 30 secs 0 days 0 hours 0 mins 0.300 secs 1
+b 0 days 0 hours 0 mins 40 secs 0 days 0 hours 0 mins 0.400 secs 2
+c 0 days 0 hours 0 mins 50 secs 0 days 0 hours 0 mins 0.500 secs 1
+c 0 days 0 hours 1 mins 0 secs 0 days 0 hours 0 mins 0.600 secs 2
+
+query T?
+SELECT column3, avg(column1) FROM duration GROUP BY column3 ORDER BY column3;
+----
+a 0 days 0 hours 0 mins 15 secs
+b 0 days 0 hours 0 mins 35 secs
+c 0 days 0 hours 0 mins 55 secs
+
+query I??
+SELECT column4, avg(column1), avg(column2) FROM duration GROUP BY column4 ORDER BY column4;
+----
+1 0 days 0 hours 0 mins 30 secs 0 days 0 hours 0 mins 0.300 secs
+2 0 days 0 hours 0 mins 40 secs 0 days 0 hours 0 mins 0.400 secs
+
+query TI??
+SELECT column3, column4, column1, avg(column1) OVER (PARTITION BY column3 ORDER BY column4 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as running_avg
+FROM duration
+ORDER BY column3, column4;
+----
+a 1 0 days 0 hours 0 mins 10 secs 0 days 0 hours 0 mins 10 secs
+a 2 0 days 0 hours 0 mins 20 secs 0 days 0 hours 0 mins 15 secs
+b 1 0 days 0 hours 0 mins 30 secs 0 days 0 hours 0 mins 30 secs
+b 2 0 days 0 hours 0 mins 40 secs 0 days 0 hours 0 mins 35 secs
+c 1 0 days 0 hours 0 mins 50 secs 0 days 0 hours 0 mins 50 secs
+c 2 0 days 0 hours 1 mins 0 secs 0 days 0 hours 0 mins 55 secs
+
+statement ok
+drop table duration;
+
+statement ok
+create table duration_nulls as values
+  (arrow_cast(10, 'Duration(Second)'), 'a', 1),
+  (arrow_cast(20, 'Duration(Second)'), 'a', 2),
+  (NULL, 'b', 1),
+  (arrow_cast(40, 'Duration(Second)'), 'b', 2),
+  (arrow_cast(50, 'Duration(Second)'), 'c', 1),
+  (NULL, 'c', 2);
+
+query T?I
+SELECT column2, avg(column1), column3 FROM duration_nulls GROUP BY column2, column3 ORDER BY column2, column3;
+----
+a 0 days 0 hours 0 mins 10 secs 1
+a 0 days 0 hours 0 mins 20 secs 2
+b NULL 1
+b 0 days 0 hours 0 mins 40 secs 2
+c 0 days 0 hours 0 mins 50 secs 1
+c NULL 2
+
+statement ok
+drop table duration_nulls;
+
 # Prepare the table with dictionary values for testing
 statement ok
 CREATE TABLE value(x bigint) AS VALUES (1), (2), (3), (1), (3), (4), (5), (2);
