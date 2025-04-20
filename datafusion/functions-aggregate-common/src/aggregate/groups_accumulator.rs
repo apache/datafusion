@@ -103,10 +103,8 @@ pub struct GroupsAccumulatorAdapter {
     /// state for each group, stored in group_index order
     states: Vec<AccumulatorState>,
 
-    /// Whether the group indices are contiguous.
-    ///
-    /// See [GroupsAccumulatorMetadata::group_indices_ordering]
-    contiguous_group_indices: bool,
+    /// The metadata for the accumulators that got from [`GroupsAccumulator::register_metadata`]
+    metadata: GroupsAccumulatorMetadata,
 
     /// Current memory usage, in bytes.
     ///
@@ -154,7 +152,7 @@ impl GroupsAccumulatorAdapter {
             allocation_bytes: 0,
 
             // Default for no assumption about the input
-            contiguous_group_indices: false,
+            metadata: GroupsAccumulatorMetadata::default(),
         }
     }
 
@@ -185,10 +183,10 @@ impl GroupsAccumulatorAdapter {
         group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
-        f: F,
+        f: &F,
     ) -> Result<()>
     where
-        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()> + Copy,
+        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()>,
     {
         self.make_accumulators_if_needed(total_num_groups)?;
 
@@ -198,21 +196,22 @@ impl GroupsAccumulatorAdapter {
             return Ok(());
         }
 
-        let (sizes_pre, sizes_post) = if self.contiguous_group_indices {
-            self.invoke_per_accumulator_on_contiguous_group_indices(
-                values,
-                group_indices,
-                opt_filter,
-                f,
-            )
-        } else {
-            self.invoke_per_accumulator_on_non_ordered_group_indices(
-                values,
-                group_indices,
-                opt_filter,
-                f,
-            )
-        }?;
+        let (sizes_pre, sizes_post) =
+            if matches!(self.metadata.group_indices_ordering, InputOrderMode::Sorted) {
+                self.invoke_per_accumulator_on_contiguous_group_indices(
+                    values,
+                    group_indices,
+                    opt_filter,
+                    f,
+                )
+            } else {
+                self.invoke_per_accumulator_on_non_ordered_group_indices(
+                    values,
+                    group_indices,
+                    opt_filter,
+                    f,
+                )
+            }?;
 
         self.adjust_allocation(sizes_pre, sizes_post);
 
@@ -222,7 +221,7 @@ impl GroupsAccumulatorAdapter {
     /// invokes f(accumulator, values) for each group that has values
     /// in group_indices.
     ///
-    /// if the group indices are contiguous we avoiding
+    /// Returns (usize, usize) which is (accumulators memory before invocation, accumulators memory after invocation)
     ///
     /// This function first reorders the input and filter so that
     /// values for each group_index are contiguous and then invokes f
@@ -251,10 +250,10 @@ impl GroupsAccumulatorAdapter {
         values: &[ArrayRef],
         group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
-        f: F,
+        f: &F,
     ) -> Result<(usize, usize)>
     where
-        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()> + Copy,
+        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()>,
     {
         // figure out which input rows correspond to which groups.
         // Note that self.state.indices starts empty for all groups
@@ -324,15 +323,17 @@ impl GroupsAccumulatorAdapter {
     /// This function is the same as [`Self::invoke_per_accumulator_on_non_ordered_group_indices`] but avoid reordering of the
     /// input as we know that each group_index is contiguous
     ///
+    /// Returns (usize, usize) which is (accumulators memory before invocation, accumulators memory after invocation)
+    ///
     fn invoke_per_accumulator_on_contiguous_group_indices<F>(
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
-        f: F,
+        f: &F,
     ) -> Result<(usize, usize)>
     where
-        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()> + Copy,
+        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()>,
     {
         let mut current_group_index = group_indices[0];
         let mut start_idx = 0;
@@ -423,14 +424,13 @@ impl GroupsAccumulatorAdapter {
 }
 
 impl GroupsAccumulator for GroupsAccumulatorAdapter {
-    fn register_metadata(&mut self, metadata: &GroupsAccumulatorMetadata) -> Result<()> {
+    fn register_metadata(&mut self, metadata: GroupsAccumulatorMetadata) -> Result<()> {
         if !self.states.is_empty() {
             return internal_err!(
                 "Cannot register metadata after the accumulator already has states"
             );
         }
-        self.contiguous_group_indices =
-            matches!(metadata.group_indices_ordering, InputOrderMode::Sorted);
+        self.metadata = metadata;
 
         Ok(())
     }
@@ -447,7 +447,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             group_indices,
             opt_filter,
             total_num_groups,
-            |accumulator, values_to_accumulate| {
+            &|accumulator, values_to_accumulate| {
                 accumulator.update_batch(values_to_accumulate)
             },
         )?;
@@ -522,7 +522,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             group_indices,
             opt_filter,
             total_num_groups,
-            |accumulator, values_to_accumulate| {
+            &|accumulator, values_to_accumulate| {
                 accumulator.merge_batch(values_to_accumulate)?;
                 Ok(())
             },

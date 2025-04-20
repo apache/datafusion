@@ -408,6 +408,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// specialized for that particular aggregate and its input types
     accumulators: Vec<Box<dyn GroupsAccumulator>>,
 
+    /// The current metadata for the [`GroupsAccumulator`]s, see [`GroupsAccumulator::register_metadata`]
+    accumulators_metadata: GroupsAccumulatorMetadata,
+
     // ========================================================================
     // TASK-SPECIFIC STATES:
     // Inner states groups together properties, states for a specific task.
@@ -478,14 +481,19 @@ impl GroupedHashAggregateStream {
             }
         };
 
-        let group_accumulator_metadata = GroupsAccumulatorMetadata {
-            group_indices_ordering: agg.input_order_mode.clone(),
+        let group_accumulator_metadata = {
+            let mut metadata = GroupsAccumulatorMetadata::default();
+            metadata.group_indices_ordering = agg.input_order_mode.clone();
+
+            metadata
         };
 
         // Instantiate the accumulators
         let accumulators: Vec<_> = aggregate_exprs
             .iter()
-            .map(|expr| create_group_accumulator(expr, &group_accumulator_metadata))
+            .map(|expr| {
+                create_group_accumulator(expr, group_accumulator_metadata.clone())
+            })
             .collect::<Result<_>>()?;
 
         let group_schema = agg_group_by.group_schema(&agg.input().schema())?;
@@ -620,6 +628,7 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
+            accumulators_metadata: group_accumulator_metadata,
         })
     }
 }
@@ -629,7 +638,7 @@ impl GroupedHashAggregateStream {
 /// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
     agg_expr: &Arc<AggregateFunctionExpr>,
-    metadata: &GroupsAccumulatorMetadata,
+    metadata: GroupsAccumulatorMetadata,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     let mut group_accumulator: Box<dyn GroupsAccumulator> =
         if agg_expr.groups_accumulator_supported() {
@@ -1092,8 +1101,10 @@ impl GroupedHashAggregateStream {
             .build()?;
         self.input_done = false;
 
-        let group_ordering_changed =
-            !matches!(self.group_ordering, GroupOrdering::Full(_));
+        let group_ordering_changed = !matches!(
+            self.accumulators_metadata.group_indices_ordering,
+            InputOrderMode::Sorted
+        );
         self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
 
         if group_ordering_changed {
@@ -1103,10 +1114,10 @@ impl GroupedHashAggregateStream {
                 );
             }
 
+            self.accumulators_metadata.group_indices_ordering = InputOrderMode::Sorted;
+
             for acc in self.accumulators.iter_mut() {
-                acc.register_metadata(&GroupsAccumulatorMetadata {
-                    group_indices_ordering: InputOrderMode::Sorted,
-                })?
+                acc.register_metadata(self.accumulators_metadata.clone())?
             }
         }
 

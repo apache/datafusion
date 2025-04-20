@@ -112,7 +112,7 @@ pub trait GroupsAccumulator: Send {
     /// This will be called either right after initialization or after [`Self::state`], [`Self::evaluate`] consumed all the groups.
     ///
     /// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
-    fn register_metadata(&mut self, _metadata: &GroupsAccumulatorMetadata) -> Result<()> {
+    fn register_metadata(&mut self, _metadata: GroupsAccumulatorMetadata) -> Result<()> {
         Ok(())
     }
 
@@ -263,7 +263,12 @@ pub trait GroupsAccumulator: Send {
 }
 
 /// Metadata for [`GroupsAccumulator`] with some execution time information so you can optimize your implementation.
+///
+/// This is not exhaustive so we can add more metadata in the future without breaking.
+///
+/// In order to create a new [`GroupsAccumulatorMetadata`] you can use [`GroupsAccumulatorMetadata::default()`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GroupsAccumulatorMetadata {
     /// Thr ordering of the group indices
     ///
@@ -274,5 +279,19 @@ pub struct GroupsAccumulatorMetadata {
     ///
     /// You can be sure that you will never get another group with index 1 or 2 (until call to [`GroupsAccumulator::state`]/[`GroupsAccumulator::evaluate`] which will shift the group indices).
     /// However, you might get another group with index 3 in the future.
+    ///
+    /// Possible optimizations you can do in your implementation when the group indices are sorted are:
+    /// 1. Only track the current group state
+    /// 2. Have a builder that is ready to be built by call to [`Self::state`]/[`Self::evaluate`]
+    ///
     pub group_indices_ordering: InputOrderMode,
+}
+
+impl Default for GroupsAccumulatorMetadata {
+    fn default() -> Self {
+        Self {
+            // No assumptions about the ordering of the group indices
+            group_indices_ordering: InputOrderMode::Linear,
+        }
+    }
 }
