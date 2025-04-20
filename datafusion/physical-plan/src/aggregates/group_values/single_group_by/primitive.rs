@@ -136,7 +136,9 @@ where
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         if let Some(block_size) = self.block_size {
             let before_add_group = |group_values: &mut VecDeque<Vec<T::Native>>| {
-                if group_values.back().unwrap().len() == block_size {
+                if group_values.is_empty()
+                    || group_values.back().unwrap().len() == block_size
+                {
                     let new_block = Vec::with_capacity(block_size);
                     group_values.push_back(new_block);
                 }
@@ -156,15 +158,20 @@ where
     }
 
     fn size(&self) -> usize {
-        // self.map.capacity() * size_of::<usize>() + self.values.len
+        self.map.capacity() * size_of::<usize>()
+            + self
+                .values
+                .iter()
+                .map(|blk| blk.len() * blk.allocated_size())
+                .sum::<usize>()
     }
 
     fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.len() == 0
     }
 
     fn len(&self) -> usize {
-        self.values.len()
+        self.map.len() + self.null_group.map(|_| 1).unwrap_or_default()
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -184,24 +191,29 @@ where
         }
 
         let array: PrimitiveArray<T> = match emit_to {
+            // ===============================================
+            // Emitting in flat mode
+            // ===============================================
             EmitTo::All => {
                 assert!(
                     self.block_size.is_none(),
-                    "only support EmitTo::All in flat group values"
+                    "only support EmitTo::All in flat mode"
                 );
 
                 self.map.clear();
                 build_primitive(
                     std::mem::take(self.values.back_mut().unwrap()),
-                    self.null_group.take(),
+                    self.null_group.take().map(|idx| idx as usize),
                 )
             }
+
             EmitTo::First(n) => {
                 assert!(
                     self.block_size.is_none(),
-                    "only support EmitTo::First in flat group values"
+                    "only support EmitTo::First in flat mode"
                 );
 
+                let n = n as u64;
                 self.map.retain(|group_idx| {
                     // Decrement group index by n
                     match group_idx.checked_sub(n) {
@@ -214,6 +226,7 @@ where
                         None => false,
                     }
                 });
+
                 let null_group = match &mut self.null_group {
                     Some(v) if *v >= n => {
                         *v -= n;
@@ -224,12 +237,107 @@ where
                 };
 
                 let single_block = self.values.back_mut().unwrap();
-                let mut split = single_block.split_off(n);
+                let mut split = single_block.split_off(n as usize);
                 std::mem::swap(single_block, &mut split);
-                build_primitive(split, null_group)
+                build_primitive(split, null_group.map(|idx| idx as usize))
             }
-            EmitTo::NextBlock(_) => {
-                
+
+            // ===============================================
+            // Emitting in blocked mode
+            // ===============================================
+            // TODO: we should consider if it is necessary to support indices modifying
+            // in `EmitTo::NextBlock`. It is only used in spilling case, maybe we can
+            // always emit all in blocked mode. So, we just need to clear the map rather
+            // than doing expansive modification for each buck in it.
+            EmitTo::NextBlock(true) => {
+                assert!(
+                    self.block_size.is_some(),
+                    "only support EmitTo::Next in blocked group values"
+                );
+
+                // We only emit the first block(`block_id == 0`),
+                // so erase the entries with `block_id == 0`, and decrease entries with `block_id > 0`
+                self.map.retain(|packed_idx| {
+                    let old_blk_id =
+                        BlockedGroupIndexOperations::get_block_id(*packed_idx);
+                    match old_blk_id.checked_sub(1) {
+                        // `block_id > 0`, shift `block_id` down
+                        Some(new_blk_id) => {
+                            let blk_offset =
+                                BlockedGroupIndexOperations::get_block_offset(
+                                    *packed_idx,
+                                );
+                            let new_packed_idx = BlockedGroupIndexOperations::pack_index(
+                                new_blk_id as u32,
+                                blk_offset,
+                            );
+                            *packed_idx = new_packed_idx;
+
+                            true
+                        }
+
+                        // `block_id == 0`, so remove from table
+                        None => false,
+                    }
+                });
+
+                // Similar as `non-nulls`, if `block_id > 0` we decrease, and if `block_id == 0` we erase
+                let null_block_pair_opt = self.null_group.map(|packed_idx| {
+                    (
+                        BlockedGroupIndexOperations::get_block_id(packed_idx),
+                        BlockedGroupIndexOperations::get_block_offset(packed_idx),
+                    )
+                });
+                let null_idx = match null_block_pair_opt {
+                    Some((blk_id, blk_offset)) if blk_id > 0 => {
+                        let new_blk_id = blk_id - 1;
+                        let new_packed_idx = BlockedGroupIndexOperations::pack_index(
+                            new_blk_id, blk_offset,
+                        );
+                        self.null_group = Some(new_packed_idx);
+                        None
+                    }
+                    Some((_, blk_offset)) => {
+                        self.null_group = None;
+                        Some(blk_offset as usize)
+                    }
+                    None => None,
+                };
+
+                let emit_blk = self.values.pop_front().unwrap();
+                build_primitive(emit_blk, null_idx)
+            }
+
+            EmitTo::NextBlock(false) => {
+                assert!(
+                    self.block_size.is_some(),
+                    "only support EmitTo::Next in blocked group values"
+                );
+
+                let null_block_pair_opt = self.null_group.map(|packed_idx| {
+                    (
+                        BlockedGroupIndexOperations::get_block_id(packed_idx),
+                        BlockedGroupIndexOperations::get_block_offset(packed_idx),
+                    )
+                });
+                let null_idx = match null_block_pair_opt {
+                    Some((blk_id, blk_offset)) if blk_id > 0 => {
+                        let new_blk_id = blk_id - 1;
+                        let new_packed_idx = BlockedGroupIndexOperations::pack_index(
+                            new_blk_id, blk_offset,
+                        );
+                        self.null_group = Some(new_packed_idx);
+                        None
+                    }
+                    Some((_, blk_offset)) => {
+                        self.null_group = None;
+                        Some(blk_offset as usize)
+                    }
+                    None => None,
+                };
+
+                let emit_blk = self.values.pop_front().unwrap();
+                build_primitive(emit_blk, null_idx)
             }
         };
 
@@ -238,8 +346,16 @@ where
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {
         let count = batch.num_rows();
-        self.values.clear();
-        self.values.shrink_to(count);
+
+        // TODO: Only reserve room of values in `flat mode` currently,
+        // we may need to consider it again when supporting spilling
+        // for `blocked mode`.
+        if self.block_size.is_none() {
+            let single_block = self.values.back_mut().unwrap();
+            single_block.clear();
+            single_block.shrink_to(count);
+        }
+
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
     }
@@ -265,16 +381,17 @@ where
         for v in cols[0].as_primitive::<T>() {
             let group_index = match v {
                 None => *self.null_group.get_or_insert_with(|| {
-                    // actions before add new group like checking if room is enough
+                    // Actions before add new group like checking if room is enough
                     before_add_group(&mut self.values);
 
-                    // get block infos and update block
-                    let block_id = self.values.len() as u32;
+                    // Get block infos and update block,
+                    // we need `current block` and `next offset in block`
+                    let block_id = self.values.len() as u32 - 1;
                     let current_block = self.values.back_mut().unwrap();
                     let block_offset = current_block.len() as u64;
                     current_block.push(Default::default());
 
-                    // get group index and finish actions needed it
+                    // Get group index and finish actions needed it
                     O::pack_index(block_id, block_offset)
                 }),
                 Some(key) => {
@@ -305,16 +422,17 @@ where
                     match insert {
                         hashbrown::hash_table::Entry::Occupied(o) => *o.get(),
                         hashbrown::hash_table::Entry::Vacant(v) => {
-                            // actions before add new group like checking if room is enough
+                            // Actions before add new group like checking if room is enough
                             before_add_group(&mut self.values);
 
-                            // get block infos and update block
-                            let block_id = self.values.len() as u32;
+                            // Get block infos and update block,
+                            // we need `current block` and `next offset in block`
+                            let block_id = self.values.len() as u32 - 1;
                             let current_block = self.values.back_mut().unwrap();
                             let block_offset = current_block.len() as u64;
                             current_block.push(key);
 
-                            // get group index and finish actions needed it
+                            // Get group index and finish actions needed it
                             let packed_index = O::pack_index(block_id, block_offset);
                             v.insert(packed_index);
                             packed_index

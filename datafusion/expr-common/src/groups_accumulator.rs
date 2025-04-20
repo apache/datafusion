@@ -25,7 +25,7 @@ use datafusion_common::{not_impl_err, DataFusionError, Result};
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy)]
 pub enum EmitTo {
-    /// Emit all groups
+    /// Emit all groups, will clear all existing group indexes
     All,
     /// Emit only the first `n` groups and shift all existing group
     /// indexes down by `n`.
@@ -35,11 +35,7 @@ pub enum EmitTo {
     First(usize),
     /// Emit next block in the blocked managed groups
     ///
-    /// The flag's meaning:
-    ///   - `true` represents new groups still will be added,
-    ///     and we need to shift the values down.
-    ///   - `false` represents no new groups will be added again,
-    ///     and we don't need to shift the values down.
+    /// Similar as `Emit::All`, will also clear all existing group indexes
     NextBlock(bool),
 }
 
