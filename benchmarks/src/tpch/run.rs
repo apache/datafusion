@@ -355,7 +355,7 @@ mod tests {
         let common = CommonOpt {
             iterations: 1,
             partitions: Some(2),
-            batch_size: 8192,
+            batch_size: Some(8192),
             mem_pool_type: "fair".to_string(),
             memory_limit: None,
             sort_spill_reservation_bytes: None,
@@ -392,7 +392,7 @@ mod tests {
         let common = CommonOpt {
             iterations: 1,
             partitions: Some(2),
-            batch_size: 8192,
+            batch_size: Some(8192),
             mem_pool_type: "fair".to_string(),
             memory_limit: None,
             sort_spill_reservation_bytes: None,
