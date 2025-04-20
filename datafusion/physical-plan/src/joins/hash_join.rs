@@ -86,7 +86,7 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
-const HASH_JOIN_SEED: RandomState = 
+const HASH_JOIN_SEED: RandomState =
     RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
 
 /// HashTable and input data for the left (build side) of a join
