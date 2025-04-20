@@ -86,6 +86,8 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
+const HASH_JOIN_SEED: RandomState = RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
+
 /// HashTable and input data for the left (build side) of a join
 struct JoinLeftData {
     /// The hash table with indices into `batch`
@@ -385,7 +387,7 @@ impl HashJoinExec {
         let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = HASH_JOIN_SEED;
 
         let join_schema = Arc::new(join_schema);
 
