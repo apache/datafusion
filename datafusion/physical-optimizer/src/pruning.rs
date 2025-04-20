@@ -3132,15 +3132,170 @@ mod tests {
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Date64) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Date64)";
 
         // test column on the left
-        let expr = cast(col("c1"), DataType::Date64)
-            .eq(lit(ScalarValue::Date64(Some(123))));
+        let expr =
+            cast(col("c1"), DataType::Date64).eq(lit(ScalarValue::Date64(Some(123))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr = lit(ScalarValue::Date64(Some(123)))
-            .eq(cast(col("c1"), DataType::Date64));
+        let expr =
+            lit(ScalarValue::Date64(Some(123))).eq(cast(col("c1"), DataType::Date64));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_dict_string_date() -> Result<()> {
+        // Test with Dictionary<UInt8, Utf8> for the literal
+        let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
+        let expected_expr = "true";
+
+        // test column on the left
+        let expr = cast(
+            col("c1"),
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+        )
+        .eq(lit(ScalarValue::Utf8(Some("2024-01-01".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr = lit(ScalarValue::Utf8(Some("2024-01-01".to_string()))).eq(cast(
+            col("c1"),
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+        ));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_date_dict_string() -> Result<()> {
+        // Test with Dictionary<UInt8, Utf8> for the column
+        let schema = Schema::new(vec![Field::new(
+            "c1",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]);
+        let expected_expr = "true";
+
+        // test column on the left
+        let expr =
+            cast(col("c1"), DataType::Date32).eq(lit(ScalarValue::Date32(Some(123))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr =
+            lit(ScalarValue::Date32(Some(123))).eq(cast(col("c1"), DataType::Date32));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_dict_dict_same_value_type() -> Result<()> {
+        // Test with Dictionary types that have the same value type but different key types
+        let schema = Schema::new(vec![Field::new(
+            "c1",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]);
+
+        // Direct comparison with no cast
+        let expr = col("c1").eq(lit(ScalarValue::Utf8(Some("test".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        let expected_expr =
+            "c1_null_count@2 != row_count@3 AND c1_min@0 <= test AND test <= c1_max@1";
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // Test with column cast to a dictionary with different key type
+        let expr = cast(
+            col("c1"),
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+        )
+        .eq(lit(ScalarValue::Utf8(Some("test".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Utf8)) <= test AND test <= CAST(c1_max@1 AS Dictionary(UInt16, Utf8))";
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_dict_dict_different_value_type() -> Result<()> {
+        // Test with Dictionary types that have different value types
+        let schema = Schema::new(vec![Field::new(
+            "c1",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Int32)),
+            false,
+        )]);
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 123 AND 123 <= CAST(c1_max@1 AS Int64)";
+
+        // Test with literal of a different type
+        let expr =
+            cast(col("c1"), DataType::Int64).eq(lit(ScalarValue::Int64(Some(123))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_nested_dict() -> Result<()> {
+        // Test with nested Dictionary types
+        let schema = Schema::new(vec![Field::new(
+            "c1",
+            DataType::Dictionary(
+                Box::new(DataType::UInt8),
+                Box::new(DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Utf8),
+                )),
+            ),
+            false,
+        )]);
+        let expected_expr =
+            "c1_null_count@2 != row_count@3 AND c1_min@0 <= test AND test <= c1_max@1";
+
+        // Test with a simple literal
+        let expr = col("c1").eq(lit(ScalarValue::Utf8(Some("test".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_dict_date_dict_date() -> Result<()> {
+        // Test with dictionary-wrapped date types for both sides
+        let schema = Schema::new(vec![Field::new(
+            "c1",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Date32)),
+            false,
+        )]);
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Date64)) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Dictionary(UInt16, Date64))";
+
+        // Test with a cast to a different date type
+        let expr = cast(
+            col("c1"),
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Date64)),
+        )
+        .eq(lit(ScalarValue::Date64(Some(123))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3154,15 +3309,15 @@ mod tests {
         let expected_expr = "true";
 
         // test column on the left
-        let expr = cast(col("c1"), DataType::Date32)
-            .eq(lit(ScalarValue::Date32(Some(123))));
+        let expr =
+            cast(col("c1"), DataType::Date32).eq(lit(ScalarValue::Date32(Some(123))));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         // test column on the right
-        let expr = lit(ScalarValue::Date32(Some(123)))
-            .eq(cast(col("c1"), DataType::Date32));
+        let expr =
+            lit(ScalarValue::Date32(Some(123))).eq(cast(col("c1"), DataType::Date32));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
