@@ -40,7 +40,9 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{BooleanArray, PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
+use arrow::array::{
+    BooleanArray, PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array,
+};
 use arrow::compute::{kernels, take_arrays};
 use arrow::datatypes::{BooleanType, SchemaRef, UInt32Type, UInt64Type};
 use arrow_schema::{DataType, Field};
@@ -356,8 +358,10 @@ impl BatchPartitioner {
                     hash_buffer.resize(batch.num_rows(), 0);
                     create_hashes(&arrays, random_state, &mut hash_buffer)?;
 
-                    let hash_vector = UInt64Array::from(hash_buffer).unary_mut(|a| a % *num_partitions as u64).unwrap();
-        
+                    let hash_vector = UInt64Array::from(hash_buffer)
+                        .unary_mut(|a| a % *num_partitions as u64)
+                        .unwrap();
+
                     let mut fields = batch
                         .schema()
                         .fields()
@@ -382,7 +386,8 @@ impl BatchPartitioner {
                         let selection_array = arrow_ord::cmp::eq(
                             &hash_vector,
                             &UInt64Array::from(vec![partition as u64; batch.num_rows()]),
-                        ).unwrap();
+                        )
+                        .unwrap();
                         let selection_vector = Arc::new(selection_array);
                         let mut columns = batch.columns().to_vec();
                         columns.push(selection_vector);
