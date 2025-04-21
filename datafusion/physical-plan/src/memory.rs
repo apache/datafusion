@@ -192,6 +192,19 @@ impl DisplayAs for LazyMemoryExec {
                         .join(", ")
                 )
             }
+            DisplayFormatType::TreeRender => {
+                //TODO: remove batch_size, add one line per generator
+                writeln!(
+                    f,
+                    "batch_generators={}",
+                    self.batch_generators
+                        .iter()
+                        .map(|g| g.read().to_string())
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )?;
+                Ok(())
+            }
         }
     }
 }

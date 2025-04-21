@@ -175,12 +175,7 @@ async fn run_tests() -> Result<()> {
             futures::stream::iter(match result {
                 // Tokio panic error
                 Err(e) => Some(DataFusionError::External(Box::new(e))),
-                Ok(thread_result) => match thread_result {
-                    // Test run error
-                    Err(e) => Some(e),
-                    // success
-                    Ok(_) => None,
-                },
+                Ok(thread_result) => thread_result.err(),
             })
         })
         .collect()
@@ -581,6 +576,12 @@ struct Options {
         help = "IGNORED (for compatibility with built-in rust test runner)"
     )]
     ignored: bool,
+
+    #[clap(
+        long,
+        help = "IGNORED (for compatibility with built-in rust test runner)"
+    )]
+    nocapture: bool,
 }
 
 impl Options {

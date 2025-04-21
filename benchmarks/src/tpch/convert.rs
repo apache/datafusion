@@ -15,20 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::logical_expr::select_expr::SelectExpr;
 use datafusion_common::instant::Instant;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use datafusion::common::not_impl_err;
 
+use super::get_tbl_tpch_table_schema;
+use super::TPCH_TABLES;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use structopt::StructOpt;
-
-use super::get_tbl_tpch_table_schema;
-use super::TPCH_TABLES;
 
 /// Convert tpch .slt files to .parquet or .csv files
 #[derive(Debug, StructOpt)]
@@ -56,6 +56,10 @@ pub struct ConvertOpt {
     /// Batch size when reading CSV or Parquet files
     #[structopt(short = "s", long = "batch-size", default_value = "8192")]
     batch_size: usize,
+
+    /// Sort each table by its first column in ascending order.
+    #[structopt(short = "t", long = "sort")]
+    sort: bool,
 }
 
 impl ConvertOpt {
@@ -69,6 +73,7 @@ impl ConvertOpt {
         for table in TPCH_TABLES {
             let start = Instant::now();
             let schema = get_tbl_tpch_table_schema(table);
+            let key_column_name = schema.fields()[0].name();
 
             let input_path = format!("{input_path}/{table}.tbl");
             let options = CsvReadOptions::new()
@@ -76,6 +81,13 @@ impl ConvertOpt {
                 .has_header(false)
                 .delimiter(b'|')
                 .file_extension(".tbl");
+            let options = if self.sort {
+                // indicated that the file is already sorted by its first column to speed up the conversion
+                options
+                    .file_sort_order(vec![vec![col(key_column_name).sort(true, false)]])
+            } else {
+                options
+            };
 
             let config = SessionConfig::new().with_batch_size(self.batch_size);
             let ctx = SessionContext::new_with_config(config);
@@ -89,7 +101,8 @@ impl ConvertOpt {
                 .iter()
                 .take(schema.fields.len() - 1)
                 .map(Expr::from)
-                .collect();
+                .map(SelectExpr::from)
+                .collect::<Vec<_>>();
 
             csv = csv.select(selection)?;
             // optionally, repartition the file
@@ -97,6 +110,11 @@ impl ConvertOpt {
             if partitions > 1 {
                 csv = csv.repartition(Partitioning::RoundRobinBatch(partitions))?
             }
+            let csv = if self.sort {
+                csv.sort_by(vec![col(key_column_name)])?
+            } else {
+                csv
+            };
 
             // create the physical plan
             let csv = csv.create_physical_plan().await?;

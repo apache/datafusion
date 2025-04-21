@@ -79,9 +79,12 @@ pub fn is_datetime(dt: &DataType) -> bool {
     )
 }
 
-/// Determine whether the given data type `dt` is a `Utf8` or `LargeUtf8`.
-pub fn is_utf8_or_large_utf8(dt: &DataType) -> bool {
-    matches!(dt, DataType::Utf8 | DataType::LargeUtf8)
+/// Determine whether the given data type `dt` is a `Utf8` or `Utf8View` or `LargeUtf8`.
+pub fn is_utf8_or_utf8view_or_large_utf8(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+    )
 }
 
 /// Determine whether the given data type `dt` is a `Decimal`.

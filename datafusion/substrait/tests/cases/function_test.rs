@@ -24,6 +24,7 @@ mod tests {
     use datafusion::common::Result;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+    use insta::assert_snapshot;
 
     #[tokio::test]
     async fn contains_function_test() -> Result<()> {
@@ -31,14 +32,14 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        let plan_str = format!("{}", plan);
-
-        assert_eq!(
-            plan_str,
-            "Projection: nation.n_name\
-            \n  Filter: contains(nation.n_name, Utf8(\"IA\"))\
-            \n    TableScan: nation"
-        );
+        assert_snapshot!(
+        plan,
+        @r#"
+            Projection: nation.n_name
+              Filter: contains(nation.n_name, Utf8("IA"))
+                TableScan: nation
+            "#
+                );
         Ok(())
     }
 }

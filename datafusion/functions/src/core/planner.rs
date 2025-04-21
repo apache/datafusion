@@ -60,7 +60,7 @@ impl ExprPlanner for CoreFunctionPlanner {
 
     fn plan_overlay(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
-            ScalarFunction::new_udf(crate::string::overlay(), args),
+            ScalarFunction::new_udf(crate::core::overlay(), args),
         )))
     }
 

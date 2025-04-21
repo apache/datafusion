@@ -149,9 +149,17 @@ macro_rules! config_namespace {
                             // $(#[allow(deprecated)])?
                             {
                                 $(let value = $transform(value);)? // Apply transformation if specified
-                                $(log::warn!($warn);)? // Log warning if specified
                                 #[allow(deprecated)]
-                                self.$field_name.set(rem, value.as_ref())
+                                let ret = self.$field_name.set(rem, value.as_ref());
+
+                                $(if !$warn.is_empty() {
+                                    let default: $field_type = $default;
+                                    #[allow(deprecated)]
+                                    if default != self.$field_name {
+                                        log::warn!($warn);
+                                    }
+                                })? // Log warning if specified, and the value is not the default
+                                ret
                             }
                         },
                     )*
@@ -252,8 +260,13 @@ config_namespace! {
         /// string length and thus DataFusion can not enforce such limits.
         pub support_varchar_with_length: bool, default = true
 
+       /// If true, `VARCHAR` is mapped to `Utf8View` during SQL planning.
+       /// If false, `VARCHAR` is mapped to `Utf8`  during SQL planning.
+       /// Default is false.
+        pub map_varchar_to_utf8view: bool, default = false
+
         /// When set to true, the source locations relative to the original SQL
-        /// query (i.e. [`Span`](sqlparser::tokenizer::Span)) will be collected
+        /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected
         /// and recorded in the logical plan nodes.
         pub collect_spans: bool, default = false
 
@@ -445,6 +458,14 @@ config_namespace! {
         /// the UTF8 flag for strings, causing string columns to be loaded as
         /// BLOB instead.
         pub binary_as_string: bool, default = false
+
+        /// (reading) If true, parquet reader will read columns of
+        /// physical type int96 as originating from a different resolution
+        /// than nanosecond. This is useful for reading data from systems like Spark
+        /// which stores microsecond resolution timestamps in an int96 allowing it
+        /// to write values with a larger date range than 64-bit timestamps with
+        /// nanosecond resolution.
+        pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -711,6 +732,10 @@ config_namespace! {
 
         /// When set to true, the explain statement will print schema information
         pub show_schema: bool, default = false
+
+        /// Display format of explain. Default is "indent".
+        /// When set to "tree", it will print the plan in a tree-rendered format.
+        pub format: String, default = "indent".to_string()
     }
 }
 
@@ -1990,8 +2015,8 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::config::{
-        ConfigEntry, ConfigExtension, ConfigFileType, ExtensionOptions, Extensions,
-        TableOptions,
+        ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
+        Extensions, TableOptions,
     };
 
     #[derive(Default, Debug, Clone)]
@@ -2074,6 +2099,37 @@ mod tests {
         assert_eq!(table_config.csv.escape.unwrap() as char, '"');
         table_config.set("format.escape", "\'").unwrap();
         assert_eq!(table_config.csv.escape.unwrap() as char, '\'');
+    }
+
+    #[test]
+    fn warning_only_not_default() {
+        use std::sync::atomic::AtomicUsize;
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        use log::{Level, LevelFilter, Metadata, Record};
+        struct SimpleLogger;
+        impl log::Log for SimpleLogger {
+            fn enabled(&self, metadata: &Metadata) -> bool {
+                metadata.level() <= Level::Info
+            }
+
+            fn log(&self, record: &Record) {
+                if self.enabled(record.metadata()) {
+                    COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            fn flush(&self) {}
+        }
+        log::set_logger(&SimpleLogger).unwrap();
+        log::set_max_level(LevelFilter::Info);
+        let mut sql_parser_options = crate::config::SqlParserOptions::default();
+        sql_parser_options
+            .set("enable_options_value_normalization", "false")
+            .unwrap();
+        assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 0);
+        sql_parser_options
+            .set("enable_options_value_normalization", "true")
+            .unwrap();
+        assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[cfg(feature = "parquet")]

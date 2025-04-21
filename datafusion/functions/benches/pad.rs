@@ -16,12 +16,12 @@
 // under the License.
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, OffsetSizeTrait, PrimitiveArray};
-use arrow::datatypes::Int64Type;
+use arrow::datatypes::{DataType, Int64Type};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::{lpad, rpad};
 use rand::distributions::{Distribution, Uniform};
 use rand::Rng;
@@ -102,24 +102,45 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args::<i32>(size, 32, false);
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                criterion::black_box(lpad().invoke_batch(&args, size).unwrap())
+                criterion::black_box(
+                    lpad()
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            number_rows: size,
+                            return_type: &DataType::Utf8,
+                        })
+                        .unwrap(),
+                )
             })
         });
 
         let args = create_args::<i64>(size, 32, false);
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                criterion::black_box(lpad().invoke_batch(&args, size).unwrap())
+                criterion::black_box(
+                    lpad()
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            number_rows: size,
+                            return_type: &DataType::LargeUtf8,
+                        })
+                        .unwrap(),
+                )
             })
         });
 
         let args = create_args::<i32>(size, 32, true);
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                criterion::black_box(lpad().invoke_batch(&args, size).unwrap())
+                criterion::black_box(
+                    lpad()
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            number_rows: size,
+                            return_type: &DataType::Utf8,
+                        })
+                        .unwrap(),
+                )
             })
         });
 
@@ -130,16 +151,30 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args::<i32>(size, 32, false);
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                criterion::black_box(rpad().invoke_batch(&args, size).unwrap())
+                criterion::black_box(
+                    rpad()
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            number_rows: size,
+                            return_type: &DataType::Utf8,
+                        })
+                        .unwrap(),
+                )
             })
         });
 
         let args = create_args::<i64>(size, 32, false);
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                criterion::black_box(rpad().invoke_batch(&args, size).unwrap())
+                criterion::black_box(
+                    rpad()
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            number_rows: size,
+                            return_type: &DataType::LargeUtf8,
+                        })
+                        .unwrap(),
+                )
             })
         });
 
@@ -147,8 +182,15 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args::<i32>(size, 32, true);
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                criterion::black_box(rpad().invoke_batch(&args, size).unwrap())
+                criterion::black_box(
+                    rpad()
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            number_rows: size,
+                            return_type: &DataType::Utf8,
+                        })
+                        .unwrap(),
+                )
             })
         });
 

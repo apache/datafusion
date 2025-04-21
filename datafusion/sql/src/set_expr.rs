@@ -31,7 +31,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<LogicalPlan> {
         let set_expr_span = Span::try_from_sqlparser_span(set_expr.span());
         match set_expr {
-            SetExpr::Select(s) => self.select_to_plan(*s, vec![], planner_context),
+            SetExpr::Select(s) => self.select_to_plan(*s, None, planner_context),
             SetExpr::Values(v) => self.sql_values_to_plan(v, planner_context),
             SetExpr::SetOperation {
                 op,

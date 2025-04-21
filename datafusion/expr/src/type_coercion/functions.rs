@@ -19,7 +19,7 @@ use super::binary::{binary_numeric_coercion, comparison_coercion};
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use arrow::{
     compute::can_cast_types,
-    datatypes::{DataType, TimeUnit},
+    datatypes::{DataType, Field, TimeUnit},
 };
 use datafusion_common::types::LogicalType;
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, ListCoercion};
@@ -49,7 +49,7 @@ pub fn data_types_with_scalar_udf(
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
-    if current_types.is_empty() {
+    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
         if type_signature.supports_zero_argument() {
             return Ok(vec![]);
         } else if type_signature.used_to_support_zero_arguments() {
@@ -87,7 +87,7 @@ pub fn data_types_with_aggregate_udf(
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
-    if current_types.is_empty() {
+    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
         if type_signature.supports_zero_argument() {
             return Ok(vec![]);
         } else if type_signature.used_to_support_zero_arguments() {
@@ -124,7 +124,7 @@ pub fn data_types_with_window_udf(
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
-    if current_types.is_empty() {
+    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
         if type_signature.supports_zero_argument() {
             return Ok(vec![]);
         } else if type_signature.used_to_support_zero_arguments() {
@@ -161,7 +161,7 @@ pub fn data_types(
 ) -> Result<Vec<DataType>> {
     let type_signature = &signature.type_signature;
 
-    if current_types.is_empty() {
+    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
         if type_signature.supports_zero_argument() {
             return Ok(vec![]);
         } else if type_signature.used_to_support_zero_arguments() {
@@ -387,7 +387,7 @@ fn get_valid_types(
                     new_base_type =
                         coerce_array_types(function_name, current_type, &new_base_type)?;
                 }
-                ArrayFunctionArgument::Index => {}
+                ArrayFunctionArgument::Index | ArrayFunctionArgument::String => {}
             }
         }
         let new_array_type = datafusion_common::utils::coerced_type_with_base_type_only(
@@ -408,6 +408,7 @@ fn get_valid_types(
             let valid_type = match argument_type {
                 ArrayFunctionArgument::Element => new_elem_type.clone(),
                 ArrayFunctionArgument::Index => DataType::Int64,
+                ArrayFunctionArgument::String => DataType::Utf8,
                 ArrayFunctionArgument::Array => {
                     let Some(current_type) = array(current_type) else {
                         return Ok(vec![vec![]]);
@@ -435,6 +436,10 @@ fn get_valid_types(
         match array_type {
             DataType::List(_) | DataType::LargeList(_) => Some(array_type.clone()),
             DataType::FixedSizeList(field, _) => Some(DataType::List(Arc::clone(field))),
+            DataType::Null => Some(DataType::List(Arc::new(Field::new_list_field(
+                DataType::Int64,
+                true,
+            )))),
             _ => None,
         }
     }

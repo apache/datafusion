@@ -21,7 +21,7 @@
 
 The section contains examples how to perform CPU profiling for Apache DataFusion on different operating systems.
 
-## Building a flamegraph
+## Building a flame graph
 
 [Video: how to CPU profile DataFusion with a Flamegraph](https://youtu.be/2z11xtYw_xs)
 
@@ -82,6 +82,43 @@ CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph --root --bench sql_planner -- 
 
 [Video: how to CPU profile DataFusion with XCode Instruments](https://youtu.be/P3dXH61Kr5U)
 
-## Linux
+## Profiling using Samply cross platform profiler
 
-## Windows
+There is an opportunity to build flamegraphs, call trees and stack charts on any platform using
+[Samply](https://github.com/mstange/samply)
+
+Install Samply profiler
+
+```shell
+cargo install --locked samply
+```
+
+More Samply [installation options](https://github.com/mstange/samply?tab=readme-ov-file#installation)
+
+Run the profiler
+
+```shell
+samply record --profile profiling ./my-application my-arguments
+```
+
+### Profile the benchmark
+
+[Set up benchmarks](https://github.com/apache/datafusion/blob/main/benchmarks/README.md#running-the-benchmarks) if not yet done
+
+Example: Profile Q22 query from TPC-H benchmark.
+Note: `--profile profiling` to profile release optimized artifact with debug symbols
+
+```shell
+cargo build --profile profiling --bin tpch
+samply record ./target/profiling/tpch benchmark datafusion --iterations 5 --path datafusion/benchmarks/data/tpch_sf10 --prefer_hash_join true --format parquet -o datafusion/benchmarks/results/dev2/tpch_sf10.json --query 22
+```
+
+After sampling has completed the Samply starts a local server and navigates to the profiler
+
+```shell
+Local server listening at http://127.0.0.1:3000
+```
+
+![img.png](samply_profiler.png)
+
+Note: The Firefox profiler cannot be opened in Safari, please use Chrome or Firefox instead

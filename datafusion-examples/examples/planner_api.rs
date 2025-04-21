@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion::error::Result;
-use datafusion::logical_expr::{LogicalPlan, PlanType};
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::displayable;
 use datafusion::physical_planner::DefaultPhysicalPlanner;
 use datafusion::prelude::*;
@@ -77,9 +77,7 @@ async fn to_physical_plan_in_one_api_demo(
 
     println!(
         "Physical plan direct from logical plan:\n\n{}\n\n",
-        displayable(physical_plan.as_ref())
-            .to_stringified(false, PlanType::InitialPhysicalPlan)
-            .plan
+        displayable(physical_plan.as_ref()).indent(false)
     );
 
     let traversal = extract_node_ids_from_execution_plan_tree(physical_plan.as_ref());
@@ -143,6 +141,10 @@ async fn to_physical_plan_step_by_step_demo(
         .query_planner()
         .create_physical_plan(&optimized_logical_plan, &ctx.state())
         .await?;
+    println!(
+        "Final physical plan:\n\n{}\n\n",
+        displayable(physical_plan.as_ref()).indent(false)
+    );
 
     // Call the physical optimizer with an existing physical plan (in this
     // case the plan is already optimized, but an unoptimized plan would
@@ -154,9 +156,7 @@ async fn to_physical_plan_step_by_step_demo(
         planner.optimize_physical_plan(physical_plan, &ctx.state(), |_, _| {})?;
     println!(
         "Optimized physical plan:\n\n{}\n\n",
-        displayable(physical_plan.as_ref())
-            .to_stringified(false, PlanType::InitialPhysicalPlan)
-            .plan
+        displayable(physical_plan.as_ref()).indent(false)
     );
 
     Ok(())

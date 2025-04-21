@@ -21,12 +21,12 @@ use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
 };
-use datafusion::error::Result;
 use datafusion::{
     error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
     physical_plan::{DisplayAs, ExecutionPlan, PlanProperties},
 };
+use datafusion::{error::Result, physical_plan::DisplayFormatType};
 use tokio::runtime::Handle;
 
 use crate::{
@@ -198,14 +198,22 @@ unsafe impl Sync for ForeignExecutionPlan {}
 impl DisplayAs for ForeignExecutionPlan {
     fn fmt_as(
         &self,
-        _t: datafusion::physical_plan::DisplayFormatType,
+        t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        write!(
-            f,
-            "FFI_ExecutionPlan(number_of_children={})",
-            self.children.len(),
-        )
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "FFI_ExecutionPlan(number_of_children={})",
+                    self.children.len(),
+                )
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
+        }
     }
 }
 
@@ -315,7 +323,7 @@ mod tests {
     impl DisplayAs for EmptyExec {
         fn fmt_as(
             &self,
-            _t: datafusion::physical_plan::DisplayFormatType,
+            _t: DisplayFormatType,
             _f: &mut std::fmt::Formatter,
         ) -> std::fmt::Result {
             unimplemented!()

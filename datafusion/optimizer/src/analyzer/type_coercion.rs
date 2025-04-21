@@ -46,7 +46,7 @@ use datafusion_expr::type_coercion::functions::{
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
+use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_utf8view_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
@@ -296,6 +296,7 @@ impl<'a> TypeCoercionRewriter<'a> {
             &right.get_type(right_schema)?,
         )
         .get_input_types()?;
+
         Ok((
             left.cast_to(&left_type, left_schema)?,
             right.cast_to(&right_type, right_schema)?,
@@ -314,12 +315,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             Expr::ScalarSubquery(Subquery {
                 subquery,
                 outer_ref_columns,
+                spans,
             }) => {
                 let new_plan =
                     analyze_internal(self.schema, Arc::unwrap_or_clone(subquery))?.data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
+                    spans,
                 })))
             }
             Expr::Exists(Exists { subquery, negated }) => {
@@ -332,6 +335,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
                         outer_ref_columns: subquery.outer_ref_columns,
+                        spans: subquery.spans,
                     },
                     negated,
                 })))
@@ -355,6 +359,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
+                    spans: subquery.spans,
                 };
                 Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
                     Box::new(expr.cast_to(&common_type, self.schema)?),
@@ -712,7 +717,7 @@ fn coerce_frame_bound(
 
 fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
-        || is_utf8_or_large_utf8(col_type)
+        || is_utf8_or_utf8view_or_large_utf8(col_type)
         || matches!(col_type, DataType::Null)
         || matches!(col_type, DataType::Boolean)
     {
@@ -1049,7 +1054,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow::datatypes::DataType::Utf8;
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
 
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
@@ -1058,7 +1063,7 @@ mod test {
     use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
+    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, Spans};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
@@ -2087,6 +2092,31 @@ mod test {
     }
 
     #[test]
+    fn test_map_with_diff_name() -> Result<()> {
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("key", Utf8, false));
+        builder.push(Field::new("value", DataType::Float64, true));
+        let struct_fields = builder.finish().fields;
+
+        let fields =
+            Field::new("entries", DataType::Struct(struct_fields.clone()), false);
+        let map_type_entries = DataType::Map(Arc::new(fields), false);
+
+        let fields = Field::new("key_value", DataType::Struct(struct_fields), false);
+        let may_type_cutsom = DataType::Map(Arc::new(fields), false);
+
+        let expr = col("a").eq(cast(col("a"), may_type_cutsom));
+        let empty = empty_with_type(map_type_entries);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let expected = "Projection: a = CAST(CAST(a AS Map(Field { name: \"key_value\", data_type: Struct([Field { name: \"key\", data_type: Utf8, \
+        nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"value\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), \
+        nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false)) AS Map(Field { name: \"entries\", data_type: Struct([Field { name: \"key\", data_type: Utf8, nullable: false, \
+        dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"value\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false))\n  \
+        EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
+    }
+
+    #[test]
     fn interval_plus_timestamp() -> Result<()> {
         // SELECT INTERVAL '1' YEAR + '2000-01-01T00:00:00'::timestamp;
         let expr = Expr::BinaryExpr(BinaryExpr::new(
@@ -2135,6 +2165,7 @@ mod test {
             Subquery {
                 subquery: empty_int32,
                 outer_ref_columns: vec![],
+                spans: Spans::new(),
             },
             false,
         ));
@@ -2160,6 +2191,7 @@ mod test {
             Subquery {
                 subquery: empty_int64,
                 outer_ref_columns: vec![],
+                spans: Spans::new(),
             },
             false,
         ));
@@ -2184,6 +2216,7 @@ mod test {
             Subquery {
                 subquery: empty_inside,
                 outer_ref_columns: vec![],
+                spans: Spans::new(),
             },
             false,
         ));

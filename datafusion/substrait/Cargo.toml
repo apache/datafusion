@@ -39,7 +39,7 @@ itertools = { workspace = true }
 object_store = { workspace = true }
 pbjson-types = { workspace = true }
 prost = { workspace = true }
-substrait = { version = "0.53", features = ["serde"] }
+substrait = { version = "0.55", features = ["serde"] }
 url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 
@@ -48,6 +48,7 @@ datafusion = { workspace = true, features = ["nested_expressions"] }
 datafusion-functions-aggregate = { workspace = true }
 serde_json = "1.0"
 tokio = { workspace = true }
+insta = { workspace = true }
 
 [features]
 default = ["physical"]

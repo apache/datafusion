@@ -20,7 +20,8 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
 //! Function packages for [DataFusion].
@@ -99,10 +100,8 @@ pub mod string;
 make_stub_package!(string, "string_expressions");
 
 /// Core datafusion expressions
-/// Enabled via feature flag `core_expressions`
-#[cfg(feature = "core_expressions")]
+/// These are always available and not controlled by a feature flag
 pub mod core;
-make_stub_package!(core, "core_expressions");
 
 /// Date and time expressions.
 /// Contains functions such as to_timestamp
@@ -147,7 +146,6 @@ pub mod utils;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
-    #[cfg(feature = "core_expressions")]
     pub use super::core::expr_fn::*;
     #[cfg(feature = "crypto_expressions")]
     pub use super::crypto::expr_fn::*;

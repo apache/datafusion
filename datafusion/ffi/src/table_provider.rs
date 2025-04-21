@@ -110,8 +110,8 @@ pub struct FFI_TableProvider {
     /// * `session_config` - session configuration
     /// * `projections` - if specified, only a subset of the columns are returned
     /// * `filters_serialized` - filters to apply to the scan, which are a
-    ///    [`LogicalExprList`] protobuf message serialized into bytes to pass
-    ///    across the FFI boundary.
+    ///   [`LogicalExprList`] protobuf message serialized into bytes to pass
+    ///   across the FFI boundary.
     /// * `limit` - if specified, limit the number of rows returned
     pub scan: unsafe extern "C" fn(
         provider: &Self,
@@ -259,14 +259,10 @@ unsafe extern "C" fn scan_fn_wrapper(
         };
 
         let projections: Vec<_> = projections.into_iter().collect();
-        let maybe_projections = match projections.is_empty() {
-            true => None,
-            false => Some(&projections),
-        };
 
         let plan = rresult_return!(
             internal_provider
-                .scan(&ctx.state(), maybe_projections, &filters, limit.into())
+                .scan(&ctx.state(), Some(&projections), &filters, limit.into())
                 .await
         );
 
@@ -382,7 +378,7 @@ impl FFI_TableProvider {
 /// defined on this struct must only use the stable functions provided in
 /// FFI_TableProvider to interact with the foreign table provider.
 #[derive(Debug)]
-pub struct ForeignTableProvider(FFI_TableProvider);
+pub struct ForeignTableProvider(pub FFI_TableProvider);
 
 unsafe impl Send for ForeignTableProvider {}
 unsafe impl Sync for ForeignTableProvider {}
@@ -598,6 +594,51 @@ mod tests {
             .show()
             .await?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregation() -> Result<()> {
+        use arrow::datatypes::Field;
+        use datafusion::arrow::{
+            array::Float32Array, datatypes::DataType, record_batch::RecordBatch,
+        };
+        use datafusion::common::assert_batches_eq;
+        use datafusion::datasource::MemTable;
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+        // define data in two partitions
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Float32Array::from(vec![2.0, 4.0, 8.0]))],
+        )?;
+
+        let ctx = SessionContext::new();
+
+        let provider = Arc::new(MemTable::try_new(schema, vec![vec![batch1]])?);
+
+        let ffi_provider = FFI_TableProvider::new(provider, true, None);
+
+        let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
+
+        ctx.register_table("t", Arc::new(foreign_table_provider))?;
+
+        let result = ctx
+            .sql("SELECT COUNT(*) as cnt FROM t")
+            .await?
+            .collect()
+            .await?;
+        #[rustfmt::skip]
+        let expected = [
+            "+-----+",
+            "| cnt |",
+            "+-----+",
+            "| 3   |",
+            "+-----+"
+        ];
+        assert_batches_eq!(expected, &result);
         Ok(())
     }
 }
