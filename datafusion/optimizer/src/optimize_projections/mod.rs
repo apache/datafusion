@@ -31,8 +31,7 @@ use datafusion_common::{
 use datafusion_expr::expr::Alias;
 use datafusion_expr::Unnest;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, Aggregate, Distinct, Expr, Projection,
-    TableScan, Window,
+    logical_plan::LogicalPlan, Aggregate, Distinct, Expr, Projection, TableScan, Window,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
