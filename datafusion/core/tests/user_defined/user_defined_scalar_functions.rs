@@ -1377,7 +1377,6 @@ async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordB
 struct MetadataBasedUdf {
     name: String,
     signature: Signature,
-    output_field: Field,
 }
 
 impl MetadataBasedUdf {
@@ -1386,12 +1385,9 @@ impl MetadataBasedUdf {
         // instances of this UDF. This is a small hack for the unit tests to get unique
         // names, but you could do something more elegant with the metadata.
         let name = format!("metadata_based_udf_{}", metadata.len());
-        let output_field =
-            Field::new(&name, DataType::UInt64, true).with_metadata(metadata);
         Self {
             name,
             signature: Signature::exact(vec![DataType::UInt64], Volatility::Immutable),
-            output_field,
         }
     }
 }
@@ -1451,10 +1447,6 @@ impl ScalarUDFImpl for MetadataBasedUdf {
 
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
         self.name == other.name()
-    }
-
-    fn output_field(&self, _input_schema: &Schema) -> Option<Field> {
-        Some(self.output_field.clone())
     }
 }
 
@@ -1610,13 +1602,6 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
 
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
         self.name == other.name()
-    }
-
-    fn output_field(&self, _input_schema: &Schema) -> Option<Field> {
-        Some(
-            Field::new("canonical_extension_udf", DataType::Utf8, true)
-                .with_extension_type(MyUserExtentionType {}),
-        )
     }
 }
 

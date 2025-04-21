@@ -231,8 +231,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(output)
     }
 
-    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
-        Ok(self.fun.as_ref().inner().output_field(input_schema))
+    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
+        Ok(Some(self.return_field.clone()))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
