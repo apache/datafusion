@@ -43,6 +43,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -52,6 +53,9 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use crate::filter_pushdown::{
+    filter_pushdown_transparent, FilterDescription, FilterPushdownResult,
+};
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::trace;
@@ -729,6 +733,17 @@ impl ExecutionPlan for RepartitionExec {
             new_projection,
             new_partitioning,
         )?)))
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        fd: FilterDescription,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(filter_pushdown_transparent::<Arc<dyn ExecutionPlan>>(
+            Arc::new(self.clone()),
+            fd,
+        ))
     }
 }
 
