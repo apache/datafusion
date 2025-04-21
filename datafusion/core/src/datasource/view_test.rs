@@ -20,10 +20,11 @@
 #[cfg(test)]
 mod tests {
     use crate::error::Result;
+    use crate::execution::context::SessionConfig;
     use crate::execution::options::ParquetReadOptions;
     use crate::prelude::SessionContext;
     use crate::test_util::parquet_test_data;
-    use crate::{assert_batches_eq, execution::context::SessionConfig};
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_expr::{col, lit};
 
     #[tokio::test]
@@ -45,9 +46,13 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = ["+---+", "| b |", "+---+", "| 2 |", "+---+"];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---+
+        | b |
+        +---+
+        | 2 |
+        +---+
+        "###);
 
         Ok(())
     }
@@ -91,16 +96,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+---------+---------+",
-            "| column1 | column2 | column3 |",
-            "+---------+---------+---------+",
-            "| 1       | 2       | 3       |",
-            "| 4       | 5       | 6       |",
-            "+---------+---------+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+---------+---------+
+        | column1 | column2 | column3 |
+        +---------+---------+---------+
+        | 1       | 2       | 3       |
+        | 4       | 5       | 6       |
+        +---------+---------+---------+
+        "###);
 
         let view_sql =
             "CREATE VIEW replace_xyz AS SELECT * REPLACE (column1*2 as column1) FROM xyz";
@@ -112,16 +115,15 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+---------+---------+",
-            "| column1 | column2 | column3 |",
-            "+---------+---------+---------+",
-            "| 2       | 2       | 3       |",
-            "| 8       | 5       | 6       |",
-            "+---------+---------+---------+",
-        ];
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+---------+---------+
+        | column1 | column2 | column3 |
+        +---------+---------+---------+
+        | 2       | 2       | 3       |
+        | 8       | 5       | 6       |
+        +---------+---------+---------+
+        "###);
 
-        assert_batches_eq!(expected, &results);
         Ok(())
     }
 
@@ -144,16 +146,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------------+",
-            "| column1_alias |",
-            "+---------------+",
-            "| 1             |",
-            "| 4             |",
-            "+---------------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------------+
+        | column1_alias |
+        +---------------+
+        | 1             |
+        | 4             |
+        +---------------+
+        "###);
 
         Ok(())
     }
@@ -177,16 +177,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------------+---------------+",
-            "| column2_alias | column1_alias |",
-            "+---------------+---------------+",
-            "| 2             | 1             |",
-            "| 5             | 4             |",
-            "+---------------+---------------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------------+---------------+
+        | column2_alias | column1_alias |
+        +---------------+---------------+
+        | 2             | 1             |
+        | 5             | 4             |
+        +---------------+---------------+
+        "###);
 
         Ok(())
     }
@@ -215,16 +213,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 1       |",
-            "| 4       |",
-            "+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+
+        | column1 |
+        +---------+
+        | 1       |
+        | 4       |
+        +---------+
+        "###);
 
         Ok(())
     }
@@ -253,15 +249,13 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 4       |",
-            "+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+
+        | column1 |
+        +---------+
+        | 4       |
+        +---------+
+        "###);
 
         Ok(())
     }
@@ -293,16 +287,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+---------+---------+",
-            "| column2 | column1 | column3 |",
-            "+---------+---------+---------+",
-            "| 2       | 1       | 3       |",
-            "| 5       | 4       | 6       |",
-            "+---------+---------+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+---------+---------+
+        | column2 | column1 | column3 |
+        +---------+---------+---------+
+        | 2       | 1       | 3       |
+        | 5       | 4       | 6       |
+        +---------+---------+---------+
+        "###);
 
         Ok(())
     }
@@ -450,16 +442,14 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = [
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 1       |",
-            "| 4       |",
-            "+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
+        insta::assert_snapshot!(batches_to_string(&results),@r###"
+        +---------+
+        | column1 |
+        +---------+
+        | 1       |
+        | 4       |
+        +---------+
+        "###);
 
         Ok(())
     }

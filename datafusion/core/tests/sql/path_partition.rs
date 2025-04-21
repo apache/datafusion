@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::{
     datasource::{
@@ -87,29 +87,22 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
     ];
     let exec = table.scan(&ctx.state(), None, &filters, None).await?;
     let data_source_exec = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let data_source = data_source_exec.data_source();
-    let file_source = data_source
-        .as_any()
-        .downcast_ref::<FileScanConfig>()
-        .unwrap();
-    let parquet_config = file_source
-        .file_source()
-        .as_any()
-        .downcast_ref::<ParquetSource>()
-        .unwrap();
-    let pred = parquet_config.predicate().unwrap();
-    // Only the last filter should be pushdown to TableScan
-    let expected = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
-        Operator::Gt,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-    ));
+    if let Some((_, parquet_config)) =
+        data_source_exec.downcast_to_file_source::<ParquetSource>()
+    {
+        let pred = parquet_config.predicate().unwrap();
+        // Only the last filter should be pushdown to TableScan
+        let expected = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        ));
 
-    assert!(pred.as_any().is::<BinaryExpr>());
-    let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
+        assert!(pred.as_any().is::<BinaryExpr>());
+        let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
 
-    assert_eq!(pred, expected.as_ref());
-
+        assert_eq!(pred, expected.as_ref());
+    }
     Ok(())
 }
 
@@ -719,7 +712,7 @@ impl ObjectStore for MirroringObjectStore {
         let meta = ObjectMeta {
             location: location.clone(),
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-            size: metadata.len() as usize,
+            size: metadata.len(),
             e_tag: None,
             version: None,
         };
@@ -735,14 +728,15 @@ impl ObjectStore for MirroringObjectStore {
     async fn get_range(
         &self,
         location: &Path,
-        range: Range<usize>,
+        range: Range<u64>,
     ) -> object_store::Result<Bytes> {
         self.files.iter().find(|x| *x == location).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
         let mut file = File::open(path).unwrap();
-        file.seek(SeekFrom::Start(range.start as u64)).unwrap();
+        file.seek(SeekFrom::Start(range.start)).unwrap();
 
         let to_read = range.end - range.start;
+        let to_read: usize = to_read.try_into().unwrap();
         let mut data = Vec::with_capacity(to_read);
         let read = file.take(to_read as u64).read_to_end(&mut data).unwrap();
         assert_eq!(read, to_read);
@@ -757,9 +751,10 @@ impl ObjectStore for MirroringObjectStore {
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         let prefix = prefix.cloned().unwrap_or_default();
-        Box::pin(stream::iter(self.files.iter().filter_map(
+        let size = self.file_size;
+        Box::pin(stream::iter(self.files.clone().into_iter().filter_map(
             move |location| {
                 // Don't return for exact prefix match
                 let filter = location
@@ -769,9 +764,9 @@ impl ObjectStore for MirroringObjectStore {
 
                 filter.then(|| {
                     Ok(ObjectMeta {
-                        location: location.clone(),
+                        location,
                         last_modified: Utc.timestamp_nanos(0),
-                        size: self.file_size as usize,
+                        size,
                         e_tag: None,
                         version: None,
                     })
@@ -809,7 +804,7 @@ impl ObjectStore for MirroringObjectStore {
                 let object = ObjectMeta {
                     location: k.clone(),
                     last_modified: Utc.timestamp_nanos(0),
-                    size: self.file_size as usize,
+                    size: self.file_size,
                     e_tag: None,
                     version: None,
                 };

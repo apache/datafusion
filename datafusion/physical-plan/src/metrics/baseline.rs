@@ -143,6 +143,31 @@ impl Drop for BaselineMetrics {
     }
 }
 
+/// Helper for creating and tracking spill-related metrics for
+/// each operator
+#[derive(Debug, Clone)]
+pub struct SpillMetrics {
+    /// count of spills during the execution of the operator
+    pub spill_file_count: Count,
+
+    /// total spilled bytes during the execution of the operator
+    pub spilled_bytes: Count,
+
+    /// total spilled rows during the execution of the operator
+    pub spilled_rows: Count,
+}
+
+impl SpillMetrics {
+    /// Create a new SpillMetrics structure
+    pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        Self {
+            spill_file_count: MetricBuilder::new(metrics).spill_count(partition),
+            spilled_bytes: MetricBuilder::new(metrics).spilled_bytes(partition),
+            spilled_rows: MetricBuilder::new(metrics).spilled_rows(partition),
+        }
+    }
+}
+
 /// Trait for things that produce output rows as a result of execution.
 pub trait RecordOutput {
     /// Record that some number of output rows have been produced

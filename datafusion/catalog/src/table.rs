@@ -288,7 +288,7 @@ pub trait TableProvider: Debug + Sync + Send {
     /// See [`DataSinkExec`] for the common pattern of inserting a
     /// streams of `RecordBatch`es as files to an ObjectStore.
     ///
-    /// [`DataSinkExec`]: datafusion_physical_plan::insert::DataSinkExec
+    /// [`DataSinkExec`]: datafusion_datasource::sink::DataSinkExec
     async fn insert_into(
         &self,
         _state: &dyn Session,

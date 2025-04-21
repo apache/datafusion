@@ -24,8 +24,9 @@ use arrow::array::{
 
 use arrow::compute::sum;
 use arrow::datatypes::{
-    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType, Field,
-    Float64Type, UInt64Type,
+    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Field, Float64Type, TimeUnit, UInt64Type,
 };
 use datafusion_common::{
     exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
@@ -145,6 +146,16 @@ impl AggregateUDFImpl for Avg {
                 target_precision: *target_precision,
                 target_scale: *target_scale,
             })),
+
+            (Duration(time_unit), Duration(result_unit)) => {
+                Ok(Box::new(DurationAvgAccumulator {
+                    sum: None,
+                    count: 0,
+                    time_unit: *time_unit,
+                    result_unit: *result_unit,
+                }))
+            }
+
             _ => exec_err!(
                 "AvgAccumulator for ({} --> {})",
                 &data_type,
@@ -390,6 +401,105 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
         self.count -= (values.len() - values.null_count()) as u64;
         if let Some(x) = sum(values) {
             self.sum = Some(self.sum.unwrap().sub_wrapping(x));
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+}
+
+/// An accumulator to compute the average for duration values
+#[derive(Debug)]
+struct DurationAvgAccumulator {
+    sum: Option<i64>,
+    count: u64,
+    time_unit: TimeUnit,
+    result_unit: TimeUnit,
+}
+
+impl Accumulator for DurationAvgAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array = &values[0];
+        self.count += (array.len() - array.null_count()) as u64;
+
+        let sum_value = match self.time_unit {
+            TimeUnit::Second => sum(array.as_primitive::<DurationSecondType>()),
+            TimeUnit::Millisecond => sum(array.as_primitive::<DurationMillisecondType>()),
+            TimeUnit::Microsecond => sum(array.as_primitive::<DurationMicrosecondType>()),
+            TimeUnit::Nanosecond => sum(array.as_primitive::<DurationNanosecondType>()),
+        };
+
+        if let Some(x) = sum_value {
+            let v = self.sum.get_or_insert(0);
+            *v += x;
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let avg = self.sum.map(|sum| sum / self.count as i64);
+
+        match self.result_unit {
+            TimeUnit::Second => Ok(ScalarValue::DurationSecond(avg)),
+            TimeUnit::Millisecond => Ok(ScalarValue::DurationMillisecond(avg)),
+            TimeUnit::Microsecond => Ok(ScalarValue::DurationMicrosecond(avg)),
+            TimeUnit::Nanosecond => Ok(ScalarValue::DurationNanosecond(avg)),
+        }
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let duration_value = match self.time_unit {
+            TimeUnit::Second => ScalarValue::DurationSecond(self.sum),
+            TimeUnit::Millisecond => ScalarValue::DurationMillisecond(self.sum),
+            TimeUnit::Microsecond => ScalarValue::DurationMicrosecond(self.sum),
+            TimeUnit::Nanosecond => ScalarValue::DurationNanosecond(self.sum),
+        };
+
+        Ok(vec![ScalarValue::from(self.count), duration_value])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.count += sum(states[0].as_primitive::<UInt64Type>()).unwrap_or_default();
+
+        let sum_value = match self.time_unit {
+            TimeUnit::Second => sum(states[1].as_primitive::<DurationSecondType>()),
+            TimeUnit::Millisecond => {
+                sum(states[1].as_primitive::<DurationMillisecondType>())
+            }
+            TimeUnit::Microsecond => {
+                sum(states[1].as_primitive::<DurationMicrosecondType>())
+            }
+            TimeUnit::Nanosecond => {
+                sum(states[1].as_primitive::<DurationNanosecondType>())
+            }
+        };
+
+        if let Some(x) = sum_value {
+            let v = self.sum.get_or_insert(0);
+            *v += x;
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array = &values[0];
+        self.count -= (array.len() - array.null_count()) as u64;
+
+        let sum_value = match self.time_unit {
+            TimeUnit::Second => sum(array.as_primitive::<DurationSecondType>()),
+            TimeUnit::Millisecond => sum(array.as_primitive::<DurationMillisecondType>()),
+            TimeUnit::Microsecond => sum(array.as_primitive::<DurationMicrosecondType>()),
+            TimeUnit::Nanosecond => sum(array.as_primitive::<DurationNanosecondType>()),
+        };
+
+        if let Some(x) = sum_value {
+            self.sum = Some(self.sum.unwrap() - x);
         }
         Ok(())
     }

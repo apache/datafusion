@@ -230,7 +230,6 @@ impl Optimizer {
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
-            Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
             // Must be after PropagateEmptyRelation
@@ -243,9 +242,8 @@ impl Optimizer {
             Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateGroupByConstant::new()),
+            Arc::new(CommonSubexprEliminate::new()),
             Arc::new(OptimizeProjections::new()),
         ];
 
@@ -508,8 +506,11 @@ mod tests {
         });
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
 
-        // Simplify assert to check the error message contains the expected message, which is only the schema length mismatch
-        assert_contains!(err.strip_backtrace(), "Schema mismatch: the schema length are not same Expected schema length: 3, got: 0");
+        // Simplify assert to check the error message contains the expected message
+        assert_contains!(
+            err.strip_backtrace(),
+            "Failed due to a difference in schemas: original schema: DFSchema"
+        );
     }
 
     #[test]

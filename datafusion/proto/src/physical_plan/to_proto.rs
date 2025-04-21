@@ -22,6 +22,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::physical_plan::FileSink;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
@@ -210,6 +211,9 @@ pub fn serialize_physical_expr(
     value: &Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
+    // Snapshot the expr in case it has dynamic predicate state so
+    // it can be serialized
+    let value = snapshot_physical_expr(Arc::clone(value))?;
     let expr = value.as_any();
 
     if let Some(expr) = expr.downcast_ref::<Column>() {
@@ -368,7 +372,7 @@ pub fn serialize_physical_expr(
         })
     } else {
         let mut buf: Vec<u8> = vec![];
-        match codec.try_encode_expr(value, &mut buf) {
+        match codec.try_encode_expr(&value, &mut buf) {
             Ok(_) => {
                 let inputs: Vec<protobuf::PhysicalExprNode> = value
                     .children()
@@ -441,7 +445,7 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
         })? as u64;
         Ok(protobuf::PartitionedFile {
             path: pf.object_meta.location.as_ref().to_owned(),
-            size: pf.object_meta.size as u64,
+            size: pf.object_meta.size,
             last_modified_ns,
             partition_values: pf
                 .partition_values
@@ -449,7 +453,7 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
-            statistics: pf.statistics.as_ref().map(|s| s.into()),
+            statistics: pf.statistics.as_ref().map(|s| s.as_ref().into()),
         })
     }
 }
@@ -485,7 +489,7 @@ pub fn serialize_file_scan_config(
     let file_groups = conf
         .file_groups
         .iter()
-        .map(|p| p.as_slice().try_into())
+        .map(|p| p.files().try_into())
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut output_orderings = vec![];
@@ -507,12 +511,12 @@ pub fn serialize_file_scan_config(
 
     Ok(protobuf::FileScanExecConf {
         file_groups,
-        statistics: Some((&conf.statistics).into()),
+        statistics: Some((&conf.file_source.statistics().unwrap()).into()),
         limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
         projection: conf
             .projection
             .as_ref()
-            .unwrap_or(&vec![])
+            .unwrap_or(&(0..schema.fields().len()).collect::<Vec<_>>())
             .iter()
             .map(|n| *n as u32)
             .collect(),
@@ -585,7 +589,7 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
 
     fn try_from(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
         let file_groups = conf
-            .file_groups
+            .file_group
             .iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>>>()?;

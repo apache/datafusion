@@ -35,8 +35,8 @@ mod tests {
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
-    use datafusion_common::test_util::arrow_test_data;
-    use datafusion_common::{assert_batches_eq, Result};
+    use datafusion_common::test_util::{arrow_test_data, batches_to_string};
+    use datafusion_common::Result;
     use datafusion_datasource::decoder::{
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
     };
@@ -57,6 +57,7 @@ mod tests {
     use chrono::DateTime;
     use futures::stream::BoxStream;
     use futures::StreamExt;
+    use insta::assert_snapshot;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
@@ -71,7 +72,7 @@ mod tests {
     #[derive(Debug)]
     struct VariableStream {
         bytes_to_repeat: Bytes,
-        max_iterations: usize,
+        max_iterations: u64,
         iterations_detected: Arc<Mutex<usize>>,
     }
 
@@ -102,14 +103,15 @@ mod tests {
 
         async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
             let bytes = self.bytes_to_repeat.clone();
-            let range = 0..bytes.len() * self.max_iterations;
+            let len = bytes.len() as u64;
+            let range = 0..len * self.max_iterations;
             let arc = self.iterations_detected.clone();
             let stream = futures::stream::repeat_with(move || {
                 let arc_inner = arc.clone();
                 *arc_inner.lock().unwrap() += 1;
                 Ok(bytes.clone())
             })
-            .take(self.max_iterations)
+            .take(self.max_iterations as usize)
             .boxed();
 
             Ok(GetResult {
@@ -137,7 +139,7 @@ mod tests {
         async fn get_ranges(
             &self,
             _location: &Path,
-            _ranges: &[Range<usize>],
+            _ranges: &[Range<u64>],
         ) -> object_store::Result<Vec<Bytes>> {
             unimplemented!()
         }
@@ -153,7 +155,7 @@ mod tests {
         fn list(
             &self,
             _prefix: Option<&Path>,
-        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             unimplemented!()
         }
 
@@ -178,7 +180,7 @@ mod tests {
     }
 
     impl VariableStream {
-        pub fn new(bytes_to_repeat: Bytes, max_iterations: usize) -> Self {
+        pub fn new(bytes_to_repeat: Bytes, max_iterations: u64) -> Self {
             Self {
                 bytes_to_repeat,
                 max_iterations,
@@ -248,6 +250,7 @@ mod tests {
         let exec = scan_format(
             &state,
             &format,
+            None,
             root,
             "aggregate_test_100_with_nulls.csv",
             projection,
@@ -298,6 +301,7 @@ mod tests {
         let exec = scan_format(
             &state,
             &format,
+            None,
             root,
             "aggregate_test_100_with_nulls.csv",
             projection,
@@ -370,7 +374,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };
@@ -428,7 +432,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };
@@ -557,15 +561,17 @@ mod tests {
             .select_columns(&["c2", "c3"])?
             .collect()
             .await?;
-        #[rustfmt::skip]
-            let expected = ["+----+------+",
-            "| c2 | c3   |",
-            "+----+------+",
-            "| 5  | 36   |",
-            "| 5  | -31  |",
-            "| 5  | -101 |",
-            "+----+------+"];
-        assert_batches_eq!(expected, &record_batch);
+
+        assert_snapshot!(batches_to_string(&record_batch), @r###"
+            +----+------+
+            | c2 | c3   |
+            +----+------+
+            | 5  | 36   |
+            | 5  | -31  |
+            | 5  | -101 |
+            +----+------+
+        "###);
+
         Ok(())
     }
 
@@ -578,7 +584,7 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let root = format!("{}/csv", arrow_test_data());
         let format = CsvFormat::default().with_has_header(has_header);
-        scan_format(state, &format, &root, file_name, projection, limit).await
+        scan_format(state, &format, None, &root, file_name, projection, limit).await
     }
 
     #[tokio::test]
@@ -671,13 +677,15 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        #[rustfmt::skip]
-        let expected = ["+--------------+",
-            "| sum(aggr.c2) |",
-            "+--------------+",
-            "| 285          |",
-            "+--------------+"];
-        assert_batches_eq!(expected, &query_result);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        +--------------+
+        | sum(aggr.c2) |
+        +--------------+
+        | 285          |
+        +--------------+
+        "###);
+        }
+
         assert_eq!(n_partitions, actual_partitions);
 
         Ok(())
@@ -708,13 +716,15 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        #[rustfmt::skip]
-        let expected = ["+--------------+",
-            "| sum(aggr.c3) |",
-            "+--------------+",
-            "| 781          |",
-            "+--------------+"];
-        assert_batches_eq!(expected, &query_result);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        +--------------+
+        | sum(aggr.c3) |
+        +--------------+
+        | 781          |
+        +--------------+
+        "###);
+        }
+
         assert_eq!(1, actual_partitions); // Compressed csv won't be scanned in parallel
 
         Ok(())
@@ -743,13 +753,15 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        #[rustfmt::skip]
-        let expected = ["+--------------+",
-            "| sum(aggr.c3) |",
-            "+--------------+",
-            "| 781          |",
-            "+--------------+"];
-        assert_batches_eq!(expected, &query_result);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        +--------------+
+        | sum(aggr.c3) |
+        +--------------+
+        | 781          |
+        +--------------+
+        "###);
+        }
+
         assert_eq!(1, actual_partitions); // csv won't be scanned in parallel when newlines_in_values is set
 
         Ok(())
@@ -772,10 +784,10 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        #[rustfmt::skip]
-        let expected = ["++",
-            "++"];
-        assert_batches_eq!(expected, &query_result);
+        assert_snapshot!(batches_to_string(&query_result),@r###"
+            ++
+            ++
+        "###);
 
         Ok(())
     }
@@ -797,10 +809,10 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        #[rustfmt::skip]
-        let expected = ["++",
-            "++"];
-        assert_batches_eq!(expected, &query_result);
+        assert_snapshot!(batches_to_string(&query_result),@r###"
+            ++
+            ++
+        "###);
 
         Ok(())
     }
@@ -839,10 +851,10 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        #[rustfmt::skip]
-        let expected = ["++",
-            "++"];
-        assert_batches_eq!(expected, &query_result);
+        assert_snapshot!(batches_to_string(&query_result),@r###"
+            ++
+            ++
+        "###);
 
         Ok(())
     }
@@ -891,13 +903,14 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        #[rustfmt::skip]
-        let expected = ["+---------------------+",
-            "| sum(empty.column_1) |",
-            "+---------------------+",
-            "| 10                  |",
-            "+---------------------+"];
-        assert_batches_eq!(expected, &query_result);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+            +---------------------+
+            | sum(empty.column_1) |
+            +---------------------+
+            | 10                  |
+            +---------------------+
+        "###);}
+
         assert_eq!(n_partitions, actual_partitions); // Won't get partitioned if all files are empty
 
         Ok(())
@@ -930,13 +943,6 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        #[rustfmt::skip]
-        let expected = ["+-----------------------+",
-            "| sum(one_col.column_1) |",
-            "+-----------------------+",
-            "| 50                    |",
-            "+-----------------------+"];
-
         let file_size = std::fs::metadata("tests/data/one_col.csv")?.len() as usize;
         // A 20-Byte file at most get partitioned into 20 chunks
         let expected_partitions = if n_partitions <= file_size {
@@ -944,7 +950,16 @@ mod tests {
         } else {
             file_size
         };
-        assert_batches_eq!(expected, &query_result);
+
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        +-----------------------+
+        | sum(one_col.column_1) |
+        +-----------------------+
+        | 50                    |
+        +-----------------------+
+        "###);
+        }
+
         assert_eq!(expected_partitions, actual_partitions);
 
         Ok(())
@@ -975,13 +990,14 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        #[rustfmt::skip]
-        let expected = ["+---------------+",
-            "| sum_of_5_cols |",
-            "+---------------+",
-            "| 15            |",
-            "+---------------+"];
-        assert_batches_eq!(expected, &query_result);
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+            +---------------+
+            | sum_of_5_cols |
+            +---------------+
+            | 15            |
+            +---------------+
+        "###);}
+
         assert_eq!(n_partitions, actual_partitions);
 
         Ok(())

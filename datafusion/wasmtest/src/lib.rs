@@ -90,12 +90,15 @@ mod test {
         datasource::MemTable,
         execution::context::SessionContext,
     };
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::{
         config::SessionConfig, disk_manager::DiskManagerConfig,
         runtime_env::RuntimeEnvBuilder,
     };
     use datafusion_physical_plan::collect;
     use datafusion_sql::parser::DFParser;
+    use object_store::{memory::InMemory, path::Path, ObjectStore};
+    use url::Url;
     use wasm_bindgen_test::wasm_bindgen_test;
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -115,6 +118,22 @@ mod test {
         let session_config = SessionConfig::new().with_target_partitions(1);
         Arc::new(SessionContext::new_with_config_rt(session_config, rt))
     }
+
+    fn create_test_data() -> (Arc<Schema>, RecordBatch) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+
+        let data: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+        ];
+
+        let batch = RecordBatch::try_new(schema.clone(), data).unwrap();
+        (schema, batch)
+    }
+
     #[wasm_bindgen_test(unsupported = tokio::test)]
     async fn basic_execute() {
         let sql = "SELECT 2 + 2;";
@@ -185,17 +204,7 @@ mod test {
 
     #[wasm_bindgen_test(unsupported = tokio::test)]
     async fn test_parquet_write() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("value", DataType::Utf8, false),
-        ]));
-
-        let data: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from(vec![1])),
-            Arc::new(StringArray::from(vec!["a"])),
-        ];
-
-        let batch = RecordBatch::try_new(schema.clone(), data).unwrap();
+        let (schema, batch) = create_test_data();
         let mut buffer = Vec::new();
         let mut writer = datafusion::parquet::arrow::ArrowWriter::try_new(
             &mut buffer,
@@ -206,5 +215,47 @@ mod test {
 
         writer.write(&batch).unwrap();
         writer.close().unwrap();
+    }
+
+    #[wasm_bindgen_test(unsupported = tokio::test)]
+    async fn test_parquet_read_and_write() {
+        let (schema, batch) = create_test_data();
+        let mut buffer = Vec::new();
+        let mut writer = datafusion::parquet::arrow::ArrowWriter::try_new(
+            &mut buffer,
+            schema.clone(),
+            None,
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let session_ctx = SessionContext::new();
+        let store = InMemory::new();
+
+        let path = Path::from("a.parquet");
+        store.put(&path, buffer.into()).await.unwrap();
+
+        let url = Url::parse("memory://").unwrap();
+        session_ctx.register_object_store(&url, Arc::new(store));
+        session_ctx
+            .register_parquet("a", "memory:///a.parquet", Default::default())
+            .await
+            .unwrap();
+
+        let df = session_ctx.sql("SELECT * FROM a").await.unwrap();
+
+        let result = df.collect().await.unwrap();
+
+        assert_eq!(
+            batches_to_string(&result),
+            "+----+-------+\n\
+             | id | value |\n\
+             +----+-------+\n\
+             | 1  | a     |\n\
+             | 2  | b     |\n\
+             | 3  | c     |\n\
+             +----+-------+"
+        );
     }
 }
