@@ -289,7 +289,7 @@ impl Accumulator for ArrayAggAccumulator {
         }
 
         let val = Arc::clone(&values[0]);
-        if val.len() > 0 {
+        if !val.is_empty() {
             self.values.push(val);
         }
         Ok(())
@@ -310,7 +310,7 @@ impl Accumulator for ArrayAggAccumulator {
         match Self::get_optional_values_to_merge_as_is(list_arr) {
             Some(values) => {
                 // Make sure we don't insert empty lists
-                if values.len() > 0 {
+                if !values.is_empty() {
                     self.values.push(values);
                 }
             }

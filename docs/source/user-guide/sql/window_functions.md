@@ -168,17 +168,22 @@ cume_dist()
 
 #### Example
 
--- Example usage of the cume_dist window function:
-SELECT salary,
-cume_dist() OVER (ORDER BY salary) AS cume_dist
-FROM employees;
+```sql
+    --Example usage of the cume_dist window function:
+    SELECT salary,
+       cume_dist() OVER (ORDER BY salary) AS cume_dist
+    FROM employees;
+```
+
+```sql
 +--------+-----------+
 | salary | cume_dist |
 +--------+-----------+
-| 30000 | 0.33 |
-| 50000 | 0.67 |
-| 70000 | 1.00 |
+| 30000  | 0.33      |
+| 50000  | 0.67      |
+| 70000  | 1.00      |
 +--------+-----------+
+```
 
 ### `dense_rank`
 
