@@ -33,7 +33,6 @@ use crate::{
     statistics::MinMaxStatistics,
     PartitionedFile,
 };
-
 use arrow::{
     array::{
         ArrayData, ArrayRef, BufferBuilder, DictionaryArray, RecordBatch,
@@ -42,6 +41,7 @@ use arrow::{
     buffer::Buffer,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
 };
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     exec_err, ColumnStatistics, Constraints, DataFusionError, Result, ScalarValue,
     Statistics,
@@ -49,9 +49,12 @@ use datafusion_common::{
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
-use datafusion_physical_expr::{
-    expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
-    PhysicalSortExpr,
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::filter_pushdown::{
+    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
+    FilterPushdownSupport,
 };
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
@@ -477,7 +480,8 @@ impl DataSource for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let (schema, _, _, orderings) = self.project();
+                let schema = self.projected_schema();
+                let orderings = get_projected_output_ordering(self, &schema);
 
                 write!(f, "file_groups=")?;
                 FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -589,6 +593,46 @@ impl DataSource for FileScanConfig {
                     .build(),
             ) as _
         }))
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        fd: FilterDescription,
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
+        let FilterPushdownResult {
+            support,
+            remaining_description,
+        } = self.file_source.try_pushdown_filters(fd, config)?;
+
+        match support {
+            FilterPushdownSupport::Supported {
+                child_descriptions,
+                op,
+                revisit,
+            } => {
+                let new_data_source = Arc::new(
+                    FileScanConfigBuilder::from(self.clone())
+                        .with_source(op)
+                        .build(),
+                );
+
+                debug_assert!(child_descriptions.is_empty());
+                debug_assert!(!revisit);
+
+                Ok(FilterPushdownResult {
+                    support: FilterPushdownSupport::Supported {
+                        child_descriptions,
+                        op: new_data_source,
+                        revisit,
+                    },
+                    remaining_description,
+                })
+            }
+            FilterPushdownSupport::NotSupported => {
+                Ok(filter_pushdown_not_supported(remaining_description))
+            }
+        }
     }
 }
 
@@ -1051,7 +1095,8 @@ impl Debug for FileScanConfig {
 
 impl DisplayAs for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let (schema, _, _, orderings) = self.project();
+        let schema = self.projected_schema();
+        let orderings = get_projected_output_ordering(self, &schema);
 
         write!(f, "file_groups=")?;
         FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -1538,7 +1583,7 @@ mod tests {
         );
 
         // verify the proj_schema includes the last column and exactly the same the field it is defined
-        let (proj_schema, _, _, _) = conf.project();
+        let proj_schema = conf.projected_schema();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             *proj_schema.field(file_schema.fields().len()),
@@ -1644,7 +1689,7 @@ mod tests {
         assert_eq!(source_statistics, statistics);
         assert_eq!(source_statistics.column_statistics.len(), 3);
 
-        let (proj_schema, ..) = conf.project();
+        let proj_schema = conf.projected_schema();
         // created a projector for that projected schema
         let mut proj = PartitionColumnProjector::new(
             proj_schema,

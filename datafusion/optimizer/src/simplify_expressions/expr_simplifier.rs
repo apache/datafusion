@@ -760,6 +760,25 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     None => lit_bool_null(),
                 })
             }
+            // According to SQL's null semantics, NULL = NULL evaluates to NULL
+            // Both sides are the same expression (A = A) and A is non-volatile expression
+            // A = A --> A IS NOT NULL OR NULL
+            // A = A --> true (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Eq,
+                right,
+            }) if (left == right) & !left.is_volatile() => {
+                Transformed::yes(match !info.nullable(&left)? {
+                    true => lit(true),
+                    false => Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(Expr::IsNotNull(left)),
+                        op: Or,
+                        right: Box::new(lit_bool_null()),
+                    }),
+                })
+            }
+
             // Rules for NotEq
             //
 
@@ -2244,6 +2263,21 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_eq_not_self() {
+        // `expr_a`: column `c2` is nullable, so `c2 = c2` simplifies to `c2 IS NOT NULL OR NULL`
+        // This ensures the expression is only true when `c2` is not NULL, accounting for SQL's NULL semantics.
+        let expr_a = col("c2").eq(col("c2"));
+        let expected_a = col("c2").is_not_null().or(lit_bool_null());
+
+        // `expr_b`: column `c2_non_null` is explicitly non-nullable, so `c2_non_null = c2_non_null` is always true
+        let expr_b = col("c2_non_null").eq(col("c2_non_null"));
+        let expected_b = lit(true);
+
+        assert_eq!(simplify(expr_a), expected_a);
+        assert_eq!(simplify(expr_b), expected_b);
+    }
+
+    #[test]
     fn test_simplify_or_true() {
         let expr_a = col("c2").or(lit(true));
         let expr_b = lit(true).or(col("c2"));
@@ -3276,6 +3310,15 @@ mod tests {
         simplifier.simplify(expr)
     }
 
+    fn coerce(expr: Expr) -> Expr {
+        let schema = expr_test_schema();
+        let execution_props = ExecutionProps::new();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&execution_props).with_schema(Arc::clone(&schema)),
+        );
+        simplifier.coerce(expr, schema.as_ref()).unwrap()
+    }
+
     fn simplify(expr: Expr) -> Expr {
         try_simplify(expr).unwrap()
     }
@@ -3318,6 +3361,7 @@ mod tests {
                     Field::new("c2_non_null", DataType::Boolean, false),
                     Field::new("c3_non_null", DataType::Int64, false),
                     Field::new("c4_non_null", DataType::UInt32, false),
+                    Field::new("c5", DataType::FixedSizeBinary(3), true),
                 ]
                 .into(),
                 HashMap::new(),
@@ -4439,6 +4483,34 @@ mod tests {
                     .and((rand.clone().eq(lit(0))).or(rand.clone().eq(lit(0))))
             );
         }
+    }
+
+    #[test]
+    fn simplify_fixed_size_binary_eq_lit() {
+        let bytes = [1u8, 2, 3].as_slice();
+
+        // The expression starts simple.
+        let expr = col("c5").eq(lit(bytes));
+
+        // The type coercer introduces a cast.
+        let coerced = coerce(expr.clone());
+        let schema = expr_test_schema();
+        assert_eq!(
+            coerced,
+            col("c5")
+                .cast_to(&DataType::Binary, schema.as_ref())
+                .unwrap()
+                .eq(lit(bytes))
+        );
+
+        // The simplifier removes the cast.
+        assert_eq!(
+            simplify(coerced),
+            col("c5").eq(Expr::Literal(ScalarValue::FixedSizeBinary(
+                3,
+                Some(bytes.to_vec()),
+            )))
+        );
     }
 
     fn if_not_null(expr: Expr, then: bool) -> Expr {

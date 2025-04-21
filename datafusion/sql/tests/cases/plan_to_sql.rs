@@ -2342,3 +2342,86 @@ fn test_unparse_right_anti_join() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn test_unparse_cross_join_with_table_scan_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    // Cross Join:
+    //   SubqueryAlias: t1
+    //     TableScan: test projection=[v]
+    //   SubqueryAlias: t2
+    //     TableScan: test projection=[v]
+    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
+        .cross_join(subquery_alias(table_scan2, "t2")?)?
+        .build()?;
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "t1"."v", "t2"."v" FROM "test" AS "t1" CROSS JOIN "test" AS "t2""#
+    );
+    Ok(())
+}
+
+#[test]
+fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    // Inner Join:
+    //   SubqueryAlias: t1
+    //     TableScan: test projection=[v]
+    //   SubqueryAlias: t2
+    //     TableScan: test projection=[v]
+    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
+        .join_on(
+            subquery_alias(table_scan2, "t2")?,
+            datafusion_expr::JoinType::Inner,
+            vec![col("t1.v").eq(col("t2.v"))],
+        )?
+        .build()?;
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "t1"."v", "t2"."v" FROM "test" AS "t1" INNER JOIN "test" AS "t2" ON ("t1"."v" = "t2"."v")"#
+    );
+    Ok(())
+}
+
+#[test]
+fn test_unparse_left_semi_join_with_table_scan_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    // LeftSemi Join:
+    //   SubqueryAlias: t1
+    //     TableScan: test projection=[v]
+    //   SubqueryAlias: t2
+    //     TableScan: test projection=[v]
+    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
+        .join_on(
+            subquery_alias(table_scan2, "t2")?,
+            datafusion_expr::JoinType::LeftSemi,
+            vec![col("t1.v").eq(col("t2.v"))],
+        )?
+        .build()?;
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "t1"."v" FROM "test" AS "t1" WHERE EXISTS (SELECT 1 FROM "test" AS "t2" WHERE ("t1"."v" = "t2"."v"))"#
+    );
+    Ok(())
+}
