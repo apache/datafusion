@@ -72,16 +72,16 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     fn as_any(&self) -> &dyn Any;
     /// Get the data type of this expression, given the schema of the input
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        Ok(self.output_field(input_schema)?.data_type().to_owned())
+        Ok(self.return_field(input_schema)?.data_type().to_owned())
     }
     /// Determine whether this expression is nullable, given the schema of the input
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        Ok(self.output_field(input_schema)?.is_nullable())
+        Ok(self.return_field(input_schema)?.is_nullable())
     }
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
     /// The output field associated with this expression
-    fn output_field(&self, input_schema: &Schema) -> Result<Field> {
+    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
         Ok(Field::new(
             format!("{self}"),
             self.data_type(input_schema)?,
@@ -479,7 +479,7 @@ where
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
 /// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
 /// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
-/// # fn output_field(&self, input_schema: &Schema) -> Result<Field> { unimplemented!() }
+/// # fn return_field(&self, input_schema: &Schema) -> Result<Field> { unimplemented!() }
 /// # fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>{ unimplemented!() }
 /// # fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }

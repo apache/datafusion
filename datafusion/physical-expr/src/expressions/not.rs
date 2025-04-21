@@ -101,8 +101,8 @@ impl PhysicalExpr for NotExpr {
         }
     }
 
-    fn output_field(&self, input_schema: &Schema) -> Result<Field> {
-        self.arg.output_field(input_schema)
+    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+        self.arg.return_field(input_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

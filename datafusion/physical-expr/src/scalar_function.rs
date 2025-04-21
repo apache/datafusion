@@ -92,7 +92,7 @@ impl ScalarFunctionExpr {
         let name = fun.name().to_string();
         let arg_fields = args
             .iter()
-            .map(|e| e.output_field(schema))
+            .map(|e| e.return_field(schema))
             .collect::<Result<Vec<_>>>()?;
 
         // verify that input data types is consistent with function's `TypeSignature`
@@ -183,7 +183,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         let arg_fields_owned = self
             .args
             .iter()
-            .map(|e| e.output_field(batch.schema_ref()))
+            .map(|e| e.return_field(batch.schema_ref()))
             .collect::<Result<Vec<_>>>()?;
         let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
@@ -217,7 +217,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(output)
     }
 
-    fn output_field(&self, _input_schema: &Schema) -> Result<Field> {
+    fn return_field(&self, _input_schema: &Schema) -> Result<Field> {
         Ok(self.return_field.clone())
     }
 
