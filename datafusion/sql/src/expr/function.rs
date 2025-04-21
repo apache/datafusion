@@ -408,17 +408,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if let Some(suggested_func_name) =
             suggest_valid_function(&name, is_function_window, self.context_provider)
         {
-            plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
-                .map_err(|e| {
-                    let span = Span::try_from_sqlparser_span(sql_parser_span);
-                    let mut diagnostic =
-                        Diagnostic::new_error(format!("Invalid function '{name}'"), span);
-                    diagnostic.add_note(
-                        format!("Possible function '{}'", suggested_func_name),
-                        None,
-                    );
-                    e.with_diagnostic(diagnostic)
-                })
+            let span = Span::try_from_sqlparser_span(sql_parser_span);
+            let mut diagnostic =
+                Diagnostic::new_error(format!("Invalid function '{name}'"), span);
+            diagnostic
+                .add_note(format!("Possible function '{}'", suggested_func_name), None);
+            plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?"; diag=diagnostic)
         } else {
             internal_err!("No functions registered with this context.")
         }
