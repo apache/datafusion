@@ -39,7 +39,7 @@ use std::fmt;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
-    ($MSG:expr $(, $DIAG:expr)?) => {{
+    ($MSG:expr $(; diagnostic = $DIAG:expr)?) => {{
 
         let err = DataFusionError::from(ParserError::ParserError($MSG.to_string()));
         $(
@@ -459,7 +459,8 @@ impl<'a> DFParser<'a> {
             span,
         );
         parser_err!(
-            format!("Expected: {expected}, found: {found}{}", found.span.start),
+            format!("Expected: {expected}, found: {found}{}", found.span.start);
+            diagnostic=
             diagnostic
         )
     }

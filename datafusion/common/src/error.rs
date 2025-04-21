@@ -826,7 +826,7 @@ make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
 // Exposes a macro to create `DataFusionError::SQL` with optional backtrace
 #[macro_export]
 macro_rules! sql_datafusion_err {
-    ($ERR:expr $(, $DIAG:expr)?) => {{
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
         let err = DataFusionError::SQL($ERR, Some(DataFusionError::get_back_trace()));
         $(
             let err = err.with_diagnostic($DIAG);
@@ -838,7 +838,7 @@ macro_rules! sql_datafusion_err {
 // Exposes a macro to create `Err(DataFusionError::SQL)` with optional backtrace
 #[macro_export]
 macro_rules! sql_err {
-    ($ERR:expr $(, $DIAG:expr)?) => {{
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
         let err = datafusion_common::sql_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
@@ -850,38 +850,56 @@ macro_rules! sql_err {
 // Exposes a macro to create `DataFusionError::ArrowError` with optional backtrace
 #[macro_export]
 macro_rules! arrow_datafusion_err {
-    ($ERR:expr) => {
-        DataFusionError::ArrowError($ERR, Some(DataFusionError::get_back_trace()))
-    };
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = DataFusionError::ArrowError($ERR, Some(DataFusionError::get_back_trace()));
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        err
+    }};
 }
 
 // Exposes a macro to create `Err(DataFusionError::ArrowError)` with optional backtrace
 #[macro_export]
 macro_rules! arrow_err {
-    ($ERR:expr) => {
-        Err(datafusion_common::arrow_datafusion_err!($ERR))
-    };
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {
+    {
+        let err = datafusion_common::arrow_datafusion_err!($ERR);
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        Err(err)
+    }};
 }
 
 // Exposes a macro to create `DataFusionError::SchemaError` with optional backtrace
 #[macro_export]
 macro_rules! schema_datafusion_err {
-    ($ERR:expr) => {
-        $crate::error::DataFusionError::SchemaError(
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = $crate::error::DataFusionError::SchemaError(
             $ERR,
             Box::new(Some($crate::error::DataFusionError::get_back_trace())),
-        )
-    };
+        );
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        err
+    }};
 }
 
 // Exposes a macro to create `Err(DataFusionError::SchemaError)` with optional backtrace
 #[macro_export]
 macro_rules! schema_err {
-    ($ERR:expr) => {
-        Err($crate::error::DataFusionError::SchemaError(
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = $crate::error::DataFusionError::SchemaError(
             $ERR,
             Box::new(Some($crate::error::DataFusionError::get_back_trace())),
-        ))
+        );
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        Err(err)
+    }
     };
 }
 
