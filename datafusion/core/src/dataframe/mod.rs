@@ -1387,7 +1387,7 @@ impl DataFrame {
     ///     .with_default_features()
     ///     .build();
     /// let ctx = SessionContext::new_with_state(session_state);
-    /// let df = ctx.sql("select null as null-column").await?;
+    /// let df = ctx.sql("select null as 'null-column'").await?;
     /// let result = df.to_string().await?;
     /// assert_eq!(result, "+-------------+
     /// | null-column |
