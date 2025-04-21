@@ -486,7 +486,7 @@ impl GroupedHashAggregateStream {
         };
 
         // Instantiate the accumulators
-        let accumulators: Vec<_> = aggregate_exprs
+        let mut accumulators: Vec<_> = aggregate_exprs
             .iter()
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
@@ -551,7 +551,7 @@ impl GroupedHashAggregateStream {
             ordering.as_ref(),
         )?;
 
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let mut group_values = new_group_values(group_schema, &group_ordering)?;
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
@@ -604,6 +604,15 @@ impl GroupedHashAggregateStream {
             None
         };
 
+        // Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
+        let enable_blocked_groups = maybe_enable_blocked_groups(
+            &context,
+            group_values.as_mut(),
+            &mut accumulators,
+            batch_size,
+            &group_ordering,
+        )?;
+
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
             input,
@@ -623,7 +632,7 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
-            enable_blocked_groups: false,
+            enable_blocked_groups,
         })
     }
 }
@@ -645,6 +654,49 @@ pub(crate) fn create_group_accumulator(
         let agg_expr_captured = Arc::clone(agg_expr);
         let factory = move || agg_expr_captured.create_accumulator();
         Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
+    }
+}
+
+/// Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
+/// The blocked optimization will be enabled when:
+///   - When `enable_aggregation_intermediate_states_blocked_approach` is true
+///   - It is not streaming aggregation(because blocked mode can't support Emit::first(exact n))
+///   - The spilling is disabled(still need to consider more to support it efficiently)
+///   - The accumulator is not empty(I am still not sure about logic in this case)
+///   - [`GroupValues::supports_blocked_groups`] and all [`GroupsAccumulator::supports_blocked_groups`] are true
+///
+/// [`GroupValues::supports_blocked_groups`]: crate::aggregates::group_values::GroupValues::supports_blocked_groups
+/// [`GroupsAccumulator::supports_blocked_groups`]: datafusion_expr::GroupsAccumulator::supports_blocked_groups
+///
+// TODO: support blocked optimization in streaming, spilling, and maybe empty accumulators case?
+fn maybe_enable_blocked_groups(
+    context: &TaskContext,
+    group_values: &mut dyn GroupValues,
+    accumulators: &mut [Box<dyn GroupsAccumulator>],
+    block_size: usize,
+    group_ordering: &GroupOrdering,
+) -> Result<bool> {
+    // if !context.session_config().options().execution
+    if !matches!(group_ordering, GroupOrdering::None)
+        || accumulators.is_empty()
+        || context.runtime_env().disk_manager.tmp_files_enabled()
+    {
+        return Ok(false);
+    }
+
+    let group_values_supports_blocked = group_values.supports_blocked_groups();
+    let accumulators_support_blocked =
+        accumulators.iter().all(|acc| acc.supports_blocked_groups());
+
+    match (group_values_supports_blocked, accumulators_support_blocked) {
+        (true, true) => {
+            group_values.alter_block_size(Some(block_size))?;
+            accumulators
+                .iter_mut()
+                .try_for_each(|acc| acc.alter_block_size(Some(block_size)))?;
+            Ok(true)
+        }
+        _ => Ok(false),
     }
 }
 
