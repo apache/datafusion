@@ -42,7 +42,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::TaskContext;
+use datafusion_execution::{DiskManager, TaskContext};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
@@ -62,6 +62,11 @@ pub(crate) enum ExecutionState {
     /// When producing output, the remaining rows to output are stored
     /// here and are sliced off as needed in batch_size chunks
     ProducingOutput(RecordBatch),
+    /// Producing output block by block.
+    ///
+    /// It is the blocked version `ProducingOutput` and will be used
+    /// when blocked optimization is enabled.
+    ProducingBlocks,
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
     ///
@@ -423,6 +428,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
+    /// Have we enabled the blocked optimization for group values and accumulators
+    enable_blocked_groups: bool,
+
     // ========================================================================
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
@@ -615,6 +623,7 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
+            enable_blocked_groups: false,
         })
     }
 }
@@ -802,6 +811,33 @@ impl Stream for GroupedHashAggregateStream {
                     )));
                 }
 
+                ExecutionState::ProducingBlocks => {
+                    // Try to emit and then:
+                    //   - If found `Err`, throw it, end this stream abnormally
+                    //   - If found `None`, it means all blocks are polled, end this stream normally
+                    //   - If found `Some`, return it and wait next polling
+                    let emit_result = self.emit(emit_to, false);
+                    let Ok(batch_opt) = emit_result else {
+                        return Poll::Ready(Some(emit_result));
+                    };
+
+                    let Some(batch) = batch_opt else {
+                        self.exec_state = if self.input_done {
+                            ExecutionState::Done
+                        } else if self.should_skip_aggregation() {
+                            ExecutionState::SkippingAggregation
+                        } else {
+                            ExecutionState::ReadingInput
+                        };
+                        continue;
+                    };
+
+                    debug_assert!(output_batch.num_rows() > 0);
+                    return Poll::Ready(Some(Ok(
+                        batch.record_output(&self.baseline_metrics)
+                    )));
+                }
+
                 ExecutionState::Done => {
                     // release the memory reservation since sending back output batch itself needs
                     // some memory reservation, so make some room for it.
@@ -982,6 +1018,9 @@ impl GroupedHashAggregateStream {
             && self.update_memory_reservation().is_err()
         {
             assert_ne!(self.mode, AggregateMode::Partial);
+            // TODO: support spilling when blocked group optimization is on
+            // (`enable_blocked_groups` is true)
+            assert!(!self.enable_blocked_groups);
             self.spill()?;
             self.clear_shrink(batch);
         }
@@ -1033,11 +1072,16 @@ impl GroupedHashAggregateStream {
     /// Currently only [`GroupOrdering::None`] is supported for early emitting.
     /// TODO: support group_ordering for early emitting
     fn emit_early_if_necessary(&mut self) -> Result<()> {
+        // TODO: support spilling when blocked group optimization is on
+        // (`enable_blocked_groups` is true)
         if self.group_values.len() >= self.batch_size
             && matches!(self.group_ordering, GroupOrdering::None)
             && self.update_memory_reservation().is_err()
         {
             assert_eq!(self.mode, AggregateMode::Partial);
+            // TODO: support spilling when blocked group optimization is on
+            // (`enable_blocked_groups` is true)
+            assert!(!self.enable_blocked_groups);
             let n = self.group_values.len() / self.batch_size * self.batch_size;
             if let Some(batch) = self.emit(EmitTo::First(n), false)? {
                 self.exec_state = ExecutionState::ProducingOutput(batch);
@@ -1100,9 +1144,16 @@ impl GroupedHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
-            let batch = self.emit(EmitTo::All, false)?;
-            batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
+            if !self.enable_blocked_groups {
+                let batch = self.emit(EmitTo::All, false)?;
+                batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
+            } else {
+                ExecutionState::ProducingBlocks
+            }
         } else {
+            // TODO: support spilling when blocked group optimization is on
+            // (`enable_blocked_groups` is true)
+            assert!(!self.enable_blocked_groups);
             // If spill files exist, stream-merge them.
             self.update_merged_stream()?;
             ExecutionState::ReadingInput
@@ -1130,9 +1181,13 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<()> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
-                if let Some(batch) = self.emit(EmitTo::All, false)? {
-                    self.exec_state = ExecutionState::ProducingOutput(batch);
-                };
+                if !self.enable_blocked_groups {
+                    if let Some(batch) = self.emit(EmitTo::All, false)? {
+                        self.exec_state = ExecutionState::ProducingOutput(batch);
+                    };
+                } else {
+                    self.exec_state = ExecutionState::ProducingBlocks;
+                }
             }
         }
 
