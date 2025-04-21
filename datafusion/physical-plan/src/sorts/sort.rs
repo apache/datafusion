@@ -1325,6 +1325,7 @@ impl ExecutionPlan for SortExec {
             metrics_set: self.metrics_set.clone(),
             preserve_partitioning: self.preserve_partitioning,
             cache: self.cache.clone().with_node_id(_node_id),
+            common_sort_prefix: self.common_sort_prefix.clone(),
         };
         Ok(Some(Arc::new(new_plan)))
     }
