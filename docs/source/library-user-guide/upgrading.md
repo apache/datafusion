@@ -31,7 +31,7 @@ access to metadata fields, which can be used for extension types.
 To upgrade structs which implement `ScalarUDFImpl`, if you have implemented
 `return_type_from_args` you need instead to implement `return_field_from_args`.
 If your functions do not need to handle metadata, this should be straightforward
-repackaging of the output data into a `Field`. The name you specify on the 
+repackaging of the output data into a `Field`. The name you specify on the
 field is not important. It will be overwritten during planning. `ReturnInfo`
 has been removed, so you will need to remove all references to it.
 
