@@ -405,6 +405,18 @@ config_namespace! {
         /// in joins can reduce memory usage when joining large
         /// tables with a highly-selective join filter, but is also slightly slower.
         pub enforce_batch_size_in_joins: bool, default = false
+
+        /// Should DataFusion use the the blocked approach to manage the groups
+        /// values and their related states in accumulators.
+        /// By default, the blocked approach will be used. And the blocked approach
+        /// allocates capacity for the block based on a predefined block size firstly.
+        /// When the block reaches its limit, we allocate a new block (also with
+        /// the same predefined block size based capacity) instead of expanding
+        /// the current one and copying the data.
+        /// If setting this flag to `false`, will fall-back to use the single approach,
+        /// values are managed within a single large block(can think of it as a Vec).
+        /// As this block grows, it often triggers numerous copies, resulting in poor performance.
+        pub enable_aggregation_blocked_groups: bool, default = true
     }
 }
 

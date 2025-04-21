@@ -659,7 +659,7 @@ pub(crate) fn create_group_accumulator(
 
 /// Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
 /// The blocked optimization will be enabled when:
-///   - When `enable_aggregation_intermediate_states_blocked_approach` is true
+///   - When `enable_aggregation_blocked_groups` is true(default to true)
 ///   - It is not streaming aggregation(because blocked mode can't support Emit::first(exact n))
 ///   - The spilling is disabled(still need to consider more to support it efficiently)
 ///   - The accumulator is not empty(I am still not sure about logic in this case)
@@ -676,8 +676,12 @@ fn maybe_enable_blocked_groups(
     block_size: usize,
     group_ordering: &GroupOrdering,
 ) -> Result<bool> {
-    // if !context.session_config().options().execution
-    if !matches!(group_ordering, GroupOrdering::None)
+    if !context
+        .session_config()
+        .options()
+        .execution
+        .enable_aggregation_blocked_groups
+        || !matches!(group_ordering, GroupOrdering::None)
         || accumulators.is_empty()
         || context.runtime_env().disk_manager.tmp_files_enabled()
     {
