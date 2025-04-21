@@ -297,13 +297,13 @@ pub struct ScalarFunctionArgs<'a, 'b> {
     /// The evaluated arguments to the function
     pub args: Vec<ColumnarValue>,
     /// Field associated with each arg, if it exists
-    pub arg_fields: Vec<Option<&'b Field>>,
+    pub arg_fields: Vec<Option<&'a Field>>,
     /// The number of rows in record batch being evaluated
     pub number_rows: usize,
     /// The return field of the scalar function returned (from `return_type`
     /// or `return_field_from_args`) when creating the physical expression
     /// from the logical expression
-    pub return_field: &'a Field,
+    pub return_field: &'b Field,
 }
 
 /// Information about arguments passed to the function
