@@ -364,7 +364,7 @@ fn ensure_distribution_helper(
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = target_partitions;
     config.optimizer.enable_round_robin_repartition = true;
-    config.optimizer.repartition_file_scans = false;
+    config.optimizer.repartition_datasource_scans = false;
     config.optimizer.repartition_file_min_size = 1024;
     config.optimizer.prefer_existing_sort = prefer_existing_sort;
     ensure_distribution(distribution_context, &config).map(|item| item.data.plan)
@@ -396,7 +396,7 @@ fn test_suite_default_config_options() -> ConfigOptions {
     config.optimizer.prefer_existing_union = false;
 
     // By default, will not repartition file scans.
-    config.optimizer.repartition_file_scans = false;
+    config.optimizer.repartition_datasource_scans = false;
     config.optimizer.repartition_file_min_size = 1024;
 
     // By default, set query execution concurrency to 10.
@@ -449,7 +449,7 @@ impl TestConfig {
     /// If preferred, will repartition file scans.
     /// Accepts a minimum file size to repartition.
     fn with_prefer_repartition_file_scans(mut self, file_min_size: usize) -> Self {
-        self.config.optimizer.repartition_file_scans = true;
+        self.config.optimizer.repartition_datasource_scans = true;
         self.config.optimizer.repartition_file_min_size = file_min_size;
         self
     }
@@ -3483,7 +3483,7 @@ async fn test_distribute_sort_parquet() -> Result<()> {
     let test_config: TestConfig =
         TestConfig::default().with_prefer_repartition_file_scans(1000);
     assert!(
-        test_config.config.optimizer.repartition_file_scans,
+        test_config.config.optimizer.repartition_datasource_scans,
         "should enable scans to be repartitioned"
     );
 
@@ -3524,7 +3524,7 @@ async fn test_distribute_sort_memtable() -> Result<()> {
     let test_config: TestConfig =
         TestConfig::default().with_prefer_repartition_file_scans(1000);
     assert!(
-        test_config.config.optimizer.repartition_file_scans,
+        test_config.config.optimizer.repartition_datasource_scans,
         "should enable scans to be repartitioned"
     );
 

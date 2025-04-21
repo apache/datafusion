@@ -356,7 +356,9 @@ impl MemoryExec {
 /// Data source configuration for reading in-memory batches of data
 #[derive(Clone, Debug)]
 pub struct MemorySourceConfig {
-    /// The partitions to query
+    /// The partitions to query.
+    ///
+    /// Each partition is a `Vec<RecordBatch>`.
     partitions: Vec<Vec<RecordBatch>>,
     /// Schema representing the data before projection
     schema: SchemaRef,
@@ -448,6 +450,10 @@ impl DataSource for MemorySourceConfig {
         }
     }
 
+    /// If possible, redistribute batches across partitions according to their size.
+    ///
+    /// Returns `Ok(None)` if unable to repartition. Preserve output ordering if exists.
+    /// Refer to [`DataSource::repartitioned`] for further details.
     fn repartitioned(
         &self,
         target_partitions: usize,
@@ -455,7 +461,7 @@ impl DataSource for MemorySourceConfig {
         output_ordering: Option<LexOrdering>,
     ) -> Result<Option<Arc<dyn DataSource>>> {
         if self.partitions.is_empty() || self.partitions.len() >= target_partitions
-        // if already have more partitions than desired, do not merge
+        // if have no partitions, or already have more partitions than desired, do not repartition
         {
             return Ok(None);
         }
@@ -758,7 +764,9 @@ impl MemorySourceConfig {
 
     /// Repartition while preserving order.
     ///
-    /// Returns None if cannot fulfill requested repartitioning.
+    /// Returns `Ok(None)` if cannot fulfill the requested repartitioning, such
+    /// as having too few batches to fulfill the `target_partitions` or if unable
+    /// to preserve output ordering.
     fn repartition_preserving_order(
         &self,
         target_partitions: usize,
@@ -778,6 +786,8 @@ impl MemorySourceConfig {
 
             let cnt_to_repartition = target_partitions - self.partitions.len();
 
+            // Label the current partitions and their order.
+            // Such that when we later split up the partitions into smaller sizes, we are maintaining the order.
             let to_repartition = self
                 .partitions
                 .iter()
@@ -789,11 +799,15 @@ impl MemorySourceConfig {
                 })
                 .collect_vec();
 
-            // split the largest partitions
+            // Put all of the partitions into a heap ordered by `RePartition::partial_cmp`, which sizes
+            // by count of rows.
             let mut max_heap = BinaryHeap::with_capacity(target_partitions);
             for rep in to_repartition {
                 max_heap.push(rep);
             }
+
+            // Split the largest partitions into smaller partitions. Maintaining the output
+            // order of the partitions & newly created partitions.
             let mut cannot_split_further = Vec::with_capacity(target_partitions);
             for _ in 0..cnt_to_repartition {
                 loop {
@@ -814,6 +828,8 @@ impl MemorySourceConfig {
             }
             let mut partitions = max_heap.drain().collect_vec();
             partitions.extend(cannot_split_further);
+
+            // Finally, sort all partitions by the output ordering.
             partitions.sort_by_key(|p| p.idx);
             let partitions = partitions.into_iter().map(|rep| rep.batches).collect_vec();
 
@@ -824,7 +840,8 @@ impl MemorySourceConfig {
     /// Repartition into evenly sized chunks (as much as possible without batch splitting),
     /// disregarding any ordering.
     ///
-    /// Returns None if cannot fulfill requested repartitioning.
+    /// Returns `Ok(None)` if cannot fulfill the requested repartitioning, such
+    /// as having too few batches to fulfill the `target_partitions`.
     fn repartition_evenly_by_size(
         &self,
         target_partitions: usize,
@@ -835,7 +852,7 @@ impl MemorySourceConfig {
             return Ok(None);
         }
 
-        // repartition evenly
+        // Take all flattened batches (all in 1 partititon/vec) and divide evenly into the desired number of `target_partitions`.
         let total_num_rows = flatten_batches.iter().map(|b| b.num_rows()).sum::<usize>();
         let target_partition_size = total_num_rows.div_ceil(target_partitions);
         let mut partitions =
@@ -871,8 +888,12 @@ impl MemorySourceConfig {
 ///
 /// Do not implement clone, in order to avoid unnecessary copying during repartitioning.
 struct RePartition {
+    /// Original output ordering for the partition.
     idx: usize,
+    /// Total size of the partition, for use in heap ordering
+    /// (a.k.a. splitting up the largest partitions).
     row_count: usize,
+    /// A partition containing record batches.
     batches: Vec<RecordBatch>,
 }
 
@@ -886,12 +907,12 @@ impl RePartition {
         }
 
         let new_0 = RePartition {
-            idx: self.idx,
+            idx: self.idx, // output ordering
             row_count: 0,
             batches: vec![],
         };
         let new_1 = RePartition {
-            idx: self.idx + 1,
+            idx: self.idx + 1, // output ordering +1
             row_count: 0,
             batches: vec![],
         };
