@@ -19,6 +19,33 @@
 
 # Upgrade Guides
 
+## DataFusion `48.0.0`
+
+### Processing `Field` instead of `DataType` for user defined functions
+
+In order to support metadata handling and extension types, user defined functions are
+now switching to traits which use `Field` rather than a `DataType` and nullability.
+This gives a single interface to both of these parameters and additionally allows
+access to metadata fields, which can be used for extension types.
+
+To upgrade structs which implement `ScalarUDFImpl`, if you have implemented
+`return_type_from_args` you need instead to implement `return_field_from_args`.
+If your functions do not need to handle metadata, this should be straightforward
+repackaging of the output data into a `Field`. The name you specify on the 
+field is not important. It will be overwritten during planning. `ReturnInfo`
+has been removed, so you will need to remove all references to it.
+
+`ScalarFunctionArgs` now contains a field called `arg_fields`. You can use this
+to access the metadata associated with the columnar values during invocation.
+
+### Physical Expression return field
+
+To support the changes to user defined functions processing metadata, the
+`PhysicalExpr` trait, which now must specify a return `Field` based on the input
+schema. To upgrade structs which implement `PhysicalExpr` you need to implement
+the `return_field` function. There are numerous examples in the `physical-expr`
+crate.
+
 ## DataFusion `46.0.0`
 
 ### Use `invoke_with_args` instead of `invoke()` and `invoke_batch()`
