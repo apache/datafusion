@@ -62,3 +62,8 @@ datafusion-functions-window-common = { workspace = true }
 datafusion-sql = { workspace = true }
 env_logger = { workspace = true }
 insta = { workspace = true }
+criterion = {workspace = true}
+
+[[bench]]
+name = "projection_unnecessary"
+harness = false
