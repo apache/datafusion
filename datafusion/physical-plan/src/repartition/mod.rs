@@ -40,14 +40,16 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
+use arrow::array::{
+    PrimitiveArray, RecordBatch, RecordBatchOptions, Scalar, UInt64Array,
+};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow_schema::{DataType, Field};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
-use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{HashMap, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
@@ -378,11 +380,9 @@ impl BatchPartitioner {
                     let it = (0..*num_partitions).map(move |partition| {
                         // Tracking time required for repartitioned batches construction
                         let _timer = partitioner_timer.timer();
-                        let selection_array = arrow_ord::cmp::eq(
-                            &hash_vector,
-                            &UInt64Array::from(vec![partition as u64; batch.num_rows()]),
-                        )
-                        .unwrap();
+                        let partition_scalar = UInt64Array::new_scalar(partition as u64);
+                        let selection_array =
+                            arrow_ord::cmp::eq(&hash_vector, &partition_scalar).unwrap();
                         let selection_vector = Arc::new(selection_array);
                         let mut columns = batch.columns().to_vec();
                         columns.push(selection_vector);
