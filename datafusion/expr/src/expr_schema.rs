@@ -409,7 +409,7 @@ impl ExprSchemable for Expr {
             Expr::Negative(expr) => {
                 expr.to_field(schema).map(|(_, f)| f.as_ref().clone())
             }
-            Expr::Column(c) => schema.to_field(c).cloned(),
+            Expr::Column(c) => schema.field_from_column(c).cloned(),
             Expr::OuterReferenceColumn(ty, _) => {
                 Ok(Field::new(&schema_name, ty.clone(), true))
             }
@@ -848,7 +848,7 @@ mod tests {
             }
         }
 
-        fn to_field(&self, _col: &Column) -> Result<&Field> {
+        fn field_from_column(&self, _col: &Column) -> Result<&Field> {
             Ok(&self.field)
         }
     }

@@ -516,14 +516,6 @@ impl DFSchema {
     }
 
     /// Find the field with the given qualified column
-    pub fn field_from_column(&self, column: &Column) -> Result<&Field> {
-        match &column.relation {
-            Some(r) => self.field_with_qualified_name(r, &column.name),
-            None => self.field_with_unqualified_name(&column.name),
-        }
-    }
-
-    /// Find the field with the given qualified column
     pub fn qualified_field_from_column(
         &self,
         column: &Column,
@@ -970,27 +962,27 @@ impl Display for DFSchema {
 pub trait ExprSchema: std::fmt::Debug {
     /// Is this column reference nullable?
     fn nullable(&self, col: &Column) -> Result<bool> {
-        Ok(self.to_field(col)?.is_nullable())
+        Ok(self.field_from_column(col)?.is_nullable())
     }
 
     /// What is the datatype of this column?
     fn data_type(&self, col: &Column) -> Result<&DataType> {
-        Ok(self.to_field(col)?.data_type())
+        Ok(self.field_from_column(col)?.data_type())
     }
 
     /// Returns the column's optional metadata.
     fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
-        Ok(self.to_field(col)?.metadata())
+        Ok(self.field_from_column(col)?.metadata())
     }
 
     /// Return the column's datatype and nullability
     fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)> {
-        let field = self.to_field(col)?;
+        let field = self.field_from_column(col)?;
         Ok((field.data_type(), field.is_nullable()))
     }
 
     // Return the column's field
-    fn to_field(&self, col: &Column) -> Result<&Field>;
+    fn field_from_column(&self, col: &Column) -> Result<&Field>;
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -1011,14 +1003,17 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
         self.as_ref().data_type_and_nullable(col)
     }
 
-    fn to_field(&self, col: &Column) -> Result<&Field> {
-        self.as_ref().to_field(col)
+    fn field_from_column(&self, col: &Column) -> Result<&Field> {
+        self.as_ref().field_from_column(col)
     }
 }
 
 impl ExprSchema for DFSchema {
-    fn to_field(&self, col: &Column) -> Result<&Field> {
-        self.field_from_column(col)
+    fn field_from_column(&self, col: &Column) -> Result<&Field> {
+        match &col.relation {
+            Some(r) => self.field_with_qualified_name(r, &col.name),
+            None => self.field_with_unqualified_name(&col.name),
+        }
     }
 }
 
