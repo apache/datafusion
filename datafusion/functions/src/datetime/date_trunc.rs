@@ -726,12 +726,16 @@ mod tests {
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
             let batch_len = input.len();
+            let arg_fields = vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", input.data_type().clone(), false),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Scalar(ScalarValue::from("day")),
                     ColumnarValue::Array(Arc::new(input)),
                 ],
-                arg_fields: vec![None; 2],
+                arg_fields: arg_fields.iter().collect(),
                 number_rows: batch_len,
                 return_field: &Field::new(
                     "f",
@@ -893,12 +897,16 @@ mod tests {
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
             let batch_len = input.len();
+            let arg_fields = vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", input.data_type().clone(), false),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Scalar(ScalarValue::from("hour")),
                     ColumnarValue::Array(Arc::new(input)),
                 ],
-                arg_fields: vec![None; 2],
+                arg_fields: arg_fields.iter().collect(),
                 number_rows: batch_len,
                 return_field: &Field::new(
                     "f",

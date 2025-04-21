@@ -379,10 +379,6 @@ impl PhysicalExpr for InListExpr {
         Ok(ColumnarValue::Array(Arc::new(r)))
     }
 
-    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
-        Ok(None)
-    }
-
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         let mut children = vec![];
         children.push(&self.expr);

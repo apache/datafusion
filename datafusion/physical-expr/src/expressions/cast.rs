@@ -144,11 +144,11 @@ impl PhysicalExpr for CastExpr {
         value.cast_to(&self.cast_type, Some(&self.cast_options))
     }
 
-    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
+    fn output_field(&self, input_schema: &Schema) -> Result<Field> {
         Ok(self
             .expr
             .output_field(input_schema)?
-            .map(|f| f.with_data_type(self.cast_type.clone())))
+            .with_data_type(self.cast_type.clone()))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

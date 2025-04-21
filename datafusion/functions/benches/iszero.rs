@@ -33,13 +33,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
         let batch_len = f32_array.len();
         let f32_args = vec![ColumnarValue::Array(f32_array)];
+        let arg_fields_owned = f32_args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         c.bench_function(&format!("iszero f32 array: {}", size), |b| {
             b.iter(|| {
                 black_box(
                     iszero
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f32_args.clone(),
-                            arg_fields: vec![None; f32_args.len()],
+                            arg_fields: arg_fields.clone(),
                             number_rows: batch_len,
                             return_field: &Field::new("f", DataType::Boolean, true),
                         })
@@ -50,13 +57,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f64_array = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
         let batch_len = f64_array.len();
         let f64_args = vec![ColumnarValue::Array(f64_array)];
+        let arg_fields_owned = f64_args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         c.bench_function(&format!("iszero f64 array: {}", size), |b| {
             b.iter(|| {
                 black_box(
                     iszero
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f64_args.clone(),
-                            arg_fields: vec![None; f64_args.len()],
+                            arg_fields: arg_fields.clone(),
                             number_rows: batch_len,
                             return_field: &Field::new("f", DataType::Boolean, true),
                         })

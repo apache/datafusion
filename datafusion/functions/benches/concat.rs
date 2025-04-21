@@ -37,6 +37,13 @@ fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
 fn criterion_benchmark(c: &mut Criterion) {
     for size in [1024, 4096, 8192] {
         let args = create_args(size, 32);
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         let mut group = c.benchmark_group("concat function");
         group.bench_function(BenchmarkId::new("concat", size), |b| {
             b.iter(|| {
@@ -45,7 +52,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     concat()
                         .invoke_with_args(ScalarFunctionArgs {
                             args: args_cloned,
-                            arg_fields: vec![None; args.len()],
+                            arg_fields: arg_fields.clone(),
                             number_rows: size,
                             return_field: &Field::new("f", DataType::Utf8, true),
                         })

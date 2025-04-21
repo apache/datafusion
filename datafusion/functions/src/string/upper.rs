@@ -104,10 +104,11 @@ mod tests {
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();
 
+        let arg_field = Field::new("a", input.data_type().clone(), true);
         let args = ScalarFunctionArgs {
             number_rows: input.len(),
             args: vec![ColumnarValue::Array(input)],
-            arg_fields: vec![None; 1],
+            arg_fields: vec![&arg_field],
             return_field: &Field::new("f", Utf8, true),
         };
 

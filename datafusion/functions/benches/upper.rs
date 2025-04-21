@@ -42,7 +42,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 let args_cloned = args.clone();
                 black_box(upper.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
-                    arg_fields: vec![None; args.len()],
+                    arg_fields: vec![&Field::new("a", DataType::Utf8, true)],
                     number_rows: size,
                     return_field: &Field::new("f", DataType::Utf8, true),
                 }))

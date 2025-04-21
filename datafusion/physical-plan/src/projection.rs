@@ -79,10 +79,7 @@ impl ProjectionExec {
         let fields: Result<Vec<Field>> = expr
             .iter()
             .map(|(e, name)| {
-                let metadata = e
-                    .output_field(&input_schema)?
-                    .map(|field| field.metadata().clone())
-                    .unwrap_or_default();
+                let metadata = e.output_field(&input_schema)?.metadata().clone();
 
                 let field = Field::new(
                     name,

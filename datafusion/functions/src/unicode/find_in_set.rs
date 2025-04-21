@@ -471,7 +471,12 @@ mod tests {
                     })
                     .unwrap_or(1);
                 let return_type = fis.return_type(&type_array)?;
-                let arg_fields = vec![None; args.len()];
+                let arg_fields_owned = args
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, a)| Field::new(format!("arg_{idx}"), a.data_type(), true))
+                    .collect::<Vec<_>>();
+                let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
                 let result = fis.invoke_with_args(ScalarFunctionArgs {
                     args,
                     arg_fields,

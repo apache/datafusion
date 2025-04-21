@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::PhysicalExpr;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
@@ -127,10 +127,6 @@ impl PhysicalExpr for LikeExpr {
             (true, false) => apply_cmp(&lhs, &rhs, nlike),
             (true, true) => apply_cmp(&lhs, &rhs, nilike),
         }
-    }
-
-    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
-        Ok(None)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

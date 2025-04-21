@@ -46,7 +46,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_ascii.clone(),
-                        arg_fields: vec![None; args_string_ascii.len()],
+                        arg_fields: vec![&Field::new(
+                            "a",
+                            args_string_ascii[0].data_type(),
+                            true,
+                        )],
                         number_rows: N_ROWS,
                         return_field: &Field::new("f", DataType::Utf8, true),
                     }))
@@ -66,7 +70,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_utf8.clone(),
-                        arg_fields: vec![None; args_string_utf8.len()],
+                        arg_fields: vec![&Field::new(
+                            "a",
+                            args_string_utf8[0].data_type(),
+                            true,
+                        )],
                         number_rows: N_ROWS,
                         return_field: &Field::new("f", DataType::Utf8, true),
                     }))
@@ -88,7 +96,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_ascii.clone(),
-                        arg_fields: vec![None; args_string_view_ascii.len()],
+                        arg_fields: vec![&Field::new(
+                            "a",
+                            args_string_view_ascii[0].data_type(),
+                            true,
+                        )],
                         number_rows: N_ROWS,
                         return_field: &Field::new("f", DataType::Utf8, true),
                     }))
@@ -108,7 +120,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_utf8.clone(),
-                        arg_fields: vec![None; args_string_view_utf8.len()],
+                        arg_fields: vec![&Field::new(
+                            "a",
+                            args_string_view_utf8[0].data_type(),
+                            true,
+                        )],
                         number_rows: N_ROWS,
                         return_field: &Field::new("f", DataType::Utf8, true),
                     }))

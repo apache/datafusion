@@ -157,9 +157,10 @@ mod test {
             f32::INFINITY,
             f32::NEG_INFINITY,
         ]));
+        let arg_fields = [Field::new("a", DataType::Float32, false)];
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
-            arg_fields: vec![None; 1],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: array.len(),
             return_field: &Field::new("f", DataType::Float32, true),
         };
@@ -202,9 +203,10 @@ mod test {
             f64::INFINITY,
             f64::NEG_INFINITY,
         ]));
+        let arg_fields = [Field::new("a", DataType::Float64, false)];
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
-            arg_fields: vec![None; 1],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: array.len(),
             return_field: &Field::new("f", DataType::Float64, true),
         };

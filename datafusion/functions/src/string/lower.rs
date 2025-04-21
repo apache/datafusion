@@ -104,11 +104,12 @@ mod tests {
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = LowerFunc::new();
+        let arg_fields = [Field::new("a", input.data_type().clone(), true)];
 
         let args = ScalarFunctionArgs {
             number_rows: input.len(),
             args: vec![ColumnarValue::Array(input)],
-            arg_fields: vec![None; 1],
+            arg_fields: arg_fields.iter().collect(),
             return_field: &Field::new("f", Utf8, true),
         };
 

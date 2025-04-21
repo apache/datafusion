@@ -508,89 +508,82 @@ mod tests {
     use arrow::datatypes::{DataType, Field, TimeUnit};
 
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use chrono::TimeDelta;
 
+    fn invoke_date_bin_with_args(
+        args: Vec<ColumnarValue>,
+        number_rows: usize,
+        return_field: &Field,
+    ) -> Result<ColumnarValue, DataFusionError> {
+        let arg_fields = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type(), true))
+            .collect::<Vec<_>>();
+
+        let args = datafusion_expr::ScalarFunctionArgs {
+            args,
+            arg_fields: arg_fields.iter().collect(),
+            number_rows,
+            return_field,
+        };
+        DateBinFunc::new().invoke_with_args(args)
+    }
+
     #[test]
     fn test_date_bin() {
         let return_field =
-            Field::new("f", DataType::Timestamp(TimeUnit::Nanosecond, None), true);
+            &Field::new("f", DataType::Timestamp(TimeUnit::Nanosecond, None), true);
 
-        let mut args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
-                    IntervalDayTime {
-                        days: 0,
-                        milliseconds: 1,
-                    },
-                ))),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: 1,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        let mut args = vec![
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 1,
+            }))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert!(res.is_ok());
 
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
         let batch_len = timestamps.len();
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
-                    IntervalDayTime {
-                        days: 0,
-                        milliseconds: 1,
-                    },
-                ))),
-                ColumnarValue::Array(timestamps),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: batch_len,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 1,
+            }))),
+            ColumnarValue::Array(timestamps),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, batch_len, return_field);
         assert!(res.is_ok());
 
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
-                    IntervalDayTime {
-                        days: 0,
-                        milliseconds: 1,
-                    },
-                ))),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 2],
-            number_rows: 1,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 1,
+            }))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert!(res.is_ok());
 
         // stride supports month-day-nano
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNano {
-                        months: 0,
-                        days: 0,
-                        nanoseconds: 1,
-                    },
-                ))),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: 1,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNano {
+                    months: 0,
+                    days: 0,
+                    nanoseconds: 1,
+                },
+            ))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert!(res.is_ok());
 
         //
@@ -598,35 +591,25 @@ mod tests {
         //
 
         // invalid number of arguments
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
-                IntervalDayTime {
-                    days: 0,
-                    milliseconds: 1,
-                },
-            )))],
-            arg_fields: vec![None; 1],
-            number_rows: 1,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+            IntervalDayTime {
+                days: 0,
+                milliseconds: 1,
+            },
+        )))];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN expected two or three arguments"
         );
 
         // stride: invalid type
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: 1,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN expects stride argument to be an INTERVAL but got Interval(YearMonth)"
@@ -634,119 +617,83 @@ mod tests {
 
         // stride: invalid value
 
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
-                    IntervalDayTime {
-                        days: 0,
-                        milliseconds: 0,
-                    },
-                ))),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: 1,
-            return_field: &return_field,
-        };
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 0,
+            }))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ];
 
-        let res = DateBinFunc::new().invoke_with_args(args);
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN stride must be non-zero"
         );
 
         // stride: overflow of day-time interval
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
-                    IntervalDayTime::MAX,
-                ))),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: 1,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                IntervalDayTime::MAX,
+            ))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN stride argument is too large"
         );
 
         // stride: overflow of month-day-nano interval
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, i32::MAX, 1)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: 1,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, i32::MAX, 1)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN stride argument is too large"
         );
 
         // stride: month intervals
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1, 1, 1)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: 1,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1, 1, 1)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN stride does not support combination of month, day and nanosecond intervals"
         );
 
         // origin: invalid type
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
-                    IntervalDayTime {
-                        days: 0,
-                        milliseconds: 1,
-                    },
-                ))),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-                ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: 1,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 1,
+            }))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosecond precision but got Timestamp(Microsecond, None)"
         );
 
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
-                    IntervalDayTime {
-                        days: 0,
-                        milliseconds: 1,
-                    },
-                ))),
-                ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: 1,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 1,
+            }))),
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert!(res.is_ok());
 
         // unsupported array type for stride
@@ -760,17 +707,12 @@ mod tests {
                 })
                 .collect::<IntervalDayTimeArray>(),
         );
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Array(intervals),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: 1,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![
+            ColumnarValue::Array(intervals),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ];
+        let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN only supports literal values for the stride argument, not arrays"
@@ -779,22 +721,15 @@ mod tests {
         // unsupported array type for origin
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
         let batch_len = timestamps.len();
-        args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
-                    IntervalDayTime {
-                        days: 0,
-                        milliseconds: 1,
-                    },
-                ))),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-                ColumnarValue::Array(timestamps),
-            ],
-            arg_fields: vec![None; 3],
-            number_rows: batch_len,
-            return_field: &return_field,
-        };
-        let res = DateBinFunc::new().invoke_with_args(args);
+        args = vec![
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 1,
+            }))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Array(timestamps),
+        ];
+        let res = invoke_date_bin_with_args(args, batch_len, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
@@ -910,24 +845,22 @@ mod tests {
                     .collect::<TimestampNanosecondArray>()
                     .with_timezone_opt(tz_opt.clone());
                 let batch_len = input.len();
-                let args = datafusion_expr::ScalarFunctionArgs {
-                    args: vec![
-                        ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
-                        ColumnarValue::Array(Arc::new(input)),
-                        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                            Some(string_to_timestamp_nanos(origin).unwrap()),
-                            tz_opt.clone(),
-                        )),
-                    ],
-                    arg_fields: vec![None; 3],
-                    number_rows: batch_len,
-                    return_field: &Field::new(
-                        "f",
-                        DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
-                        true,
-                    ),
-                };
-                let result = DateBinFunc::new().invoke_with_args(args).unwrap();
+                let args = vec![
+                    ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
+                    ColumnarValue::Array(Arc::new(input)),
+                    ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                        Some(string_to_timestamp_nanos(origin).unwrap()),
+                        tz_opt.clone(),
+                    )),
+                ];
+                let return_field = &Field::new(
+                    "f",
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                    true,
+                );
+                let result =
+                    invoke_date_bin_with_args(args, batch_len, return_field).unwrap();
+
                 if let ColumnarValue::Array(result) = result {
                     assert_eq!(
                         result.data_type(),

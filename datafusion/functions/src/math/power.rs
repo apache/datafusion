@@ -194,6 +194,10 @@ mod tests {
 
     #[test]
     fn test_power_f64() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("a", DataType::Float64, true),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Float64Array::from(vec![
@@ -203,7 +207,7 @@ mod tests {
                     3.0, 2.0, 4.0, 4.0,
                 ]))), // exponent
             ],
-            arg_fields: vec![None; 2],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 4,
             return_field: &Field::new("f", DataType::Float64, true),
         };
@@ -229,12 +233,16 @@ mod tests {
 
     #[test]
     fn test_power_i64() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("a", DataType::Int64, true),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
                 ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
             ],
-            arg_fields: vec![None; 2],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 4,
             return_field: &Field::new("f", DataType::Int64, true),
         };

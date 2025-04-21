@@ -101,7 +101,7 @@ impl PhysicalExpr for NotExpr {
         }
     }
 
-    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
+    fn output_field(&self, input_schema: &Schema) -> Result<Field> {
         self.arg.output_field(input_schema)
     }
 

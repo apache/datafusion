@@ -60,7 +60,7 @@ async fn csv_query_custom_udf_with_cast() -> Result<()> {
     let ctx = create_udf_context();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c11)) FROM aggregate_test_100";
-    let actual = plan_and_collect(&ctx, sql).await.unwrap();
+    let actual = plan_and_collect(&ctx, sql).await?;
 
     insta::assert_snapshot!(batches_to_string(&actual), @r###"
     +------------------------------------------+
@@ -79,7 +79,7 @@ async fn csv_query_avg_sqrt() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     // Note it is a different column (c12) than above (c11)
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
-    let actual = plan_and_collect(&ctx, sql).await.unwrap();
+    let actual = plan_and_collect(&ctx, sql).await?;
 
     insta::assert_snapshot!(batches_to_string(&actual), @r###"
     +------------------------------------------+
@@ -392,7 +392,7 @@ async fn udaf_as_window_func() -> Result<()> {
   WindowAggr: windowExpr=[[my_acc(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
     TableScan: my_table"#;
 
-    let dataframe = context.sql(sql).await.unwrap();
+    let dataframe = context.sql(sql).await?;
     assert_eq!(format!("{}", dataframe.logical_plan()), expected);
     Ok(())
 }
@@ -402,7 +402,7 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
     let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch)?;
 
     let myfunc = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(array) = &args[0] else {
@@ -446,7 +446,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     let ctx = SessionContext::new();
     let arr = Int32Array::from(vec![1]);
     let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch)?;
 
     let myfunc = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(array) = &args[0] else {
@@ -1377,6 +1377,7 @@ async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordB
 struct MetadataBasedUdf {
     name: String,
     signature: Signature,
+    metadata: HashMap<String, String>,
 }
 
 impl MetadataBasedUdf {
@@ -1388,6 +1389,7 @@ impl MetadataBasedUdf {
         Self {
             name,
             signature: Signature::exact(vec![DataType::UInt64], Volatility::Immutable),
+            metadata,
         }
     }
 }
@@ -1406,19 +1408,23 @@ impl ScalarUDFImpl for MetadataBasedUdf {
     }
 
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        Ok(DataType::UInt64)
+        unimplemented!(
+            "this should never be called since return_field_from_args is implemented"
+        );
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new(self.name(), DataType::UInt64, true)
+            .with_metadata(self.metadata.clone()))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         assert_eq!(args.arg_fields.len(), 1);
-        let should_double = match &args.arg_fields[0] {
-            Some(field) => field
-                .metadata()
-                .get("modify_values")
-                .map(|v| v == "double_output")
-                .unwrap_or(false),
-            None => false,
-        };
+        let should_double = args.arg_fields[0]
+            .metadata()
+            .get("modify_values")
+            .map(|v| v == "double_output")
+            .unwrap_or(false);
         let mulitplier = if should_double { 2 } else { 1 };
 
         match &args.args[0] {
@@ -1557,9 +1563,14 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
         Ok(DataType::Utf8)
     }
 
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Field> {
+        Ok(Field::new("canonical_extension_udf", DataType::Utf8, true)
+            .with_extension_type(MyUserExtentionType {}))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         assert_eq!(args.arg_fields.len(), 1);
-        let input_field = args.arg_fields[0].unwrap();
+        let input_field = args.arg_fields[0];
 
         let output_as_bool = matches!(
             CanonicalExtensionType::try_from(input_field),

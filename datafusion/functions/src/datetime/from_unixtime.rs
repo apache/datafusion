@@ -170,9 +170,10 @@ mod test {
 
     #[test]
     fn test_without_timezone() {
+        let arg_field = Field::new("a", DataType::Int64, true);
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(Int64(Some(1729900800)))],
-            arg_fields: vec![None; 1],
+            arg_fields: vec![&arg_field],
             number_rows: 1,
             return_field: &Field::new("f", DataType::Timestamp(Second, None), true),
         };
@@ -188,6 +189,10 @@ mod test {
 
     #[test]
     fn test_with_timezone() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("a", DataType::Utf8, true),
+        ];
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(Int64(Some(1729900800))),
@@ -195,7 +200,7 @@ mod test {
                     "America/New_York".to_string(),
                 ))),
             ],
-            arg_fields: vec![None; 2],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 2,
             return_field: &Field::new(
                 "f",

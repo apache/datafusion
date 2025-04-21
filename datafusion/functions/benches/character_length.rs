@@ -34,13 +34,19 @@ fn criterion_benchmark(c: &mut Criterion) {
     for str_len in [8, 32, 128, 4096] {
         // StringArray ASCII only
         let args_string_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, false);
+        let arg_fields_owned = args_string_ascii
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         c.bench_function(
             &format!("character_length_StringArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_ascii.clone(),
-                        arg_fields: vec![None; args_string_ascii.len()],
+                        arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
                         return_field: &return_field,
                     }))
@@ -50,13 +56,19 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         // StringArray UTF8
         let args_string_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, false);
+        let arg_fields_owned = args_string_utf8
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         c.bench_function(
             &format!("character_length_StringArray_utf8_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_utf8.clone(),
-                        arg_fields: vec![None; args_string_utf8.len()],
+                        arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
                         return_field: &return_field,
                     }))
@@ -66,13 +78,19 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         // StringViewArray ASCII only
         let args_string_view_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, true);
+        let arg_fields_owned = args_string_view_ascii
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         c.bench_function(
             &format!("character_length_StringViewArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_ascii.clone(),
-                        arg_fields: vec![None; args_string_view_ascii.len()],
+                        arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
                         return_field: &return_field,
                     }))
@@ -82,13 +100,19 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         // StringViewArray UTF8
         let args_string_view_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, true);
+        let arg_fields_owned = args_string_view_utf8
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         c.bench_function(
             &format!("character_length_StringViewArray_utf8_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
                     black_box(character_length.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_utf8.clone(),
-                        arg_fields: vec![None; args_string_view_utf8.len()],
+                        arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
                         return_field: &return_field,
                     }))

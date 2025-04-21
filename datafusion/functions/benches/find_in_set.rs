@@ -153,11 +153,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.measurement_time(Duration::from_secs(10));
 
         let args = gen_args_array(n_rows, str_len, 0.1, 0.5, false);
+        let arg_fields_owned = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         group.bench_function(format!("string_len_{}", str_len), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
-                    arg_fields: vec![None; args.len()],
+                    arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
                     return_field: &Field::new("f", DataType::Int32, true),
                 }))
@@ -165,11 +170,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
 
         let args = gen_args_array(n_rows, str_len, 0.1, 0.5, true);
+        let arg_fields_owned = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         group.bench_function(format!("string_view_len_{}", str_len), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
-                    arg_fields: vec![None; args.len()],
+                    arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
                     return_field: &Field::new("f", DataType::Int32, true),
                 }))
@@ -181,11 +191,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut group = c.benchmark_group("find_in_set_scalar");
 
         let args = gen_args_scalar(n_rows, str_len, 0.1, false);
+        let arg_fields_owned = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         group.bench_function(format!("string_len_{}", str_len), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
-                    arg_fields: vec![None; args.len()],
+                    arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
                     return_field: &Field::new("f", DataType::Int32, true),
                 }))
@@ -193,11 +208,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
 
         let args = gen_args_scalar(n_rows, str_len, 0.1, true);
+        let arg_fields_owned = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
         group.bench_function(format!("string_view_len_{}", str_len), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
-                    arg_fields: vec![None; args.len()],
+                    arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
                     return_field: &Field::new("f", DataType::Int32, true),
                 }))

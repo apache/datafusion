@@ -127,8 +127,8 @@ impl PhysicalExpr for Column {
         Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
     }
 
-    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
-        Ok(Some(input_schema.field(self.index).clone()))
+    fn output_field(&self, input_schema: &Schema) -> Result<Field> {
+        Ok(input_schema.field(self.index).clone())
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

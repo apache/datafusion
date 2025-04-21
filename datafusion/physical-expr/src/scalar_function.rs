@@ -92,18 +92,7 @@ impl ScalarFunctionExpr {
         let name = fun.name().to_string();
         let arg_fields = args
             .iter()
-            .enumerate()
-            .map(|(idx, e)| {
-                e.output_field(schema).and_then(|maybe_field| {
-                    Ok(maybe_field.unwrap_or({
-                        Field::new(
-                            format!("field_{idx}"),
-                            e.data_type(schema)?,
-                            e.nullable(schema)?,
-                        )
-                    }))
-                })
-            })
+            .map(|e| e.output_field(schema))
             .collect::<Result<Vec<_>>>()?;
 
         // verify that input data types is consistent with function's `TypeSignature`
@@ -196,10 +185,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .iter()
             .map(|e| e.output_field(batch.schema_ref()))
             .collect::<Result<Vec<_>>>()?;
-        let arg_fields = arg_fields_owned
-            .iter()
-            .map(|opt_map| opt_map.as_ref())
-            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
         let input_empty = args.is_empty();
         let input_all_scalar = args
@@ -231,8 +217,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(output)
     }
 
-    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
-        Ok(Some(self.return_field.clone()))
+    fn output_field(&self, _input_schema: &Schema) -> Result<Field> {
+        Ok(self.return_field.clone())
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

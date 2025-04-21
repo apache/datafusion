@@ -407,7 +407,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{types::TimestampNanosecondType, TimestampNanosecondArray};
+    use arrow::array::{types::TimestampNanosecondType, Array, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::NaiveDateTime;
@@ -538,10 +538,11 @@ mod tests {
     }
 
     fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
+        let arg_field = Field::new("a", input.data_type(), true);
         let res = ToLocalTimeFunc::new()
             .invoke_with_args(ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(input)],
-                arg_fields: vec![None; 1],
+                arg_fields: vec![&arg_field],
                 number_rows: 1,
                 return_field: &Field::new("f", expected.data_type(), true),
             })
@@ -603,9 +604,10 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>();
             let batch_size = input.len();
+            let arg_field = Field::new("a", input.data_type().clone(), true);
             let args = ScalarFunctionArgs {
                 args: vec![ColumnarValue::Array(Arc::new(input))],
-                arg_fields: vec![None; 1],
+                arg_fields: vec![&arg_field],
                 number_rows: batch_size,
                 return_field: &Field::new(
                     "f",

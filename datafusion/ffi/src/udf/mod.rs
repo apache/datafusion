@@ -21,7 +21,6 @@ use crate::{
     util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
     volatility::FFI_Volatility,
 };
-use abi_stable::std_types::ROption;
 use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
@@ -85,7 +84,7 @@ pub struct FFI_ScalarUDF {
     pub invoke_with_args: unsafe extern "C" fn(
         udf: &Self,
         args: RVec<WrappedArray>,
-        arg_fields: RVec<ROption<WrappedSchema>>,
+        arg_fields: RVec<WrappedSchema>,
         num_rows: usize,
         return_field: WrappedSchema,
     ) -> RResult<WrappedArray, RString>,
@@ -173,7 +172,7 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
     udf: &FFI_ScalarUDF,
     args: RVec<WrappedArray>,
-    arg_fields: RVec<ROption<WrappedSchema>>,
+    arg_fields: RVec<WrappedSchema>,
     number_rows: usize,
     return_field: WrappedSchema,
 ) -> RResult<WrappedArray, RString> {
@@ -193,18 +192,10 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
 
     let arg_fields_owned = arg_fields
         .into_iter()
-        .map(|maybe_field| {
-            Option::from(maybe_field.as_ref().map(|wrapped_field| {
-                (&wrapped_field.0).try_into().map_err(DataFusionError::from)
-            }))
-            .transpose()
-        })
-        .collect::<Result<Vec<Option<Field>>>>();
+        .map(|wrapped_field| (&wrapped_field.0).try_into().map_err(DataFusionError::from))
+        .collect::<Result<Vec<Field>>>();
     let arg_fields_owned = rresult_return!(arg_fields_owned);
-    let arg_fields = arg_fields_owned
-        .iter()
-        .map(|maybe_map| maybe_map.as_ref())
-        .collect::<Vec<_>>();
+    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
     let args = ScalarFunctionArgs {
         args,
@@ -366,12 +357,12 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 
         let arg_fields_wrapped = arg_fields
             .iter()
-            .map(|maybe_field| maybe_field.map(FFI_ArrowSchema::try_from).transpose())
+            .map(|field| FFI_ArrowSchema::try_from(*field))
             .collect::<std::result::Result<Vec<_>, ArrowError>>()?;
 
         let arg_fields = arg_fields_wrapped
             .into_iter()
-            .map(|maybe_field| maybe_field.map(WrappedSchema).into())
+            .map(WrappedSchema)
             .collect::<RVec<_>>();
 
         let return_field = WrappedSchema(FFI_ArrowSchema::try_from(return_field)?);

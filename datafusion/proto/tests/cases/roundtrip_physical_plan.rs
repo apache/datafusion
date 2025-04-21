@@ -864,10 +864,6 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             unreachable!()
         }
 
-        fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
-            Ok(None)
-        }
-
         fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
             vec![&self.inner]
         }

@@ -93,7 +93,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
-                        arg_fields: vec![None; 2],
+                        arg_fields: vec![
+                            &Field::new("a", data.data_type(), true),
+                            &Field::new("b", patterns.data_type(), true),
+                        ],
                         number_rows: batch_len,
                         return_field: &Field::new("f", DataType::Utf8, true),
                     })
@@ -115,7 +118,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
-                        arg_fields: vec![None; 2],
+                        arg_fields: vec![
+                            &Field::new("a", data.data_type(), true),
+                            &Field::new("b", patterns.data_type(), true),
+                        ],
                         number_rows: batch_len,
                         return_field: &Field::new("f", DataType::Utf8, true),
                     })
@@ -143,7 +149,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), pattern.clone()],
-                        arg_fields: vec![None; 2],
+                        arg_fields: vec![
+                            &Field::new("a", data.data_type(), true),
+                            &Field::new("b", pattern.data_type(), true),
+                        ],
                         number_rows: 1,
                         return_field: &Field::new("f", DataType::Utf8, true),
                     })

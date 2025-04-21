@@ -481,9 +481,14 @@ mod tests {
             Some("z"),
         ])));
 
+        let arg_fields = vec![
+            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![c0, c1, c2],
-            arg_fields: vec![None; 3],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 3,
             return_field: &Field::new("f", Utf8, true),
         };
@@ -512,9 +517,14 @@ mod tests {
             Some("z"),
         ])));
 
+        let arg_fields = vec![
+            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true),
+        ];
         let args = ScalarFunctionArgs {
             args: vec![c0, c1, c2],
-            arg_fields: vec![None; 3],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 3,
             return_field: &Field::new("f", Utf8, true),
         };

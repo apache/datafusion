@@ -164,10 +164,14 @@ mod test {
             Some("yyy?()"),
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
+        let arg_fields = vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("a", DataType::Utf8, true),
+        ];
 
         let args = ScalarFunctionArgs {
             args: vec![array, scalar],
-            arg_fields: vec![None; 2],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 2,
             return_field: &Field::new("f", DataType::Boolean, true),
         };

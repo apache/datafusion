@@ -189,48 +189,65 @@ mod tests {
             ],
         );
 
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Union(
+                None,
+                fields.clone(),
+                UnionMode::Dense,
+            )),
+            ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
+        ];
+        let arg_fields = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .collect::<Vec<_>>();
+
         let result = fun.invoke_with_args(ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Union(
-                    None,
-                    fields.clone(),
-                    UnionMode::Dense,
-                )),
-                ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
-            ],
-            arg_fields: vec![None; 2],
+            args,
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 1,
             return_field: &Field::new("f", DataType::Utf8, true),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
 
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Union(
+                Some((3, Box::new(ScalarValue::Int32(Some(42))))),
+                fields.clone(),
+                UnionMode::Dense,
+            )),
+            ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
+        ];
+        let arg_fields = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .collect::<Vec<_>>();
+
         let result = fun.invoke_with_args(ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Union(
-                    Some((3, Box::new(ScalarValue::Int32(Some(42))))),
-                    fields.clone(),
-                    UnionMode::Dense,
-                )),
-                ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
-            ],
-            arg_fields: vec![None; 2],
+            args,
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 1,
             return_field: &Field::new("f", DataType::Utf8, true),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
 
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Union(
+                Some((1, Box::new(ScalarValue::new_utf8("42")))),
+                fields.clone(),
+                UnionMode::Dense,
+            )),
+            ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
+        ];
+        let arg_fields = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .collect::<Vec<_>>();
         let result = fun.invoke_with_args(ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Union(
-                    Some((1, Box::new(ScalarValue::new_utf8("42")))),
-                    fields.clone(),
-                    UnionMode::Dense,
-                )),
-                ColumnarValue::Scalar(ScalarValue::new_utf8("str")),
-            ],
-            arg_fields: vec![None; 2],
+            args,
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 1,
             return_field: &Field::new("f", DataType::Utf8, true),
         })?;

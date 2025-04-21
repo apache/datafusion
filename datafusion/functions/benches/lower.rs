@@ -124,12 +124,19 @@ fn criterion_benchmark(c: &mut Criterion) {
     let lower = string::lower();
     for size in [1024, 4096, 8192] {
         let args = create_args1(size, 32);
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         c.bench_function(&format!("lower_all_values_are_ascii: {}", size), |b| {
             b.iter(|| {
                 let args_cloned = args.clone();
                 black_box(lower.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
-                    arg_fields: vec![None; args.len()],
+                    arg_fields: arg_fields.clone(),
                     number_rows: size,
                     return_field: &Field::new("f", DataType::Utf8, true),
                 }))
@@ -137,6 +144,13 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
 
         let args = create_args2(size);
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         c.bench_function(
             &format!("lower_the_first_value_is_nonascii: {}", size),
             |b| {
@@ -144,7 +158,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     let args_cloned = args.clone();
                     black_box(lower.invoke_with_args(ScalarFunctionArgs {
                         args: args_cloned,
-                        arg_fields: vec![None; args.len()],
+                        arg_fields: arg_fields.clone(),
                         number_rows: size,
                         return_field: &Field::new("f", DataType::Utf8, true),
                     }))
@@ -153,6 +167,13 @@ fn criterion_benchmark(c: &mut Criterion) {
         );
 
         let args = create_args3(size);
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         c.bench_function(
             &format!("lower_the_middle_value_is_nonascii: {}", size),
             |b| {
@@ -160,7 +181,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     let args_cloned = args.clone();
                     black_box(lower.invoke_with_args(ScalarFunctionArgs {
                         args: args_cloned,
-                        arg_fields: vec![None; args.len()],
+                        arg_fields: arg_fields.clone(),
                         number_rows: size,
                         return_field: &Field::new("f", DataType::Utf8, true),
                     }))
@@ -179,6 +200,15 @@ fn criterion_benchmark(c: &mut Criterion) {
             for &str_len in &str_lens {
                 for &size in &sizes {
                     let args = create_args4(size, str_len, *null_density, mixed);
+                    let arg_fields_owned = args
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, arg)| {
+                            Field::new(format!("arg_{idx}"), arg.data_type(), true)
+                        })
+                        .collect::<Vec<_>>();
+                    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
                     c.bench_function(
                         &format!("lower_all_values_are_ascii_string_views: size: {}, str_len: {}, null_density: {}, mixed: {}",
                      size, str_len, null_density, mixed),
@@ -186,7 +216,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
                                 args: args_cloned,
-                                arg_fields: vec![None; args.len()],
+                                arg_fields: arg_fields.clone(),
                                 number_rows: size,
                                 return_field: &Field::new("f", DataType::Utf8, true),
                             }))
@@ -201,7 +231,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
                                 args: args_cloned,
-                                arg_fields: vec![None; args.len()],
+                                arg_fields: arg_fields.clone(),
                                 number_rows: size,
                                 return_field: &Field::new("f", DataType::Utf8, true),
                             }))
@@ -216,7 +246,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
                                 args: args_cloned,
-                                arg_fields: vec![None; args.len()],
+                                arg_fields: arg_fields.clone(),
                                 number_rows: size,
                                 return_field: &Field::new("f", DataType::Utf8, true),
                             }))

@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 
-use arrow::datatypes::Field;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -76,10 +75,6 @@ impl PhysicalExpr for Literal {
         Ok(ColumnarValue::Scalar(self.value.clone()))
     }
 
-    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
-        Ok(None)
-    }
-
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![]
     }
@@ -117,7 +112,7 @@ mod tests {
     use super::*;
 
     use arrow::array::Int32Array;
-
+    use arrow::datatypes::Field;
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 

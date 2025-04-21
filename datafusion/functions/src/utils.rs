@@ -161,6 +161,10 @@ pub mod test {
                 arg_fields: &field_array,
                 scalar_arguments: &scalar_arguments_refs,
             });
+            let arg_fields_owned = $ARGS.iter()
+                .enumerate()
+                .map(|(idx, arg)| arrow::datatypes::Field::new(format!("f_{idx}"), arg.data_type(), true))
+                .collect::<Vec<_>>();
 
             match expected {
                 Ok(expected) => {
@@ -169,7 +173,7 @@ pub mod test {
                     let return_type = return_field.data_type();
                     assert_eq!(return_type, &$EXPECTED_DATA_TYPE);
 
-                    let arg_fields = vec![None; $ARGS.len()];
+                    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
                     let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_field: &return_field});
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
@@ -193,7 +197,7 @@ pub mod test {
                     else {
                         let return_field = return_field.unwrap();
 
-                        let arg_fields = vec![None; $ARGS.len()];
+                        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
                         // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
                         match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_field: &return_field}) {
                             Ok(_) => assert!(false, "expected error"),

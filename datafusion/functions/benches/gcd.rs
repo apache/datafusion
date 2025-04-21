@@ -48,7 +48,10 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![array_a.clone(), array_b.clone()],
-                    arg_fields: vec![None; 2],
+                    arg_fields: vec![
+                        &Field::new("a", array_a.data_type(), true),
+                        &Field::new("b", array_b.data_type(), true),
+                    ],
                     number_rows: 0,
                     return_field: &Field::new("f", DataType::Int64, true),
                 })
@@ -65,7 +68,10 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![array_a.clone(), scalar_b.clone()],
-                    arg_fields: vec![None; 2],
+                    arg_fields: vec![
+                        &Field::new("a", array_a.data_type(), true),
+                        &Field::new("b", scalar_b.data_type(), true),
+                    ],
                     number_rows: 0,
                     return_field: &Field::new("f", DataType::Int64, true),
                 })
@@ -82,7 +88,10 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![scalar_a.clone(), scalar_b.clone()],
-                    arg_fields: vec![None; 2],
+                    arg_fields: vec![
+                        &Field::new("a", scalar_a.data_type(), true),
+                        &Field::new("b", scalar_b.data_type(), true),
+                    ],
                     number_rows: 0,
                     return_field: &Field::new("f", DataType::Int64, true),
                 })

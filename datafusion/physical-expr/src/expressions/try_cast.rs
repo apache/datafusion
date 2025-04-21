@@ -110,7 +110,7 @@ impl PhysicalExpr for TryCastExpr {
         }
     }
 
-    fn output_field(&self, input_schema: &Schema) -> Result<Option<Field>> {
+    fn output_field(&self, input_schema: &Schema) -> Result<Field> {
         self.expr.output_field(input_schema)
     }
 

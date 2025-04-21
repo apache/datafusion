@@ -48,6 +48,13 @@ fn criterion_benchmark(c: &mut Criterion) {
         let timestamps = ColumnarValue::Array(timestamps_array);
         let udf = date_trunc();
         let args = vec![precision, timestamps];
+        let arg_fields_owned = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .collect::<Vec<_>>();
+        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+
         let return_type = udf
             .return_type(&args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>())
             .unwrap();
@@ -56,7 +63,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
-                    arg_fields: vec![None; args.len()],
+                    arg_fields: arg_fields.clone(),
                     number_rows: batch_len,
                     return_field: &return_field,
                 })

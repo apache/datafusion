@@ -432,10 +432,6 @@ impl PhysicalExpr for BinaryExpr {
             .map(ColumnarValue::Array)
     }
 
-    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
-        Ok(None)
-    }
-
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![&self.left, &self.right]
     }

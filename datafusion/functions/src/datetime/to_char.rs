@@ -303,7 +303,7 @@ mod tests {
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
         TimestampSecondArray,
     };
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::{NaiveDateTime, Timelike};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -385,9 +385,13 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_data {
+            let arg_fields = vec![
+                Field::new("a", value.data_type(), false),
+                Field::new("a", format.data_type(), false),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
-                arg_fields: vec![None; 2],
+                arg_fields: arg_fields.iter().collect(),
                 number_rows: 1,
                 return_field: &Field::new("f", DataType::Utf8, true),
             };
@@ -466,12 +470,16 @@ mod tests {
 
         for (value, format, expected) in scalar_array_data {
             let batch_len = format.len();
+            let arg_fields = vec![
+                Field::new("a", value.data_type(), false),
+                Field::new("a", format.data_type().to_owned(), false),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Scalar(value),
                     ColumnarValue::Array(Arc::new(format) as ArrayRef),
                 ],
-                arg_fields: vec![None; 2],
+                arg_fields: arg_fields.iter().collect(),
                 number_rows: batch_len,
                 return_field: &Field::new("f", DataType::Utf8, true),
             };
@@ -598,12 +606,16 @@ mod tests {
 
         for (value, format, expected) in array_scalar_data {
             let batch_len = value.len();
+            let arg_fields = vec![
+                Field::new("a", value.data_type().clone(), false),
+                Field::new("a", format.data_type(), false),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Array(value as ArrayRef),
                     ColumnarValue::Scalar(format),
                 ],
-                arg_fields: vec![None; 2],
+                arg_fields: arg_fields.iter().collect(),
                 number_rows: batch_len,
                 return_field: &Field::new("f", DataType::Utf8, true),
             };
@@ -621,12 +633,16 @@ mod tests {
 
         for (value, format, expected) in array_array_data {
             let batch_len = value.len();
+            let arg_fields = vec![
+                Field::new("a", value.data_type().clone(), false),
+                Field::new("a", format.data_type().clone(), false),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Array(value),
                     ColumnarValue::Array(Arc::new(format) as ArrayRef),
                 ],
-                arg_fields: vec![None; 2],
+                arg_fields: arg_fields.iter().collect(),
                 number_rows: batch_len,
                 return_field: &Field::new("f", DataType::Utf8, true),
             };
@@ -647,9 +663,10 @@ mod tests {
         //
 
         // invalid number of arguments
+        let arg_field = Field::new("a", DataType::Int32, true);
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
-            arg_fields: vec![None; 1],
+            arg_fields: vec![&arg_field],
             number_rows: 1,
             return_field: &Field::new("f", DataType::Utf8, true),
         };
@@ -660,12 +677,16 @@ mod tests {
         );
 
         // invalid type
+        let arg_fields = vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("a", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ];
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            arg_fields: vec![None; 2],
+            arg_fields: arg_fields.iter().collect(),
             number_rows: 1,
             return_field: &Field::new("f", DataType::Utf8, true),
         };

@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
-use arrow::datatypes::Field;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -75,10 +74,6 @@ impl PhysicalExpr for UnKnownColumn {
     /// Evaluate the expression
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
         internal_err!("UnKnownColumn::evaluate() should not be called")
-    }
-
-    fn output_field(&self, _input_schema: &Schema) -> Result<Option<Field>> {
-        Ok(None)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
