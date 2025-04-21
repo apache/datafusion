@@ -174,7 +174,7 @@ where
     }
 
     fn len(&self) -> usize {
-        self.map.len() + self.null_group.map(|_| 1).unwrap_or_default()
+        self.values.iter().map(|block| block.len()).sum::<usize>()
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
