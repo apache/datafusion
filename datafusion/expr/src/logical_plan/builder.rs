@@ -2192,7 +2192,7 @@ pub fn unnest_with_options(
 
                     // new columns dependent on the same original index
                     dependency_indices
-                        .extend(std::iter::repeat_n(index, transformed_columns.len()));
+                        .extend(std::iter::repeat(index).take(transformed_columns.len()));
                     Ok(transformed_columns
                         .iter()
                         .map(|(col, field)| (col.relation.to_owned(), field.to_owned()))

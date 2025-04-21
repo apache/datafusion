@@ -33,9 +33,9 @@ impl<'a> WindowUDFFieldArgs<'a> {
     /// # Arguments
     ///
     /// * `input_types` - The data types corresponding to the
-    ///   arguments to the user-defined window function.
+    ///     arguments to the user-defined window function.
     /// * `function_name` - The qualified schema name of the
-    ///   user-defined window function expression.
+    ///     user-defined window function expression.
     ///
     pub fn new(input_types: &'a [DataType], display_name: &'a str) -> Self {
         WindowUDFFieldArgs {

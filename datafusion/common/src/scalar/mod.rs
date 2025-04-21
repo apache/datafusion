@@ -27,7 +27,7 @@ use std::convert::Infallible;
 use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::iter::repeat_n;
+use std::iter::repeat;
 use std::mem::{size_of, size_of_val};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -802,14 +802,12 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     let values_array = value.to_array_of_size(1)?;
 
     // Create a key array with `size` elements, each of 0
-    let key_array: PrimitiveArray<K> = repeat_n(
-        if value.is_null() {
-            None
-        } else {
-            Some(K::default_value())
-        },
-        size,
-    )
+    let key_array: PrimitiveArray<K> = repeat(if value.is_null() {
+        None
+    } else {
+        Some(K::default_value())
+    })
+    .take(size)
     .collect();
 
     // create a new DictionaryArray
@@ -2191,7 +2189,8 @@ impl ScalarValue {
         scale: i8,
         size: usize,
     ) -> Result<Decimal256Array> {
-        Ok(repeat_n(value, size)
+        Ok(repeat(value)
+            .take(size)
             .collect::<Decimal256Array>()
             .with_precision_and_scale(precision, scale)?)
     }
@@ -2417,47 +2416,53 @@ impl ScalarValue {
             }
             ScalarValue::Utf8(e) => match e {
                 Some(value) => {
-                    Arc::new(StringArray::from_iter_values(repeat_n(value, size)))
+                    Arc::new(StringArray::from_iter_values(repeat(value).take(size)))
                 }
                 None => new_null_array(&DataType::Utf8, size),
             },
             ScalarValue::Utf8View(e) => match e {
                 Some(value) => {
-                    Arc::new(StringViewArray::from_iter_values(repeat_n(value, size)))
+                    Arc::new(StringViewArray::from_iter_values(repeat(value).take(size)))
                 }
                 None => new_null_array(&DataType::Utf8View, size),
             },
             ScalarValue::LargeUtf8(e) => match e {
                 Some(value) => {
-                    Arc::new(LargeStringArray::from_iter_values(repeat_n(value, size)))
+                    Arc::new(LargeStringArray::from_iter_values(repeat(value).take(size)))
                 }
                 None => new_null_array(&DataType::LargeUtf8, size),
             },
             ScalarValue::Binary(e) => match e {
                 Some(value) => Arc::new(
-                    repeat_n(Some(value.as_slice()), size).collect::<BinaryArray>(),
+                    repeat(Some(value.as_slice()))
+                        .take(size)
+                        .collect::<BinaryArray>(),
                 ),
-                None => Arc::new(repeat_n(None::<&str>, size).collect::<BinaryArray>()),
+                None => {
+                    Arc::new(repeat(None::<&str>).take(size).collect::<BinaryArray>())
+                }
             },
             ScalarValue::BinaryView(e) => match e {
                 Some(value) => Arc::new(
-                    repeat_n(Some(value.as_slice()), size).collect::<BinaryViewArray>(),
+                    repeat(Some(value.as_slice()))
+                        .take(size)
+                        .collect::<BinaryViewArray>(),
                 ),
                 None => {
-                    Arc::new(repeat_n(None::<&str>, size).collect::<BinaryViewArray>())
+                    Arc::new(repeat(None::<&str>).take(size).collect::<BinaryViewArray>())
                 }
             },
             ScalarValue::FixedSizeBinary(s, e) => match e {
                 Some(value) => Arc::new(
                     FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                        repeat_n(Some(value.as_slice()), size),
+                        repeat(Some(value.as_slice())).take(size),
                         *s,
                     )
                     .unwrap(),
                 ),
                 None => Arc::new(
                     FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                        repeat_n(None::<&[u8]>, size),
+                        repeat(None::<&[u8]>).take(size),
                         *s,
                     )
                     .unwrap(),
@@ -2465,11 +2470,15 @@ impl ScalarValue {
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => Arc::new(
-                    repeat_n(Some(value.as_slice()), size).collect::<LargeBinaryArray>(),
+                    repeat(Some(value.as_slice()))
+                        .take(size)
+                        .collect::<LargeBinaryArray>(),
                 ),
-                None => {
-                    Arc::new(repeat_n(None::<&str>, size).collect::<LargeBinaryArray>())
-                }
+                None => Arc::new(
+                    repeat(None::<&str>)
+                        .take(size)
+                        .collect::<LargeBinaryArray>(),
+                ),
             },
             ScalarValue::List(arr) => {
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
@@ -2597,7 +2606,7 @@ impl ScalarValue {
                         child_arrays.push(ar);
                         new_fields.push(field.clone());
                     }
-                    let type_ids = repeat_n(*v_id, size);
+                    let type_ids = repeat(*v_id).take(size);
                     let type_ids = ScalarBuffer::<i8>::from_iter(type_ids);
                     let value_offsets = match mode {
                         UnionMode::Sparse => None,
@@ -2665,7 +2674,7 @@ impl ScalarValue {
     }
 
     fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
-        let arrays = repeat_n(arr, size).collect::<Vec<_>>();
+        let arrays = repeat(arr).take(size).collect::<Vec<_>>();
         let ret = match !arrays.is_empty() {
             true => arrow::compute::concat(arrays.as_slice())?,
             false => arr.slice(0, 0),

@@ -36,9 +36,9 @@ impl<'a> ExpressionArgs<'a> {
     /// # Arguments
     ///
     /// * `input_exprs` - The expressions passed as arguments
-    ///   to the user-defined window function.
+    ///     to the user-defined window function.
     /// * `input_types` - The data types corresponding to the
-    ///   arguments to the user-defined window function.
+    ///     arguments to the user-defined window function.
     ///
     pub fn new(
         input_exprs: &'a [Arc<dyn PhysicalExpr>],

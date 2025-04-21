@@ -759,11 +759,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// # Arguments
     ///
     /// * `input`           - The input plan that will be aggregated. The grouping, aggregate, and
-    ///   "having" expressions must all be resolvable from this plan.
+    ///                       "having" expressions must all be resolvable from this plan.
     /// * `select_exprs`    - The projection expressions from the SELECT clause.
     /// * `having_expr_opt` - Optional HAVING clause.
     /// * `group_by_exprs`  - Grouping expressions from the GROUP BY clause. These can be column
-    ///   references or more complex expressions.
+    ///                       references or more complex expressions.
     /// * `aggr_exprs`      - Aggregate expressions, such as `SUM(a)` or `COUNT(1)`.
     ///
     /// # Return
@@ -772,9 +772,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///
     /// * `plan`                   - A [LogicalPlan::Aggregate] plan for the newly created aggregate.
     /// * `select_exprs_post_aggr` - The projection expressions rewritten to reference columns from
-    ///   the aggregate
+    ///                              the aggregate
     /// * `having_expr_post_aggr`  - The "having" expression rewritten to reference a column from
-    ///   the aggregate
+    ///                              the aggregate
     fn aggregate(
         &self,
         input: &LogicalPlan,

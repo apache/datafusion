@@ -110,8 +110,8 @@ pub struct FFI_TableProvider {
     /// * `session_config` - session configuration
     /// * `projections` - if specified, only a subset of the columns are returned
     /// * `filters_serialized` - filters to apply to the scan, which are a
-    ///   [`LogicalExprList`] protobuf message serialized into bytes to pass
-    ///   across the FFI boundary.
+    ///    [`LogicalExprList`] protobuf message serialized into bytes to pass
+    ///    across the FFI boundary.
     /// * `limit` - if specified, limit the number of rows returned
     pub scan: unsafe extern "C" fn(
         provider: &Self,

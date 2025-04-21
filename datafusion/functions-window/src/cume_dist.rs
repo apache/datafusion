@@ -128,7 +128,7 @@ impl PartitionEvaluator for CumeDistEvaluator {
                     let len = range.end - range.start;
                     *acc += len as u64;
                     let value: f64 = (*acc as f64) / scalar;
-                    let result = iter::repeat_n(value, len);
+                    let result = iter::repeat(value).take(len);
                     Some(result)
                 })
                 .flatten(),

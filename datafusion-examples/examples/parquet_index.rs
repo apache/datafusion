@@ -685,7 +685,7 @@ fn make_demo_file(path: impl AsRef<Path>, value_range: Range<i32>) -> Result<()>
 
     let num_values = value_range.len();
     let file_names =
-        StringArray::from_iter_values(std::iter::repeat_n(&filename, num_values));
+        StringArray::from_iter_values(std::iter::repeat(&filename).take(num_values));
     let values = Int32Array::from_iter_values(value_range);
     let batch = RecordBatch::try_from_iter(vec![
         ("file_name", Arc::new(file_names) as ArrayRef),

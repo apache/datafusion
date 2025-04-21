@@ -42,7 +42,7 @@ pub trait SchemaAdapterFactory: Debug + Send + Sync + 'static {
     /// Arguments:
     ///
     /// * `projected_table_schema`: The schema for the table, projected to
-    ///   include only the fields being output (projected) by the this mapping.
+    ///    include only the fields being output (projected) by the this mapping.
     ///
     /// * `table_schema`: The entire table schema for the table
     fn create(

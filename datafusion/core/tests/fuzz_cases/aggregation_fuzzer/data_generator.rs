@@ -33,12 +33,12 @@ use crate::fuzz_cases::record_batch_generator::{ColumnDescr, RecordBatchGenerato
 ///     when you call `generate` function
 ///         
 ///   - `rows_num_range`, the number of rows in the datasets will be randomly generated
-///     within this range
+///      within this range
 ///
 ///   - `sort_keys`, if `sort_keys` are defined, when you call the `generate` function, the generator
-///     will generate one `base dataset` firstly. Then the `base dataset` will be sorted
-///     based on each `sort_key` respectively. And finally `len(sort_keys) + 1` datasets
-///     will be returned
+///      will generate one `base dataset` firstly. Then the `base dataset` will be sorted
+///      based on each `sort_key` respectively. And finally `len(sort_keys) + 1` datasets
+///      will be returned
 ///
 #[derive(Debug, Clone)]
 pub struct DatasetGeneratorConfig {

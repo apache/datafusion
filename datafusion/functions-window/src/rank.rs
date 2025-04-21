@@ -261,7 +261,7 @@ impl PartitionEvaluator for RankEvaluator {
                     .iter()
                     .scan(1_u64, |acc, range| {
                         let len = range.end - range.start;
-                        let result = iter::repeat_n(*acc, len);
+                        let result = iter::repeat(*acc).take(len);
                         *acc += len as u64;
                         Some(result)
                     })
@@ -274,7 +274,7 @@ impl PartitionEvaluator for RankEvaluator {
                     .zip(1u64..)
                     .flat_map(|(range, rank)| {
                         let len = range.end - range.start;
-                        iter::repeat_n(rank, len)
+                        iter::repeat(rank).take(len)
                     }),
             )),
 
@@ -287,7 +287,7 @@ impl PartitionEvaluator for RankEvaluator {
                         .scan(0_u64, |acc, range| {
                             let len = range.end - range.start;
                             let value = (*acc as f64) / (denominator - 1.0).max(1.0);
-                            let result = iter::repeat_n(value, len);
+                            let result = iter::repeat(value).take(len);
                             *acc += len as u64;
                             Some(result)
                         })

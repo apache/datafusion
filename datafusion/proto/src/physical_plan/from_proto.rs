@@ -67,7 +67,7 @@ impl From<&protobuf::PhysicalColumn> for Column {
 /// * `proto` - Input proto with physical sort expression node
 /// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
-///   when performing type coercion.
+///                    when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_sort_expr(
     proto: &protobuf::PhysicalSortExprNode,
@@ -94,7 +94,7 @@ pub fn parse_physical_sort_expr(
 /// * `proto` - Input proto with vector of physical sort expression node
 /// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
-///   when performing type coercion.
+///                    when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_sort_exprs(
     proto: &[protobuf::PhysicalSortExprNode],
@@ -118,7 +118,7 @@ pub fn parse_physical_sort_exprs(
 /// * `name` - Name of the window expression.
 /// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
-///   when performing type coercion.
+///                    when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_window_expr(
     proto: &protobuf::PhysicalWindowExprNode,
@@ -203,7 +203,7 @@ where
 /// * `proto` - Input proto with physical expression node
 /// * `registry` - A registry knows how to build logical expressions out of user-defined function names
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
-///   when performing type coercion.
+///                    when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
 pub fn parse_physical_expr(
     proto: &protobuf::PhysicalExprNode,

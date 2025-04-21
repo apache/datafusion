@@ -175,7 +175,12 @@ async fn run_tests() -> Result<()> {
             futures::stream::iter(match result {
                 // Tokio panic error
                 Err(e) => Some(DataFusionError::External(Box::new(e))),
-                Ok(thread_result) => thread_result.err(),
+                Ok(thread_result) => match thread_result {
+                    // Test run error
+                    Err(e) => Some(e),
+                    // success
+                    Ok(_) => None,
+                },
             })
         })
         .collect()

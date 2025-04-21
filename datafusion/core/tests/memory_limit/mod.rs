@@ -863,10 +863,11 @@ impl Scenario {
                 single_row_batches,
             } => {
                 use datafusion::physical_expr::expressions::col;
-                let batches: Vec<Vec<_>> = std::iter::repeat_n(
-                    maybe_split_batches(dict_batches(), *single_row_batches),
-                    *partitions,
-                )
+                let batches: Vec<Vec<_>> = std::iter::repeat(maybe_split_batches(
+                    dict_batches(),
+                    *single_row_batches,
+                ))
+                .take(*partitions)
                 .collect();
 
                 let schema = batches[0][0].schema();
