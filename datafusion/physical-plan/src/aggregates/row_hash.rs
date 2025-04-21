@@ -42,7 +42,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::{DiskManager, TaskContext};
+use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
@@ -872,9 +872,9 @@ impl Stream for GroupedHashAggregateStream {
                     //   - If found `Err`, throw it, end this stream abnormally
                     //   - If found `None`, it means all blocks are polled, end this stream normally
                     //   - If found `Some`, return it and wait next polling
-                    let emit_result = self.emit(emit_to, false);
+                    let emit_result = self.emit(EmitTo::NextBlock, false);
                     let Ok(batch_opt) = emit_result else {
-                        return Poll::Ready(Some(emit_result));
+                        return Poll::Ready(Some(Err(emit_result.unwrap_err())));
                     };
 
                     let Some(batch) = batch_opt else {
@@ -888,7 +888,7 @@ impl Stream for GroupedHashAggregateStream {
                         continue;
                     };
 
-                    debug_assert!(output_batch.num_rows() > 0);
+                    debug_assert!(batch.num_rows() > 0);
                     return Poll::Ready(Some(Ok(
                         batch.record_output(&self.baseline_metrics)
                     )));

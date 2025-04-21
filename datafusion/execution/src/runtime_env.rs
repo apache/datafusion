@@ -263,7 +263,7 @@ impl RuntimeEnvBuilder {
             (pool, disk_manager)
         } else {
             (
-                Arc::new(UnboundedMemoryPool::default()),
+                Arc::new(UnboundedMemoryPool::default()) as _,
                 DiskManagerConfig::Disabled,
             )
         };
