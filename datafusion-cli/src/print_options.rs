@@ -163,7 +163,7 @@ impl PrintOptions {
                 &[batch],
                 MaxRows::Unlimited,
                 with_header,
-                &format_options,
+                format_options,
             )?;
             with_header = false;
         }

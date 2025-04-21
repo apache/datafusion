@@ -647,6 +647,7 @@ mod tests {
                     &self.batches,
                     self.maxrows,
                     with_header,
+                    &FormatOptions::default(),
                 )
                 .unwrap();
             String::from_utf8(buffer).unwrap()
