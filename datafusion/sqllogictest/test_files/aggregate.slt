@@ -4998,20 +4998,21 @@ create table d as values
   (NULL, NULL, NULL, NULL, 1),
   (NULL, NULL, NULL, NULL, 2);
 
-query I?
+
+query I? rowsort
 SELECT column5, avg(column1) FROM d GROUP BY column5;
 ----
-2 0 days 0 hours 0 mins 15 secs
 1 0 days 0 hours 0 mins 6 secs
+2 0 days 0 hours 0 mins 15 secs
 
-query I??
-SELECT column5, column1, avg(column1) OVER (PARTITION BY column5 ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as window_avg 
+query I?? rowsort
+SELECT column5, column1, avg(column1) OVER (PARTITION BY column5 ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as window_avg
 FROM d WHERE column1 IS NOT NULL;
 ----
-2 0 days 0 hours 0 mins 5 secs 0 days 0 hours 0 mins 5 secs
-2 0 days 0 hours 0 mins 25 secs 0 days 0 hours 0 mins 15 secs
 1 0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 1 secs
 1 0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 6 secs
+2 0 days 0 hours 0 mins 25 secs 0 days 0 hours 0 mins 15 secs
+2 0 days 0 hours 0 mins 5 secs 0 days 0 hours 0 mins 5 secs
 
 # Cumulative average window function
 query I??
