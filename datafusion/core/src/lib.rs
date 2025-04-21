@@ -874,6 +874,12 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/runtime_configs.md",
+    user_guide_runtime_configs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/crate-configuration.md",
     user_guide_crate_configuration
 );
@@ -1021,8 +1027,8 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/user-guide/sql/write_options.md",
-    user_guide_sql_write_options
+    "../../../docs/source/user-guide/sql/format_options.md",
+    user_guide_sql_format_options
 );
 
 #[cfg(doctest)]

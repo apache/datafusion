@@ -1117,8 +1117,6 @@ impl LogicalPlanBuilder {
             .collect::<Result<_>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys).collect();
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
         let mut join_on: Vec<(Expr, Expr)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
@@ -1163,33 +1161,33 @@ impl LogicalPlanBuilder {
                 DataFusionError::Internal("filters should not be None here".to_string())
             })?)
         } else {
-            Ok(Self::new(LogicalPlan::Join(Join {
-                left: self.plan,
-                right: Arc::new(right),
-                on: join_on,
-                filter: filters,
+            let join = Join::try_new(
+                self.plan,
+                Arc::new(right),
+                join_on,
+                filters,
                 join_type,
-                join_constraint: JoinConstraint::Using,
-                schema: DFSchemaRef::new(join_schema),
-                null_equals_null: false,
-            })))
+                JoinConstraint::Using,
+                false,
+            )?;
+
+            Ok(Self::new(LogicalPlan::Join(join)))
         }
     }
 
     /// Apply a cross join
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &JoinType::Inner)?;
-        Ok(Self::new(LogicalPlan::Join(Join {
-            left: self.plan,
-            right: Arc::new(right),
-            on: vec![],
-            filter: None,
-            join_type: JoinType::Inner,
-            join_constraint: JoinConstraint::On,
-            null_equals_null: false,
-            schema: DFSchemaRef::new(join_schema),
-        })))
+        let join = Join::try_new(
+            self.plan,
+            Arc::new(right),
+            vec![],
+            None,
+            JoinType::Inner,
+            JoinConstraint::On,
+            false,
+        )?;
+
+        Ok(Self::new(LogicalPlan::Join(join)))
     }
 
     /// Repartition
@@ -1350,7 +1348,7 @@ impl LogicalPlanBuilder {
     /// to columns from the existing input. `r`, the second element of the tuple,
     /// must only refer to columns from the right input.
     ///
-    /// `filter` contains any other other filter expression to apply during the
+    /// `filter` contains any other filter expression to apply during the
     /// join. Note that `equi_exprs` predicates are evaluated more efficiently
     /// than the filter expressions, so they are preferred.
     pub fn join_with_expr_keys(
@@ -1400,19 +1398,17 @@ impl LogicalPlanBuilder {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
-
-        Ok(Self::new(LogicalPlan::Join(Join {
-            left: self.plan,
-            right: Arc::new(right),
-            on: join_key_pairs,
+        let join = Join::try_new(
+            self.plan,
+            Arc::new(right),
+            join_key_pairs,
             filter,
             join_type,
-            join_constraint: JoinConstraint::On,
-            schema: DFSchemaRef::new(join_schema),
-            null_equals_null: false,
-        })))
+            JoinConstraint::On,
+            false,
+        )?;
+
+        Ok(Self::new(LogicalPlan::Join(join)))
     }
 
     /// Unnest the given column.

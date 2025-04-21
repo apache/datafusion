@@ -74,7 +74,7 @@ LOCATION <literal>
 <key_value_list> := (<literal> <literal, <literal> <literal>, ...)
 ```
 
-For a detailed list of write related options which can be passed in the OPTIONS key_value_list, see [Write Options](write_options).
+For a comprehensive list of format-specific options that can be specified in the `OPTIONS` clause, see [Format Options](format_options.md).
 
 `file_type` is one of `CSV`, `ARROW`, `PARQUET`, `AVRO` or `JSON`
 
