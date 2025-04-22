@@ -86,6 +86,7 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
+/// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
 const HASH_JOIN_SEED: RandomState =
     RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
 
