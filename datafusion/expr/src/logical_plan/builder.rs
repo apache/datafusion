@@ -498,7 +498,7 @@ impl LogicalPlanBuilder {
             TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
 
         // Inline TableScan
-        if table_scan.filters.is_empty() {
+        if table_scan.projection.is_none() && table_scan.filters.is_empty() {
             if let Some(p) = table_scan.source.get_logical_plan() {
                 let sub_plan = p.into_owned();
                 // Ensures that the reference to the inlined table remains the
