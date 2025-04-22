@@ -408,3 +408,172 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use crate::aggregates::group_values::single_group_by::primitive::GroupValuesPrimitive;
+    use crate::aggregates::group_values::GroupValues;
+    use arrow::array::{AsArray, Int64Array, NullBufferBuilder, UInt32Array};
+    use arrow::datatypes::{DataType, UInt32Type};
+    use datafusion_expr::EmitTo;
+    use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+        BlockedGroupIndexOperations, GroupIndexOperations,
+    };
+
+    #[test]
+    fn test_flat_primitive_group_values() {
+        // Will cover such insert cases:
+        //   1.1 Non-null row + distinct
+        //   1.2 Null row + distinct
+        //   1.3 Non-null row + non-distinct
+        //   1.4 Null row + non-distinct
+        //
+        // Will cover such emit cases:
+        //   2.1 Emit first n
+        //   2.2 Emit all
+        //   2.3 Insert again + emit
+        let mut group_values = GroupValuesPrimitive::<UInt32Type>::new(DataType::UInt32);
+        let mut group_indices = vec![];
+
+        let data1 = Arc::new(UInt32Array::from(vec![
+            Some(1),
+            None,
+            Some(1),
+            None,
+            Some(2),
+            Some(3),
+        ]));
+        let data2 = Arc::new(UInt32Array::from(vec![Some(3), None, Some(4), Some(5)]));
+
+        // Insert case 1.1, 1.3, 1.4 + Emit case 2.1
+        group_values
+            .intern(&vec![data1.clone() as _], &mut group_indices)
+            .unwrap();
+
+        let mut expected = BTreeMap::new();
+        for (&group_index, value) in group_indices.iter().zip(data1.iter()) {
+            expected.insert(group_index, value);
+        }
+        let mut expected = expected.into_iter().collect::<Vec<_>>();
+        let last_group_index = expected.len() - 1;
+        let last_value = expected.last().unwrap().1;
+        expected.pop();
+
+        let emit_result = group_values.emit(EmitTo::First(3)).unwrap();
+        let actual = emit_result[0]
+            .as_primitive::<UInt32Type>()
+            .iter()
+            .enumerate()
+            .map(|(group_idx, val)| {
+                assert!(group_idx < last_group_index);
+                (group_idx, val)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(expected, actual);
+
+        // Insert case 1.1~1.3 + Emit case 2.2~2.3
+        group_values
+            .intern(&vec![data2.clone() as _], &mut group_indices)
+            .unwrap();
+
+        let mut expected = BTreeMap::new();
+        for (&group_index, value) in group_indices.iter().zip(data2.iter()) {
+            if group_index == 0 {
+                assert_eq!(last_value, value);
+            }
+            expected.insert(group_index, value);
+        }
+        let expected = expected.into_iter().collect::<Vec<_>>();
+
+        let emit_result = group_values.emit(EmitTo::All).unwrap();
+        let actual = emit_result[0]
+            .as_primitive::<UInt32Type>()
+            .iter()
+            .enumerate()
+            .collect::<Vec<_>>();
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_blocked_primitive_group_values() {
+        // Will cover such insert cases:
+        //   1.1 Non-null row + distinct
+        //   1.2 Null row + distinct
+        //   1.3 Non-null row + non-distinct
+        //   1.4 Null row + non-distinct
+        //
+        // Will cover such emit cases:
+        //   2.1 Emit block
+        //   2.2 Insert again + emit block
+        //
+        let mut group_values = GroupValuesPrimitive::<UInt32Type>::new(DataType::UInt32);
+        let block_size = 2;
+        group_values.alter_block_size(Some(block_size)).unwrap();
+        let mut group_indices = vec![];
+
+        let data1 = Arc::new(UInt32Array::from(vec![
+            Some(1),
+            None,
+            Some(1),
+            None,
+            Some(2),
+            Some(3),
+        ]));
+        let data2 = Arc::new(UInt32Array::from(vec![Some(3), None, Some(4)]));
+
+        // Insert case 1.1, 1.3, 1.4 + Emit case 2.1
+        group_values
+            .intern(&vec![data1.clone() as _], &mut group_indices)
+            .unwrap();
+
+        let mut expected = BTreeMap::new();
+        for (&packed_index, value) in group_indices.iter().zip(data1.iter()) {
+            let block_id = BlockedGroupIndexOperations::get_block_id(packed_index as u64);
+            let block_offset =
+                BlockedGroupIndexOperations::get_block_offset(packed_index as u64);
+            let flatten_index = block_id as usize * block_size + block_offset as usize;
+            expected.insert(flatten_index, value);
+        }
+        let expected = expected.into_iter().collect::<Vec<_>>();
+
+        let emit_result1 = group_values.emit(EmitTo::NextBlock).unwrap();
+        assert_eq!(emit_result1[0].len(), block_size);
+        let emit_result2 = group_values.emit(EmitTo::NextBlock).unwrap();
+        assert_eq!(emit_result2[0].len(), block_size);
+        let iter1 = emit_result1[0].as_primitive::<UInt32Type>().iter();
+        let iter2 = emit_result2[0].as_primitive::<UInt32Type>().iter();
+        let actual = iter1.chain(iter2).enumerate().collect::<Vec<_>>();
+
+        assert_eq!(actual, expected);
+
+        // Insert case 1.1~1.2 + Emit case 2.2
+        group_values
+            .intern(&vec![data2.clone() as _], &mut group_indices)
+            .unwrap();
+
+        let mut expected = BTreeMap::new();
+        for (&packed_index, value) in group_indices.iter().zip(data2.iter()) {
+            let block_id = BlockedGroupIndexOperations::get_block_id(packed_index as u64);
+            let block_offset =
+                BlockedGroupIndexOperations::get_block_offset(packed_index as u64);
+            let flatten_index = block_id as usize * block_size + block_offset as usize;
+            expected.insert(flatten_index, value);
+        }
+        let expected = expected.into_iter().collect::<Vec<_>>();
+
+        let emit_result1 = group_values.emit(EmitTo::NextBlock).unwrap();
+        assert_eq!(emit_result1[0].len(), block_size);
+        let emit_result2 = group_values.emit(EmitTo::NextBlock).unwrap();
+        assert_eq!(emit_result2[0].len(), 1);
+        let iter1 = emit_result1[0].as_primitive::<UInt32Type>().iter();
+        let iter2 = emit_result2[0].as_primitive::<UInt32Type>().iter();
+        let actual = iter1.chain(iter2).enumerate().collect::<Vec<_>>();
+
+        assert_eq!(actual, expected);
+    }
+}
