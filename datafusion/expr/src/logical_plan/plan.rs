@@ -4805,7 +4805,11 @@ digraph {
             .transform_down_with_subqueries(|plan| {
                 match plan {
                     LogicalPlan::Projection(..) => {
-                        return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump));
+                        return Ok(Transformed::new(
+                            plan,
+                            false,
+                            TreeNodeRecursion::Jump,
+                        ));
                     }
                     LogicalPlan::Filter(..) => filter_found = true,
                     _ => {}
@@ -4855,7 +4859,11 @@ digraph {
             fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
                 match node {
                     LogicalPlan::Projection(..) => {
-                        return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
+                        return Ok(Transformed::new(
+                            node,
+                            false,
+                            TreeNodeRecursion::Jump,
+                        ));
                     }
                     LogicalPlan::Filter(..) => self.filter_found = true,
                     _ => {}

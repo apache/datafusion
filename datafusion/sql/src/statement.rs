@@ -899,7 +899,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let table_name = match table {
                     TableObject::TableName(table_name) => table_name,
                     TableObject::TableFunction(_) => {
-                        return not_impl_err!("INSERT INTO Table functions not supported");
+                        return not_impl_err!(
+                            "INSERT INTO Table functions not supported"
+                        );
                     }
                 };
                 if let Some(or) = or {

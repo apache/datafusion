@@ -712,7 +712,9 @@ macro_rules! interval_min_max {
             Some(choose_min_max!($OP)) => $RHS.clone(),
             Some(_) => $LHS.clone(),
             None => {
-                return internal_err!("Comparison error while computing interval min/max");
+                return internal_err!(
+                    "Comparison error while computing interval min/max"
+                );
             }
         }
     }};
