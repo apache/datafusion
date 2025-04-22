@@ -23,9 +23,8 @@ use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
 use datafusion::common::{
-    not_impl_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, Spans,
-    TableReference,
+    DFSchema, DFSchemaRef, Spans, TableReference, not_impl_datafusion_err, not_impl_err,
+    plan_datafusion_err, plan_err, substrait_datafusion_err, substrait_err,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort, WindowFunctionParams};
@@ -56,7 +55,7 @@ use crate::variation_const::{
     TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
 };
 use async_trait::async_trait;
-use datafusion::arrow::array::{new_empty_array, AsArray};
+use datafusion::arrow::array::{AsArray, new_empty_array};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::catalog::TableProvider;
 use datafusion::common::scalar::ScalarStructBuilder;
@@ -64,10 +63,10 @@ use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
-    col, expr, GroupingSet, Like, LogicalPlanBuilder, Partitioning, Repartition,
-    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    GroupingSet, Like, LogicalPlanBuilder, Partitioning, Repartition, WindowFrameBound,
+    WindowFrameUnits, WindowFunctionDefinition, col, expr,
 };
-use datafusion::prelude::{lit, JoinType};
+use datafusion::prelude::{JoinType, lit};
 use datafusion::{
     arrow, error::Result, logical_expr::utils::split_conjunction,
     logical_expr::utils::split_conjunction_owned, prelude::Column, scalar::ScalarValue,
@@ -79,7 +78,7 @@ use substrait::proto::exchange_rel::ExchangeKind;
 use substrait::proto::expression::cast::FailureBehavior::ReturnNull;
 use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::literal::{
-    interval_day_to_second, IntervalCompound, IntervalDayToSecond, IntervalYearToMonth,
+    IntervalCompound, IntervalDayToSecond, IntervalYearToMonth, interval_day_to_second,
 };
 use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{
@@ -90,26 +89,27 @@ use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::rel_common::{Emit, EmitKind};
 use substrait::proto::set_rel::SetOp;
 use substrait::proto::{
-    aggregate_function::AggregationInvocation,
-    expression::{
-        field_reference::ReferenceType::DirectReference, literal::LiteralType,
-        reference_segment::ReferenceType::StructField,
-        window_function::bound as SubstraitBound,
-        window_function::bound::Kind as BoundKind, window_function::Bound,
-        window_function::BoundsType, MaskExpression, RexType,
-    },
-    fetch_rel,
-    function_argument::ArgType,
-    join_rel, plan_rel, r#type,
-    read_rel::ReadType,
-    rel::RelType,
-    rel_common,
-    sort_field::{SortDirection, SortKind::*},
     AggregateFunction, AggregateRel, ConsistentPartitionWindowRel, CrossRel,
     DynamicParameter, ExchangeRel, Expression, ExtendedExpression, ExtensionLeafRel,
     ExtensionMultiRel, ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument,
     JoinRel, NamedStruct, Plan, ProjectRel, ReadRel, Rel, RelCommon, SetRel, SortField,
     SortRel, Type,
+    aggregate_function::AggregationInvocation,
+    expression::{
+        MaskExpression, RexType, field_reference::ReferenceType::DirectReference,
+        literal::LiteralType, reference_segment::ReferenceType::StructField,
+        window_function::Bound, window_function::BoundsType,
+        window_function::bound as SubstraitBound,
+        window_function::bound::Kind as BoundKind,
+    },
+    fetch_rel,
+    function_argument::ArgType,
+    join_rel, plan_rel,
+    read_rel::ReadType,
+    rel::RelType,
+    rel_common,
+    sort_field::{SortDirection, SortKind::*},
+    r#type,
 };
 
 #[async_trait]
@@ -561,8 +561,8 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
             .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
         let Some(input_rel) = &rel.input else {
             return substrait_err!(
-                    "ExtensionSingleRel missing input rel, try using ExtensionLeafRel instead"
-                );
+                "ExtensionSingleRel missing input rel, try using ExtensionLeafRel instead"
+            );
         };
         let input_plan = self.consume_rel(input_rel).await?;
         let plan = plan.with_exprs_and_inputs(plan.expressions(), vec![input_plan])?;
@@ -770,39 +770,76 @@ pub async fn from_substrait_plan_with_consumer(
                 Some(rt) => match rt {
                     plan_rel::RelType::Rel(rel) => Ok(consumer.consume_rel(rel).await?),
                     plan_rel::RelType::Root(root) => {
-                        let plan = consumer.consume_rel(root.input.as_ref().unwrap()).await?;
+                        let plan =
+                            consumer.consume_rel(root.input.as_ref().unwrap()).await?;
                         if root.names.is_empty() {
                             // Backwards compatibility for plans missing names
                             return Ok(plan);
                         }
-                        let renamed_schema = make_renamed_schema(plan.schema(), &root.names)?;
-                        if renamed_schema.has_equivalent_names_and_types(plan.schema()).is_ok() {
+                        let renamed_schema =
+                            make_renamed_schema(plan.schema(), &root.names)?;
+                        if renamed_schema
+                            .has_equivalent_names_and_types(plan.schema())
+                            .is_ok()
+                        {
                             // Nothing to do if the schema is already equivalent
                             return Ok(plan);
                         }
                         match plan {
                             // If the last node of the plan produces expressions, bake the renames into those expressions.
                             // This isn't necessary for correctness, but helps with roundtrip tests.
-                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), renamed_schema.fields())?, p.input)?)),
+                            LogicalPlan::Projection(p) => {
+                                Ok(LogicalPlan::Projection(Projection::try_new(
+                                    rename_expressions(
+                                        p.expr,
+                                        p.input.schema(),
+                                        renamed_schema.fields(),
+                                    )?,
+                                    p.input,
+                                )?))
+                            }
                             LogicalPlan::Aggregate(a) => {
-                                let (group_fields, expr_fields) = renamed_schema.fields().split_at(a.group_expr.len());
-                                let new_group_exprs = rename_expressions(a.group_expr, a.input.schema(), group_fields)?;
-                                let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), expr_fields)?;
-                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, new_group_exprs, new_aggr_exprs)?))
-                            },
+                                let (group_fields, expr_fields) =
+                                    renamed_schema.fields().split_at(a.group_expr.len());
+                                let new_group_exprs = rename_expressions(
+                                    a.group_expr,
+                                    a.input.schema(),
+                                    group_fields,
+                                )?;
+                                let new_aggr_exprs = rename_expressions(
+                                    a.aggr_expr,
+                                    a.input.schema(),
+                                    expr_fields,
+                                )?;
+                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                                    a.input,
+                                    new_group_exprs,
+                                    new_aggr_exprs,
+                                )?))
+                            }
                             // There are probably more plans where we could bake things in, can add them later as needed.
                             // Otherwise, add a new Project to handle the renaming.
-                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), renamed_schema.fields())?, Arc::new(plan))?))
+                            _ => Ok(LogicalPlan::Projection(Projection::try_new(
+                                rename_expressions(
+                                    plan.schema()
+                                        .columns()
+                                        .iter()
+                                        .map(|c| col(c.to_owned())),
+                                    plan.schema(),
+                                    renamed_schema.fields(),
+                                )?,
+                                Arc::new(plan),
+                            )?)),
                         }
                     }
                 },
-                None => plan_err!("Cannot parse plan relation: None")
+                None => plan_err!("Cannot parse plan relation: None"),
             }
-        },
+        }
         _ => not_impl_err!(
             "Substrait plan with more than 1 relation trees not supported. Number of relation trees: {:?}",
             plan.relations.len()
-        )
+        ),
     }
 }
 
@@ -848,7 +885,9 @@ pub async fn from_substrait_extended_expr(
     let input_schema = DFSchemaRef::new(match &extended_expr.base_schema {
         Some(base_schema) => from_substrait_named_struct(&consumer, base_schema),
         None => {
-            plan_err!("required property `base_schema` missing from Substrait ExtendedExpression message")
+            plan_err!(
+                "required property `base_schema` missing from Substrait ExtendedExpression message"
+            )
         }
     }?);
 
@@ -861,7 +900,9 @@ pub async fn from_substrait_extended_expr(
                 not_impl_err!("Measure expressions are not yet supported")
             }
             None => {
-                plan_err!("required property `expr_type` missing from Substrait ExpressionReference message")
+                plan_err!(
+                    "required property `expr_type` missing from Substrait ExpressionReference message"
+                )
             }
         }?;
         let expr = consumer
@@ -1044,7 +1085,8 @@ fn make_renamed_schema(
         return substrait_err!(
             "Names list must match exactly to nested schema, but found {} uses for {} names",
             name_idx,
-            dfs_names.len());
+            dfs_names.len()
+        );
     }
 
     DFSchema::from_field_specific_qualified_schema(
@@ -2129,40 +2171,43 @@ pub async fn from_scalar_function(
 
     // try to first match the requested function into registered udfs, then built-in ops
     // and finally built-in expressions
-    match consumer.get_function_registry().udf(fn_name) { Ok(func) => {
-        Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+    match consumer.get_function_registry().udf(fn_name) {
+        Ok(func) => Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             func.to_owned(),
             args,
-        )))
-    } _ => if let Some(op) = name_to_op(fn_name) {
-        if f.arguments.len() < 2 {
-            return not_impl_err!(
+        ))),
+        _ => {
+            if let Some(op) = name_to_op(fn_name) {
+                if f.arguments.len() < 2 {
+                    return not_impl_err!(
                         "Expect at least two arguments for binary operator {op:?}, the provided number of operators is {:?}",
-                       f.arguments.len()
+                        f.arguments.len()
                     );
-        }
-        // Some expressions are binary in DataFusion but take in a variadic number of args in Substrait.
-        // In those cases we iterate through all the arguments, applying the binary expression against them all
-        let combined_expr = args
-            .into_iter()
-            .fold(None, |combined_expr: Option<Expr>, arg: Expr| {
-                Some(match combined_expr {
-                    Some(expr) => Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(expr),
-                        op,
-                        right: Box::new(arg),
-                    }),
-                    None => arg,
-                })
-            })
-            .unwrap();
+                }
+                // Some expressions are binary in DataFusion but take in a variadic number of args in Substrait.
+                // In those cases we iterate through all the arguments, applying the binary expression against them all
+                let combined_expr = args
+                    .into_iter()
+                    .fold(None, |combined_expr: Option<Expr>, arg: Expr| {
+                        Some(match combined_expr {
+                            Some(expr) => Expr::BinaryExpr(BinaryExpr {
+                                left: Box::new(expr),
+                                op,
+                                right: Box::new(arg),
+                            }),
+                            None => arg,
+                        })
+                    })
+                    .unwrap();
 
-        Ok(combined_expr)
-    } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
-        builder.build(consumer, f, input_schema).await
-    } else {
-        not_impl_err!("Unsupported function name: {fn_name:?}")
-    }}
+                Ok(combined_expr)
+            } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
+                builder.build(consumer, f, input_schema).await
+            } else {
+                not_impl_err!("Unsupported function name: {fn_name:?}")
+            }
+        }
+    }
 }
 
 pub async fn from_literal(
@@ -2217,17 +2262,19 @@ pub async fn from_window_function(
     let fn_name = substrait_fun_name(fn_signature);
 
     // check udwf first, then udaf, then built-in window and aggregate functions
-    let fun = match consumer.get_function_registry().udwf(fn_name) { Ok(udwf) => {
-        Ok(WindowFunctionDefinition::WindowUDF(udwf))
-    } _ => { match consumer.get_function_registry().udaf(fn_name) { Ok(udaf) => {
-        Ok(WindowFunctionDefinition::AggregateUDF(udaf))
-    } _ => {
-        not_impl_err!(
-            "Window function {} is not supported: function anchor = {:?}",
-            fn_name,
-            window.function_reference
-        )
-    }}}}?;
+    let fun = match consumer.get_function_registry().udwf(fn_name) {
+        Ok(udwf) => Ok(WindowFunctionDefinition::WindowUDF(udwf)),
+        _ => match consumer.get_function_registry().udaf(fn_name) {
+            Ok(udaf) => Ok(WindowFunctionDefinition::AggregateUDF(udaf)),
+            _ => {
+                not_impl_err!(
+                    "Window function {} is not supported: function anchor = {:?}",
+                    fn_name,
+                    window.function_reference
+                )
+            }
+        },
+    }?;
 
     let mut order_by =
         from_substrait_sorts(consumer, &window.sorts, input_schema).await?;
@@ -2291,7 +2338,9 @@ pub async fn from_subquery(
         Some(subquery_type) => match subquery_type {
             SubqueryType::InPredicate(in_predicate) => {
                 if in_predicate.needles.len() != 1 {
-                    substrait_err!("InPredicate Subquery type must have exactly one Needle expression")
+                    substrait_err!(
+                        "InPredicate Subquery type must have exactly one Needle expression"
+                    )
                 } else {
                     let needle_expr = &in_predicate.needles[0];
                     let haystack_expr = &in_predicate.haystack;
@@ -2551,36 +2600,38 @@ fn from_substrait_type(
                 if let Some(name) = consumer.get_extensions().types.get(&u.type_reference)
                 {
                     #[allow(deprecated)]
-                        match name.as_ref() {
-                            // Kept for backwards compatibility, producers should use IntervalCompound instead
-                            INTERVAL_MONTH_DAY_NANO_TYPE_NAME => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
-                            _ => not_impl_err!(
-                                "Unsupported Substrait user defined type with ref {} and variation {}",
-                                u.type_reference,
-                                u.type_variation_reference
-                            ),
+                    match name.as_ref() {
+                        // Kept for backwards compatibility, producers should use IntervalCompound instead
+                        INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
+                            Ok(DataType::Interval(IntervalUnit::MonthDayNano))
                         }
+                        _ => not_impl_err!(
+                            "Unsupported Substrait user defined type with ref {} and variation {}",
+                            u.type_reference,
+                            u.type_variation_reference
+                        ),
+                    }
                 } else {
                     #[allow(deprecated)]
-                        match u.type_reference {
-                            // Kept for backwards compatibility, producers should use IntervalYear instead
-                            INTERVAL_YEAR_MONTH_TYPE_REF => {
-                                Ok(DataType::Interval(IntervalUnit::YearMonth))
-                            }
-                            // Kept for backwards compatibility, producers should use IntervalDay instead
-                            INTERVAL_DAY_TIME_TYPE_REF => {
-                                Ok(DataType::Interval(IntervalUnit::DayTime))
-                            }
-                            // Kept for backwards compatibility, producers should use IntervalCompound instead
-                            INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
-                                Ok(DataType::Interval(IntervalUnit::MonthDayNano))
-                            }
-                            _ => not_impl_err!(
-                        "Unsupported Substrait user defined type with ref {} and variation {}",
-                        u.type_reference,
-                        u.type_variation_reference
-                    ),
+                    match u.type_reference {
+                        // Kept for backwards compatibility, producers should use IntervalYear instead
+                        INTERVAL_YEAR_MONTH_TYPE_REF => {
+                            Ok(DataType::Interval(IntervalUnit::YearMonth))
                         }
+                        // Kept for backwards compatibility, producers should use IntervalDay instead
+                        INTERVAL_DAY_TIME_TYPE_REF => {
+                            Ok(DataType::Interval(IntervalUnit::DayTime))
+                        }
+                        // Kept for backwards compatibility, producers should use IntervalCompound instead
+                        INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
+                            Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+                        }
+                        _ => not_impl_err!(
+                            "Unsupported Substrait user defined type with ref {} and variation {}",
+                            u.type_reference,
+                            u.type_variation_reference
+                        ),
+                    }
                 }
             }
             r#type::Kind::Struct(s) => Ok(DataType::Struct(from_substrait_struct_type(
@@ -2990,19 +3041,23 @@ fn from_substrait_literal(
             // DF only supports millisecond precision, so for any more granular type we lose precision
             let milliseconds = match precision_mode {
                 Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
-                None =>
+                None => {
                     if *subseconds != 0 {
-                        return substrait_err!("Cannot set subseconds field of IntervalDayToSecond without setting precision");
+                        return substrait_err!(
+                            "Cannot set subseconds field of IntervalDayToSecond without setting precision"
+                        );
                     } else {
                         0_i32
                     }
+                }
                 Some(PrecisionMode::Precision(0)) => *subseconds as i32 * 1000,
                 Some(PrecisionMode::Precision(3)) => *subseconds as i32,
                 Some(PrecisionMode::Precision(6)) => (subseconds / 1000) as i32,
                 Some(PrecisionMode::Precision(9)) => (subseconds / 1000 / 1000) as i32,
                 _ => {
                     return not_impl_err!(
-                    "Unsupported Substrait interval day to second precision mode: {precision_mode:?}")
+                        "Unsupported Substrait interval day to second precision mode: {precision_mode:?}"
+                    );
                 }
             };
 
@@ -3087,10 +3142,10 @@ fn from_substrait_literal(
                     }
                     _ => {
                         return not_impl_err!(
-                        "Unsupported Substrait user defined type with ref {} and name {}",
-                        user_defined.type_reference,
-                        name
-                    )
+                            "Unsupported Substrait user defined type with ref {} and name {}",
+                            user_defined.type_reference,
+                            name
+                        );
                     }
                 }
             } else {
@@ -3139,7 +3194,7 @@ fn from_substrait_literal(
                         return not_impl_err!(
                             "Unsupported Substrait user defined type literal with ref {}",
                             user_defined.type_reference
-                        )
+                        );
                     }
                 }
             }
@@ -3307,8 +3362,8 @@ impl BuiltinExprBuilder {
                 }
                 _ => {
                     return substrait_err!(
-                    "Expect Utf8 literal for escape char, but found {escape_char_expr:?}"
-                )
+                        "Expect Utf8 literal for escape char, but found {escape_char_expr:?}"
+                    );
                 }
             }
         } else {
@@ -3329,8 +3384,8 @@ impl BuiltinExprBuilder {
 mod test {
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::{
-        from_substrait_literal_without_names, from_substrait_rex,
-        DefaultSubstraitConsumer,
+        DefaultSubstraitConsumer, from_substrait_literal_without_names,
+        from_substrait_rex,
     };
     use arrow::array::types::IntervalMonthDayNano;
     use datafusion::arrow;
@@ -3340,12 +3395,12 @@ mod test {
     use datafusion::prelude::{Expr, SessionContext};
     use datafusion::scalar::ScalarValue;
     use std::sync::LazyLock;
+    use substrait::proto::expression::Literal;
     use substrait::proto::expression::literal::{
-        interval_day_to_second, IntervalCompound, IntervalDayToSecond,
-        IntervalYearToMonth, LiteralType,
+        IntervalCompound, IntervalDayToSecond, IntervalYearToMonth, LiteralType,
+        interval_day_to_second,
     };
     use substrait::proto::expression::window_function::BoundsType;
-    use substrait::proto::expression::Literal;
 
     static TEST_SESSION_STATE: LazyLock<SessionState> =
         LazyLock::new(|| SessionContext::default().state());

@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::iter::Peekable;
 use std::sync::Arc;
 
-use crate::equivalence::class::AcrossPartitions;
 use crate::ConstExpr;
+use crate::equivalence::class::AcrossPartitions;
 
 use super::EquivalenceProperties;
 use crate::PhysicalSortExpr;
@@ -256,19 +256,35 @@ impl UnionEquivalentOrderingBuilder {
         {
             // If the next expressions are equal, add the next match
             // otherwise try and match with a constant
-            match advance_if_match(&mut sort_expr_iter, &mut existing_sort_expr_iter)
-            { Some(expr) => {
-                augmented_ordering.push(expr);
-            } _ => { match advance_if_matches_constant(&mut sort_expr_iter, existing_constants)
-            { Some(expr) => {
-                augmented_ordering.push(expr);
-            } _ => { match advance_if_matches_constant(&mut existing_sort_expr_iter, constants)
-            { Some(expr) => {
-                augmented_ordering.push(expr);
-            } _ => {
-                // no match, can't continue the ordering, return what we have
-                break;
-            }}}}}}
+            match advance_if_match(&mut sort_expr_iter, &mut existing_sort_expr_iter) {
+                Some(expr) => {
+                    augmented_ordering.push(expr);
+                }
+                _ => {
+                    match advance_if_matches_constant(
+                        &mut sort_expr_iter,
+                        existing_constants,
+                    ) {
+                        Some(expr) => {
+                            augmented_ordering.push(expr);
+                        }
+                        _ => {
+                            match advance_if_matches_constant(
+                                &mut existing_sort_expr_iter,
+                                constants,
+                            ) {
+                                Some(expr) => {
+                                    augmented_ordering.push(expr);
+                                }
+                                _ => {
+                                    // no match, can't continue the ordering, return what we have
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Some(augmented_ordering)

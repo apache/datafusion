@@ -28,7 +28,7 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -514,12 +514,9 @@ pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
 pub fn snapshot_physical_expr(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform_up(|e| {
-        match e.snapshot()? { Some(snapshot) => {
-            Ok(Transformed::yes(snapshot))
-        } _ => {
-            Ok(Transformed::no(Arc::clone(&e)))
-        }}
+    expr.transform_up(|e| match e.snapshot()? {
+        Some(snapshot) => Ok(Transformed::yes(snapshot)),
+        _ => Ok(Transformed::no(Arc::clone(&e))),
     })
     .data()
 }

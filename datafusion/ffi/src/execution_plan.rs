@@ -18,8 +18,8 @@
 use std::{ffi::c_void, pin::Pin, sync::Arc};
 
 use abi_stable::{
-    std_types::{RResult, RString, RVec},
     StableAbi,
+    std_types::{RResult, RString, RVec},
 };
 use datafusion::{
     error::DataFusionError,
@@ -78,68 +78,86 @@ pub struct ExecutionPlanPrivateData {
 
 unsafe extern "C" fn properties_fn_wrapper(
     plan: &FFI_ExecutionPlan,
-) -> FFI_PlanProperties { unsafe {
-    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
-    let plan = &(*private_data).plan;
+) -> FFI_PlanProperties {
+    unsafe {
+        let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+        let plan = &(*private_data).plan;
 
-    plan.properties().into()
-}}
+        plan.properties().into()
+    }
+}
 
 unsafe extern "C" fn children_fn_wrapper(
     plan: &FFI_ExecutionPlan,
-) -> RVec<FFI_ExecutionPlan> { unsafe {
-    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
-    let plan = &(*private_data).plan;
-    let ctx = &(*private_data).context;
-    let runtime = &(*private_data).runtime;
+) -> RVec<FFI_ExecutionPlan> {
+    unsafe {
+        let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+        let plan = &(*private_data).plan;
+        let ctx = &(*private_data).context;
+        let runtime = &(*private_data).runtime;
 
-    let children: Vec<_> = plan
-        .children()
-        .into_iter()
-        .map(|child| {
-            FFI_ExecutionPlan::new(Arc::clone(child), Arc::clone(ctx), runtime.clone())
-        })
-        .collect();
+        let children: Vec<_> = plan
+            .children()
+            .into_iter()
+            .map(|child| {
+                FFI_ExecutionPlan::new(
+                    Arc::clone(child),
+                    Arc::clone(ctx),
+                    runtime.clone(),
+                )
+            })
+            .collect();
 
-    children.into()
-}}
+        children.into()
+    }
+}
 
 unsafe extern "C" fn execute_fn_wrapper(
     plan: &FFI_ExecutionPlan,
     partition: usize,
-) -> RResult<FFI_RecordBatchStream, RString> { unsafe {
-    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
-    let plan = &(*private_data).plan;
-    let ctx = &(*private_data).context;
-    let runtime = (*private_data).runtime.clone();
+) -> RResult<FFI_RecordBatchStream, RString> {
+    unsafe {
+        let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+        let plan = &(*private_data).plan;
+        let ctx = &(*private_data).context;
+        let runtime = (*private_data).runtime.clone();
 
-    rresult!(plan
-        .execute(partition, Arc::clone(ctx))
-        .map(|rbs| FFI_RecordBatchStream::new(rbs, runtime)))
-}}
+        rresult!(
+            plan.execute(partition, Arc::clone(ctx))
+                .map(|rbs| FFI_RecordBatchStream::new(rbs, runtime))
+        )
+    }
+}
 
-unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> RString { unsafe {
-    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
-    let plan = &(*private_data).plan;
+unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> RString {
+    unsafe {
+        let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+        let plan = &(*private_data).plan;
 
-    plan.name().into()
-}}
+        plan.name().into()
+    }
+}
 
-unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) { unsafe {
-    let private_data = Box::from_raw(plan.private_data as *mut ExecutionPlanPrivateData);
-    drop(private_data);
-}}
+unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
+    unsafe {
+        let private_data =
+            Box::from_raw(plan.private_data as *mut ExecutionPlanPrivateData);
+        drop(private_data);
+    }
+}
 
-unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_ExecutionPlan { unsafe {
-    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
-    let plan_data = &(*private_data);
+unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_ExecutionPlan {
+    unsafe {
+        let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+        let plan_data = &(*private_data);
 
-    FFI_ExecutionPlan::new(
-        Arc::clone(&plan_data.plan),
-        Arc::clone(&plan_data.context),
-        plan_data.runtime.clone(),
-    )
-}}
+        FFI_ExecutionPlan::new(
+            Arc::clone(&plan_data.plan),
+            Arc::clone(&plan_data.context),
+            plan_data.runtime.clone(),
+        )
+    }
+}
 
 impl Clone for FFI_ExecutionPlan {
     fn clone(&self) -> Self {
@@ -292,8 +310,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::{
         physical_plan::{
-            execution_plan::{Boundedness, EmissionType},
             Partitioning,
+            execution_plan::{Boundedness, EmissionType},
         },
         prelude::SessionContext,
     };

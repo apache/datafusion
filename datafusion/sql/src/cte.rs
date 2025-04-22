@@ -21,9 +21,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::Schema;
 use datafusion_common::{
-    not_impl_err, plan_err,
+    Result, not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
-    Result,
 };
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
 use sqlparser::ast::{Query, SetExpr, SetOperator, With};

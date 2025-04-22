@@ -31,7 +31,7 @@ mod tests {
     use std::fs;
     use substrait::proto::plan_rel::RelType;
     use substrait::proto::rel_common::{Emit, EmitKind};
-    use substrait::proto::{rel, RelCommon};
+    use substrait::proto::{RelCommon, rel};
 
     #[tokio::test]
     async fn serialize_to_file() -> Result<()> {

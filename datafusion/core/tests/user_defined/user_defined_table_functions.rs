@@ -21,17 +21,17 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::Int64Array;
-use arrow::csv::reader::Format;
 use arrow::csv::ReaderBuilder;
+use arrow::csv::reader::Format;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::test_util::batches_to_string;
-use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableProvider;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::error::Result;
 use datafusion::execution::TaskContext;
-use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;

@@ -27,7 +27,7 @@ use crate::{
 };
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
-use datafusion_common::{config::ConfigEntry, Result};
+use datafusion_common::{Result, config::ConfigEntry};
 use object_store::ObjectStore;
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -24,23 +24,23 @@ use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
     DurationNanosecondArray, DurationSecondArray, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
     IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
     LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::compute;
 use arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, DurationMicrosecondType,
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, Float16Type,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalUnit,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    downcast_value, exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
+    ColumnStatistics, DataFusionError, Result, downcast_value, exec_err, internal_err,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
@@ -57,8 +57,8 @@ use arrow::datatypes::{
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
-    SetMonotonicity, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, SetMonotonicity, Signature, Volatility,
+    function::AccumulatorArgs,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
@@ -712,7 +712,7 @@ macro_rules! interval_min_max {
             Some(choose_min_max!($OP)) => $RHS.clone(),
             Some(_) => $LHS.clone(),
             None => {
-                return internal_err!("Comparison error while computing interval min/max")
+                return internal_err!("Comparison error while computing interval min/max");
             }
         }
     }};

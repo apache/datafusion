@@ -19,14 +19,14 @@
 
 use crate::make_array::{empty_array_type, make_array_inner};
 use crate::utils::make_scalar_function;
-use arrow::array::{new_empty_array, Array, ArrayRef, GenericListArray, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait, new_empty_array};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, internal_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -521,7 +521,7 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         let array = match arrays.first() {
             Some(array) => Arc::clone(array),
             None => {
-                return internal_err!("array_distinct: failed to get array from rows")
+                return internal_err!("array_distinct: failed to get array from rows");
             }
         };
         new_arrays.push(array);

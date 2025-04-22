@@ -26,7 +26,7 @@ use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
+use crate::{PhysicalExpr, expressions::PhysicalSortExpr, reverse_order_bys};
 
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::Field;

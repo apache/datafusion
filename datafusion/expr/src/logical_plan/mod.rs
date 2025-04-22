@@ -21,14 +21,14 @@ pub mod display;
 pub mod dml;
 mod extension;
 pub(crate) mod invariants;
-pub use invariants::{assert_expected_schema, check_subquery_expr, InvariantLevel};
+pub use invariants::{InvariantLevel, assert_expected_schema, check_subquery_expr};
 mod plan;
 mod statement;
 pub mod tree_node;
 
 pub use builder::{
-    build_join_schema, table_scan, union, wrap_projection_for_join_if_necessary,
     LogicalPlanBuilder, LogicalPlanBuilderOptions, LogicalTableSource, UNNAMED_TABLE,
+    build_join_schema, table_scan, union, wrap_projection_for_join_if_necessary,
 };
 pub use ddl::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
@@ -37,11 +37,12 @@ pub use ddl::{
 };
 pub use dml::{DmlStatement, WriteOp};
 pub use plan::{
-    projection_schema, Aggregate, Analyze, ColumnUnnestList, DescribeTable, Distinct,
-    DistinctOn, EmptyRelation, Explain, ExplainFormat, Extension, FetchType, Filter,
-    Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
-    Projection, RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan, Subquery,
+    Aggregate, Analyze, ColumnUnnestList, DescribeTable, Distinct, DistinctOn,
+    EmptyRelation, Explain, ExplainFormat, Extension, FetchType, Filter, Join,
+    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
+    RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan, Subquery,
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
+    projection_schema,
 };
 pub use statement::{
     Deallocate, Execute, Prepare, SetVariable, Statement, TransactionAccessMode,

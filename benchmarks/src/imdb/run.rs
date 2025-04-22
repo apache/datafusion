@@ -18,14 +18,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{get_imdb_table_schema, get_query_sql, IMDB_TABLES};
+use super::{IMDB_TABLES, get_imdb_table_schema, get_query_sql};
 use crate::util::{BenchmarkRun, CommonOpt};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
+use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };

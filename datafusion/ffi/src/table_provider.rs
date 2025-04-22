@@ -18,8 +18,8 @@
 use std::{any::Any, ffi::c_void, sync::Arc};
 
 use abi_stable::{
-    std_types::{ROption, RResult, RString, RVec},
     StableAbi,
+    std_types::{ROption, RResult, RString, RVec},
 };
 use arrow::datatypes::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
@@ -28,14 +28,14 @@ use datafusion::{
     catalog::{Session, TableProvider},
     datasource::TableType,
     error::DataFusionError,
-    execution::{session_state::SessionStateBuilder, TaskContext},
-    logical_expr::{logical_plan::dml::InsertOp, TableProviderFilterPushDown},
+    execution::{TaskContext, session_state::SessionStateBuilder},
+    logical_expr::{TableProviderFilterPushDown, logical_plan::dml::InsertOp},
     physical_plan::ExecutionPlan,
     prelude::{Expr, SessionContext},
 };
 use datafusion_proto::{
     logical_plan::{
-        from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
+        DefaultLogicalExtensionCodec, from_proto::parse_exprs, to_proto::serialize_exprs,
     },
     protobuf::LogicalExprList,
 };
@@ -166,21 +166,25 @@ struct ProviderPrivateData {
     runtime: Option<Handle>,
 }
 
-unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedSchema { unsafe {
-    let private_data = provider.private_data as *const ProviderPrivateData;
-    let provider = &(*private_data).provider;
+unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedSchema {
+    unsafe {
+        let private_data = provider.private_data as *const ProviderPrivateData;
+        let provider = &(*private_data).provider;
 
-    provider.schema().into()
-}}
+        provider.schema().into()
+    }
+}
 
 unsafe extern "C" fn table_type_fn_wrapper(
     provider: &FFI_TableProvider,
-) -> FFI_TableType { unsafe {
-    let private_data = provider.private_data as *const ProviderPrivateData;
-    let provider = &(*private_data).provider;
+) -> FFI_TableType {
+    unsafe {
+        let private_data = provider.private_data as *const ProviderPrivateData;
+        let provider = &(*private_data).provider;
 
-    provider.table_type().into()
-}}
+        provider.table_type().into()
+    }
+}
 
 fn supports_filters_pushdown_internal(
     provider: &Arc<dyn TableProvider + Send>,
@@ -212,14 +216,16 @@ fn supports_filters_pushdown_internal(
 unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     provider: &FFI_TableProvider,
     filters_serialized: RVec<u8>,
-) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> { unsafe {
-    let private_data = provider.private_data as *const ProviderPrivateData;
-    let provider = &(*private_data).provider;
+) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> {
+    unsafe {
+        let private_data = provider.private_data as *const ProviderPrivateData;
+        let provider = &(*private_data).provider;
 
-    supports_filters_pushdown_internal(provider, &filters_serialized)
-        .map_err(|e| e.to_string().into())
-        .into()
-}}
+        supports_filters_pushdown_internal(provider, &filters_serialized)
+            .map_err(|e| e.to_string().into())
+            .into()
+    }
+}
 
 unsafe extern "C" fn scan_fn_wrapper(
     provider: &FFI_TableProvider,
@@ -227,119 +233,130 @@ unsafe extern "C" fn scan_fn_wrapper(
     projections: RVec<usize>,
     filters_serialized: RVec<u8>,
     limit: ROption<usize>,
-) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> { unsafe {
-    let private_data = provider.private_data as *mut ProviderPrivateData;
-    let internal_provider = &(*private_data).provider;
-    let session_config = session_config.clone();
-    let runtime = &(*private_data).runtime;
+) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
+    unsafe {
+        let private_data = provider.private_data as *mut ProviderPrivateData;
+        let internal_provider = &(*private_data).provider;
+        let session_config = session_config.clone();
+        let runtime = &(*private_data).runtime;
 
-    async move {
-        let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
-        let session = SessionStateBuilder::new()
-            .with_default_features()
-            .with_config(config.0)
-            .build();
-        let ctx = SessionContext::new_with_state(session);
+        async move {
+            let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
+            let session = SessionStateBuilder::new()
+                .with_default_features()
+                .with_config(config.0)
+                .build();
+            let ctx = SessionContext::new_with_state(session);
 
-        let filters = match filters_serialized.is_empty() {
-            true => vec![],
-            false => {
-                let default_ctx = SessionContext::new();
-                let codec = DefaultLogicalExtensionCodec {};
+            let filters = match filters_serialized.is_empty() {
+                true => vec![],
+                false => {
+                    let default_ctx = SessionContext::new();
+                    let codec = DefaultLogicalExtensionCodec {};
 
-                let proto_filters =
-                    rresult_return!(LogicalExprList::decode(filters_serialized.as_ref()));
+                    let proto_filters = rresult_return!(LogicalExprList::decode(
+                        filters_serialized.as_ref()
+                    ));
 
-                rresult_return!(parse_exprs(
-                    proto_filters.expr.iter(),
-                    &default_ctx,
-                    &codec
-                ))
-            }
-        };
+                    rresult_return!(parse_exprs(
+                        proto_filters.expr.iter(),
+                        &default_ctx,
+                        &codec
+                    ))
+                }
+            };
 
-        let projections: Vec<_> = projections.into_iter().collect();
+            let projections: Vec<_> = projections.into_iter().collect();
 
-        let plan = rresult_return!(
-            internal_provider
-                .scan(&ctx.state(), Some(&projections), &filters, limit.into())
-                .await
-        );
+            let plan = rresult_return!(
+                internal_provider
+                    .scan(&ctx.state(), Some(&projections), &filters, limit.into())
+                    .await
+            );
 
-        RResult::ROk(FFI_ExecutionPlan::new(
-            plan,
-            ctx.task_ctx(),
-            runtime.clone(),
-        ))
+            RResult::ROk(FFI_ExecutionPlan::new(
+                plan,
+                ctx.task_ctx(),
+                runtime.clone(),
+            ))
+        }
+        .into_ffi()
     }
-    .into_ffi()
-}}
+}
 
 unsafe extern "C" fn insert_into_fn_wrapper(
     provider: &FFI_TableProvider,
     session_config: &FFI_SessionConfig,
     input: &FFI_ExecutionPlan,
     insert_op: FFI_InsertOp,
-) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> { unsafe {
-    let private_data = provider.private_data as *mut ProviderPrivateData;
-    let internal_provider = &(*private_data).provider;
-    let session_config = session_config.clone();
-    let input = input.clone();
-    let runtime = &(*private_data).runtime;
+) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
+    unsafe {
+        let private_data = provider.private_data as *mut ProviderPrivateData;
+        let internal_provider = &(*private_data).provider;
+        let session_config = session_config.clone();
+        let input = input.clone();
+        let runtime = &(*private_data).runtime;
 
-    async move {
-        let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
-        let session = SessionStateBuilder::new()
-            .with_default_features()
-            .with_config(config.0)
-            .build();
-        let ctx = SessionContext::new_with_state(session);
+        async move {
+            let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
+            let session = SessionStateBuilder::new()
+                .with_default_features()
+                .with_config(config.0)
+                .build();
+            let ctx = SessionContext::new_with_state(session);
 
-        let input = rresult_return!(ForeignExecutionPlan::try_from(&input).map(Arc::new));
+            let input =
+                rresult_return!(ForeignExecutionPlan::try_from(&input).map(Arc::new));
 
-        let insert_op = InsertOp::from(insert_op);
+            let insert_op = InsertOp::from(insert_op);
 
-        let plan = rresult_return!(
-            internal_provider
-                .insert_into(&ctx.state(), input, insert_op)
-                .await
-        );
+            let plan = rresult_return!(
+                internal_provider
+                    .insert_into(&ctx.state(), input, insert_op)
+                    .await
+            );
 
-        RResult::ROk(FFI_ExecutionPlan::new(
-            plan,
-            ctx.task_ctx(),
-            runtime.clone(),
-        ))
+            RResult::ROk(FFI_ExecutionPlan::new(
+                plan,
+                ctx.task_ctx(),
+                runtime.clone(),
+            ))
+        }
+        .into_ffi()
     }
-    .into_ffi()
-}}
+}
 
-unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) { unsafe {
-    let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
-    drop(private_data);
-}}
-
-unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_TableProvider { unsafe {
-    let old_private_data = provider.private_data as *const ProviderPrivateData;
-    let runtime = (*old_private_data).runtime.clone();
-
-    let private_data = Box::into_raw(Box::new(ProviderPrivateData {
-        provider: Arc::clone(&(*old_private_data).provider),
-        runtime,
-    })) as *mut c_void;
-
-    FFI_TableProvider {
-        schema: schema_fn_wrapper,
-        scan: scan_fn_wrapper,
-        table_type: table_type_fn_wrapper,
-        supports_filters_pushdown: provider.supports_filters_pushdown,
-        insert_into: provider.insert_into,
-        clone: clone_fn_wrapper,
-        release: release_fn_wrapper,
-        version: super::version,
-        private_data,
+unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) {
+    unsafe {
+        let private_data =
+            Box::from_raw(provider.private_data as *mut ProviderPrivateData);
+        drop(private_data);
     }
-}}
+}
+
+unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_TableProvider {
+    unsafe {
+        let old_private_data = provider.private_data as *const ProviderPrivateData;
+        let runtime = (*old_private_data).runtime.clone();
+
+        let private_data = Box::into_raw(Box::new(ProviderPrivateData {
+            provider: Arc::clone(&(*old_private_data).provider),
+            runtime,
+        })) as *mut c_void;
+
+        FFI_TableProvider {
+            schema: schema_fn_wrapper,
+            scan: scan_fn_wrapper,
+            table_type: table_type_fn_wrapper,
+            supports_filters_pushdown: provider.supports_filters_pushdown,
+            insert_into: provider.insert_into,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            version: super::version,
+            private_data,
+        }
+    }
+}
 
 impl Drop for FFI_TableProvider {
     fn drop(&mut self) {
@@ -457,7 +474,7 @@ impl TableProvider for ForeignTableProvider {
                     return Ok(vec![
                         TableProviderFilterPushDown::Unsupported;
                         filters.len()
-                    ])
+                    ]);
                 }
             };
 

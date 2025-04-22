@@ -26,8 +26,8 @@ use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
 use itertools::Itertools;
 use log::debug;
-use object_store::path::Path;
 use object_store::path::DELIMITER;
+use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use url::Url;
 

@@ -18,14 +18,14 @@
 //! [`DiskManager`]: Manages files generated during query execution
 
 use datafusion_common::{
-    config_err, resources_datafusion_err, resources_err, DataFusionError, Result,
+    DataFusionError, Result, config_err, resources_datafusion_err, resources_err,
 };
 use log::debug;
 use parking_lot::Mutex;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::{Builder, NamedTempFile, TempDir};
 
 use crate::memory_pool::human_readable_size;
@@ -339,7 +339,10 @@ mod tests {
         let manager = DiskManager::try_new(config).unwrap();
         assert!(!manager.tmp_files_enabled());
         assert_eq!(
-            manager.create_tmp_file("Testing").unwrap_err().strip_backtrace(),
+            manager
+                .create_tmp_file("Testing")
+                .unwrap_err()
+                .strip_backtrace(),
             "Resources exhausted: Memory Exhausted while Testing (DiskManager is disabled)",
         )
     }

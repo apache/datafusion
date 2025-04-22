@@ -25,9 +25,9 @@ use crate::datasource::file_format::avro::AvroFormat;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
 
+use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::{file_format::csv::CsvFormat, listing::ListingOptions};
 use crate::error::Result;

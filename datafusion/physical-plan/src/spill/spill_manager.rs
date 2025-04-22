@@ -24,12 +24,12 @@ use arrow::record_batch::RecordBatch;
 use datafusion_execution::runtime_env::RuntimeEnv;
 
 use datafusion_common::Result;
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::SendableRecordBatchStream;
+use datafusion_execution::disk_manager::RefCountedTempFile;
 
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
 
-use super::{in_progress_spill_file::InProgressSpillFile, SpillReaderStream};
+use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 
 /// The `SpillManager` is responsible for the following tasks:
 /// - Reading and writing `RecordBatch`es to raw files based on the provided configurations.

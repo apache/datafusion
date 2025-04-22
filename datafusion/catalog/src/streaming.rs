@@ -25,10 +25,10 @@ use async_trait::async_trait;
 
 use crate::Session;
 use crate::TableProvider;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::{Expr, TableType};
-use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use log::debug;
 
 /// A [`TableProvider`] that streams a set of [`PartitionStream`]

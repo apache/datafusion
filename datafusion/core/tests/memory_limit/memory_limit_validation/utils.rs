@@ -16,14 +16,14 @@
 // under the License.
 
 use datafusion_common_runtime::SpawnedTask;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_execution::{
-    memory_pool::{human_readable_size, FairSpillPool},
+    memory_pool::{FairSpillPool, human_readable_size},
     runtime_env::RuntimeEnvBuilder,
 };
 

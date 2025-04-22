@@ -25,7 +25,7 @@ use crate::parser::{
     LexOrdering, Statement as DFStatement,
 };
 use crate::planner::{
-    object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
+    ContextProvider, PlannerContext, SqlToRel, object_name_to_qualifier,
 };
 use crate::utils::normalize_ident;
 
@@ -33,18 +33,18 @@ use arrow::datatypes::{DataType, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
-    unqualified_field_not_found, Column, Constraint, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue, SchemaError, SchemaReference, TableReference,
-    ToDFSchema,
+    Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
+    ScalarValue, SchemaError, SchemaReference, TableReference, ToDFSchema, exec_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
+    unqualified_field_not_found,
 };
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
-use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
+use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
+    Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
@@ -52,7 +52,7 @@ use datafusion_expr::{
     LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable,
     SortExpr, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
-    Volatility, WriteOp,
+    Volatility, WriteOp, cast, col,
 };
 use sqlparser::ast::{
     self, BeginTransactionKind, NullsDistinctOption, ShowStatementIn,
@@ -451,10 +451,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         let plan = if has_columns {
                             if schema.fields().len() != input_schema.fields().len() {
                                 return plan_err!(
-                            "Mismatch: {} columns specified, but result has {} columns",
-                            schema.fields().len(),
-                            input_schema.fields().len()
-                        );
+                                    "Mismatch: {} columns specified, but result has {} columns",
+                                    schema.fields().len(),
+                                    input_schema.fields().len()
+                                );
                             }
                             let input_fields = input_schema.fields();
                             let project_exprs = schema
@@ -672,18 +672,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                     ObjectType::Schema => {
                         let name = match name {
-                            TableReference::Bare { table } => Ok(SchemaReference::Bare { schema: table }),
-                            TableReference::Partial { schema, table } => Ok(SchemaReference::Full { schema: table, catalog: schema }),
-                            TableReference::Full { catalog: _, schema: _, table: _ } => {
-                                Err(ParserError("Invalid schema specifier (has 3 parts)".to_string()))
+                            TableReference::Bare { table } => {
+                                Ok(SchemaReference::Bare { schema: table })
                             }
+                            TableReference::Partial { schema, table } => {
+                                Ok(SchemaReference::Full {
+                                    schema: table,
+                                    catalog: schema,
+                                })
+                            }
+                            TableReference::Full {
+                                catalog: _,
+                                schema: _,
+                                table: _,
+                            } => Err(ParserError(
+                                "Invalid schema specifier (has 3 parts)".to_string(),
+                            )),
                         }?;
-                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(DropCatalogSchema {
-                            name,
-                            if_exists,
-                            cascade,
-                            schema: DFSchemaRef::new(DFSchema::empty()),
-                        })))
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(
+                            DropCatalogSchema {
+                                name,
+                                if_exists,
+                                cascade,
+                                schema: DFSchemaRef::new(DFSchema::empty()),
+                            },
+                        )))
                     }
                     _ => not_impl_err!(
                         "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
@@ -886,7 +899,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let table_name = match table {
                     TableObject::TableName(table_name) => table_name,
                     TableObject::TableFunction(_) => {
-                        return not_impl_err!("INSERT INTO Table functions not supported")
+                        return not_impl_err!("INSERT INTO Table functions not supported");
                     }
                 };
                 if let Some(or) = or {
@@ -2062,7 +2075,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             (false, false) => InsertOp::Append,
             (true, false) => InsertOp::Overwrite,
             (false, true) => InsertOp::Replace,
-            (true, true) => plan_err!("Conflicting insert operations: `overwrite` and `replace_into` cannot both be true")?,
+            (true, true) => plan_err!(
+                "Conflicting insert operations: `overwrite` and `replace_into` cannot both be true"
+            )?,
         };
 
         let plan = LogicalPlan::Dml(DmlStatement::new(

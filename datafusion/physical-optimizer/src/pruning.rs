@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::AsArray;
 use arrow::{
-    array::{new_null_array, ArrayRef, BooleanArray},
+    array::{ArrayRef, BooleanArray, new_null_array},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
@@ -32,15 +32,14 @@ use log::trace;
 
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::tree_node::TransformedResult;
-use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err,
-    tree_node::{Transformed, TreeNode},
-    ScalarValue,
-};
 use datafusion_common::{Column, DFSchema};
+use datafusion_common::{
+    ScalarValue, internal_err, plan_datafusion_err, plan_err,
+    tree_node::{Transformed, TreeNode},
+};
 use datafusion_expr_common::operator::Operator;
-use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
-use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
+use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee, collect_columns};
+use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
@@ -986,8 +985,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
 
     trace!(
         "Creating statistics batch for {:#?} with {:#?}",
-        required_columns,
-        arrays
+        required_columns, arrays
     );
 
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
@@ -1321,22 +1319,22 @@ fn build_is_null_column_expr(
 
         let null_count_field = &Field::new(field.name(), DataType::UInt64, true);
         if with_not {
-            match required_columns.row_count_column_expr(col, expr, null_count_field)
-            { Ok(row_count_expr) => {
-                required_columns
-                    .null_count_column_expr(col, expr, null_count_field)
-                    .map(|null_count_column_expr| {
-                        // IsNotNull(column) => null_count != row_count
-                        Arc::new(phys_expr::BinaryExpr::new(
-                            null_count_column_expr,
-                            Operator::NotEq,
-                            row_count_expr,
-                        )) as _
-                    })
-                    .ok()
-            } _ => {
-                None
-            }}
+            match required_columns.row_count_column_expr(col, expr, null_count_field) {
+                Ok(row_count_expr) => {
+                    required_columns
+                        .null_count_column_expr(col, expr, null_count_field)
+                        .map(|null_count_column_expr| {
+                            // IsNotNull(column) => null_count != row_count
+                            Arc::new(phys_expr::BinaryExpr::new(
+                                null_count_column_expr,
+                                Operator::NotEq,
+                                row_count_expr,
+                            )) as _
+                        })
+                        .ok()
+                }
+                _ => None,
+            }
         } else {
             required_columns
                 .null_count_column_expr(col, expr, null_count_field)
@@ -1897,7 +1895,7 @@ mod tests {
         datatypes::TimeUnit,
     };
     use datafusion_expr::expr::InList;
-    use datafusion_expr::{cast, is_null, try_cast, Expr};
+    use datafusion_expr::{Expr, cast, is_null, try_cast};
     use datafusion_functions_nested::expr_fn::{array_has, make_array};
     use datafusion_physical_expr::expressions as phys_expr;
     use datafusion_physical_expr::planner::logical2physical;
@@ -2811,7 +2809,7 @@ mod tests {
             test_build_predicate_expression(&expr, &schema, &mut required_columns);
         assert_eq!(predicate_expr.to_string(), expected_expr);
         println!("required_columns: {:#?}", required_columns); // for debugging assertions below
-                                                               // c1 < 1 should add c1_min
+        // c1 < 1 should add c1_min
         let c1_min_field = Field::new("c1_min", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[0],

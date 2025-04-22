@@ -22,8 +22,8 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::JoinType::Inner;
 use datafusion_expr::{
-    logical_plan::{EmptyRelation, LogicalPlan},
     Expr,
+    logical_plan::{EmptyRelation, LogicalPlan},
 };
 
 /// Eliminates joins when join condition is false.
@@ -78,7 +78,7 @@ mod tests {
     use crate::test::*;
     use datafusion_common::Result;
     use datafusion_expr::JoinType::Inner;
-    use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder, LogicalPlan};
+    use datafusion_expr::{LogicalPlan, lit, logical_plan::builder::LogicalPlanBuilder};
     use std::sync::Arc;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {

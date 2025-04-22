@@ -22,7 +22,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::List;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::{ScalarValue, exec_err};
 use datafusion_doc::Documentation;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,

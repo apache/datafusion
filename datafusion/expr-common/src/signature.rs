@@ -413,9 +413,11 @@ impl TypeSignature {
                 vec![Self::join_types(types, ", ")]
             }
             TypeSignature::Any(arg_count) => {
-                vec![std::iter::repeat_n("Any", *arg_count)
-                    .collect::<Vec<&str>>()
-                    .join(", ")]
+                vec![
+                    std::iter::repeat_n("Any", *arg_count)
+                        .collect::<Vec<&str>>()
+                        .join(", "),
+                ]
             }
             TypeSignature::UserDefined => {
                 vec!["UserDefined".to_string()]

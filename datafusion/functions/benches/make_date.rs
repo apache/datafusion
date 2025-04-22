@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int32Array};
 use arrow::datatypes::DataType;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rand::rngs::ThreadRng;
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rand::Rng;
+use rand::rngs::ThreadRng;
 
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};

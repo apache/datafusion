@@ -25,23 +25,23 @@ use crate::variation_const::{
 use datafusion::arrow::datatypes::DataType;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_plan::{displayable, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, displayable};
 
 use datafusion::datasource::physical_plan::ParquetSource;
-use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
-use substrait::proto::expression::MaskExpression;
-use substrait::proto::r#type::{
-    Binary, Boolean, Fp64, Kind, Nullability, String as SubstraitString, Struct, I64,
-};
-use substrait::proto::read_rel::local_files::file_or_files::ParquetReadOptions;
-use substrait::proto::read_rel::local_files::file_or_files::{FileFormat, PathType};
-use substrait::proto::read_rel::local_files::FileOrFiles;
-use substrait::proto::read_rel::LocalFiles;
-use substrait::proto::read_rel::ReadType;
-use substrait::proto::rel::RelType;
 use substrait::proto::ReadRel;
 use substrait::proto::Rel;
-use substrait::proto::{extensions, NamedStruct, Type};
+use substrait::proto::expression::MaskExpression;
+use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
+use substrait::proto::read_rel::LocalFiles;
+use substrait::proto::read_rel::ReadType;
+use substrait::proto::read_rel::local_files::FileOrFiles;
+use substrait::proto::read_rel::local_files::file_or_files::ParquetReadOptions;
+use substrait::proto::read_rel::local_files::file_or_files::{FileFormat, PathType};
+use substrait::proto::rel::RelType;
+use substrait::proto::r#type::{
+    Binary, Boolean, Fp64, I64, Kind, Nullability, String as SubstraitString, Struct,
+};
+use substrait::proto::{NamedStruct, Type, extensions};
 
 /// Convert DataFusion ExecutionPlan to Substrait Rel
 pub fn to_substrait_rel(

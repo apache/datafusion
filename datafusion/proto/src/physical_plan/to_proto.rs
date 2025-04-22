@@ -38,12 +38,12 @@ use datafusion::{
     },
     physical_plan::expressions::LikeExpr,
 };
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err, not_impl_err};
 use datafusion_expr::WindowFrame;
 
 use crate::protobuf::{
-    self, physical_aggregate_expr_node, physical_window_expr_node, PhysicalSortExprNode,
-    PhysicalSortExprNodeCollection,
+    self, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
+    physical_aggregate_expr_node, physical_window_expr_node,
 };
 
 use super::PhysicalExtensionCodec;

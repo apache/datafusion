@@ -24,17 +24,17 @@ use arrow::array::{
 
 use arrow::compute::sum;
 use arrow::datatypes::{
-    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType,
+    ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Field, Float64Type, TimeUnit, UInt64Type,
+    DurationSecondType, Field, Float64Type, TimeUnit, UInt64Type, i256,
 };
 use datafusion_common::{
-    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
+    Result, ScalarValue, exec_err, not_impl_err, utils::take_function_args,
 };
+use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator,
     ReversedUDAF, Signature,

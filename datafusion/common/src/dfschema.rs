@@ -23,10 +23,10 @@ use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result, _plan_err, _schema_err};
+use crate::error::{_plan_err, _schema_err, DataFusionError, Result};
 use crate::{
-    field_not_found, unqualified_field_not_found, Column, FunctionalDependencies,
-    SchemaError, TableReference,
+    Column, FunctionalDependencies, SchemaError, TableReference, field_not_found,
+    unqualified_field_not_found,
 };
 
 use arrow::compute::can_cast_types;
@@ -1198,12 +1198,14 @@ mod tests {
             join.to_string()
         );
         // test valid access
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare("t1"), "c0")
-            .is_ok());
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare("t2"), "c0")
-            .is_ok());
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare("t1"), "c0")
+                .is_ok()
+        );
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare("t2"), "c0")
+                .is_ok()
+        );
         // test invalid access
         assert!(join.field_with_unqualified_name("c0").is_err());
         assert!(join.field_with_unqualified_name("t1.c0").is_err());
@@ -1245,18 +1247,20 @@ mod tests {
             join.to_string()
         );
         // test valid access
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare("t1"), "c0")
-            .is_ok());
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare("t1"), "c0")
+                .is_ok()
+        );
         assert!(join.field_with_unqualified_name("c0").is_ok());
         assert!(join.field_with_unqualified_name("c100").is_ok());
         assert!(join.field_with_name(None, "c100").is_ok());
         // test invalid access
         assert!(join.field_with_unqualified_name("t1.c0").is_err());
         assert!(join.field_with_unqualified_name("t1.c100").is_err());
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare(""), "c100")
-            .is_err());
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare(""), "c100")
+                .is_err()
+        );
         Ok(())
     }
 
@@ -1265,9 +1269,11 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from(test_schema_1())?;
         let join = left.join(&right);
-        assert_contains!(join.unwrap_err().to_string(),
-                         "Schema error: Schema contains qualified \
-                          field name t1.c0 and unqualified field name c0 which would be ambiguous");
+        assert_contains!(
+            join.unwrap_err().to_string(),
+            "Schema error: Schema contains qualified \
+                          field name t1.c0 and unqualified field name c0 which would be ambiguous"
+        );
         Ok(())
     }
 

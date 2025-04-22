@@ -19,7 +19,7 @@ use super::{
     LogicalField, LogicalFieldRef, LogicalFields, LogicalType, LogicalUnionFields,
     TypeSignature,
 };
-use crate::error::{Result, _internal_err};
+use crate::error::{_internal_err, Result};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
@@ -352,10 +352,10 @@ impl LogicalType for NativeType {
             }
             _ => {
                 return _internal_err!(
-                "Unavailable default cast for native type {:?} from physical type {:?}",
-                self,
-                origin
-            )
+                    "Unavailable default cast for native type {:?} from physical type {:?}",
+                    self,
+                    origin
+                );
             }
         })
     }

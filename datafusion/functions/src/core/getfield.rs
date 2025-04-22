@@ -16,16 +16,16 @@
 // under the License.
 
 use arrow::array::{
-    make_array, make_comparator, Array, BooleanArray, Capacities, MutableArrayData,
-    Scalar,
+    Array, BooleanArray, Capacities, MutableArrayData, Scalar, make_array,
+    make_comparator,
 };
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow_buffer::NullBuffer;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, utils::take_function_args, Result,
-    ScalarValue,
+    Result, ScalarValue, exec_err, internal_err, plan_datafusion_err,
+    utils::take_function_args,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
@@ -145,24 +145,34 @@ impl ScalarUDFImpl for GetFieldFunc {
                         // often named "key", and "value", but we don't require any specific naming here;
                         // instead, we assume that the second column is the "value" column both here and in
                         // execution.
-                        let value_field = fields.get(1).expect("fields should have exactly two members");
+                        let value_field = fields
+                            .get(1)
+                            .expect("fields should have exactly two members");
                         Ok(ReturnInfo::new_nullable(value_field.data_type().clone()))
-                    },
-                    _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
+                    }
+                    _ => exec_err!(
+                        "Map fields must contain a Struct with exactly 2 fields"
+                    ),
                 }
             }
-            (DataType::Struct(fields),sv) => {
-                sv.and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
+            (DataType::Struct(fields), sv) => sv
+                .and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
                 .map_or_else(
                     || exec_err!("Field name must be a non-empty string"),
                     |field_name| {
-                    fields.iter().find(|f| f.name() == field_name)
-                    .ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
-                    .map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
-                })
-            },
+                        fields
+                            .iter()
+                            .find(|f| f.name() == field_name)
+                            .ok_or(plan_datafusion_err!(
+                                "Field {field_name} not found in struct"
+                            ))
+                            .map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
+                    },
+                ),
             (DataType::Null, _) => Ok(ReturnInfo::new_nullable(DataType::Null)),
-            (other, _) => exec_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
+            (other, _) => exec_err!(
+                "The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"
+            ),
         }
     }
 

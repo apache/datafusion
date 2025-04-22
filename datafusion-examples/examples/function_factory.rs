@@ -17,7 +17,7 @@
 
 use arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{exec_err, internal_err, DataFusionError};
+use datafusion::common::{DataFusionError, exec_err, internal_err};
 use datafusion::error::Result;
 use datafusion::execution::context::{
     FunctionFactory, RegisterFunction, SessionContext, SessionState,

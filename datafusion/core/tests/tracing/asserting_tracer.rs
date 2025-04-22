@@ -21,7 +21,7 @@ use std::ops::Deref;
 use std::sync::{Arc, LazyLock};
 
 use datafusion_common::{HashMap, HashSet};
-use datafusion_common_runtime::{set_join_set_tracer, JoinSetTracer};
+use datafusion_common_runtime::{JoinSetTracer, set_join_set_tracer};
 use futures::future::BoxFuture;
 use tokio::sync::{Mutex, MutexGuard};
 

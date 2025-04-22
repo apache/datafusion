@@ -31,13 +31,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    types::UInt64Type, Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait,
-    UInt64Array,
+    Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait, UInt64Array,
+    types::UInt64Type,
 };
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, internal_err, utils::take_function_args};
 use itertools::Itertools;
 
 use crate::utils::{compare_element_to_list, make_scalar_function};

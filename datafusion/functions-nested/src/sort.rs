@@ -18,14 +18,14 @@
 //! [`ScalarUDFImpl`] definitions for array_sort function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{new_null_array, Array, ArrayRef, ListArray, NullBufferBuilder};
+use arrow::array::{Array, ArrayRef, ListArray, NullBufferBuilder, new_null_array};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::SortColumn;
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List};
 use arrow::datatypes::{DataType, Field};
 use arrow::{compute, compute::SortOptions};
 use datafusion_common::cast::{as_list_array, as_string_array};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,

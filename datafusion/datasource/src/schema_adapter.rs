@@ -21,7 +21,7 @@
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
-use arrow::array::{new_null_array, RecordBatch, RecordBatchOptions};
+use arrow::array::{RecordBatch, RecordBatchOptions, new_null_array};
 use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::plan_err;
@@ -260,7 +260,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
                             file_field.name(),
                             file_field.data_type(),
                             table_field.data_type()
-                        )
+                        );
                     }
                 }
             }

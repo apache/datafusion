@@ -28,12 +28,12 @@ use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTab
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinType, Result};
-use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::Partitioning;
-use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
+use datafusion_physical_expr::expressions::col;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::{displayable, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 use async_trait::async_trait;
 
@@ -420,11 +420,14 @@ async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
     )];
     let sort = sort_exec(sort_exprs.clone(), source);
     let bw = bounded_window_exec("c9", sort_exprs, sort);
-    assert_plan(bw.as_ref(), vec![
-        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
-        "  SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]",
-        "    DataSourceExec: partitions=1, partition_sizes=[0]"
-    ]);
+    assert_plan(
+        bw.as_ref(),
+        vec![
+            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+            "  SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]",
+            "    DataSourceExec: partitions=1, partition_sizes=[0]",
+        ],
+    );
     assert_sanity_check(&bw, true);
     Ok(())
 }
@@ -443,10 +446,13 @@ async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
         },
     )];
     let bw = bounded_window_exec("c9", sort_exprs, source);
-    assert_plan(bw.as_ref(), vec![
-        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
-        "  DataSourceExec: partitions=1, partition_sizes=[0]"
-    ]);
+    assert_plan(
+        bw.as_ref(),
+        vec![
+            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+            "  DataSourceExec: partitions=1, partition_sizes=[0]",
+        ],
+    );
     // Order requirement of the `BoundedWindowAggExec` is not satisfied. We expect to receive error during sanity check.
     assert_sanity_check(&bw, false);
     Ok(())

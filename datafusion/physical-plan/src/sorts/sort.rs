@@ -31,7 +31,7 @@ use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
 };
-use crate::projection::{make_with_child, update_expr, ProjectionExec};
+use crate::projection::{ProjectionExec, make_with_child, update_expr};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
@@ -47,16 +47,16 @@ use crate::{
 use arrow::array::{
     Array, RecordBatch, RecordBatchOptions, StringViewArray, UInt32Array,
 };
-use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
+use arrow::compute::{SortColumn, concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{
-    exec_datafusion_err, internal_datafusion_err, internal_err, DataFusionError, Result,
+    DataFusionError, Result, exec_datafusion_err, internal_datafusion_err, internal_err,
 };
+use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
@@ -436,7 +436,9 @@ impl ExternalSorter {
         }
 
         if !globally_sorted_batches.is_empty() {
-            return internal_err!("This function consumes globally_sorted_batches, so it should be empty after taking.");
+            return internal_err!(
+                "This function consumes globally_sorted_batches, so it should be empty after taking."
+            );
         }
 
         Ok(())
@@ -1144,14 +1146,22 @@ impl DisplayAs for SortExec {
                 let preserve_partitioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
+                        write!(
+                            f,
+                            "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]",
+                            self.expr
+                        )?;
                         if !self.common_sort_prefix.is_empty() {
                             write!(f, ", sort_prefix=[{}]", self.common_sort_prefix)
                         } else {
                             Ok(())
                         }
                     }
-                    None => write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr),
+                    None => write!(
+                        f,
+                        "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]",
+                        self.expr
+                    ),
                 }
             }
             DisplayFormatType::TreeRender => match self.fetch {
@@ -1217,7 +1227,12 @@ impl ExecutionPlan for SortExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start SortExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
 
         let mut input = self.input.execute(partition, Arc::clone(&context))?;
 
@@ -1360,9 +1375,9 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::test;
-    use crate::test::assert_is_pending;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use crate::test::assert_is_pending;
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
 
     use arrow::array::*;
     use arrow::compute::SortOptions;
@@ -1370,11 +1385,11 @@ mod tests {
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
+    use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_execution::RecordBatchStream;
-    use datafusion_physical_expr::expressions::{Column, Literal};
     use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_expr::expressions::{Column, Literal};
 
     use futures::{FutureExt, Stream};
     use insta::assert_snapshot;

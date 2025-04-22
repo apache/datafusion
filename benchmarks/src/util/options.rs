@@ -25,7 +25,7 @@ use datafusion::{
     },
     prelude::SessionConfig,
 };
-use datafusion_common::{utils::get_available_parallelism, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, utils::get_available_parallelism};
 use structopt::StructOpt;
 
 // Common benchmark options (don't use doc comments otherwise this doc
@@ -101,7 +101,7 @@ impl CommonOpt {
                     return Err(DataFusionError::Configuration(format!(
                         "Invalid memory pool type: {}",
                         self.mem_pool_type
-                    )))
+                    )));
                 }
             };
             rt_builder = rt_builder

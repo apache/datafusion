@@ -20,7 +20,7 @@ use std::fmt;
 use arrow::datatypes::FieldRef;
 use datafusion_common::{Column, TableReference};
 
-use crate::{expr::WildcardOptions, Expr};
+use crate::{Expr, expr::WildcardOptions};
 
 /// Represents a SELECT expression in a SQL query.
 ///

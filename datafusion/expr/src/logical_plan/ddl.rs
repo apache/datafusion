@@ -183,7 +183,10 @@ impl DdlStatement {
                         cascade,
                         ..
                     }) => {
-                        write!(f, "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}")
+                        write!(
+                            f,
+                            "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}"
+                        )
                     }
                     DdlStatement::CreateFunction(CreateFunction { name, .. }) => {
                         write!(f, "CreateFunction: name {name:?}")

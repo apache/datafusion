@@ -278,7 +278,7 @@ impl GroupOrderingPartial {
 mod tests {
     use arrow::array::Int32Array;
     use arrow_schema::{DataType, Field};
-    use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+    use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
 
     use super::*;
 

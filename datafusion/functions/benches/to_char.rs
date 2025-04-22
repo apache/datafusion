@@ -21,12 +21,12 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Date32Array, StringArray};
 use arrow::datatypes::DataType;
-use chrono::prelude::*;
 use chrono::TimeDelta;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use chrono::prelude::*;
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use rand::Rng;
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
-use rand::Rng;
 
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;

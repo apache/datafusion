@@ -25,8 +25,8 @@ use arrow::{
     datatypes::Field,
 };
 use datafusion_common::{
-    downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, HashMap, Result,
-    ScalarValue,
+    DataFusionError, HashMap, Result, ScalarValue, downcast_value, plan_err,
+    unwrap_or_internal_err,
 };
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};

@@ -26,8 +26,8 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::utils::ListCoercion;
 use datafusion_common::Result;
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
     cast::as_generic_list_array,
     exec_err, not_impl_err, plan_err,
@@ -304,8 +304,10 @@ impl ScalarUDFImpl for ArrayConcat {
                             arg_type.clone()
                         } else if !expr_type.equals_datatype(arg_type) {
                             return plan_err!(
-                            "It is not possible to concatenate arrays of different types. Expected: {}, got: {}", expr_type, arg_type
-                                );
+                                "It is not possible to concatenate arrays of different types. Expected: {}, got: {}",
+                                expr_type,
+                                arg_type
+                            );
                         } else {
                             expr_type
                         }

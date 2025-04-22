@@ -32,9 +32,9 @@ use super::{
 use crate::execution_plan::CardinalityEffect;
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
-use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
+use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
 use crate::repartition::distributor_channels::{
-    channels, partition_aware_channels, DistributionReceiver, DistributionSender,
+    DistributionReceiver, DistributionSender, channels, partition_aware_channels,
 };
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
@@ -43,18 +43,18 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
+use datafusion_common::HashMap;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
-use datafusion_common::HashMap;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use crate::filter_pushdown::{
-    filter_pushdown_transparent, FilterDescription, FilterPushdownResult,
+    FilterDescription, FilterPushdownResult, filter_pushdown_transparent,
 };
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
@@ -633,8 +633,7 @@ impl ExecutionPlan for RepartitionExec {
 
             trace!(
                 "Before returning stream in {}::execute for partition: {}",
-                name,
-                partition
+                name, partition
             );
 
             if preserve_order {
@@ -1090,8 +1089,8 @@ mod tests {
         test::{
             assert_is_pending,
             exec::{
-                assert_strong_count_converges_to_zero, BarrierExec, BlockingExec,
-                ErrorExec, MockExec,
+                BarrierExec, BlockingExec, ErrorExec, MockExec,
+                assert_strong_count_converges_to_zero,
             },
         },
         {collect, expressions::col},

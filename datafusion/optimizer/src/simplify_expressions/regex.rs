@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{lit, BinaryExpr, Expr, Like, Operator};
+use datafusion_expr::{BinaryExpr, Expr, Like, Operator, lit};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
 /// Maximum number of regex alternations (`foo|bar|...`) that will be expanded into multiple `LIKE` expressions.
@@ -73,9 +73,14 @@ pub fn simplify_regex_expr(
                             return Ok(expr);
                         }
                     }
-                } else { match lower_simple(&mode, &left, &hir) { Some(expr) => {
-                    return Ok(expr);
-                } _ => {}}}
+                } else {
+                    match lower_simple(&mode, &left, &hir) {
+                        Some(expr) => {
+                            return Ok(expr);
+                        }
+                        _ => {}
+                    }
+                }
             }
             Err(e) => {
                 // error out early since the execution may fail anyways
@@ -348,20 +353,23 @@ fn lower_alt(mode: &OperatorMode, left: &Expr, alts: &[Hir]) -> Option<Expr> {
     let mut accu: Option<Expr> = None;
 
     for part in alts {
-        match lower_simple(mode, left, part) { Some(expr) => {
-            accu = match accu {
-                Some(accu) => {
-                    if mode.not {
-                        Some(accu.and(expr))
-                    } else {
-                        Some(accu.or(expr))
+        match lower_simple(mode, left, part) {
+            Some(expr) => {
+                accu = match accu {
+                    Some(accu) => {
+                        if mode.not {
+                            Some(accu.and(expr))
+                        } else {
+                            Some(accu.or(expr))
+                        }
                     }
-                }
-                None => Some(expr),
-            };
-        } _ => {
-            return None;
-        }}
+                    None => Some(expr),
+                };
+            }
+            _ => {
+                return None;
+            }
+        }
     }
 
     Some(accu.expect("at least two alts"))

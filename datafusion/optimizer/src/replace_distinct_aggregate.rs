@@ -25,8 +25,8 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
-use datafusion_expr::{col, ExprFunctionExt, LogicalPlanBuilder};
 use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
+use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, col};
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 ///
@@ -191,7 +191,7 @@ mod tests {
 
     use datafusion_common::Result;
     use datafusion_expr::{
-        col, logical_plan::builder::LogicalPlanBuilder, Expr, LogicalPlan,
+        Expr, LogicalPlan, col, logical_plan::builder::LogicalPlanBuilder,
     };
     use datafusion_functions_aggregate::sum::sum;
 
@@ -225,8 +225,7 @@ mod tests {
             .distinct()?
             .build()?;
 
-        let expected =
-            "Projection: test.a, test.b\n  Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n    TableScan: test";
+        let expected = "Projection: test.a, test.b\n  Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n    TableScan: test";
         assert_optimized_plan_equal(&plan, expected)
     }
 
@@ -251,8 +250,7 @@ mod tests {
             .distinct()?
             .build()?;
 
-        let expected =
-            "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  Projection: test.a, test.b\n    Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[sum(test.c)]]\n      TableScan: test";
+        let expected = "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  Projection: test.a, test.b\n    Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[sum(test.c)]]\n      TableScan: test";
         assert_optimized_plan_equal(&plan, expected)
     }
 }

@@ -29,9 +29,9 @@ use tonic::{Request, Response, Status, Streaming};
 use datafusion::prelude::*;
 
 use arrow_flight::{
-    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
+    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
 };
 
 #[derive(Clone)]

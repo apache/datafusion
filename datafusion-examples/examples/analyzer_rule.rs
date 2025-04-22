@@ -16,10 +16,10 @@
 // under the License.
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+use datafusion::common::Result;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::Result;
-use datafusion::logical_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit};
 use datafusion::optimizer::analyzer::AnalyzerRule;
 use datafusion::prelude::SessionContext;
 use std::sync::{Arc, Mutex};

@@ -18,8 +18,8 @@
 use arrow::array::{
     ArrayRef, GenericStringArray, OffsetSizeTrait, StringViewArray, UInt32Array,
 };
-use rand::rngs::StdRng;
 use rand::Rng;
+use rand::rngs::StdRng;
 
 /// Randomly generate string arrays
 pub struct StringArrayGenerator {

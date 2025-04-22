@@ -23,24 +23,24 @@ mod primitive;
 
 use std::mem::{self, size_of};
 
+use crate::aggregates::group_values::GroupValues;
 use crate::aggregates::group_values::multi_group_by::{
     bytes::ByteGroupValueBuilder, bytes_view::ByteViewGroupValueBuilder,
     primitive::PrimitiveGroupValueBuilder,
 };
-use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, Schema, SchemaRef,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, SchemaRef,
     StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -1040,7 +1040,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                         v.push(Box::new(b) as _)
                     }
                     dt => {
-                        return not_impl_err!("{dt} not supported in GroupValuesColumn")
+                        return not_impl_err!("{dt} not supported in GroupValuesColumn");
                     }
                 }
             }
@@ -1242,7 +1242,7 @@ mod tests {
     use datafusion_expr::EmitTo;
 
     use crate::aggregates::group_values::{
-        multi_group_by::GroupValuesColumn, GroupValues,
+        GroupValues, multi_group_by::GroupValuesColumn,
     };
 
     use super::GroupIndexView;

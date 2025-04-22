@@ -25,13 +25,13 @@ use std::{
 
 use crate::file_groups::FileGroup;
 use crate::{
+    PartitionedFile,
     display::FileGroupsDisplay,
     file::FileSource,
     file_compression_type::FileCompressionType,
     file_stream::FileStream,
     source::{DataSource, DataSourceExec},
     statistics::MinMaxStatistics,
-    PartitionedFile,
 };
 use arrow::{
     array::{
@@ -42,25 +42,25 @@ use arrow::{
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
 };
 use datafusion_common::{
-    config::ConfigOptions, exec_err, ColumnStatistics, Constraints, Result, Statistics,
+    ColumnStatistics, Constraints, Result, Statistics, config::ConfigOptions, exec_err,
 };
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_execution::{
-    object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
+    SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
 };
 use datafusion_physical_expr::{
-    expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
-    PhysicalSortExpr,
+    EquivalenceProperties, LexOrdering, Partitioning, PhysicalSortExpr,
+    expressions::Column,
 };
 use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
+    FilterDescription, FilterPushdownResult, FilterPushdownSupport,
+    filter_pushdown_not_supported,
 };
 use datafusion_physical_plan::{
-    display::{display_orderings, ProjectSchemaDisplay},
-    metrics::ExecutionPlanMetricsSet,
-    projection::{all_alias_free_columns, new_projections_for_columns, ProjectionExec},
     DisplayAs, DisplayFormatType, ExecutionPlan,
+    display::{ProjectSchemaDisplay, display_orderings},
+    metrics::ExecutionPlanMetricsSet,
+    projection::{ProjectionExec, all_alias_free_columns, new_projections_for_columns},
 };
 use log::{debug, warn};
 
@@ -1199,7 +1199,10 @@ impl PartitionColumnProjector {
             let actual_data_type = partition_value.data_type();
             if let DataType::Dictionary(key_type, _) = expected_data_type {
                 if !matches!(actual_data_type, DataType::Dictionary(_, _)) {
-                    warn!("Partition value for column {} was not dictionary-encoded, applied auto-fix.", field.name());
+                    warn!(
+                        "Partition value for column {} was not dictionary-encoded, applied auto-fix.",
+                        field.name()
+                    );
                     partition_value = Cow::Owned(ScalarValue::Dictionary(
                         key_type.clone(),
                         Box::new(partition_value.as_ref().clone()),
@@ -1529,8 +1532,8 @@ mod tests {
     };
 
     use datafusion_common::stats::Precision;
-    use datafusion_common::{assert_batches_eq, DFSchema};
-    use datafusion_expr::{execution_props::ExecutionProps, SortExpr};
+    use datafusion_common::{DFSchema, assert_batches_eq};
+    use datafusion_expr::{SortExpr, execution_props::ExecutionProps};
     use datafusion_physical_expr::create_physical_expr;
     use std::collections::HashMap;
 
@@ -1902,7 +1905,7 @@ mod tests {
         use chrono::TimeZone;
         use datafusion_common::DFSchema;
         use datafusion_expr::execution_props::ExecutionProps;
-        use object_store::{path::Path, ObjectMeta};
+        use object_store::{ObjectMeta, path::Path};
 
         struct File {
             name: &'static str,
@@ -1994,7 +1997,9 @@ mod tests {
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\nbuild min rows\ncaused by\ncreate sorting columns\ncaused by\nError during planning: cannot sort by nullable column")
+                expected_result: Err(
+                    "construct min/max statistics for split_groups_by_statistics\ncaused by\nbuild min rows\ncaused by\ncreate sorting columns\ncaused by\nError during planning: cannot sort by nullable column",
+                ),
             },
             TestCase {
                 name: "all three non-overlapping",
@@ -2050,7 +2055,9 @@ mod tests {
                     File::new("2", "2023-01-02", vec![None]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\ncollect min/max values\ncaused by\nget min/max for column: 'value'\ncaused by\nError during planning: statistics not found"),
+                expected_result: Err(
+                    "construct min/max statistics for split_groups_by_statistics\ncaused by\ncollect min/max values\ncaused by\nget min/max for column: 'value'\ncaused by\nError during planning: statistics not found",
+                ),
             },
         ];
 

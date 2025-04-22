@@ -21,7 +21,7 @@ use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, arrow_datafusion_err};
 use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::{
     Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,

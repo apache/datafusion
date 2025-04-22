@@ -18,9 +18,9 @@
 //! [`ExtractEquijoinPredicate`] identifies equality join (equijoin) predicates
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::DFSchema;
 use datafusion_common::Result;
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, Join, LogicalPlan, Operator};
@@ -158,7 +158,7 @@ mod tests {
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
-        col, lit, logical_plan::builder::LogicalPlanBuilder, JoinType,
+        JoinType, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
     use std::sync::Arc;
 

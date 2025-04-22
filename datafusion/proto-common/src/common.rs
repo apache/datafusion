@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_datafusion_err, DataFusionError};
+use datafusion_common::{DataFusionError, internal_datafusion_err};
 
 /// Return a `DataFusionError::Internal` with the given message
 pub fn proto_error<S: Into<String>>(message: S) -> DataFusionError {

@@ -17,7 +17,7 @@
 
 use arrow::compute::SortOptions;
 use datafusion_common::utils::compare_rows;
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::{ScalarValue, exec_err};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 
@@ -136,36 +136,38 @@ pub fn merge_ordered_arrays(
     let mut merged_orderings = vec![];
     // Continue iterating the loop until consuming data of all branches.
     loop {
-        let minimum = match heap.pop() { Some(minimum) => {
-            minimum
-        } _ => {
-            // Heap is empty, fill it with the next entries from each branch.
-            for branch_idx in 0..n_branch {
-                if let Some(orderings) = ordering_values[branch_idx].pop_front() {
-                    // Their size should be same, we can safely .unwrap here.
-                    let value = values[branch_idx].pop_front().unwrap();
-                    // Push the next element to the heap:
-                    heap.push(CustomElement::new(
-                        branch_idx,
-                        value,
-                        orderings,
-                        sort_options,
-                    ));
+        let minimum = match heap.pop() {
+            Some(minimum) => minimum,
+            _ => {
+                // Heap is empty, fill it with the next entries from each branch.
+                for branch_idx in 0..n_branch {
+                    if let Some(orderings) = ordering_values[branch_idx].pop_front() {
+                        // Their size should be same, we can safely .unwrap here.
+                        let value = values[branch_idx].pop_front().unwrap();
+                        // Push the next element to the heap:
+                        heap.push(CustomElement::new(
+                            branch_idx,
+                            value,
+                            orderings,
+                            sort_options,
+                        ));
+                    }
+                    // If None, we consumed this branch, skip it.
                 }
-                // If None, we consumed this branch, skip it.
-            }
 
-            // Now we have filled the heap, get the largest entry (this will be
-            // the next element in merge).
-            match heap.pop() { Some(minimum) => {
-                minimum
-            } _ => {
-                // Heap is empty, this means that all indices are same with
-                // `end_indices`. We have consumed all of the branches, merge
-                // is completed, exit from the loop:
-                break;
-            }}
-        }};
+                // Now we have filled the heap, get the largest entry (this will be
+                // the next element in merge).
+                match heap.pop() {
+                    Some(minimum) => minimum,
+                    _ => {
+                        // Heap is empty, this means that all indices are same with
+                        // `end_indices`. We have consumed all of the branches, merge
+                        // is completed, exit from the loop:
+                        break;
+                    }
+                }
+            }
+        };
         let CustomElement {
             branch_idx,
             value,

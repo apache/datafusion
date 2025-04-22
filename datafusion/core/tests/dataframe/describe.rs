@@ -17,7 +17,7 @@
 
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::test_util::batches_to_string;
-use datafusion_common::{test_util::parquet_test_data, Result};
+use datafusion_common::{Result, test_util::parquet_test_data};
 use insta::assert_snapshot;
 
 #[tokio::test]

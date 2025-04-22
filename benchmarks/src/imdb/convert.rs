@@ -26,8 +26,8 @@ use structopt::StructOpt;
 
 use datafusion::common::not_impl_err;
 
-use super::get_imdb_table_schema;
 use super::IMDB_TABLES;
+use super::get_imdb_table_schema;
 
 #[derive(Debug, StructOpt)]
 pub struct ConvertOpt {

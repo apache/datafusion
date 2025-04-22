@@ -20,20 +20,20 @@ use arrow::array::ArrayDataBuilder;
 use arrow::array::BufferBuilder;
 use arrow::array::GenericStringArray;
 use arrow::array::StringViewBuilder;
-use arrow::array::{new_null_array, ArrayIter, AsArray};
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::array::{ArrayAccessor, StringViewArray};
+use arrow::array::{ArrayIter, AsArray, new_null_array};
 use arrow::datatypes::DataType;
+use datafusion_common::ScalarValue;
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
-use datafusion_common::ScalarValue;
 use datafusion_common::{
-    cast::as_generic_string_array, internal_err, DataFusionError, Result,
+    DataFusionError, Result, cast::as_generic_string_array, internal_err,
 };
-use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
+use datafusion_expr::function::Hint;
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use regex::Regex;
@@ -433,11 +433,17 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     );
     let flags = match args.len() {
         3 => None,
-        4 => Some(fetch_string_arg!(&args[3], "flags", i32, _regexp_replace_early_abort, array_size)),
+        4 => Some(fetch_string_arg!(
+            &args[3],
+            "flags",
+            i32,
+            _regexp_replace_early_abort,
+            array_size
+        )),
         other => {
             return exec_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
-            )
+            );
         }
     };
 

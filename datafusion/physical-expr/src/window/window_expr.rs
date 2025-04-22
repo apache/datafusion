@@ -22,13 +22,13 @@ use std::sync::Arc;
 
 use crate::{LexOrdering, PhysicalExpr};
 
-use arrow::array::{new_empty_array, Array, ArrayRef};
-use arrow::compute::kernels::sort::SortColumn;
+use arrow::array::{Array, ArrayRef, new_empty_array};
 use arrow::compute::SortOptions;
+use arrow::compute::kernels::sort::SortColumn;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::compare_rows;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,
 };

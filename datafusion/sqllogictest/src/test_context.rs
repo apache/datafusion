@@ -32,7 +32,7 @@ use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
 };
 use datafusion::common::DataFusionError;
-use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarUDF, Volatility};
+use datafusion::logical_expr::{ColumnarValue, Expr, ScalarUDF, Volatility, create_udf};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::{

@@ -19,8 +19,8 @@ use arrow::array::{
     ArrayRef, BinaryViewArray, GenericBinaryArray, OffsetSizeTrait, UInt32Array,
 };
 use arrow::compute;
-use rand::rngs::StdRng;
 use rand::Rng;
+use rand::rngs::StdRng;
 
 /// Randomly generate binary arrays
 pub struct BinaryArrayGenerator {

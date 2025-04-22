@@ -29,8 +29,8 @@ use datafusion_common::cast::as_binary_array;
 
 use arrow::compute::StringArrayType;
 use datafusion_common::{
-    exec_err, internal_err, plan_err, utils::take_function_args, DataFusionError, Result,
-    ScalarValue,
+    DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err,
+    utils::take_function_args,
 };
 use datafusion_expr::ColumnarValue;
 use md5::Md5;
@@ -265,7 +265,7 @@ impl DigestAlgorithm {
                 self.digest_binary_array_impl::<&BinaryViewArray>(v)
             }
             other => {
-                return exec_err!("unsupported type for digest_utf_array: {other:?}")
+                return exec_err!("unsupported type for digest_utf_array: {other:?}");
             }
         };
         Ok(ColumnarValue::Array(array))
@@ -286,7 +286,7 @@ impl DigestAlgorithm {
                 self.digest_utf8_array_impl::<&StringViewArray>(v)
             }
             other => {
-                return exec_err!("unsupported type for digest_utf_array: {other:?}")
+                return exec_err!("unsupported type for digest_utf_array: {other:?}");
             }
         };
         Ok(ColumnarValue::Array(array))

@@ -21,7 +21,7 @@ use arrow::{
     array::{ArrayRef, Int64Array},
     datatypes::DataType,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::gcd;

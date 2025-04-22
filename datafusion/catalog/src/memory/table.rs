@@ -29,19 +29,19 @@ use datafusion_expr::TableType;
 use datafusion_physical_expr::create_physical_sort_exprs;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{
-    common, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    ExecutionPlan, ExecutionPlanProperties, Partitioning, common,
 };
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
+use datafusion_common::{Constraints, DFSchema, SchemaExt, not_impl_err, plan_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::memory::MemSink;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_expr::dml::InsertOp;
 use datafusion_expr::SortExpr;
+use datafusion_expr::dml::InsertOp;
 use datafusion_session::Session;
 
 use async_trait::async_trait;

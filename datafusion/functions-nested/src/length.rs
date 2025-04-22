@@ -26,7 +26,7 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, UInt64},
 };
 use datafusion_common::cast::{as_generic_list_array, as_int64_array};
-use datafusion_common::{exec_err, internal_datafusion_err, plan_err, Result};
+use datafusion_common::{Result, exec_err, internal_datafusion_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -98,7 +98,9 @@ impl ScalarUDFImpl for ArrayLength {
         Ok(match arg_types[0] {
             List(_) | LargeList(_) | FixedSizeList(_, _) => UInt64,
             _ => {
-                return plan_err!("The array_length function can only accept List/LargeList/FixedSizeList.");
+                return plan_err!(
+                    "The array_length function can only accept List/LargeList/FixedSizeList."
+                );
             }
         })
     }

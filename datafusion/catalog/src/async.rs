@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_common::{error::Result, not_impl_err, HashMap, TableReference};
+use datafusion_common::{HashMap, TableReference, error::Result, not_impl_err};
 use datafusion_execution::config::SessionConfig;
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
@@ -60,7 +60,9 @@ impl SchemaProvider for ResolvedSchemaProvider {
     }
 
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        not_impl_err!("Attempt to deregister table '{name}' with ResolvedSchemaProvider which is not supported")
+        not_impl_err!(
+            "Attempt to deregister table '{name}' with ResolvedSchemaProvider which is not supported"
+        )
     }
 
     fn table_exist(&self, name: &str) -> bool {
@@ -425,14 +427,14 @@ mod tests {
     use std::{
         any::Any,
         sync::{
-            atomic::{AtomicU32, Ordering},
             Arc,
+            atomic::{AtomicU32, Ordering},
         },
     };
 
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
-    use datafusion_common::{error::Result, Statistics, TableReference};
+    use datafusion_common::{Statistics, TableReference, error::Result};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::{Expr, TableType};
     use datafusion_physical_plan::ExecutionPlan;

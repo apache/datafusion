@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::protobuf_common as protobuf;
 use crate::protobuf_common::{
-    arrow_type::ArrowTypeEnum, scalar_value::Value, EmptyMessage,
+    EmptyMessage, arrow_type::ArrowTypeEnum, scalar_value::Value,
 };
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::csv::WriterBuilder;
@@ -30,6 +30,8 @@ use arrow::datatypes::{
 };
 use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator};
 use datafusion_common::{
+    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, JoinSide, ScalarValue, Statistics,
     config::{
         CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
         TableParquetOptions,
@@ -38,8 +40,6 @@ use datafusion_common::{
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
-    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, JoinSide, ScalarValue, Statistics,
 };
 
 #[derive(Debug)]

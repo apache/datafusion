@@ -18,7 +18,7 @@
 use arrow::array::builder::{Int32Builder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, CaseExpr, Column, Literal};

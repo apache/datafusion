@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    builder::StringViewBuilder, cast::AsArray, Array, ArrayRef, RecordBatch,
-    RecordBatchOptions,
+    Array, ArrayRef, RecordBatch, RecordBatchOptions, builder::StringViewBuilder,
+    cast::AsArray,
 };
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
@@ -233,11 +233,7 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
                 .iter()
                 .map(|v| {
                     let len = (*v as u32) as usize;
-                    if len > 12 {
-                        len
-                    } else {
-                        0
-                    }
+                    if len > 12 { len } else { 0 }
                 })
                 .sum();
             let actual_buffer_size = s.get_buffer_memory_size();
@@ -278,7 +274,7 @@ mod tests {
 
     use super::*;
 
-    use arrow::array::{builder::ArrayBuilder, StringViewArray, UInt32Array};
+    use arrow::array::{StringViewArray, UInt32Array, builder::ArrayBuilder};
     use arrow::datatypes::{DataType, Field, Schema};
 
     #[test]

@@ -30,11 +30,11 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{internal_err, plan_err, Column, Result, ScalarValue};
+use datafusion_common::{Column, Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, expr};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default, Debug)]
@@ -99,28 +99,30 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = filter.input.as_ref().clone();
                 for (subquery, alias) in subqueries {
-                    match build_join(&subquery, &cur_input, &alias)?
-                    { Some((optimized_subquery, expr_check_map)) => {
-                        if !expr_check_map.is_empty() {
-                            rewrite_expr = rewrite_expr
-                                .transform_up(|expr| {
-                                    // replace column references with entry in map, if it exists
-                                    if let Some(map_expr) = expr
-                                        .try_as_col()
-                                        .and_then(|col| expr_check_map.get(&col.name))
-                                    {
-                                        Ok(Transformed::yes(map_expr.clone()))
-                                    } else {
-                                        Ok(Transformed::no(expr))
-                                    }
-                                })
-                                .data()?;
+                    match build_join(&subquery, &cur_input, &alias)? {
+                        Some((optimized_subquery, expr_check_map)) => {
+                            if !expr_check_map.is_empty() {
+                                rewrite_expr = rewrite_expr
+                                    .transform_up(|expr| {
+                                        // replace column references with entry in map, if it exists
+                                        if let Some(map_expr) = expr
+                                            .try_as_col()
+                                            .and_then(|col| expr_check_map.get(&col.name))
+                                        {
+                                            Ok(Transformed::yes(map_expr.clone()))
+                                        } else {
+                                            Ok(Transformed::no(expr))
+                                        }
+                                    })
+                                    .data()?;
+                            }
+                            cur_input = optimized_subquery;
                         }
-                        cur_input = optimized_subquery;
-                    } _ => {
-                        // if we can't handle all of the subqueries then bail for now
-                        return Ok(Transformed::no(LogicalPlan::Filter(filter)));
-                    }}
+                        _ => {
+                            // if we can't handle all of the subqueries then bail for now
+                            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                        }
+                    }
                 }
                 let new_plan = LogicalPlanBuilder::from(cur_input)
                     .filter(rewrite_expr)?
@@ -152,37 +154,41 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueries {
-                    match build_join(&subquery, &cur_input, &alias)?
-                    { Some((optimized_subquery, expr_check_map)) => {
-                        cur_input = optimized_subquery;
-                        if !expr_check_map.is_empty() {
-                            if let Some(expr) = subquery_to_expr_map.get(&subquery) {
-                                if let Some(rewrite_expr) =
-                                    expr_to_rewrite_expr_map.get(expr)
-                                {
-                                    let new_expr = rewrite_expr
-                                        .clone()
-                                        .transform_up(|expr| {
-                                            // replace column references with entry in map, if it exists
-                                            if let Some(map_expr) =
-                                                expr.try_as_col().and_then(|col| {
-                                                    expr_check_map.get(&col.name)
-                                                })
-                                            {
-                                                Ok(Transformed::yes(map_expr.clone()))
-                                            } else {
-                                                Ok(Transformed::no(expr))
-                                            }
-                                        })
-                                        .data()?;
-                                    expr_to_rewrite_expr_map.insert(expr, new_expr);
+                    match build_join(&subquery, &cur_input, &alias)? {
+                        Some((optimized_subquery, expr_check_map)) => {
+                            cur_input = optimized_subquery;
+                            if !expr_check_map.is_empty() {
+                                if let Some(expr) = subquery_to_expr_map.get(&subquery) {
+                                    if let Some(rewrite_expr) =
+                                        expr_to_rewrite_expr_map.get(expr)
+                                    {
+                                        let new_expr = rewrite_expr
+                                            .clone()
+                                            .transform_up(|expr| {
+                                                // replace column references with entry in map, if it exists
+                                                if let Some(map_expr) =
+                                                    expr.try_as_col().and_then(|col| {
+                                                        expr_check_map.get(&col.name)
+                                                    })
+                                                {
+                                                    Ok(Transformed::yes(map_expr.clone()))
+                                                } else {
+                                                    Ok(Transformed::no(expr))
+                                                }
+                                            })
+                                            .data()?;
+                                        expr_to_rewrite_expr_map.insert(expr, new_expr);
+                                    }
                                 }
                             }
                         }
-                    } _ => {
-                        // if we can't handle all of the subqueries then bail for now
-                        return Ok(Transformed::no(LogicalPlan::Projection(projection)));
-                    }}
+                        _ => {
+                            // if we can't handle all of the subqueries then bail for now
+                            return Ok(Transformed::no(LogicalPlan::Projection(
+                                projection,
+                            )));
+                        }
+                    }
                 }
 
                 let mut proj_exprs = vec![];
@@ -405,7 +411,7 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_expr::test::function_stub::sum;
 
-    use datafusion_expr::{col, lit, out_ref_col, scalar_subquery, Between};
+    use datafusion_expr::{Between, col, lit, out_ref_col, scalar_subquery};
     use datafusion_functions_aggregate::min_max::{max, min};
 
     /// Test multiple correlated subqueries

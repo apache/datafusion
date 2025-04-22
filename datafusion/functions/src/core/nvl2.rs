@@ -19,10 +19,10 @@ use arrow::array::Array;
 use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, utils::take_function_args, Result};
+use datafusion_common::{Result, internal_err, utils::take_function_args};
 use datafusion_expr::{
-    type_coercion::binary::comparison_coercion, ColumnarValue, Documentation,
-    ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility, type_coercion::binary::comparison_coercion,
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;

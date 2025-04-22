@@ -24,7 +24,7 @@ use arrow::datatypes::{
     DataType::{Boolean, FixedSizeList, LargeList, List},
 };
 use datafusion_common::cast::as_generic_list_array;
-use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, plan_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -93,7 +93,9 @@ impl ScalarUDFImpl for ArrayEmpty {
         Ok(match arg_types[0] {
             List(_) | LargeList(_) | FixedSizeList(_, _) => Boolean,
             _ => {
-                return plan_err!("The array_empty function can only accept List/LargeList/FixedSizeList.");
+                return plan_err!(
+                    "The array_empty function can only accept List/LargeList/FixedSizeList."
+                );
             }
         })
     }

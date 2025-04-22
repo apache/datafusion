@@ -19,7 +19,7 @@
 mod tests {
 
     use crate::datasource::MemTable;
-    use crate::datasource::{provider_as_source, DefaultTableSource};
+    use crate::datasource::{DefaultTableSource, provider_as_source};
     use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
     use arrow::array::{AsArray, Int32Array};
@@ -29,8 +29,8 @@ mod tests {
     use arrow_schema::SchemaRef;
     use datafusion_catalog::TableProvider;
     use datafusion_common::{DataFusionError, Result};
-    use datafusion_expr::dml::InsertOp;
     use datafusion_expr::LogicalPlanBuilder;
+    use datafusion_expr::dml::InsertOp;
     use futures::StreamExt;
     use std::collections::HashMap;
     use std::sync::Arc;

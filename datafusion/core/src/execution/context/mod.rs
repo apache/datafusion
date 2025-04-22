@@ -33,12 +33,12 @@ use crate::{
     datasource::listing::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
     },
-    datasource::{provider_as_source, MemTable, ViewTable},
+    datasource::{MemTable, ViewTable, provider_as_source},
     error::{DataFusionError, Result},
     execution::{
+        FunctionRegistry,
         options::ArrowReadOptions,
         runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
-        FunctionRegistry,
     },
     logical_expr::AggregateUDF,
     logical_expr::ScalarUDF,
@@ -58,30 +58,30 @@ pub use crate::execution::session_state::SessionState;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::MemoryCatalogProvider;
+use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
+    DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
+pub use datafusion_execution::TaskContext;
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::registry::SerializerRegistry;
-pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
+    Expr, UserDefinedLogicalNode, WindowUDF,
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
     planner::ExprPlanner,
-    Expr, UserDefinedLogicalNode, WindowUDF,
 };
-use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::Analyzer;
+use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use datafusion_session::SessionStore;
 
@@ -1015,13 +1015,16 @@ impl SessionContext {
                     state.config_options().catalog.default_catalog.to_string()
                 }
             };
-            match state.catalog_list().catalog(&catalog_name) { Some(catalog) => {
-                catalog
-            } _ => if allow_missing {
-                return self.return_empty_dataframe();
-            } else {
-                return self.schema_doesnt_exist_err(name);
-            }}
+            match state.catalog_list().catalog(&catalog_name) {
+                Some(catalog) => catalog,
+                _ => {
+                    if allow_missing {
+                        return self.return_empty_dataframe();
+                    } else {
+                        return self.schema_doesnt_exist_err(name);
+                    }
+                }
+            }
         };
         let dereg = catalog.deregister_schema(name.schema_name(), cascade)?;
         match (dereg, allow_missing) {
@@ -1071,7 +1074,7 @@ impl SessionContext {
                 return Err(DataFusionError::Plan(format!(
                     "Unknown runtime configuration: {}",
                     variable
-                )))
+                )));
             }
         }
         Ok(())

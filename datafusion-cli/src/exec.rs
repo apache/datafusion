@@ -29,8 +29,8 @@ use crate::{
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::prelude::*;
 use std::io::BufReader;
+use std::io::prelude::*;
 
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
@@ -39,15 +39,15 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
-use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
+use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
 use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::sql::sqlparser;
-use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use rustyline::error::ReadlineError;
 use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
@@ -610,8 +610,7 @@ mod tests {
     #[tokio::test]
     async fn create_object_store_table_gcs() -> Result<()> {
         let service_account_path = "fake_service_account_path";
-        let service_account_key =
-            "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\", \"private_key_id\":\"id\"}";
+        let service_account_key = "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\", \"private_key_id\":\"id\"}";
         let application_credentials_path = "fake_application_credentials_path";
         let location = "gcs://bucket/path/file.parquet";
 
@@ -624,7 +623,9 @@ mod tests {
         assert!(err.to_string().contains("os error 2"));
 
         // for service_account_key
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_key' '{service_account_key}') LOCATION '{location}'");
+        let sql = format!(
+            "CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_key' '{service_account_key}') LOCATION '{location}'"
+        );
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err()
@@ -659,8 +660,9 @@ mod tests {
         let location = "path/to/file.cvs";
 
         // Test with format options
-        let sql =
-            format!("CREATE EXTERNAL TABLE test STORED AS CSV LOCATION '{location}' OPTIONS('format.has_header' 'true')");
+        let sql = format!(
+            "CREATE EXTERNAL TABLE test STORED AS CSV LOCATION '{location}' OPTIONS('format.has_header' 'true')"
+        );
         create_external_table_test(location, &sql).await.unwrap();
 
         Ok(())

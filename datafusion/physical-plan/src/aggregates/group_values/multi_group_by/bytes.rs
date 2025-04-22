@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
+use crate::aggregates::group_values::multi_group_by::{GroupColumn, nulls_equal_to};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{
-    types::GenericStringType, Array, ArrayRef, AsArray, BufferBuilder,
-    GenericBinaryArray, GenericByteArray, GenericStringArray, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, BufferBuilder, GenericBinaryArray, GenericByteArray,
+    GenericStringArray, OffsetSizeTrait, types::GenericStringType,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
-use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
+use datafusion_physical_expr_common::binary_map::{INITIAL_BUFFER_CAPACITY, OutputType};
 use itertools::izip;
 use std::mem::size_of;
 use std::sync::Arc;

@@ -22,9 +22,9 @@ use std::sync::Arc;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
+    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
-    should_enable_page_index, ParquetAccessPlan, ParquetFileMetrics,
-    ParquetFileReaderFactory,
+    should_enable_page_index,
 };
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
@@ -32,7 +32,7 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
 use arrow::datatypes::{SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};

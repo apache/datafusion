@@ -23,21 +23,21 @@ use std::task::{Context, Poll};
 
 use super::work_table::{ReservedBatches, WorkTable, WorkTableExec};
 use crate::execution_plan::{Boundedness, EmissionType};
-use crate::{
-    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
-};
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use crate::{
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_common::{DataFusionError, Result, not_impl_err};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
-use futures::{ready, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready};
 
 /// Recursive query execution plan.
 ///

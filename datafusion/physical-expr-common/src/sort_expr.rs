@@ -17,7 +17,7 @@
 
 //! Sort expressions
 
-use crate::physical_expr::{fmt_sql, PhysicalExpr};
+use crate::physical_expr::{PhysicalExpr, fmt_sql};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};

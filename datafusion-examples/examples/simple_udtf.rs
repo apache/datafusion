@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::csv::reader::Format;
 use arrow::csv::ReaderBuilder;
+use arrow::csv::reader::Format;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
 use datafusion::catalog::TableFunctionImpl;
-use datafusion::common::{plan_err, ScalarValue};
-use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::common::{ScalarValue, plan_err};
 use datafusion::datasource::TableProvider;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;

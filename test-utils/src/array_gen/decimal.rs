@@ -17,8 +17,8 @@
 
 use arrow::array::{ArrayRef, PrimitiveArray, PrimitiveBuilder, UInt32Array};
 use arrow::datatypes::DecimalType;
-use rand::rngs::StdRng;
 use rand::Rng;
+use rand::rngs::StdRng;
 
 use super::random_data::RandomNativeData;
 

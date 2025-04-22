@@ -17,7 +17,7 @@
 
 use crate::util::{BenchmarkRun, CommonOpt};
 use datafusion::{error::Result, prelude::SessionContext};
-use datafusion_common::{exec_datafusion_err, instant::Instant, DataFusionError};
+use datafusion_common::{DataFusionError, exec_datafusion_err, instant::Instant};
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 

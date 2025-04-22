@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
 use crate::SendableRecordBatchStream;
+use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::Array;
 use arrow::datatypes::Schema;
@@ -28,7 +28,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Fuse, StreamExt};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 /// A [`Stream`](futures::Stream) that has multiple partitions that can
 /// be polled separately but not concurrently

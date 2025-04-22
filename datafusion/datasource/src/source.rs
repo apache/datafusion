@@ -36,8 +36,8 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
+    FilterDescription, FilterPushdownResult, FilterPushdownSupport,
+    filter_pushdown_not_supported,
 };
 
 /// Common behaviors in Data Sources for both from Files and Memory.

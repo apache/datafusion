@@ -21,7 +21,7 @@ pub(crate) mod groups_accumulator {
         pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
     }
     pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
-        accumulate::NullState, GroupsAccumulatorAdapter,
+        GroupsAccumulatorAdapter, accumulate::NullState,
     };
 }
 pub(crate) mod stats {
@@ -30,8 +30,8 @@ pub(crate) mod stats {
 pub mod utils {
     #[allow(deprecated)] // allow adjust_output_array
     pub use datafusion_functions_aggregate_common::utils::{
-        adjust_output_array, get_accum_scalar_values_as_arrays, get_sort_options,
-        ordering_fields, DecimalAverager, Hashable,
+        DecimalAverager, Hashable, adjust_output_array,
+        get_accum_scalar_values_as_arrays, get_sort_options, ordering_fields,
     };
 }
 
@@ -42,7 +42,7 @@ use crate::expressions::Column;
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
@@ -230,7 +230,7 @@ impl AggregateExprBuilder {
             None => {
                 return internal_err!(
                     "AggregateExprBuilder::alias must be provided prior to calling build"
-                )
+                );
             }
             Some(alias) => alias,
         };

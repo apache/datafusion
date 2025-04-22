@@ -27,7 +27,7 @@ use arrow::{
 };
 
 use crate::PhysicalExpr;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::ColumnarValue;
 
 /// A place holder expression, can not be evaluated.

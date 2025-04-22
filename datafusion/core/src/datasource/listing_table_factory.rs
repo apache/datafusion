@@ -28,8 +28,8 @@ use crate::datasource::listing::{
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, ToDFSchema};
-use datafusion_common::{config_datafusion_err, Result};
+use datafusion_common::{DataFusionError, ToDFSchema, arrow_datafusion_err, plan_err};
+use datafusion_common::{Result, config_datafusion_err};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;

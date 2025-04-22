@@ -67,17 +67,17 @@ use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
-use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::file::metadata::ParquetMetaData;
 
+use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::Result;
 use datafusion_datasource::schema_adapter::{SchemaAdapterFactory, SchemaMapper};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::reassign_predicate_columns;
-use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
+use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
 
@@ -316,18 +316,21 @@ impl<'schema> PushdownChecker<'schema> {
     }
 
     fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
-        match self.table_schema.index_of(column_name) { Ok(idx) => {
-            self.required_columns.insert(idx);
-            if DataType::is_nested(self.table_schema.field(idx).data_type()) {
-                self.non_primitive_columns = true;
+        match self.table_schema.index_of(column_name) {
+            Ok(idx) => {
+                self.required_columns.insert(idx);
+                if DataType::is_nested(self.table_schema.field(idx).data_type()) {
+                    self.non_primitive_columns = true;
+                    return Some(TreeNodeRecursion::Jump);
+                }
+            }
+            _ => {
+                // If the column does not exist in the (un-projected) table schema then
+                // it must be a projected column.
+                self.projected_columns = true;
                 return Some(TreeNodeRecursion::Jump);
             }
-        } _ => {
-            // If the column does not exist in the (un-projected) table schema then
-            // it must be a projected column.
-            self.projected_columns = true;
-            return Some(TreeNodeRecursion::Jump);
-        }}
+        }
 
         None
     }
@@ -518,7 +521,7 @@ mod test {
 
     use arrow::datatypes::{Field, Fields, TimeUnit::Nanosecond};
     use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
-    use datafusion_expr::{col, Expr};
+    use datafusion_expr::{Expr, col};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::{Count, Time};
 

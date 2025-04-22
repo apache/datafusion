@@ -49,17 +49,17 @@
 //! 10:29:40.809  INFO                 main ThreadId(01) tracing: ***** WITH tracer: Non-main tasks DID inherit the `run_instrumented_query` span *****
 //! ```
 
-use datafusion::common::runtime::{set_join_set_tracer, JoinSetTracer};
+use datafusion::common::runtime::{JoinSetTracer, set_join_set_tracer};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion::test_util::parquet_test_data;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use std::any::Any;
 use std::sync::Arc;
-use tracing::{info, instrument, Instrument, Level, Span};
+use tracing::{Instrument, Level, Span, info, instrument};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -73,7 +73,9 @@ async fn main() -> Result<()> {
     // Run query WITHOUT tracer injection.
     info!("***** RUNNING WITHOUT INJECTED TRACER *****");
     run_instrumented_query().await?;
-    info!("***** WITHOUT tracer: `tokio-runtime-worker` tasks did NOT inherit the `run_instrumented_query` span *****");
+    info!(
+        "***** WITHOUT tracer: `tokio-runtime-worker` tasks did NOT inherit the `run_instrumented_query` span *****"
+    );
 
     // Inject custom tracer so tasks run in the current span.
     info!("Injecting custom tracer...");
@@ -82,7 +84,9 @@ async fn main() -> Result<()> {
     // Run query WITH tracer injection.
     info!("***** RUNNING WITH INJECTED TRACER *****");
     run_instrumented_query().await?;
-    info!("***** WITH tracer: `tokio-runtime-worker` tasks DID inherit the `run_instrumented_query` span *****");
+    info!(
+        "***** WITH tracer: `tokio-runtime-worker` tasks DID inherit the `run_instrumented_query` span *****"
+    );
 
     Ok(())
 }

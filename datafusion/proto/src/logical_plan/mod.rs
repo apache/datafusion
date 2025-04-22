@@ -21,18 +21,18 @@ use std::sync::Arc;
 
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{
-    dml_node, ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
-    CustomTableScanNode, DmlNode, SortExprNodeCollection,
+    ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
+    CustomTableScanNode, DmlNode, SortExprNodeCollection, dml_node,
 };
 use crate::{
     convert_required, into_required,
     protobuf::{
-        self, listing_table_scan_node::FileFormatType,
-        logical_plan_node::LogicalPlanType, LogicalExtensionNode, LogicalPlanNode,
+        self, LogicalExtensionNode, LogicalPlanNode,
+        listing_table_scan_node::FileFormatType, logical_plan_node::LogicalPlanType,
     },
 };
 
-use crate::protobuf::{proto_error, ToProtoError};
+use crate::protobuf::{ToProtoError, proto_error};
 use arrow::datatypes::{DataType, Schema, SchemaBuilder, SchemaRef};
 use datafusion::datasource::cte_worktable::CteWorkTable;
 #[cfg(feature = "avro")]
@@ -40,45 +40,44 @@ use datafusion::datasource::file_format::avro::AvroFormat;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::{
-    file_type_to_format, format_as_file_type, FileFormatFactory,
+    FileFormatFactory, file_type_to_format, format_as_file_type,
 };
 use datafusion::{
     datasource::{
+        TableProvider,
         file_format::{
-            csv::CsvFormat, json::JsonFormat as OtherNdJsonFormat, FileFormat,
+            FileFormat, csv::CsvFormat, json::JsonFormat as OtherNdJsonFormat,
         },
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
         view::ViewTable,
-        TableProvider,
     },
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    context, internal_datafusion_err, internal_err, not_impl_err, plan_err,
-    DataFusionError, Result, TableReference, ToDFSchema,
-};
-use datafusion_expr::{
-    dml,
-    logical_plan::{
-        builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
-        CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
-        Extension, Join, JoinConstraint, Prepare, Projection, Repartition, Sort,
-        SubqueryAlias, TableScan, Values, Window,
-    },
-    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
-    Statement, WindowUDF,
+    DataFusionError, Result, TableReference, ToDFSchema, context,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_expr::{
     AggregateUDF, ColumnUnnestList, DmlStatement, FetchType, RecursiveQuery, SkipType,
     TableSource, Unnest,
 };
+use datafusion_expr::{
+    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
+    Statement, WindowUDF, dml,
+    logical_plan::{
+        Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
+        DdlStatement, Distinct, EmptyRelation, Extension, Join, JoinConstraint, Prepare,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
+        builder::project,
+    },
+};
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_sorts;
-use prost::bytes::BufMut;
 use prost::Message;
+use prost::bytes::BufMut;
 
 pub mod file_formats;
 pub mod from_proto;
@@ -786,7 +785,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Union(union) => {
                 if union.inputs.len() < 2 {
-                    return  Err( DataFusionError::Internal(String::from(
+                    return Err(DataFusionError::Internal(String::from(
                         "Protobuf deserialization error, Union was require at least two input.",
                     )));
                 }
@@ -1089,9 +1088,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             file_format_type
                         } else {
                             return Err(proto_error(format!(
-                            "Error converting file format, {:?} is invalid as a datafusion format.",
-                            listing_table.options().format
-                        )));
+                                "Error converting file format, {:?} is invalid as a datafusion format.",
+                                listing_table.options().format
+                            )));
                         }
                     };
 
@@ -1457,7 +1456,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         PartitionMethod::RoundRobin(*partition_count as u64)
                     }
                     Partitioning::DistributeBy(_) => {
-                        return not_impl_err!("DistributeBy")
+                        return not_impl_err!("DistributeBy");
                     }
                 };
 

@@ -131,31 +131,28 @@ impl FlightSqlServiceImpl {
         }
         let auth = authorization[bearer.len()..].to_string();
 
-        match self.contexts.get(&auth) { Some(context) => {
-            Ok(context.clone())
-        } _ => {
-            Err(Status::internal(format!(
+        match self.contexts.get(&auth) {
+            Some(context) => Ok(context.clone()),
+            _ => Err(Status::internal(format!(
                 "Context handle not found: {auth}"
-            )))?
-        }}
+            )))?,
+        }
     }
 
     fn get_plan(&self, handle: &str) -> Result<LogicalPlan, Status> {
-        match self.statements.get(handle) { Some(plan) => {
-            Ok(plan.clone())
-        } _ => {
-            Err(Status::internal(format!("Plan handle not found: {handle}")))?
-        }}
+        match self.statements.get(handle) {
+            Some(plan) => Ok(plan.clone()),
+            _ => Err(Status::internal(format!("Plan handle not found: {handle}")))?,
+        }
     }
 
     fn get_result(&self, handle: &str) -> Result<Vec<RecordBatch>, Status> {
-        match self.results.get(handle) { Some(result) => {
-            Ok(result.clone())
-        } _ => {
-            Err(Status::internal(format!(
+        match self.results.get(handle) {
+            Some(result) => Ok(result.clone()),
+            _ => Err(Status::internal(format!(
                 "Request handle not found: {handle}"
-            )))?
-        }}
+            )))?,
+        }
     }
 
     async fn tables(&self, ctx: Arc<SessionContext>) -> RecordBatch {
@@ -413,7 +410,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<(), Status> {
         let handle = std::str::from_utf8(&handle.prepared_statement_handle);
         if let Ok(handle) = handle {
-            info!("do_action_close_prepared_statement: removing plan and results for {handle}");
+            info!(
+                "do_action_close_prepared_statement: removing plan and results for {handle}"
+            );
             let _ = self.remove_plan(handle);
             let _ = self.remove_result(handle);
         }

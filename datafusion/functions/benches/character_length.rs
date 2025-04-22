@@ -18,7 +18,7 @@
 extern crate criterion;
 
 use arrow::datatypes::DataType;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use datafusion_expr::ScalarFunctionArgs;
 use helper::gen_string_array;
 

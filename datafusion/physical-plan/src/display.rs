@@ -30,7 +30,7 @@ use datafusion_physical_expr::LexOrdering;
 
 use crate::render_tree::RenderTree;
 
-use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
+use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
 #[derive(Debug, Clone, Copy, PartialEq)]

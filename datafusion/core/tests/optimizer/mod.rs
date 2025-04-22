@@ -27,11 +27,11 @@ use arrow::datatypes::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
-use datafusion_common::{plan_err, DFSchema, Result, ScalarValue, TableReference};
+use datafusion_common::{DFSchema, Result, ScalarValue, TableReference, plan_err};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
-    col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator,
-    ScalarUDF, TableSource, WindowUDF,
+    AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, ScalarUDF,
+    TableSource, WindowUDF, col, lit,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_optimizer::analyzer::Analyzer;
@@ -68,8 +68,7 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected =
-        "Projection: test.col_int32\
+    let expected = "Projection: test.col_int32\
          \n  Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)\
          \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
     quick_test(sql, expected);
@@ -84,8 +83,7 @@ fn timestamp_nano_ts_utc_predicates() {
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected =
-        "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
+    let expected = "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
          \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
     quick_test(sql, expected);
 }
@@ -95,8 +93,7 @@ fn concat_literals() -> Result<()> {
     let sql = "SELECT concat(true, col_int32, false, null, 'hello', col_utf8, 12, 3.4) \
         AS col
         FROM test";
-    let expected =
-        "Projection: concat(Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"falsehello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
+    let expected = "Projection: concat(Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"falsehello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
         \n  TableScan: test projection=[col_int32, col_utf8]";
     quick_test(sql, expected);
     Ok(())
@@ -107,8 +104,7 @@ fn concat_ws_literals() -> Result<()> {
     let sql = "SELECT concat_ws('-', true, col_int32, false, null, 'hello', col_utf8, 12, '', 3.4) \
         AS col
         FROM test";
-    let expected =
-        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"false-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
+    let expected = "Projection: concat_ws(Utf8(\"-\"), Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"false-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
         \n  TableScan: test projection=[col_int32, col_utf8]";
     quick_test(sql, expected);
     Ok(())

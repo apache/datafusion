@@ -20,17 +20,17 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::PhysicalExpr;
 use crate::expressions::Column;
 use crate::intervals::cp_solver::{ExprIntervalGraph, PropagationResult};
 use crate::utils::collect_columns;
-use crate::PhysicalExpr;
 
 use arrow::datatypes::Schema;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, ColumnStatistics, Result, ScalarValue,
+    ColumnStatistics, Result, ScalarValue, internal_datafusion_err, internal_err,
 };
-use datafusion_expr::interval_arithmetic::{cardinality_ratio, Interval};
+use datafusion_expr::interval_arithmetic::{Interval, cardinality_ratio};
 
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.
@@ -189,8 +189,8 @@ pub fn analyze(
         .any(|bound| bound.interval.is_none())
     {
         internal_err!(
-                "AnalysisContext is an inconsistent state. Some columns represent empty table while others don't"
-            )
+            "AnalysisContext is an inconsistent state. Some columns represent empty table while others don't"
+        )
     } else {
         let mut target_boundaries = context.boundaries;
         let mut graph = ExprIntervalGraph::try_new(Arc::clone(expr), schema)?;
@@ -287,8 +287,8 @@ fn calculate_selectivity(
             }
             (None, Some(_)) => {
                 return internal_err!(
-                "Initial boundary cannot be None while having a Some() target boundary"
-            );
+                    "Initial boundary cannot be None while having a Some() target boundary"
+                );
             }
             _ => return Ok(0.0),
         }
@@ -302,14 +302,14 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{assert_contains, DFSchema};
+    use datafusion_common::{DFSchema, assert_contains};
     use datafusion_expr::{
-        col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit, Expr,
+        Expr, col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit,
     };
 
-    use crate::{create_physical_expr, AnalysisContext};
+    use crate::{AnalysisContext, create_physical_expr};
 
-    use super::{analyze, ExprBoundaries};
+    use super::{ExprBoundaries, analyze};
 
     fn make_field(name: &str, data_type: DataType) -> Field {
         let nullable = false;
@@ -376,7 +376,9 @@ mod tests {
             )
             .unwrap();
             let Some(actual) = &analysis_result.boundaries[0].interval else {
-                panic!("The analysis result should contain non-empty intervals for all columns");
+                panic!(
+                    "The analysis result should contain non-empty intervals for all columns"
+                );
             };
             let expected = Interval::make(lower, upper).unwrap();
             assert_eq!(

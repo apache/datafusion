@@ -20,10 +20,10 @@
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::{
-    arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
+    DataFusionError, exec_datafusion_err, utils::take_function_args,
 };
 use datafusion_common::{
-    exec_datafusion_err, utils::take_function_args, DataFusionError,
+    Result, ScalarValue, arrow_datafusion_err, exec_err, internal_err,
 };
 use std::any::Any;
 

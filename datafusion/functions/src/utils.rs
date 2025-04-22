@@ -19,8 +19,8 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::function::Hint;
 
 /// Creates a function to identify the optimal return type of a string function given
 /// the type of its first argument.

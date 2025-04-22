@@ -28,10 +28,10 @@ use super::{
     Statistics,
 };
 use crate::execution_plan::CardinalityEffect;
-use crate::projection::{make_with_child, ProjectionExec};
+use crate::projection::{ProjectionExec, make_with_child};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::TaskContext;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
@@ -242,7 +242,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
 mod tests {
     use super::*;
     use crate::test::exec::{
-        assert_strong_count_converges_to_zero, BlockingExec, PanicExec,
+        BlockingExec, PanicExec, assert_strong_count_converges_to_zero,
     };
     use crate::test::{self, assert_is_pending};
     use crate::{collect, common};

@@ -28,7 +28,7 @@ use arrow::datatypes::{
 use std::any::Any;
 
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, plan_err, utils::take_function_args};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
 use datafusion_expr::{
@@ -101,7 +101,9 @@ impl ScalarUDFImpl for ArrayDims {
                 List(Arc::new(Field::new_list_field(UInt64, true)))
             }
             _ => {
-                return plan_err!("The array_dims function can only accept List/LargeList/FixedSizeList.");
+                return plan_err!(
+                    "The array_dims function can only accept List/LargeList/FixedSizeList."
+                );
             }
         })
     }
@@ -178,7 +180,9 @@ impl ScalarUDFImpl for ArrayNdims {
         Ok(match arg_types[0] {
             List(_) | LargeList(_) | FixedSizeList(_, _) => UInt64,
             _ => {
-                return plan_err!("The array_ndims function can only accept List/LargeList/FixedSizeList.");
+                return plan_err!(
+                    "The array_ndims function can only accept List/LargeList/FixedSizeList."
+                );
             }
         })
     }

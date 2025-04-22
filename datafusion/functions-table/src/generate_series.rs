@@ -22,10 +22,10 @@ use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::TableProvider;
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{Expr, TableType};
-use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use parking_lot::RwLock;
 use std::fmt;
 use std::sync::Arc;
@@ -232,11 +232,15 @@ impl TableFunctionImpl for GenerateSeriesFuncImpl {
         };
 
         if start > end && step > 0 {
-            return plan_err!("start is bigger than end, but increment is positive: cannot generate infinite series");
+            return plan_err!(
+                "start is bigger than end, but increment is positive: cannot generate infinite series"
+            );
         }
 
         if start < end && step < 0 {
-            return plan_err!("start is smaller than end, but increment is negative: cannot generate infinite series");
+            return plan_err!(
+                "start is smaller than end, but increment is negative: cannot generate infinite series"
+            );
         }
 
         if step == 0 {

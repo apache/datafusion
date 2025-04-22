@@ -66,7 +66,7 @@ impl CliHelper {
                     return Ok(ValidationResult::Invalid(Some(format!(
                         "  🤔 Invalid dialect: {}",
                         self.dialect
-                    ))))
+                    ))));
                 }
             };
             let lines = split_from_semicolon(sql);

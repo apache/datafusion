@@ -18,7 +18,7 @@
 //! Defines common code used in execution plans
 
 use std::fs;
-use std::fs::{metadata, File};
+use std::fs::{File, metadata};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -31,7 +31,7 @@ use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use futures::{StreamExt, TryStreamExt};

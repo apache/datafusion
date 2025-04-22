@@ -25,7 +25,7 @@ use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{
-    execute_stream, visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor,
+    ExecutionPlan, ExecutionPlanVisitor, execute_stream, visit_execution_plan,
 };
 use futures::StreamExt;
 

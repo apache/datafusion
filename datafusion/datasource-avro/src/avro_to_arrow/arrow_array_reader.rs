@@ -19,24 +19,24 @@
 
 use apache_avro::schema::RecordSchema;
 use apache_avro::{
+    AvroResult, Error as AvroError, Reader as AvroReader,
     schema::{Schema as AvroSchema, SchemaKind},
     types::Value,
-    AvroResult, Error as AvroError, Reader as AvroReader,
 };
 use arrow::array::{
-    make_array, Array, ArrayBuilder, ArrayData, ArrayDataBuilder, ArrayRef,
-    BooleanBuilder, LargeStringArray, ListBuilder, NullArray, OffsetSizeTrait,
-    PrimitiveArray, StringArray, StringBuilder, StringDictionaryBuilder,
+    Array, ArrayBuilder, ArrayData, ArrayDataBuilder, ArrayRef, BooleanBuilder,
+    LargeStringArray, ListBuilder, NullArray, OffsetSizeTrait, PrimitiveArray,
+    StringArray, StringBuilder, StringDictionaryBuilder, make_array,
 };
 use arrow::array::{BinaryArray, FixedSizeBinaryArray, GenericListArray};
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNumericType, ArrowPrimitiveType, DataType, Date32Type,
-    Date64Type, Field, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, Schema, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Date64Type, Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, Schema, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow::datatypes::{Fields, SchemaRef};
 use arrow::error::ArrowError;
@@ -325,7 +325,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             e => {
                 return Err(SchemaError(format!(
                     "Nested list data builder type is not supported: {e:?}"
-                )))
+                )));
             }
         };
 
@@ -390,7 +390,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     e => {
                         return Err(SchemaError(format!(
                             "Nested list data builder type is not supported: {e:?}"
-                        )))
+                        )));
                     }
                 }
             }
@@ -413,11 +413,10 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             self.build_string_dictionary_builder(rows.len());
         for row in rows {
             if let Some(value) = self.field_lookup(col_name, row) {
-                match resolve_string(value) { Ok(Some(str_v)) => {
-                    builder.append(str_v).map(drop)?
-                } _ => {
-                    builder.append_null()
-                }}
+                match resolve_string(value) {
+                    Ok(Some(str_v)) => builder.append(str_v).map(drop)?,
+                    _ => builder.append_null(),
+                }
             } else {
                 builder.append_null()
             }
@@ -534,7 +533,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             DataType::UInt32 => self.read_primitive_list_values::<UInt32Type>(rows),
             DataType::UInt64 => self.read_primitive_list_values::<UInt64Type>(rows),
             DataType::Float16 => {
-                return Err(SchemaError("Float16 not supported".to_string()))
+                return Err(SchemaError("Float16 not supported".to_string()));
             }
             DataType::Float32 => self.read_primitive_list_values::<Float32Type>(rows),
             DataType::Float64 => self.read_primitive_list_values::<Float64Type>(rows),
@@ -545,7 +544,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             | DataType::Time64(_) => {
                 return Err(SchemaError(
                     "Temporal types are not yet supported, see ARROW-4803".to_string(),
-                ))
+                ));
             }
             DataType::Utf8 => flatten_string_values(rows)
                 .into_iter()
@@ -741,7 +740,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                         t => {
                             return Err(SchemaError(format!(
                                 "TimeUnit {t:?} not supported with Time64"
-                            )))
+                            )));
                         }
                     },
                     DataType::Time32(unit) => match unit {
@@ -755,7 +754,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                         t => {
                             return Err(SchemaError(format!(
                                 "TimeUnit {t:?} not supported with Time32"
-                            )))
+                            )));
                         }
                     },
                     DataType::Utf8 | DataType::LargeUtf8 => Arc::new(
@@ -859,7 +858,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                         return Err(SchemaError(format!(
                             "type {:?} not supported",
                             field.data_type()
-                        )))
+                        )));
                     }
                 };
                 Ok(arr)

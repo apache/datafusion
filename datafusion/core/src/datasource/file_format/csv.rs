@@ -32,11 +32,11 @@ mod tests {
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_catalog::Session;
+    use datafusion_common::Result;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::{arrow_test_data, batches_to_string};
-    use datafusion_common::Result;
     use datafusion_datasource::decoder::{
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
     };
@@ -44,7 +44,7 @@ mod tests {
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::write::BatchSerializer;
     use datafusion_expr::{col, lit};
-    use datafusion_physical_plan::{collect, ExecutionPlan};
+    use datafusion_physical_plan::{ExecutionPlan, collect};
 
     use arrow::array::{
         BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
@@ -55,8 +55,8 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use chrono::DateTime;
-    use futures::stream::BoxStream;
     use futures::StreamExt;
+    use futures::stream::BoxStream;
     use insta::assert_snapshot;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;

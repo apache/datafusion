@@ -25,12 +25,12 @@ use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
+use super::FileFormatFactory;
 use super::file_compression_type::FileCompressionType;
 use super::write::demux::DemuxedStreamReceiver;
-use super::write::{create_writer, SharedBuffer};
-use super::FileFormatFactory;
-use crate::datasource::file_format::write::get_writer_schema;
+use super::write::{SharedBuffer, create_writer};
 use crate::datasource::file_format::FileFormat;
+use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::physical_plan::{ArrowSource, FileSink, FileSinkConfig};
 use crate::error::Result;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
@@ -40,11 +40,11 @@ use arrow::error::ArrowError;
 use arrow::ipc::convert::fb_to_schema;
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::IpcWriteOptions;
-use arrow::ipc::{root_as_message, CompressionType};
+use arrow::ipc::{CompressionType, root_as_message};
 use datafusion_catalog::Session;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
+    DEFAULT_ARROW_EXTENSION, DataFusionError, GetExt, Statistics, not_impl_err,
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
@@ -59,8 +59,8 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 use tokio::io::AsyncWriteExt;
 

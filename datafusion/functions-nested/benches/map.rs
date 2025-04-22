@@ -20,9 +20,9 @@ extern crate criterion;
 use arrow::array::{Int32Array, ListArray, StringArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rand::prelude::ThreadRng;
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rand::Rng;
+use rand::prelude::ThreadRng;
 use std::collections::HashSet;
 use std::sync::Arc;
 

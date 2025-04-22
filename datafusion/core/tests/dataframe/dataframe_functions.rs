@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{types::Int32Type, ListArray};
+use arrow::array::{ListArray, types::Int32Type};
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
@@ -31,7 +31,7 @@ use datafusion::prelude::*;
 use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::Alias;
-use datafusion_expr::{table_scan, ExprSchemable, LogicalPlanBuilder};
+use datafusion_expr::{ExprSchemable, LogicalPlanBuilder, table_scan};
 use datafusion_functions_aggregate::expr_fn::{approx_median, approx_percentile_cont};
 use datafusion_functions_nested::map::map;
 use insta::assert_snapshot;

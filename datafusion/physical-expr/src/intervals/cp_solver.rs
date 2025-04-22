@@ -148,19 +148,19 @@ use std::sync::Arc;
 use super::utils::{
     convert_duration_type_to_interval, convert_interval_type_to_duration, get_inverse_op,
 };
-use crate::expressions::Literal;
-use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
+use crate::expressions::Literal;
+use crate::utils::{ExprTreeNode, build_dag};
 
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::Operator;
+use datafusion_expr::interval_arithmetic::{Interval, apply_operator, satisfy_greater};
 
+use petgraph::Outgoing;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
-use petgraph::Outgoing;
 
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute ranges for expressions through interval arithmetic.
@@ -622,11 +622,14 @@ impl ExprIntervalGraph {
         given_range: Interval,
     ) -> Result<PropagationResult> {
         // Adjust the root node with the given range:
-        match self.graph[self.root].interval.intersect(given_range)? { Some(interval) => {
-            self.graph[self.root].interval = interval;
-        } _ => {
-            return Ok(PropagationResult::Infeasible);
-        }}
+        match self.graph[self.root].interval.intersect(given_range)? {
+            Some(interval) => {
+                self.graph[self.root].interval = interval;
+            }
+            _ => {
+                return Ok(PropagationResult::Infeasible);
+            }
+        }
 
         let mut bfs = Bfs::new(&self.graph, self.root);
 
@@ -701,22 +704,24 @@ fn propagate_time_interval_at_left(
     // If so, we return it as is without propagating. Otherwise, we first convert
     // the time intervals to the `Duration` type, then propagate, and then convert
     // the bounds to time intervals again.
-    let result = match convert_interval_type_to_duration(left_child) { Some(duration) => {
-        match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
-            Some(value) => {
-                let left = convert_duration_type_to_interval(&value);
-                let right = propagate_right(&value, parent, right_child, op, inverse_op)?;
-                match (left, right) {
-                    (Some(left), Some(right)) => Some((left, right)),
-                    _ => None,
+    let result = match convert_interval_type_to_duration(left_child) {
+        Some(duration) => {
+            match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
+                Some(value) => {
+                    let left = convert_duration_type_to_interval(&value);
+                    let right =
+                        propagate_right(&value, parent, right_child, op, inverse_op)?;
+                    match (left, right) {
+                        (Some(left), Some(right)) => Some((left, right)),
+                        _ => None,
+                    }
                 }
+                None => None,
             }
-            None => None,
         }
-    } _ => {
-        propagate_right(left_child, parent, right_child, op, inverse_op)?
-            .map(|right| (left_child.clone(), right))
-    }};
+        _ => propagate_right(left_child, parent, right_child, op, inverse_op)?
+            .map(|right| (left_child.clone(), right)),
+    };
     Ok(result)
 }
 
@@ -737,20 +742,21 @@ fn propagate_time_interval_at_right(
     // If so, we return it as is without propagating. Otherwise, we first convert
     // the time intervals to the `Duration` type, then propagate, and then convert
     // the bounds to time intervals again.
-    let result = match convert_interval_type_to_duration(right_child) { Some(duration) => {
-        match apply_operator(inverse_op, parent, &duration)?.intersect(left_child)? {
-            Some(value) => {
-                propagate_right(left_child, parent, &duration, op, inverse_op)?
-                    .and_then(|right| convert_duration_type_to_interval(&right))
-                    .map(|right| (value, right))
+    let result = match convert_interval_type_to_duration(right_child) {
+        Some(duration) => {
+            match apply_operator(inverse_op, parent, &duration)?.intersect(left_child)? {
+                Some(value) => {
+                    propagate_right(left_child, parent, &duration, op, inverse_op)?
+                        .and_then(|right| convert_duration_type_to_interval(&right))
+                        .map(|right| (value, right))
+                }
+                None => None,
             }
-            None => None,
         }
-    } _ => {
-        apply_operator(inverse_op, parent, right_child)?
+        _ => apply_operator(inverse_op, parent, right_child)?
             .intersect(left_child)?
-            .map(|value| (value, right_child.clone()))
-    }};
+            .map(|value| (value, right_child.clone())),
+    };
     Ok(result)
 }
 

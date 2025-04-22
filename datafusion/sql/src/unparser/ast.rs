@@ -19,7 +19,7 @@ use core::fmt;
 use std::ops::ControlFlow;
 
 use sqlparser::ast::helpers::attached_token::AttachedToken;
-use sqlparser::ast::{self, visit_expressions_mut, OrderByKind, SelectFlavor};
+use sqlparser::ast::{self, OrderByKind, SelectFlavor, visit_expressions_mut};
 
 #[derive(Clone)]
 pub struct QueryBuilder {
@@ -287,7 +287,7 @@ impl SelectBuilder {
             group_by: match self.group_by {
                 Some(ref value) => value.clone(),
                 None => {
-                    return Err(Into::into(UninitializedFieldError::from("group_by")))
+                    return Err(Into::into(UninitializedFieldError::from("group_by")));
                 }
             },
             cluster_by: self.cluster_by.clone(),
@@ -564,7 +564,7 @@ impl DerivedRelationBuilder {
             subquery: match self.subquery {
                 Some(ref value) => value.clone(),
                 None => {
-                    return Err(Into::into(UninitializedFieldError::from("subquery")))
+                    return Err(Into::into(UninitializedFieldError::from("subquery")));
                 }
             },
             alias: self.alias.clone(),

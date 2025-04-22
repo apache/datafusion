@@ -19,9 +19,8 @@
 use crate::crypto::basic::md5;
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    plan_err,
-    types::{logical_binary, logical_string, NativeType},
-    Result,
+    Result, plan_err,
+    types::{NativeType, logical_binary, logical_string},
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,

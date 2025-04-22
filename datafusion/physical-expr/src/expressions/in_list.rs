@@ -22,8 +22,8 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::physical_exprs_bag_equal;
 use crate::PhysicalExpr;
+use crate::physical_expr::physical_exprs_bag_equal;
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
@@ -38,7 +38,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::hash_utils::HashValue;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue,
+    DFSchema, Result, ScalarValue, exec_err, internal_err, not_impl_err,
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -369,11 +369,7 @@ impl PhysicalExpr for InListExpr {
                     },
                 )?;
 
-                if self.negated {
-                    not(&found)?
-                } else {
-                    found
-                }
+                if self.negated { not(&found)? } else { found }
             }
         };
         Ok(ColumnarValue::Array(Arc::new(r)))
@@ -1451,7 +1447,10 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a IN (a, b)");
-        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }])");
+        assert_eq!(
+            display_string,
+            "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }])"
+        );
 
         // Test: a NOT IN ('a', 'b')
         let list = vec![lit("a"), lit("b")];
@@ -1459,7 +1458,10 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a NOT IN (a, b)");
-        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }])");
+        assert_eq!(
+            display_string,
+            "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }])"
+        );
 
         // Test: a IN ('a', 'b', NULL)
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
@@ -1467,7 +1469,10 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a IN (a, b, NULL)");
-        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }, Literal { value: Utf8(NULL) }])");
+        assert_eq!(
+            display_string,
+            "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }, Literal { value: Utf8(NULL) }])"
+        );
 
         // Test: a NOT IN ('a', 'b', NULL)
         let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
@@ -1475,7 +1480,10 @@ mod tests {
         let sql_string = fmt_sql(expr.as_ref()).to_string();
         let display_string = expr.to_string();
         assert_eq!(sql_string, "a NOT IN (a, b, NULL)");
-        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }, Literal { value: Utf8(NULL) }])");
+        assert_eq!(
+            display_string,
+            "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }, Literal { value: Utf8(NULL) }])"
+        );
 
         Ok(())
     }

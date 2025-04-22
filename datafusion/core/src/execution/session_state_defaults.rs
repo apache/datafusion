@@ -17,6 +17,7 @@
 
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::catalog::{CatalogProvider, TableProviderFactory};
+use crate::datasource::file_format::FileFormatFactory;
 use crate::datasource::file_format::arrow::ArrowFormatFactory;
 #[cfg(feature = "avro")]
 use crate::datasource::file_format::avro::AvroFormatFactory;
@@ -24,7 +25,6 @@ use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::json::JsonFormatFactory;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormatFactory;
-use crate::datasource::file_format::FileFormatFactory;
 use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::context::SessionState;
 #[cfg(feature = "nested_expressions")]

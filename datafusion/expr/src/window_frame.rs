@@ -28,7 +28,7 @@ use arrow::datatypes::DataType;
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
 
-use datafusion_common::{plan_err, sql_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, plan_err, sql_err};
 use sqlparser::ast::{self, ValueWithSpan};
 use sqlparser::parser::ParserError::ParserError;
 
@@ -368,9 +368,10 @@ fn convert_frame_bound_to_scalar_value(
     match units {
         // For ROWS and GROUPS we are sure that the ScalarValue must be a non-negative integer ...
         ast::WindowFrameUnits::Rows | ast::WindowFrameUnits::Groups => match v {
-            ast::Expr::Value(ValueWithSpan{value: ast::Value::Number(value, false), span: _}) => {
-                Ok(ScalarValue::try_from_string(value, &DataType::UInt64)?)
-            },
+            ast::Expr::Value(ValueWithSpan {
+                value: ast::Value::Number(value, false),
+                span: _,
+            }) => Ok(ScalarValue::try_from_string(value, &DataType::UInt64)?),
             ast::Expr::Interval(ast::Interval {
                 value,
                 leading_field: None,
@@ -379,7 +380,10 @@ fn convert_frame_bound_to_scalar_value(
                 fractional_seconds_precision: None,
             }) => {
                 let value = match *value {
-                    ast::Expr::Value(ValueWithSpan{value: ast::Value::SingleQuotedString(item), span: _}) => item,
+                    ast::Expr::Value(ValueWithSpan {
+                        value: ast::Value::SingleQuotedString(item),
+                        span: _,
+                    }) => item,
                     e => {
                         return sql_err!(ParserError(format!(
                             "INTERVAL expression cannot be {e:?}"
@@ -395,14 +399,20 @@ fn convert_frame_bound_to_scalar_value(
         // ... instead for RANGE it could be anything depending on the type of the ORDER BY clause,
         // so we use a ScalarValue::Utf8.
         ast::WindowFrameUnits::Range => Ok(ScalarValue::Utf8(Some(match v {
-            ast::Expr::Value(ValueWithSpan{value: ast::Value::Number(value, false), span: _}) => value,
+            ast::Expr::Value(ValueWithSpan {
+                value: ast::Value::Number(value, false),
+                span: _,
+            }) => value,
             ast::Expr::Interval(ast::Interval {
                 value,
                 leading_field,
                 ..
             }) => {
                 let result = match *value {
-                    ast::Expr::Value(ValueWithSpan{value: ast::Value::SingleQuotedString(item), span: _}) => item,
+                    ast::Expr::Value(ValueWithSpan {
+                        value: ast::Value::SingleQuotedString(item),
+                        span: _,
+                    }) => item,
                     e => {
                         return sql_err!(ParserError(format!(
                             "INTERVAL expression cannot be {e:?}"
@@ -596,8 +606,16 @@ mod tests {
             last_field: None,
             leading_precision: None,
         })));
-        test_bound_err!(Rows, number.clone(), "Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers");
-        test_bound_err!(Groups, number.clone(), "Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers");
+        test_bound_err!(
+            Rows,
+            number.clone(),
+            "Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers"
+        );
+        test_bound_err!(
+            Groups,
+            number.clone(),
+            "Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers"
+        );
         test_bound!(
             Range,
             number.clone(),

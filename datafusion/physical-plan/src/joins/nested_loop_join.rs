@@ -19,32 +19,31 @@
 
 use std::any::Any;
 use std::fmt::Formatter;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 
 use super::utils::{
+    BatchSplitter, BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
     asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
     need_produce_result_in_final, reorder_output_after_swap, swap_join_projection,
-    BatchSplitter, BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::common::can_project;
-use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::execution_plan::{EmissionType, boundedness_from_children};
+use crate::joins::SharedBitmapBuilder;
 use crate::joins::utils::{
+    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
-    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
 };
-use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
-    try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
-    ProjectionExec,
+    EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
+    try_pushdown_through_join,
 };
 use crate::{
-    handle_state, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, handle_state,
 };
 
 use arrow::array::{BooleanBufferBuilder, UInt32Array, UInt64Array};
@@ -52,16 +51,16 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
-    exec_datafusion_err, internal_err, project_schema, JoinSide, Result, Statistics,
+    JoinSide, Result, Statistics, exec_datafusion_err, internal_err, project_schema,
 };
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::{
-    join_equivalence_properties, ProjectionMapping,
+    ProjectionMapping, join_equivalence_properties,
 };
 
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, ready};
 use parking_lot::Mutex;
 
 /// Left (build-side) data
@@ -595,23 +594,24 @@ impl ExecutionPlan for NestedLoopJoinExec {
             &[],
             self.schema(),
             self.filter(),
-        )? { Some(JoinData {
-            projected_left_child,
-            projected_right_child,
-            join_filter,
-            ..
-        }) => {
-            Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
-                Arc::new(projected_left_child),
-                Arc::new(projected_right_child),
+        )? {
+            Some(JoinData {
+                projected_left_child,
+                projected_right_child,
                 join_filter,
-                self.join_type(),
-                // Returned early if projection is not None
-                None,
-            )?)))
-        } _ => {
-            try_embed_projection(projection, self)
-        }}
+                ..
+            }) => {
+                Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
+                    Arc::new(projected_left_child),
+                    Arc::new(projected_right_child),
+                    join_filter,
+                    self.join_type(),
+                    // Returned early if projection is not None
+                    None,
+                )?)))
+            }
+            _ => try_embed_projection(projection, self),
+        }
     }
 }
 
@@ -1048,7 +1048,7 @@ pub(crate) mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::test_util::batches_to_sort_string;
-    use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_common::{ScalarValue, assert_contains};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};

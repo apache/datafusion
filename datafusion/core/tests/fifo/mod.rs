@@ -22,21 +22,21 @@
 mod unix_test {
     use std::fs::File;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     use arrow::array::Array;
     use arrow::csv::ReaderBuilder;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
     use datafusion::datasource::TableProvider;
+    use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
     use datafusion::{
         prelude::{CsvReadOptions, SessionConfig, SessionContext},
         test_util::{aggr_test_schema, arrow_test_data},
     };
     use datafusion_common::instant::Instant;
-    use datafusion_common::{exec_err, Result};
+    use datafusion_common::{Result, exec_err};
     use datafusion_expr::SortExpr;
 
     use futures::StreamExt;
@@ -44,7 +44,7 @@ mod unix_test {
     use nix::unistd;
     use tempfile::TempDir;
     use tokio::io::AsyncWriteExt;
-    use tokio::task::{spawn_blocking, JoinHandle};
+    use tokio::task::{JoinHandle, spawn_blocking};
 
     /// Makes a TableProvider for a fifo file
     fn fifo_table(

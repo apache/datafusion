@@ -17,14 +17,14 @@
 
 use std::f64::consts::LN_2;
 
-use crate::interval_arithmetic::{apply_operator, Interval};
+use crate::interval_arithmetic::{Interval, apply_operator};
 use crate::operator::Operator;
 use crate::type_coercion::binary::binary_numeric_coercion;
 
 use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::DataType;
 use datafusion_common::rounding::alter_fp_rounding_mode;
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 
 /// This object defines probabilistic distributions that encode uncertain
 /// information about a single, scalar value. Currently, we support five core
@@ -665,40 +665,49 @@ pub fn create_bernoulli_from_comparison(
             match op {
                 Operator::Eq | Operator::NotEq => {
                     let (li, ri) = (left.range(), right.range());
-                    match li.intersect(ri)? { Some(intersection) => {
-                        // If the ranges are not disjoint, calculate the probability
-                        // of equality using cardinalities:
-                        if let (Some(lc), Some(rc), Some(ic)) = (
-                            li.cardinality(),
-                            ri.cardinality(),
-                            intersection.cardinality(),
-                        ) {
-                            // Avoid overflow by widening the type temporarily:
-                            let pairs = ((lc as u128) * (rc as u128)) as f64;
-                            let p = (ic as f64).div_checked(pairs)?;
-                            // Alternative approach that may be more stable:
-                            // let p = (ic as f64)
-                            //     .div_checked(lc as f64)?
-                            //     .div_checked(rc as f64)?;
+                    match li.intersect(ri)? {
+                        Some(intersection) => {
+                            // If the ranges are not disjoint, calculate the probability
+                            // of equality using cardinalities:
+                            if let (Some(lc), Some(rc), Some(ic)) = (
+                                li.cardinality(),
+                                ri.cardinality(),
+                                intersection.cardinality(),
+                            ) {
+                                // Avoid overflow by widening the type temporarily:
+                                let pairs = ((lc as u128) * (rc as u128)) as f64;
+                                let p = (ic as f64).div_checked(pairs)?;
+                                // Alternative approach that may be more stable:
+                                // let p = (ic as f64)
+                                //     .div_checked(lc as f64)?
+                                //     .div_checked(rc as f64)?;
 
-                            let mut p_value = ScalarValue::from(p);
-                            if op == &Operator::NotEq {
-                                let one = ScalarValue::from(1.0);
-                                p_value = alter_fp_rounding_mode::<false, _>(
-                                    &one,
-                                    &p_value,
-                                    |lhs, rhs| lhs.sub_checked(rhs),
-                                )?;
-                            };
-                            return Distribution::new_bernoulli(p_value);
+                                let mut p_value = ScalarValue::from(p);
+                                if op == &Operator::NotEq {
+                                    let one = ScalarValue::from(1.0);
+                                    p_value = alter_fp_rounding_mode::<false, _>(
+                                        &one,
+                                        &p_value,
+                                        |lhs, rhs| lhs.sub_checked(rhs),
+                                    )?;
+                                };
+                                return Distribution::new_bernoulli(p_value);
+                            }
                         }
-                    } _ => if op == &Operator::Eq {
-                        // If the ranges are disjoint, probability of equality is 0.
-                        return Distribution::new_bernoulli(ScalarValue::from(0.0));
-                    } else {
-                        // If the ranges are disjoint, probability of not-equality is 1.
-                        return Distribution::new_bernoulli(ScalarValue::from(1.0));
-                    }}
+                        _ => {
+                            if op == &Operator::Eq {
+                                // If the ranges are disjoint, probability of equality is 0.
+                                return Distribution::new_bernoulli(ScalarValue::from(
+                                    0.0,
+                                ));
+                            } else {
+                                // If the ranges are disjoint, probability of not-equality is 1.
+                                return Distribution::new_bernoulli(ScalarValue::from(
+                                    1.0,
+                                ));
+                            }
+                        }
+                    }
                 }
                 Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
                     // TODO: We can handle inequality operators and calculate a
@@ -860,11 +869,11 @@ pub fn compute_variance(
 #[cfg(test)]
 mod tests {
     use super::{
+        BernoulliDistribution, Distribution, GaussianDistribution, UniformDistribution,
         combine_bernoullis, combine_gaussians, compute_mean, compute_median,
         compute_variance, create_bernoulli_from_comparison, new_generic_from_binary_op,
-        BernoulliDistribution, Distribution, GaussianDistribution, UniformDistribution,
     };
-    use crate::interval_arithmetic::{apply_operator, Interval};
+    use crate::interval_arithmetic::{Interval, apply_operator};
     use crate::operator::Operator;
 
     use arrow::datatypes::DataType;

@@ -24,15 +24,15 @@ use crate::utils::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{plan_err, HashSet, JoinSide, Result};
+use datafusion_common::{HashSet, JoinSide, Result, plan_err};
 use datafusion_expr::JoinType;
+use datafusion_physical_expr::PhysicalSortRequirement;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::PhysicalSortRequirement;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
-    calculate_join_output_ordering, ColumnIndex,
+    ColumnIndex, calculate_join_output_ordering,
 };
 use datafusion_physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -166,28 +166,33 @@ fn pushdown_sorts_helper(
             child.data.ordering_requirement = order;
             child.data.fetch = min_fetch(parent_req_fetch, child.data.fetch);
         }
-    } else { match pushdown_requirement_to_children(plan, &parent_reqs)? { Some(adjusted) => {
-        // For operators that can take a sort pushdown.
+    } else {
+        match pushdown_requirement_to_children(plan, &parent_reqs)? {
+            Some(adjusted) => {
+                // For operators that can take a sort pushdown.
 
-        // Continue pushdown, with updated requirements:
-        let parent_fetch = sort_push_down.data.fetch;
-        let current_fetch = plan.fetch();
-        for (child, order) in sort_push_down.children.iter_mut().zip(adjusted) {
-            child.data.ordering_requirement = order;
-            child.data.fetch = min_fetch(current_fetch, parent_fetch);
+                // Continue pushdown, with updated requirements:
+                let parent_fetch = sort_push_down.data.fetch;
+                let current_fetch = plan.fetch();
+                for (child, order) in sort_push_down.children.iter_mut().zip(adjusted) {
+                    child.data.ordering_requirement = order;
+                    child.data.fetch = min_fetch(current_fetch, parent_fetch);
+                }
+                sort_push_down.data.ordering_requirement = None;
+            }
+            _ => {
+                // Can not push down requirements, add new `SortExec`:
+                let sort_reqs = sort_push_down
+                    .data
+                    .ordering_requirement
+                    .clone()
+                    .unwrap_or_default();
+                let fetch = sort_push_down.data.fetch;
+                sort_push_down = add_sort_above(sort_push_down, sort_reqs, fetch);
+                assign_initial_requirements(&mut sort_push_down);
+            }
         }
-        sort_push_down.data.ordering_requirement = None;
-    } _ => {
-        // Can not push down requirements, add new `SortExec`:
-        let sort_reqs = sort_push_down
-            .data
-            .ordering_requirement
-            .clone()
-            .unwrap_or_default();
-        let fetch = sort_push_down.data.fetch;
-        sort_push_down = add_sort_above(sort_push_down, sort_reqs, fetch);
-        assign_initial_requirements(&mut sort_push_down);
-    }}}
+    }
 
     Ok(Transformed::yes(sort_push_down))
 }

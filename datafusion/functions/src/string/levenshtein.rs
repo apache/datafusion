@@ -26,7 +26,7 @@ use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::type_coercion::binary::{
     binary_to_string_coercion, string_coercion,
 };
@@ -101,7 +101,9 @@ impl ScalarUDFImpl for LevenshteinFunc {
         {
             utf8_to_int_type(&coercion_data_type, "levenshtein")
         } else {
-            exec_err!("Unsupported data types for levenshtein. Expected Utf8, LargeUtf8 or Utf8View")
+            exec_err!(
+                "Unsupported data types for levenshtein. Expected Utf8, LargeUtf8 or Utf8View"
+            )
         }
     }
 
@@ -198,7 +200,9 @@ fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         }
     } else {
-        exec_err!("Unsupported data types for levenshtein. Expected Utf8, LargeUtf8 or Utf8View")
+        exec_err!(
+            "Unsupported data types for levenshtein. Expected Utf8, LargeUtf8 or Utf8View"
+        )
     }
 }
 

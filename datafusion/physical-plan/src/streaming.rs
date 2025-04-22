@@ -22,18 +22,18 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::{DisplayAs, DisplayFormatType, PlanProperties};
-use crate::display::{display_orderings, ProjectSchemaDisplay};
+use crate::display::{ProjectSchemaDisplay, display_orderings};
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
-    all_alias_free_columns, new_projections_for_columns, update_expr, ProjectionExec,
+    ProjectionExec, all_alias_free_columns, new_projections_for_columns, update_expr,
 };
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
 
@@ -131,7 +131,9 @@ impl StreamingTableExec {
         &self.projected_schema
     }
 
-    pub fn projected_output_ordering(&self) -> impl IntoIterator<Item = LexOrdering> + use<> {
+    pub fn projected_output_ordering(
+        &self,
+    ) -> impl IntoIterator<Item = LexOrdering> + use<> {
         self.projected_output_ordering.clone()
     }
 
@@ -356,7 +358,7 @@ mod test {
     use super::*;
     use crate::collect_partitioned;
     use crate::streaming::PartitionStream;
-    use crate::test::{make_partition, TestPartitionStream};
+    use crate::test::{TestPartitionStream, make_partition};
     use arrow::record_batch::RecordBatch;
 
     #[tokio::test]

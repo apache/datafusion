@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{plan_err, DFSchema, Diagnostic, Result, Span, Spans};
+use datafusion_common::{DFSchema, Diagnostic, Result, Span, Spans, plan_err};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::{Expr, LogicalPlan, Subquery};
 use sqlparser::ast::Expr as SQLExpr;

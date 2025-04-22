@@ -26,9 +26,9 @@ use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
+use datafusion_common::TableReference;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::TableReference;
 use datafusion_common::{Column, DFSchema, Result};
 
 mod order_by;
@@ -354,10 +354,10 @@ mod test {
     use std::ops::Add;
 
     use super::*;
-    use crate::{col, lit, Cast};
+    use crate::{Cast, col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::tree_node::TreeNodeRewriter;
     use datafusion_common::ScalarValue;
+    use datafusion_common::tree_node::TreeNodeRewriter;
 
     #[derive(Default)]
     struct RecordingRewriter {

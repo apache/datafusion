@@ -22,17 +22,17 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::{
-    execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream, execute_input_stream,
 };
 
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;

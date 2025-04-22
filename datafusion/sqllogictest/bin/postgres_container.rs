@@ -16,19 +16,19 @@
 // under the License.
 
 use crate::Options;
+use ContainerCommands::{FetchHost, FetchPort};
 use datafusion::common::Result;
 use log::info;
 use std::env::set_var;
 use std::future::Future;
 use std::sync::LazyLock;
 use std::{env, thread};
+use testcontainers::ImageExt;
 use testcontainers::core::IntoContainerPort;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::ImageExt;
 use testcontainers_modules::postgres;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{mpsc, Mutex};
-use ContainerCommands::{FetchHost, FetchPort};
+use tokio::sync::{Mutex, mpsc};
 
 #[derive(Debug)]
 pub enum ContainerCommands {

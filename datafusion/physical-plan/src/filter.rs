@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
@@ -30,12 +30,12 @@ use crate::filter_pushdown::{
     FilterDescription, FilterPushdownResult, FilterPushdownSupport,
 };
 use crate::projection::{
-    make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
-    ProjectionExec,
+    EmbeddedProjection, ProjectionExec, make_with_child, try_embed_projection,
+    update_expr,
 };
 use crate::{
-    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
+    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
 };
 
 use arrow::compute::filter_record_batch;
@@ -45,7 +45,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -54,8 +54,8 @@ use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AcrossPartitions, AnalysisContext, ConstExpr,
-    ExprBoundaries, PhysicalExpr,
+    AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
+    split_conjunction,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -382,7 +382,12 @@ impl ExecutionPlan for FilterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),

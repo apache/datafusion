@@ -20,10 +20,10 @@ mod conversion;
 mod datafusion_engine;
 mod output;
 
-pub use datafusion_engine::convert_batches;
-pub use datafusion_engine::convert_schema_to_types;
 pub use datafusion_engine::DFSqlLogicTestError;
 pub use datafusion_engine::DataFusion;
+pub use datafusion_engine::convert_batches;
+pub use datafusion_engine::convert_schema_to_types;
 pub use output::DFColumnType;
 pub use output::DFOutput;
 

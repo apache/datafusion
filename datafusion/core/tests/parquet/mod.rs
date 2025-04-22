@@ -19,12 +19,12 @@
 use crate::parquet::utils::MetricsFinder;
 use arrow::{
     array::{
-        make_array, Array, ArrayRef, BinaryArray, Date32Array, Date64Array,
-        Decimal128Array, DictionaryArray, FixedSizeBinaryArray, Float64Array, Int16Array,
-        Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
-        StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        Array, ArrayRef, BinaryArray, Date32Array, Date64Array, Decimal128Array,
+        DictionaryArray, FixedSizeBinaryArray, Float64Array, Int8Array, Int16Array,
+        Int32Array, Int64Array, LargeBinaryArray, LargeStringArray, StringArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+        make_array,
     },
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
@@ -32,7 +32,7 @@ use arrow::{
 };
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
-    datasource::{provider_as_source, TableProvider},
+    datasource::{TableProvider, provider_as_source},
     physical_plan::metrics::MetricsSet,
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };

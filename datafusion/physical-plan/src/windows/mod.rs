@@ -26,13 +26,13 @@ use std::iter;
 use std::sync::Arc;
 
 use crate::{
-    expressions::PhysicalSortExpr, ExecutionPlan, ExecutionPlanProperties,
-    InputOrderMode, PhysicalExpr,
+    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
+    expressions::PhysicalSortExpr,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow_schema::SortOptions;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
@@ -43,9 +43,9 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
+    ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
     reverse_order_bys,
     window::{SlidingAggregateWindowExpr, StandardWindowFunctionExpr},
-    ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
@@ -533,13 +533,14 @@ pub fn get_best_fitting_window(
             .iter()
             .map(|e| e.get_reverse_expr())
             .collect::<Option<Vec<_>>>()
-        { Some(reversed_window_expr) => {
-            reversed_window_expr
-        } _ => {
-            // Cannot take reverse of any of the window expr
-            // In this case, with existing ordering window cannot be run
-            return Ok(None);
-        }}
+        {
+            Some(reversed_window_expr) => reversed_window_expr,
+            _ => {
+                // Cannot take reverse of any of the window expr
+                // In this case, with existing ordering window cannot be run
+                return Ok(None);
+            }
+        }
     } else {
         window_exprs.to_vec()
     };
@@ -638,14 +639,14 @@ mod tests {
     use crate::expressions::col;
     use crate::streaming::StreamingTableExec;
     use crate::test::assert_is_pending;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
 
     use arrow::compute::SortOptions;
     use datafusion_execution::TaskContext;
 
+    use InputOrderMode::{Linear, PartiallySorted, Sorted};
     use datafusion_functions_aggregate::count::count_udaf;
     use futures::FutureExt;
-    use InputOrderMode::{Linear, PartiallySorted, Sorted};
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);
@@ -1162,7 +1163,11 @@ mod tests {
             }
 
             assert_eq!(
-                get_window_mode(&partition_by_exprs, order_by_exprs.as_ref(), &exec_unbounded),
+                get_window_mode(
+                    &partition_by_exprs,
+                    order_by_exprs.as_ref(),
+                    &exec_unbounded
+                ),
                 *expected,
                 "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );

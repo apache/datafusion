@@ -27,7 +27,7 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
-use datafusion_datasource::write::{create_writer, get_writer_schema, SharedBuffer};
+use datafusion_datasource::write::{SharedBuffer, create_writer, get_writer_schema};
 
 use datafusion_datasource::file_format::{
     FileFormat, FileFormatFactory, FilePushdownSupport,
@@ -40,8 +40,8 @@ use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, ColumnStatistics,
-    DataFusionError, GetExt, Result, DEFAULT_PARQUET_EXTENSION,
+    ColumnStatistics, DEFAULT_PARQUET_EXTENSION, DataFusionError, GetExt, Result,
+    internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
@@ -51,8 +51,8 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_expr::dml::InsertOp;
 use datafusion_expr::Expr;
+use datafusion_expr::dml::InsertOp;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -61,7 +61,7 @@ use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
 use crate::can_expr_be_pushed_down_with_schemas;
-use crate::source::{parse_coerce_int96_string, ParquetSource};
+use crate::source::{ParquetSource, parse_coerce_int96_string};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
@@ -73,11 +73,11 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_writer::{
-    compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
-    ArrowLeafColumn, ArrowWriterOptions,
+    ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowWriterOptions,
+    compute_leaves, get_column_writers,
 };
 use parquet::arrow::async_reader::MetadataFetch;
-use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
+use parquet::arrow::{ArrowSchemaConverter, AsyncArrowWriter, parquet_to_arrow_schema};
 use parquet::basic::Type;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};

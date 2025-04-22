@@ -32,11 +32,11 @@ use arrow::{
     compute,
     datatypes::{
         DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+        Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
         Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
         Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-        UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+        UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
 };
 
@@ -45,12 +45,13 @@ use arrow::{
     buffer::BooleanBuffer,
 };
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, Result, ScalarValue,
+    Result, ScalarValue, downcast_value, internal_err, not_impl_err,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
-    function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    Documentation, EmitTo, GroupsAccumulator, SetMonotonicity, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator,
+    SetMonotonicity, Signature, Volatility, function::AccumulatorArgs,
+    utils::format_state_name,
 };
 use datafusion_expr::{
     Expr, ReversedUDAF, StatisticsArgs, TypeSignature, WindowFunctionDefinition,

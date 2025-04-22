@@ -22,7 +22,7 @@ use arrow::{
     datatypes::{Float32Type, Float64Type},
     util::bench_util::create_primitive_array,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::signum;
 use std::sync::Arc;

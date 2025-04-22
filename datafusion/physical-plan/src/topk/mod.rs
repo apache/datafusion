@@ -26,11 +26,11 @@ use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::spill::get_record_batch_memory_size;
-use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
+use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
-use datafusion_common::{internal_datafusion_err, HashMap};
+use datafusion_common::{HashMap, internal_datafusion_err};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,

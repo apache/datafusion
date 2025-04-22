@@ -20,14 +20,14 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{config::ConfigOptions, Result};
+use datafusion_common::{Result, config::ConfigOptions};
 use datafusion_physical_expr::conjunction;
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::filter_pushdown::{
     FilterDescription, FilterPushdownResult, FilterPushdownSupport,
 };
 use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::ExecutionPlan;
 
 /// Attempts to recursively push given filters from the top of the tree into leafs.
 ///

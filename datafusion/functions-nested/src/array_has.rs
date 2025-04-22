@@ -26,7 +26,7 @@ use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::expr::{InList, ScalarFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
@@ -557,17 +557,20 @@ fn general_array_has_for_all_and_any<O: OffsetSizeTrait>(
     let converter = RowConverter::new(vec![SortField::new(haystack.value_type())])?;
 
     for (arr, sub_arr) in haystack.iter().zip(needle.iter()) {
-        match (arr, sub_arr) { (Some(arr), Some(sub_arr)) => {
-            let arr_values = converter.convert_columns(&[arr])?;
-            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
-            boolean_builder.append_value(general_array_has_all_and_any_kernel(
-                arr_values,
-                sub_arr_values,
-                comparison_type,
-            ));
-        } _ => {
-            boolean_builder.append_null();
-        }}
+        match (arr, sub_arr) {
+            (Some(arr), Some(sub_arr)) => {
+                let arr_values = converter.convert_columns(&[arr])?;
+                let sub_arr_values = converter.convert_columns(&[sub_arr])?;
+                boolean_builder.append_value(general_array_has_all_and_any_kernel(
+                    arr_values,
+                    sub_arr_values,
+                    comparison_type,
+                ));
+            }
+            _ => {
+                boolean_builder.append_null();
+            }
+        }
     }
 
     Ok(Arc::new(boolean_builder.finish()))
@@ -597,8 +600,8 @@ mod tests {
     use arrow::array::create_array;
     use datafusion_common::utils::SingleRowListArrayBuilder;
     use datafusion_expr::{
-        col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult, Expr,
-        ScalarUDFImpl,
+        Expr, ScalarUDFImpl, col, execution_props::ExecutionProps, lit,
+        simplify::ExprSimplifyResult,
     };
 
     use crate::expr_fn::make_array;

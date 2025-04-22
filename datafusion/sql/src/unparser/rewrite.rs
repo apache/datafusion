@@ -20,8 +20,8 @@ use std::{collections::HashSet, sync::Arc};
 use arrow::datatypes::Schema;
 use datafusion_common::tree_node::TreeNodeContainer;
 use datafusion_common::{
-    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
     Column, HashMap, Result, TableReference,
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::expr::{Alias, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
@@ -406,13 +406,16 @@ impl TreeNodeRewriter for TableAliasRewriter<'_> {
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match expr {
             Expr::Column(column) => {
-                match self.table_schema.field_with_name(&column.name) { Ok(field) => {
-                    let new_column =
-                        Column::new(Some(self.alias_name.clone()), field.name().clone());
-                    Ok(Transformed::yes(Expr::Column(new_column)))
-                } _ => {
-                    Ok(Transformed::no(Expr::Column(column)))
-                }}
+                match self.table_schema.field_with_name(&column.name) {
+                    Ok(field) => {
+                        let new_column = Column::new(
+                            Some(self.alias_name.clone()),
+                            field.name().clone(),
+                        );
+                        Ok(Transformed::yes(Expr::Column(new_column)))
+                    }
+                    _ => Ok(Transformed::no(Expr::Column(column))),
+                }
             }
             _ => Ok(Transformed::no(expr)),
         }

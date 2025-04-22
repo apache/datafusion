@@ -25,30 +25,30 @@ use std::{any::Any, str::FromStr, sync::Arc};
 use crate::datasource::{
     create_ordering,
     file_format::{
-        file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
+        FileFormat, FilePushdownSupport, file_compression_type::FileCompressionType,
     },
     physical_plan::FileSinkConfig,
 };
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
-use datafusion_common::{config_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, config_err};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
+use datafusion_expr::{Expr, TableProviderFilterPushDown, utils::conjunction};
 use datafusion_expr::{SortExpr, TableType};
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_common::{
-    config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
-    SchemaExt, ToDFSchema,
+    Constraints, SchemaExt, ToDFSchema, config_datafusion_err, internal_err, plan_err,
+    project_schema,
 };
 use datafusion_execution::cache::{
     cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache,
 };
 use datafusion_physical_expr::{
-    create_physical_expr, LexOrdering, PhysicalSortRequirement,
+    LexOrdering, PhysicalSortRequirement, create_physical_expr,
 };
 
 use async_trait::async_trait;
@@ -57,7 +57,7 @@ use datafusion_common::stats::Precision;
 use datafusion_datasource::compute_all_files_statistics;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use futures::{future, stream, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use itertools::Itertools;
 use object_store::ObjectStore;
 
@@ -915,7 +915,9 @@ impl TableProvider for ListingTable {
                 if new_groups.len() <= self.options.target_partitions {
                     partitioned_file_lists = new_groups;
                 } else {
-                    log::debug!("attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered")
+                    log::debug!(
+                        "attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered"
+                    )
                 }
             }
             None => {} // no ordering required
@@ -1260,7 +1262,7 @@ mod tests {
     use crate::datasource::file_format::json::JsonFormat;
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
-    use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
+    use crate::datasource::{DefaultTableSource, MemTable, provider_as_source};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
     use crate::test::{columns, object_store::register_test_store};
@@ -1269,11 +1271,11 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_common::{ScalarValue, assert_contains};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_plan::collect;
     use datafusion_physical_plan::ExecutionPlanProperties;
+    use datafusion_physical_plan::collect;
 
     use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
     use tempfile::TempDir;
@@ -1375,24 +1377,21 @@ mod tests {
             (vec![], Ok(vec![])),
             // sort expr, but non column
             (
-                vec![vec![
-                    col("int_col").add(lit(1)).sort(true, true),
-                ]],
-                Err("Expected single column reference in sort_order[0][0], got int_col + Int32(1)"),
+                vec![vec![col("int_col").add(lit(1)).sort(true, true)]],
+                Err(
+                    "Expected single column reference in sort_order[0][0], got int_col + Int32(1)",
+                ),
             ),
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
-                Ok(vec![LexOrdering::new(
-                        vec![PhysicalSortExpr {
-                            expr: physical_col("string_col", &schema).unwrap(),
-                            options: SortOptions {
-                                descending: false,
-                                nulls_first: false,
-                            },
-                        }],
-                )
-                ])
+                Ok(vec![LexOrdering::new(vec![PhysicalSortExpr {
+                    expr: physical_col("string_col", &schema).unwrap(),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                }])]),
             ),
             // ok with two columns, different options
             (
@@ -1400,17 +1399,18 @@ mod tests {
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
                 ]],
-                Ok(vec![LexOrdering::new(
-                        vec![
-                            PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
-                                        .asc()
-                                        .nulls_last(),
-                            PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
-                                        .desc()
-                                        .nulls_first()
-                        ],
-                )
-                ])
+                Ok(vec![LexOrdering::new(vec![
+                    PhysicalSortExpr::new_default(
+                        physical_col("string_col", &schema).unwrap(),
+                    )
+                    .asc()
+                    .nulls_last(),
+                    PhysicalSortExpr::new_default(
+                        physical_col("int_col", &schema).unwrap(),
+                    )
+                    .desc()
+                    .nulls_first(),
+                ])]),
             ),
         ];
 
@@ -2138,8 +2138,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_into_append_new_parquet_files_invalid_session_fails(
-    ) -> Result<()> {
+    async fn test_insert_into_append_new_parquet_files_invalid_session_fails()
+    -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
         config_map.insert(
             "datafusion.execution.parquet.compression".into(),
@@ -2153,7 +2153,10 @@ mod tests {
         )
         .await
         .expect_err("Example should fail!");
-        assert_eq!(e.strip_backtrace(), "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)");
+        assert_eq!(
+            e.strip_backtrace(),
+            "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)"
+        );
 
         Ok(())
     }

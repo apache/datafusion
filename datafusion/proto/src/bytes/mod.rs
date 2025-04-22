@@ -24,14 +24,14 @@ use crate::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use crate::protobuf;
-use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_common::{Result, plan_datafusion_err};
 use datafusion_expr::{
-    create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LogicalPlan, Volatility,
-    WindowUDF,
+    AggregateUDF, Expr, LogicalPlan, Volatility, WindowUDF, create_udaf, create_udf,
+    create_udwf,
 };
 use prost::{
-    bytes::{Bytes, BytesMut},
     Message,
+    bytes::{Bytes, BytesMut},
 };
 use std::sync::Arc;
 

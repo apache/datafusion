@@ -21,17 +21,17 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow::datatypes::*;
+use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::error::add_possible_columns_to_diag;
-use datafusion_common::TableReference;
+use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion_common::{
-    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
-    SchemaError,
+    DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
+    plan_datafusion_err,
 };
-use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
-use datafusion_expr::{col, Expr};
+use datafusion_expr::{Expr, col};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};

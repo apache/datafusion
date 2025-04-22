@@ -16,13 +16,13 @@
 // under the License.
 
 use arrow::array::BooleanArray;
-use arrow::array::{make_comparator, ArrayRef, Datum};
+use arrow::array::{ArrayRef, Datum, make_comparator};
 use arrow::buffer::NullBuffer;
 use arrow::compute::SortOptions;
 use arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
-use datafusion_common::{arrow_datafusion_err, internal_err};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{arrow_datafusion_err, internal_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::operator::Operator;
 use std::sync::Arc;

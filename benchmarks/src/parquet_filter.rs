@@ -22,9 +22,9 @@ use crate::util::{AccessLogOpt, BenchmarkRun, CommonOpt};
 use arrow::util::pretty;
 use datafusion::common::Result;
 use datafusion::logical_expr::utils::disjunction;
-use datafusion::logical_expr::{lit, or, Expr};
+use datafusion::logical_expr::{Expr, lit, or};
 use datafusion::physical_plan::collect;
-use datafusion::prelude::{col, SessionContext};
+use datafusion::prelude::{SessionContext, col};
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use datafusion_common::instant::Instant;
 

@@ -23,15 +23,14 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
-    internal_err, tree_node::Transformed, DataFusionError, HashSet, Result,
+    DataFusionError, HashSet, Result, internal_err, tree_node::Transformed,
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
-    col,
+    Expr, col,
     expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan},
-    Expr,
 };
 
 /// single distinct to group by optimizer rule
@@ -281,8 +280,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::ExprFunctionExt;
+    use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};
@@ -318,8 +317,7 @@ mod tests {
             .build()?;
 
         // Do nothing
-        let expected =
-            "Aggregate: groupBy=[[]], aggr=[[max(test.b)]] [max(test.b):UInt32;N]\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[max(test.b)]] [max(test.b):UInt32;N]\
                             \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(plan, expected)

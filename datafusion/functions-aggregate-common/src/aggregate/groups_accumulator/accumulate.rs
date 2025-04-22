@@ -598,7 +598,7 @@ mod test {
     use super::*;
 
     use arrow::array::{Int32Array, UInt32Array};
-    use rand::{rngs::ThreadRng, Rng};
+    use rand::{Rng, rngs::ThreadRng};
     use std::collections::HashSet;
 
     #[test]
@@ -694,11 +694,7 @@ mod test {
             let values_with_nulls: Vec<Option<u32>> = (0..num_values)
                 .map(|_| {
                     let is_null = null_pct < rng.gen_range(0.0..1.0);
-                    if is_null {
-                        None
-                    } else {
-                        Some(rng.r#gen())
-                    }
+                    if is_null { None } else { Some(rng.r#gen()) }
                 })
                 .collect();
 
@@ -839,8 +835,10 @@ mod test {
                 }
             }
 
-            assert_eq!(accumulated_values, expected_values,
-                       "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
+            assert_eq!(
+                accumulated_values, expected_values,
+                "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}"
+            );
             let seen_values = null_state.seen_values.finish_cloned();
             mock.validate_seen_values(&seen_values);
 
@@ -900,8 +898,10 @@ mod test {
                 }
             }
 
-            assert_eq!(accumulated_values, expected_values,
-                       "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
+            assert_eq!(
+                accumulated_values, expected_values,
+                "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}"
+            );
         }
 
         /// This is effectively a different implementation of
@@ -955,8 +955,10 @@ mod test {
                 }
             }
 
-            assert_eq!(accumulated_values, expected_values,
-                       "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
+            assert_eq!(
+                accumulated_values, expected_values,
+                "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}"
+            );
 
             let seen_values = null_state.seen_values.finish_cloned();
             mock.validate_seen_values(&seen_values);

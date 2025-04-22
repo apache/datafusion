@@ -38,8 +38,8 @@ use std::sync::Arc;
 
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::config::{ConfigOptions, TableParquetOptions};
 use datafusion_common::Result;
+use datafusion_common::config::{ConfigOptions, TableParquetOptions};
 use datafusion_common::{Constraints, Statistics};
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
@@ -237,8 +237,10 @@ impl ParquetExecBuilder {
         }
 
         let base_config = file_scan_config.with_source(Arc::new(parquet.clone()));
-        debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
-        base_config.file_groups, base_config.projection, predicate, base_config.limit);
+        debug!(
+            "Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
+            base_config.file_groups, base_config.projection, predicate, base_config.limit
+        );
 
         ParquetExec {
             inner: DataSourceExec::new(Arc::new(base_config.clone())),

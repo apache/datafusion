@@ -20,7 +20,7 @@ use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawDictionaryExpr};
-use datafusion_expr::{lit, Expr};
+use datafusion_expr::{Expr, lit};
 
 use super::named_struct;
 

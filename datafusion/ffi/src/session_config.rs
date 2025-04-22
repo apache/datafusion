@@ -17,12 +17,12 @@
 
 use std::{
     collections::HashMap,
-    ffi::{c_char, c_void, CString},
+    ffi::{CString, c_char, c_void},
 };
 
 use abi_stable::{
-    std_types::{RHashMap, RString},
     StableAbi,
+    std_types::{RHashMap, RString},
 };
 use datafusion::{config::ConfigOptions, error::Result};
 use datafusion::{error::DataFusionError, prelude::SessionConfig};
@@ -63,41 +63,47 @@ unsafe impl Sync for FFI_SessionConfig {}
 
 unsafe extern "C" fn config_options_fn_wrapper(
     config: &FFI_SessionConfig,
-) -> RHashMap<RString, RString> { unsafe {
-    let private_data = config.private_data as *mut SessionConfigPrivateData;
-    let config_options = &(*private_data).config;
+) -> RHashMap<RString, RString> {
+    unsafe {
+        let private_data = config.private_data as *mut SessionConfigPrivateData;
+        let config_options = &(*private_data).config;
 
-    let mut options = RHashMap::default();
-    for config_entry in config_options.entries() {
-        if let Some(value) = config_entry.value {
-            options.insert(config_entry.key.into(), value.into());
+        let mut options = RHashMap::default();
+        for config_entry in config_options.entries() {
+            if let Some(value) = config_entry.value {
+                options.insert(config_entry.key.into(), value.into());
+            }
+        }
+
+        options
+    }
+}
+
+unsafe extern "C" fn release_fn_wrapper(config: &mut FFI_SessionConfig) {
+    unsafe {
+        let private_data =
+            Box::from_raw(config.private_data as *mut SessionConfigPrivateData);
+        drop(private_data);
+    }
+}
+
+unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_SessionConfig {
+    unsafe {
+        let old_private_data = config.private_data as *mut SessionConfigPrivateData;
+        let old_config = &(*old_private_data).config;
+
+        let private_data = Box::new(SessionConfigPrivateData {
+            config: old_config.clone(),
+        });
+
+        FFI_SessionConfig {
+            config_options: config_options_fn_wrapper,
+            private_data: Box::into_raw(private_data) as *mut c_void,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
         }
     }
-
-    options
-}}
-
-unsafe extern "C" fn release_fn_wrapper(config: &mut FFI_SessionConfig) { unsafe {
-    let private_data =
-        Box::from_raw(config.private_data as *mut SessionConfigPrivateData);
-    drop(private_data);
-}}
-
-unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_SessionConfig { unsafe {
-    let old_private_data = config.private_data as *mut SessionConfigPrivateData;
-    let old_config = &(*old_private_data).config;
-
-    let private_data = Box::new(SessionConfigPrivateData {
-        config: old_config.clone(),
-    });
-
-    FFI_SessionConfig {
-        config_options: config_options_fn_wrapper,
-        private_data: Box::into_raw(private_data) as *mut c_void,
-        clone: clone_fn_wrapper,
-        release: release_fn_wrapper,
-    }
-}}
+}
 
 struct SessionConfigPrivateData {
     pub config: ConfigOptions,

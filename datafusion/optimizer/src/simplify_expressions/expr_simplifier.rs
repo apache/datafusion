@@ -22,30 +22,31 @@ use std::collections::HashSet;
 use std::ops::Not;
 
 use arrow::{
-    array::{new_null_array, AsArray},
+    array::{AsArray, new_null_array},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
 
+use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
-use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
-    Operator, Volatility, WindowFunctionDefinition,
+    BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
+    WindowFunctionDefinition, and, binary::BinaryTypeCoercer, lit, or,
 };
+use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
     expr::{InList, InSubquery, WindowFunction},
     utils::{iter_conjunction, iter_conjunction_owned},
 };
-use datafusion_expr::{simplify::ExprSimplifyResult, Cast, TryCast};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
+use crate::simplify_expressions::SimplifyInfo;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
@@ -53,7 +54,6 @@ use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
     unwrap_cast_in_comparison_for_binary,
 };
-use crate::simplify_expressions::SimplifyInfo;
 use crate::{
     analyzer::type_coercion::TypeCoercionRewriter,
     simplify_expressions::unwrap_cast::try_cast_literal_to_type,
@@ -682,7 +682,10 @@ impl<'a> ConstEvaluator<'a> {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
                     ConstSimplifyResult::SimplifyRuntimeError(
-                        DataFusionError::Execution(format!("Could not evaluate the expression, found a result of length {}", a.len())),
+                        DataFusionError::Execution(format!(
+                            "Could not evaluate the expression, found a result of length {}",
+                            a.len()
+                        )),
                         expr,
                     )
                 } else if as_list_array(&a).is_ok() {
@@ -1020,7 +1023,9 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                         right: left_right,
                     }))
                 } else {
-                    return internal_err!("can_reduce_to_equal_statement should only be called with a BinaryExpr");
+                    return internal_err!(
+                        "can_reduce_to_equal_statement should only be called with a BinaryExpr"
+                    );
                 }
             }
 
@@ -1943,15 +1948,16 @@ fn are_inlist_and_eq_and_match_neg(
 fn are_inlist_and_eq(left: &Expr, right: &Expr) -> bool {
     let left = as_inlist(left);
     let right = as_inlist(right);
-    match (left, right) { (Some(lhs), Some(rhs)) => {
-        matches!(lhs.expr.as_ref(), Expr::Column(_))
-            && matches!(rhs.expr.as_ref(), Expr::Column(_))
-            && lhs.expr == rhs.expr
-            && !lhs.negated
-            && !rhs.negated
-    } _ => {
-        false
-    }}
+    match (left, right) {
+        (Some(lhs), Some(rhs)) => {
+            matches!(lhs.expr.as_ref(), Expr::Column(_))
+                && matches!(rhs.expr.as_ref(), Expr::Column(_))
+                && lhs.expr == rhs.expr
+                && !lhs.negated
+                && !rhs.negated
+        }
+        _ => false,
+    }
 }
 
 /// Try to convert an expression to an in-list expression
@@ -2144,7 +2150,7 @@ fn simplify_null_div_other_case<S: SimplifyInfo>(
 mod tests {
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
-    use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
+    use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
     use datafusion_expr::{
         function::{
             AccumulatorArgs, AggregateFunctionSimplification,

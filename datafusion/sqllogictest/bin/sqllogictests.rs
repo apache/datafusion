@@ -18,10 +18,10 @@
 use clap::Parser;
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
-use datafusion::common::{exec_err, DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, exec_err};
 use datafusion_sqllogictest::{
-    df_value_validator, read_dir_recursive, setup_scratch_dir, value_normalizer,
-    DataFusion, TestContext,
+    DataFusion, TestContext, df_value_validator, read_dir_recursive, setup_scratch_dir,
+    value_normalizer,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -31,8 +31,8 @@ use itertools::Itertools;
 use log::Level::Info;
 use log::{info, log_enabled};
 use sqllogictest::{
-    parse_file, strict_column_validator, AsyncDB, Condition, Normalizer, Record,
-    Validator,
+    AsyncDB, Condition, Normalizer, Record, Validator, parse_file,
+    strict_column_validator,
 };
 
 #[cfg(feature = "postgres")]

@@ -17,8 +17,8 @@
 
 use arrow::datatypes::Field;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
-    DataFusionError, Result, Span, TableReference,
+    Column, DFSchema, DataFusionError, Result, Span, TableReference, internal_err,
+    not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
@@ -175,7 +175,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     // TODO: remove when can support nested identifiers for OuterReferenceColumn
                                     not_impl_err!(
                                         "Nested identifiers are not yet supported for OuterReferenceColumn {}",
-                                        Column::from((qualifier, field)).quoted_flat_name()
+                                        Column::from((qualifier, field))
+                                            .quoted_flat_name()
                                     )
                                 }
                                 // Found matching field with no spare identifier(s)

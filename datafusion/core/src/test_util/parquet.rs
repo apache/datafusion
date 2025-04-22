@@ -32,15 +32,15 @@ use crate::logical_expr::execution_props::ExecutionProps;
 use crate::logical_expr::simplify::SimplifyContext;
 use crate::optimizer::simplify_expressions::ExprSimplifier;
 use crate::physical_expr::create_physical_expr;
+use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::metrics::MetricsSet;
-use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 

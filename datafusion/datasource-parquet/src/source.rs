@@ -21,12 +21,12 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::opener::build_page_pruning_predicate;
-use crate::opener::build_pruning_predicate;
-use crate::opener::ParquetOpener;
-use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
+use crate::opener::ParquetOpener;
+use crate::opener::build_page_pruning_predicate;
+use crate::opener::build_pruning_predicate;
+use crate::page_filter::PagePruningAccessPlanFilter;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
@@ -37,11 +37,11 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion_physical_plan::DisplayFormatType;
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 
 use itertools::Itertools;
 use object_store::ObjectStore;

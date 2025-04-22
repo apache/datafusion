@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{as_string_array, ArrayRef, Int32Array, StringArray},
+    array::{ArrayRef, Int32Array, StringArray, as_string_array},
     compute::SortOptions,
     record_batch::RecordBatch,
 };
@@ -28,7 +28,7 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::cast::as_int32_array;
 use datafusion_execution::memory_pool::GreedyMemoryPool;
@@ -369,7 +369,8 @@ fn make_staggered_i32_utf8_batches(len: usize) -> Vec<RecordBatch> {
                 (
                     "y",
                     Arc::new(StringArray::from_iter_values(
-                        (0..to_read).map(|_| format!("test_string_{}", rng.r#gen::<u32>())),
+                        (0..to_read)
+                            .map(|_| format!("test_string_{}", rng.r#gen::<u32>())),
                     )) as ArrayRef,
                 ),
             ])

@@ -20,7 +20,7 @@ use datafusion_common::{DFSchema, DFSchemaRef};
 use std::fmt::{self, Display};
 use std::sync::{Arc, LazyLock};
 
-use crate::{expr_vec_fmt, Expr, LogicalPlan};
+use crate::{Expr, LogicalPlan, expr_vec_fmt};
 
 /// Various types of Statements.
 ///
