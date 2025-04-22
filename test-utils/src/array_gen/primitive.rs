@@ -81,7 +81,7 @@ impl PrimitiveArrayGenerator {
         // pick num_primitives randomly from the distinct string table
         let indices: UInt32Array = (0..self.num_primitives)
             .map(|_| {
-                if self.rng.gen::<f64>() < self.null_pct {
+                if self.rng.r#gen::<f64>() < self.null_pct {
                     None
                 } else if self.num_distinct_primitives > 1 {
                     let range = 1..(self.num_distinct_primitives as u32);

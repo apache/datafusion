@@ -378,7 +378,7 @@ async fn prune_date64() {
 }
 
 macro_rules! int_tests {
-    ($bits:expr) => {
+    ($bits:expr_2021) => {
         paste::item! {
             #[tokio::test]
             //                      null count  min                                       max
@@ -533,7 +533,7 @@ int_tests!(32);
 int_tests!(64);
 
 macro_rules! uint_tests {
-    ($bits:expr) => {
+    ($bits:expr_2021) => {
         paste::item! {
             #[tokio::test]
             //                      null count  min                                       max

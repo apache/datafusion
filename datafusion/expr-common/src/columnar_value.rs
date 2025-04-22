@@ -228,11 +228,11 @@ impl fmt::Display for ColumnarValue {
                 pretty_format_columns("ColumnarValue(ArrayRef)", &[Arc::clone(array)])
             }
             ColumnarValue::Scalar(_) => {
-                if let Ok(array) = self.to_array(1) {
+                match self.to_array(1) { Ok(array) => {
                     pretty_format_columns("ColumnarValue(ScalarValue)", &[array])
-                } else {
+                } _ => {
                     return write!(f, "Error formatting columnar value");
-                }
+                }}
             }
         };
 

@@ -960,9 +960,8 @@ impl ExecutionPlan for AggregateExec {
             _ => {
                 // When the input row count is 0 or 1, we can adopt that statistic keeping its reliability.
                 // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
-                let num_rows = if let Some(value) =
-                    self.input().statistics()?.num_rows.get_value()
-                {
+                let num_rows = match self.input().statistics()?.num_rows.get_value()
+                { Some(value) => {
                     if *value > 1 {
                         self.input().statistics()?.num_rows.to_inexact()
                     } else if *value == 0 {
@@ -975,9 +974,9 @@ impl ExecutionPlan for AggregateExec {
                         // num_rows = 1 case
                         self.input().statistics()?.num_rows
                     }
-                } else {
+                } _ => {
                     Precision::Absent
-                };
+                }};
                 Ok(Statistics {
                     num_rows,
                     column_statistics,

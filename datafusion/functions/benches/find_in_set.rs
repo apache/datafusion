@@ -51,7 +51,7 @@ fn gen_args_array(
     let mut output_set_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     let mut output_element_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     for _ in 0..n_rows {
-        let rand_num = rng_ref.gen::<f32>(); // [0.0, 1.0)
+        let rand_num = rng_ref.r#gen::<f32>(); // [0.0, 1.0)
         if rand_num < null_density {
             output_element_vec.push(None);
             output_set_vec.push(None);

@@ -39,7 +39,7 @@ use std::fmt;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
-    ($MSG:expr) => {
+    ($MSG:expr_2021) => {
         Err(ParserError::ParserError($MSG.to_string()))
     };
 }

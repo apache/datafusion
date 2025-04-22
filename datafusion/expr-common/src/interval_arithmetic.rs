@@ -34,7 +34,7 @@ use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
 use datafusion_common::{internal_err, Result, ScalarValue};
 
 macro_rules! get_extreme_value {
-    ($extreme:ident, $value:expr) => {
+    ($extreme:ident, $value:expr_2021) => {
         match $value {
             DataType::UInt8 => ScalarValue::UInt8(Some(u8::$extreme)),
             DataType::UInt16 => ScalarValue::UInt16(Some(u16::$extreme)),
@@ -101,7 +101,7 @@ macro_rules! get_extreme_value {
 }
 
 macro_rules! value_transition {
-    ($bound:ident, $direction:expr, $value:expr) => {
+    ($bound:ident, $direction:expr_2021, $value:expr_2021) => {
         match $value {
             UInt8(Some(value)) if value == u8::$bound => UInt8(None),
             UInt16(Some(value)) if value == u16::$bound => UInt16(None),
@@ -195,7 +195,7 @@ pub struct Interval {
 ///       number for the floating-point type in question. In this case, converting
 ///       to `NULL` doesn't make sense as it would be interpreted as an `INF`.
 macro_rules! handle_float_intervals {
-    ($scalar_type:ident, $primitive_type:ident, $lower:expr, $upper:expr) => {{
+    ($scalar_type:ident, $primitive_type:ident, $lower:expr_2021, $upper:expr_2021) => {{
         let lower = match $lower {
             ScalarValue::$scalar_type(Some(l_val))
                 if l_val == $primitive_type::NEG_INFINITY || l_val.is_nan() =>
@@ -240,7 +240,7 @@ macro_rules! handle_float_intervals {
 ///
 /// This macro applies a one-to-one map that fixes the ordering above.
 macro_rules! map_floating_point_order {
-    ($value:expr, $ty:ty) => {{
+    ($value:expr_2021, $ty:ty) => {{
         let num_bits = std::mem::size_of::<$ty>() * 8;
         let sign_bit = 1 << (num_bits - 1);
         if $value & sign_bit == sign_bit {

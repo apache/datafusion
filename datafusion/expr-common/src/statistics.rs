@@ -665,7 +665,7 @@ pub fn create_bernoulli_from_comparison(
             match op {
                 Operator::Eq | Operator::NotEq => {
                     let (li, ri) = (left.range(), right.range());
-                    if let Some(intersection) = li.intersect(ri)? {
+                    match li.intersect(ri)? { Some(intersection) => {
                         // If the ranges are not disjoint, calculate the probability
                         // of equality using cardinalities:
                         if let (Some(lc), Some(rc), Some(ic)) = (
@@ -692,13 +692,13 @@ pub fn create_bernoulli_from_comparison(
                             };
                             return Distribution::new_bernoulli(p_value);
                         }
-                    } else if op == &Operator::Eq {
+                    } _ => if op == &Operator::Eq {
                         // If the ranges are disjoint, probability of equality is 0.
                         return Distribution::new_bernoulli(ScalarValue::from(0.0));
                     } else {
                         // If the ranges are disjoint, probability of not-equality is 1.
                         return Distribution::new_bernoulli(ScalarValue::from(1.0));
-                    }
+                    }}
                 }
                 Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
                     // TODO: We can handle inequality operators and calculate a

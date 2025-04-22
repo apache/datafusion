@@ -173,7 +173,7 @@ mod tests {
     // 4. verify that the resulting expression is of type B
     // 5. verify that the resulting values are downcastable and correct
     macro_rules! generic_decimal_to_other_test_cast {
-        ($DECIMAL_ARRAY:ident, $A_TYPE:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr) => {{
+        ($DECIMAL_ARRAY:ident, $A_TYPE:expr_2021, $TYPEARRAY:ident, $TYPE:expr_2021, $VEC:expr_2021) => {{
             let schema = Schema::new(vec![Field::new("a", $A_TYPE, true)]);
             let batch = RecordBatch::try_new(
                 Arc::new(schema.clone()),
@@ -223,7 +223,7 @@ mod tests {
     // 4. verify that the resulting expression is of type B
     // 5. verify that the resulting values are downcastable and correct
     macro_rules! generic_test_cast {
-        ($A_ARRAY:ident, $A_TYPE:expr, $A_VEC:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr) => {{
+        ($A_ARRAY:ident, $A_TYPE:expr_2021, $A_VEC:expr_2021, $TYPEARRAY:ident, $TYPE:expr_2021, $VEC:expr_2021) => {{
             let schema = Schema::new(vec![Field::new("a", $A_TYPE, true)]);
             let a_vec_len = $A_VEC.len();
             let a = $A_ARRAY::from($A_VEC);

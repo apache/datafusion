@@ -727,20 +727,20 @@ fn test_output_req_after_projection() -> Result<()> {
         Arc::new(Column::new("new_a", 1)),
         Arc::new(Column::new("b", 2)),
     ];
-    if let Distribution::HashPartitioned(vec) = after_optimize
+    match after_optimize
         .as_any()
         .downcast_ref::<OutputRequirementExec>()
         .unwrap()
         .required_input_distribution()[0]
         .clone()
-    {
+    { Distribution::HashPartitioned(vec) => {
         assert!(vec
             .iter()
             .zip(expected_distribution)
             .all(|(actual, expected)| actual.eq(&expected)));
-    } else {
+    } _ => {
         panic!("Expected HashPartitioned distribution!");
-    };
+    }};
 
     Ok(())
 }

@@ -516,7 +516,7 @@ mod tests {
 
     // applies the in_list expr to an input batch and list
     macro_rules! in_list {
-        ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
+        ($BATCH:expr_2021, $LIST:expr_2021, $NEGATED:expr_2021, $EXPECTED:expr_2021, $COL:expr_2021, $SCHEMA:expr_2021) => {{
             let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
             in_list_raw!(
                 $BATCH,
@@ -531,7 +531,7 @@ mod tests {
 
     // applies the in_list expr to an input batch and list without cast
     macro_rules! in_list_raw {
-        ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
+        ($BATCH:expr_2021, $LIST:expr_2021, $NEGATED:expr_2021, $EXPECTED:expr_2021, $COL:expr_2021, $SCHEMA:expr_2021) => {{
             let expr = in_list($COL, $LIST, $NEGATED, $SCHEMA).unwrap();
             let result = expr
                 .evaluate(&$BATCH)?
@@ -1260,7 +1260,7 @@ mod tests {
     }
 
     macro_rules! test_nullable {
-        ($COL:expr, $LIST:expr, $SCHEMA:expr, $EXPECTED:expr) => {{
+        ($COL:expr_2021, $LIST:expr_2021, $SCHEMA:expr_2021, $EXPECTED:expr_2021) => {{
             let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
             let expr = in_list(cast_expr, cast_list_exprs, &false, $SCHEMA).unwrap();
             let result = expr.nullable($SCHEMA)?;

@@ -195,7 +195,7 @@ impl ScalarUDFImpl for DatePartFunc {
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
-        let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
+        let arr = match IntervalUnit::from_str(part_trim) { Ok(interval_unit) => {
             match interval_unit {
                 IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
                 IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,
@@ -210,7 +210,7 @@ impl ScalarUDFImpl for DatePartFunc {
                 // century and decade are not supported by `DatePart`, although they are supported in postgres
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
-        } else {
+        } _ => {
             // special cases that can be extracted (in postgres) but are not interval units
             match part_trim.to_lowercase().as_str() {
                 "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
@@ -219,7 +219,7 @@ impl ScalarUDFImpl for DatePartFunc {
                 "epoch" => epoch(array.as_ref())?,
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
-        };
+        }};
 
         Ok(if is_scalar {
             ColumnarValue::Scalar(ScalarValue::try_from_array(arr.as_ref(), 0)?)

@@ -46,7 +46,7 @@ use tempfile::TempDir;
 /// Usage: `assert_metrics!(actual, operator_name, metrics)`
 ///
 macro_rules! assert_metrics {
-    ($ACTUAL: expr, $OPERATOR_NAME: expr, $METRICS: expr) => {
+    ($ACTUAL: expr_2021, $OPERATOR_NAME: expr_2021, $METRICS: expr_2021) => {
         let found = $ACTUAL
             .lines()
             .any(|line| line.contains($OPERATOR_NAME) && line.contains($METRICS));
@@ -331,7 +331,7 @@ async fn nyc() -> Result<()> {
     match &optimized_plan {
         LogicalPlan::Aggregate(Aggregate { input, .. }) => match input.as_ref() {
             LogicalPlan::TableScan(TableScan {
-                ref projected_schema,
+                projected_schema,
                 ..
             }) => {
                 assert_eq!(2, projected_schema.fields().len());

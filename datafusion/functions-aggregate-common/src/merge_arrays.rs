@@ -136,9 +136,9 @@ pub fn merge_ordered_arrays(
     let mut merged_orderings = vec![];
     // Continue iterating the loop until consuming data of all branches.
     loop {
-        let minimum = if let Some(minimum) = heap.pop() {
+        let minimum = match heap.pop() { Some(minimum) => {
             minimum
-        } else {
+        } _ => {
             // Heap is empty, fill it with the next entries from each branch.
             for branch_idx in 0..n_branch {
                 if let Some(orderings) = ordering_values[branch_idx].pop_front() {
@@ -157,15 +157,15 @@ pub fn merge_ordered_arrays(
 
             // Now we have filled the heap, get the largest entry (this will be
             // the next element in merge).
-            if let Some(minimum) = heap.pop() {
+            match heap.pop() { Some(minimum) => {
                 minimum
-            } else {
+            } _ => {
                 // Heap is empty, this means that all indices are same with
                 // `end_indices`. We have consumed all of the branches, merge
                 // is completed, exit from the loop:
                 break;
-            }
-        };
+            }}
+        }};
         let CustomElement {
             branch_idx,
             value,

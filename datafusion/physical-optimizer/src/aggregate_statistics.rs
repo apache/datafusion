@@ -48,7 +48,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some(partial_agg_exec) = take_optimizable(&*plan) {
+        match take_optimizable(&*plan) { Some(partial_agg_exec) => {
             let partial_agg_exec = partial_agg_exec
                 .as_any()
                 .downcast_ref::<AggregateExec>()
@@ -64,15 +64,14 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                     is_distinct: expr.is_distinct(),
                     exprs: args.as_slice(),
                 };
-                if let Some((optimizable_statistic, name)) =
-                    take_optimizable_value_from_statistics(&statistics_args, expr)
-                {
+                match take_optimizable_value_from_statistics(&statistics_args, expr)
+                { Some((optimizable_statistic, name)) => {
                     projections
                         .push((expressions::lit(optimizable_statistic), name.to_owned()));
-                } else {
+                } _ => {
                     // TODO: we need all aggr_expr to be resolved (cf TODO fullres)
                     break;
-                }
+                }}
             }
 
             // TODO fullres: use statistics even if not all aggr_expr could be resolved
@@ -88,10 +87,10 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 })
                 .data()
             }
-        } else {
+        } _ => {
             plan.map_children(|child| self.optimize(child, config).map(Transformed::yes))
                 .data()
-        }
+        }}
     }
 
     fn name(&self) -> &str {

@@ -324,7 +324,7 @@ fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
 }
 
 macro_rules! encode_to_array {
-    ($METHOD: ident, $INPUT:expr) => {{
+    ($METHOD: ident, $INPUT:expr_2021) => {{
         let utf8_array: StringArray = $INPUT
             .iter()
             .map(|x| x.map(|x| $METHOD(x.as_ref())))

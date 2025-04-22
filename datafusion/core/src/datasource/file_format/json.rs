@@ -336,7 +336,7 @@ mod tests {
     fn json_deserializer(
         batch_size: usize,
         schema: &Arc<Schema>,
-    ) -> Result<impl BatchDeserializer<Bytes>> {
+    ) -> Result<impl BatchDeserializer<Bytes> + use<>> {
         let decoder = ReaderBuilder::new(schema.clone())
             .with_batch_size(batch_size)
             .build_decoder()?;

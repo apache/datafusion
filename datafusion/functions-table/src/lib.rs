@@ -41,7 +41,7 @@ pub fn all_default_table_functions() -> Vec<Arc<TableFunction>> {
 /// This is used to ensure creating the list of `TableFunction` only happens once.
 #[macro_export]
 macro_rules! create_udtf_function {
-    ($module:path, $name:expr) => {
+    ($module:path, $name:expr_2021) => {
         paste::paste! {
             pub fn [<$name:lower>]() -> Arc<TableFunction> {
                 static INSTANCE: std::sync::LazyLock<Arc<TableFunction>> =

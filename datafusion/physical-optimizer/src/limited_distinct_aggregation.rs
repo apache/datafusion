@@ -166,13 +166,12 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
         if config.optimizer.enable_distinct_aggregation_soft_limit {
             plan.transform_down(|plan| {
                 Ok(
-                    if let Some(plan) =
-                        LimitedDistinctAggregation::transform_limit(plan.to_owned())
-                    {
+                    match LimitedDistinctAggregation::transform_limit(plan.to_owned())
+                    { Some(plan) => {
                         Transformed::yes(plan)
-                    } else {
+                    } _ => {
                         Transformed::no(plan)
-                    },
+                    }},
                 )
             })
             .data()

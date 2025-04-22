@@ -234,7 +234,7 @@ async fn test_median() {
 /// 1. structured types
 fn baseline_config() -> DatasetGeneratorConfig {
     let mut rng = thread_rng();
-    let columns = get_supported_types_columns(rng.gen());
+    let columns = get_supported_types_columns(rng.r#gen());
 
     let min_num_rows = 512;
     let max_num_rows = 1024;

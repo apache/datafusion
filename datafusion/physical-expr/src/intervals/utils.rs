@@ -42,17 +42,17 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
             && check_support(binary_expr.left(), schema)
             && check_support(binary_expr.right(), schema)
     } else if let Some(column) = expr_any.downcast_ref::<Column>() {
-        if let Ok(field) = schema.field_with_name(column.name()) {
+        match schema.field_with_name(column.name()) { Ok(field) => {
             is_datatype_supported(field.data_type())
-        } else {
+        } _ => {
             return false;
-        }
+        }}
     } else if let Some(literal) = expr_any.downcast_ref::<Literal>() {
-        if let Ok(dt) = literal.data_type(schema) {
+        match literal.data_type(schema) { Ok(dt) => {
             is_datatype_supported(&dt)
-        } else {
+        } _ => {
             return false;
-        }
+        }}
     } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
         check_support(cast.expr(), schema)
     } else if let Some(negative) = expr_any.downcast_ref::<NegativeExpr>() {
@@ -109,14 +109,14 @@ pub fn is_datatype_supported(data_type: &DataType) -> bool {
 
 /// Converts an [`Interval`] of time intervals to one of `Duration`s, if applicable. Otherwise, returns [`None`].
 pub fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval> {
-    if let (Some(lower), Some(upper)) = (
+    match (
         convert_interval_bound_to_duration(interval.lower()),
         convert_interval_bound_to_duration(interval.upper()),
-    ) {
+    ) { (Some(lower), Some(upper)) => {
         Interval::try_new(lower, upper).ok()
-    } else {
+    } _ => {
         None
-    }
+    }}
 }
 
 /// Converts an [`ScalarValue`] containing a time interval to one containing a `Duration`, if applicable. Otherwise, returns [`None`].
@@ -136,14 +136,14 @@ fn convert_interval_bound_to_duration(
 
 /// Converts an [`Interval`] of `Duration`s to one of time intervals, if applicable. Otherwise, returns [`None`].
 pub fn convert_duration_type_to_interval(interval: &Interval) -> Option<Interval> {
-    if let (Some(lower), Some(upper)) = (
+    match (
         convert_duration_bound_to_interval(interval.lower()),
         convert_duration_bound_to_interval(interval.upper()),
-    ) {
+    ) { (Some(lower), Some(upper)) => {
         Interval::try_new(lower, upper).ok()
-    } else {
+    } _ => {
         None
-    }
+    }}
 }
 
 /// Converts a [`ScalarValue`] containing a `Duration` to one containing a time interval, if applicable. Otherwise, returns [`None`].

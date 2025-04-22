@@ -670,7 +670,7 @@ mod test {
                 .map(|_| rng.gen_range(0..max_group))
                 .collect();
 
-            let values: Vec<u32> = (0..num_values).map(|_| rng.gen()).collect();
+            let values: Vec<u32> = (0..num_values).map(|_| rng.r#gen()).collect();
 
             // 10% chance of false
             // 10% change of null
@@ -697,7 +697,7 @@ mod test {
                     if is_null {
                         None
                     } else {
-                        Some(rng.gen())
+                        Some(rng.r#gen())
                     }
                 })
                 .collect();

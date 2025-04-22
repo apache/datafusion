@@ -692,26 +692,24 @@ impl From<protobuf::Precision> for Precision<usize> {
         match precision_type {
             protobuf::PrecisionInfo::Exact => {
                 if let Some(val) = s.val {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&val)
-                    {
+                    match ScalarValue::try_from(&val)
+                    { Ok(ScalarValue::UInt64(Some(val))) => {
                         Precision::Exact(val as usize)
-                    } else {
+                    } _ => {
                         Precision::Absent
-                    }
+                    }}
                 } else {
                     Precision::Absent
                 }
             }
             protobuf::PrecisionInfo::Inexact => {
                 if let Some(val) = s.val {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&val)
-                    {
+                    match ScalarValue::try_from(&val)
+                    { Ok(ScalarValue::UInt64(Some(val))) => {
                         Precision::Inexact(val as usize)
-                    } else {
+                    } _ => {
                         Precision::Absent
-                    }
+                    }}
                 } else {
                     Precision::Absent
                 }
@@ -729,22 +727,22 @@ impl From<protobuf::Precision> for Precision<ScalarValue> {
         match precision_type {
             protobuf::PrecisionInfo::Exact => {
                 if let Some(val) = s.val {
-                    if let Ok(val) = ScalarValue::try_from(&val) {
+                    match ScalarValue::try_from(&val) { Ok(val) => {
                         Precision::Exact(val)
-                    } else {
+                    } _ => {
                         Precision::Absent
-                    }
+                    }}
                 } else {
                     Precision::Absent
                 }
             }
             protobuf::PrecisionInfo::Inexact => {
                 if let Some(val) = s.val {
-                    if let Ok(val) = ScalarValue::try_from(&val) {
+                    match ScalarValue::try_from(&val) { Ok(val) => {
                         Precision::Inexact(val)
-                    } else {
+                    } _ => {
                         Precision::Absent
-                    }
+                    }}
                 } else {
                     Precision::Absent
                 }

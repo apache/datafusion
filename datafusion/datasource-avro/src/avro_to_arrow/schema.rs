@@ -246,13 +246,13 @@ fn external_props(schema: &AvroSchema) -> HashMap<String, String> {
     let mut props = HashMap::new();
     match &schema {
         AvroSchema::Record(RecordSchema {
-            doc: Some(ref doc), ..
+            doc: Some(doc), ..
         })
         | AvroSchema::Enum(EnumSchema {
-            doc: Some(ref doc), ..
+            doc: Some(doc), ..
         })
         | AvroSchema::Fixed(FixedSchema {
-            doc: Some(ref doc), ..
+            doc: Some(doc), ..
         }) => {
             props.insert("avro::doc".to_string(), doc.clone());
         }

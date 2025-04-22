@@ -546,10 +546,10 @@ impl EquivalenceGroup {
     ) -> Option<Arc<dyn PhysicalExpr>> {
         // First, we try to project expressions with an exact match. If we are
         // unable to do this, we consult equivalence classes.
-        if let Some(target) = mapping.target_expr(expr) {
+        match mapping.target_expr(expr) { Some(target) => {
             // If we match the source, we can project directly:
             return Some(target);
-        } else {
+        } _ => {
             // If the given expression is not inside the mapping, try to project
             // expressions considering the equivalence classes.
             for (source, target) in mapping.iter() {
@@ -563,7 +563,7 @@ impl EquivalenceGroup {
                     return Some(Arc::clone(target));
                 }
             }
-        }
+        }}
         // Project a non-leaf expression by projecting its children.
         let children = expr.children();
         if children.is_empty() {

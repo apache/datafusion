@@ -255,7 +255,7 @@ mod tests {
     }
 
     macro_rules! sized_number_test {
-        ($SIZE: expr, $T: tt) => {{
+        ($SIZE: expr_2021, $T: tt) => {{
             let mut hll = HyperLogLog::<$T>::new();
             for i in 0..$SIZE {
                 hll.add(&i);
@@ -265,7 +265,7 @@ mod tests {
     }
 
     macro_rules! typed_large_number_test {
-        ($SIZE: expr) => {{
+        ($SIZE: expr_2021) => {{
             sized_number_test!($SIZE, u64);
             sized_number_test!($SIZE, u128);
             sized_number_test!($SIZE, i64);
@@ -274,7 +274,7 @@ mod tests {
     }
 
     macro_rules! typed_number_test {
-        ($SIZE: expr) => {{
+        ($SIZE: expr_2021) => {{
             sized_number_test!($SIZE, u16);
             sized_number_test!($SIZE, u32);
             sized_number_test!($SIZE, i16);

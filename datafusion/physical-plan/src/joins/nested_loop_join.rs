@@ -588,19 +588,19 @@ impl ExecutionPlan for NestedLoopJoinExec {
             return Ok(None);
         }
 
-        if let Some(JoinData {
-            projected_left_child,
-            projected_right_child,
-            join_filter,
-            ..
-        }) = try_pushdown_through_join(
+        match try_pushdown_through_join(
             projection,
             self.left(),
             self.right(),
             &[],
             self.schema(),
             self.filter(),
-        )? {
+        )? { Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            ..
+        }) => {
             Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
                 Arc::new(projected_left_child),
                 Arc::new(projected_right_child),
@@ -609,9 +609,9 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 // Returned early if projection is not None
                 None,
             )?)))
-        } else {
+        } _ => {
             try_embed_projection(projection, self)
-        }
+        }}
     }
 }
 

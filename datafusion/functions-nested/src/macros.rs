@@ -44,7 +44,7 @@
 ///
 /// [`ScalarUDFImpl`]: datafusion_expr::ScalarUDFImpl
 macro_rules! make_udf_expr_and_func {
-    ($UDF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr , $SCALAR_UDF_FN:ident) => {
+    ($UDF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr_2021 , $SCALAR_UDF_FN:ident) => {
         paste::paste! {
             // "fluent expr_fn" style function
             #[doc = $DOC]
@@ -57,7 +57,7 @@ macro_rules! make_udf_expr_and_func {
             create_func!($UDF, $SCALAR_UDF_FN);
         }
     };
-    ($UDF:ty, $EXPR_FN:ident, $DOC:expr , $SCALAR_UDF_FN:ident) => {
+    ($UDF:ty, $EXPR_FN:ident, $DOC:expr_2021 , $SCALAR_UDF_FN:ident) => {
         paste::paste! {
             // "fluent expr_fn" style function
             #[doc = $DOC]

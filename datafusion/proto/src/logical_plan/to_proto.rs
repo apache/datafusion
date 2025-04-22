@@ -303,13 +303,13 @@ pub fn serialize_expr(
             }
         }
         Expr::WindowFunction(expr::WindowFunction {
-            ref fun,
+            fun,
             params:
                 expr::WindowFunctionParams {
-                    ref args,
-                    ref partition_by,
-                    ref order_by,
-                    ref window_frame,
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
                     // TODO: support null treatment in proto
                     null_treatment: _,
                 },
@@ -354,13 +354,13 @@ pub fn serialize_expr(
             }
         }
         Expr::AggregateFunction(expr::AggregateFunction {
-            ref func,
+            func,
             params:
                 AggregateFunctionParams {
-                    ref args,
-                    ref distinct,
-                    ref filter,
-                    ref order_by,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
                     null_treatment: _,
                 },
         }) => {

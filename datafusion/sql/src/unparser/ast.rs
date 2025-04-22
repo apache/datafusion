@@ -694,10 +694,10 @@ impl From<String> for BuilderError {
 impl fmt::Display for BuilderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::UninitializedField(ref field) => {
+            Self::UninitializedField(field) => {
                 write!(f, "`{}` must be initialized", field)
             }
-            Self::ValidationError(ref error) => write!(f, "{}", error),
+            Self::ValidationError(error) => write!(f, "{}", error),
         }
     }
 }

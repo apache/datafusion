@@ -103,11 +103,11 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
             return Err(err(&e.to_string()));
         }
 
-        if let Single(e) = &timezone.from_local_datetime(&ndt.unwrap()) {
+        match &timezone.from_local_datetime(&ndt.unwrap()) { Single(e) => {
             Ok(e.to_owned())
-        } else {
+        } _ => {
             Err(err(&e.to_string()))
-        }
+        }}
     } else {
         Ok(dt.unwrap().with_timezone(timezone))
     }

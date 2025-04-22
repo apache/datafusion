@@ -857,7 +857,7 @@ fn dict_from_values<K: ArrowDictionaryKeyType>(
 }
 
 macro_rules! typed_cast_tz {
-    ($array:expr, $index:expr, $ARRAYTYPE:ident, $SCALAR:ident, $TZ:expr) => {{
+    ($array:expr_2021, $index:expr_2021, $ARRAYTYPE:ident, $SCALAR:ident, $TZ:expr_2021) => {{
         use std::any::type_name;
         let array = $array
             .as_any()
@@ -879,7 +879,7 @@ macro_rules! typed_cast_tz {
 }
 
 macro_rules! typed_cast {
-    ($array:expr, $index:expr, $ARRAYTYPE:ident, $SCALAR:ident) => {{
+    ($array:expr_2021, $index:expr_2021, $ARRAYTYPE:ident, $SCALAR:ident) => {{
         use std::any::type_name;
         let array = $array
             .as_any()
@@ -900,13 +900,13 @@ macro_rules! typed_cast {
 }
 
 macro_rules! build_array_from_option {
-    ($DATA_TYPE:ident, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
+    ($DATA_TYPE:ident, $ARRAY_TYPE:ident, $EXPR:expr_2021, $SIZE:expr_2021) => {{
         match $EXPR {
             Some(value) => Arc::new($ARRAY_TYPE::from_value(*value, $SIZE)),
             None => new_null_array(&DataType::$DATA_TYPE, $SIZE),
         }
     }};
-    ($DATA_TYPE:ident, $ENUM:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
+    ($DATA_TYPE:ident, $ENUM:expr_2021, $ARRAY_TYPE:ident, $EXPR:expr_2021, $SIZE:expr_2021) => {{
         match $EXPR {
             Some(value) => Arc::new($ARRAY_TYPE::from_value(*value, $SIZE)),
             None => new_null_array(&DataType::$DATA_TYPE($ENUM), $SIZE),
@@ -915,7 +915,7 @@ macro_rules! build_array_from_option {
 }
 
 macro_rules! build_timestamp_array_from_option {
-    ($TIME_UNIT:expr, $TZ:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {
+    ($TIME_UNIT:expr_2021, $TZ:expr_2021, $ARRAY_TYPE:ident, $EXPR:expr_2021, $SIZE:expr_2021) => {
         match $EXPR {
             Some(value) => {
                 Arc::new($ARRAY_TYPE::from_value(*value, $SIZE).with_timezone_opt($TZ))
@@ -926,7 +926,7 @@ macro_rules! build_timestamp_array_from_option {
 }
 
 macro_rules! eq_array_primitive {
-    ($array:expr, $index:expr, $ARRAYTYPE:ident, $VALUE:expr) => {{
+    ($array:expr_2021, $index:expr_2021, $ARRAYTYPE:ident, $VALUE:expr_2021) => {{
         use std::any::type_name;
         let array = $array
             .as_any()
@@ -1876,7 +1876,7 @@ impl ScalarValue {
         }
 
         macro_rules! build_array_primitive_tz {
-            ($ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr) => {{
+            ($ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr_2021) => {{
                 {
                     let array = scalars.map(|sv| {
                         if let ScalarValue::$SCALAR_TY(v, _) = sv {
@@ -3604,7 +3604,7 @@ impl TryFrom<&DataType> for ScalarValue {
 }
 
 macro_rules! format_option {
-    ($F:expr, $EXPR:expr) => {{
+    ($F:expr_2021, $EXPR:expr_2021) => {{
         match $EXPR {
             Some(e) => write!($F, "{e}"),
             None => write!($F, "NULL"),
@@ -4846,7 +4846,7 @@ mod tests {
 
     /// Creates array directly and via ScalarValue and ensures they are the same
     macro_rules! check_scalar_iter {
-        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr) => {{
+        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr_2021) => {{
             let scalars: Vec<_> =
                 $INPUT.iter().map(|v| ScalarValue::$SCALAR_T(*v)).collect();
 
@@ -4861,7 +4861,7 @@ mod tests {
     /// Creates array directly and via ScalarValue and ensures they are the same
     /// but for variants that carry a timezone field.
     macro_rules! check_scalar_iter_tz {
-        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr) => {{
+        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr_2021) => {{
             let scalars: Vec<_> = $INPUT
                 .iter()
                 .map(|v| ScalarValue::$SCALAR_T(*v, None))
@@ -4878,7 +4878,7 @@ mod tests {
     /// Creates array directly and via ScalarValue and ensures they
     /// are the same, for string  arrays
     macro_rules! check_scalar_iter_string {
-        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr) => {{
+        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr_2021) => {{
             let scalars: Vec<_> = $INPUT
                 .iter()
                 .map(|v| ScalarValue::$SCALAR_T(v.map(|v| v.to_string())))
@@ -4895,7 +4895,7 @@ mod tests {
     /// Creates array directly and via ScalarValue and ensures they
     /// are the same, for binary arrays
     macro_rules! check_scalar_iter_binary {
-        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr) => {{
+        ($SCALAR_T:ident, $ARRAYTYPE:ident, $INPUT:expr_2021) => {{
             let scalars: Vec<_> = $INPUT
                 .iter()
                 .map(|v| ScalarValue::$SCALAR_T(v.map(|v| v.to_vec())))
@@ -5207,7 +5207,7 @@ mod tests {
     fn scalar_eq_array() {
         // Validate that eq_array has the same semantics as ScalarValue::eq
         macro_rules! make_typed_vec {
-            ($INPUT:expr, $TYPE:ident) => {{
+            ($INPUT:expr_2021, $TYPE:ident) => {{
                 $INPUT
                     .iter()
                     .map(|v| v.map(|v| v as $TYPE))
@@ -5253,14 +5253,14 @@ mod tests {
 
         /// Create a test case for casing the input to the specified array type
         macro_rules! make_test_case {
-            ($INPUT:expr, $ARRAY_TY:ident, $SCALAR_TY:ident) => {{
+            ($INPUT:expr_2021, $ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 TestCase {
                     array: Arc::new($INPUT.iter().collect::<$ARRAY_TY>()),
                     scalars: $INPUT.iter().map(|v| ScalarValue::$SCALAR_TY(*v)).collect(),
                 }
             }};
 
-            ($INPUT:expr, $ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr) => {{
+            ($INPUT:expr_2021, $ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr_2021) => {{
                 let tz = $TZ;
                 TestCase {
                     array: Arc::new($INPUT.iter().collect::<$ARRAY_TY>()),
@@ -5273,7 +5273,7 @@ mod tests {
         }
 
         macro_rules! make_str_test_case {
-            ($INPUT:expr, $ARRAY_TY:ident, $SCALAR_TY:ident) => {{
+            ($INPUT:expr_2021, $ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 TestCase {
                     array: Arc::new($INPUT.iter().cloned().collect::<$ARRAY_TY>()),
                     scalars: $INPUT
@@ -5285,7 +5285,7 @@ mod tests {
         }
 
         macro_rules! make_binary_test_case {
-            ($INPUT:expr, $ARRAY_TY:ident, $SCALAR_TY:ident) => {{
+            ($INPUT:expr_2021, $ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 TestCase {
                     array: Arc::new($INPUT.iter().cloned().collect::<$ARRAY_TY>()),
                     scalars: $INPUT
@@ -5300,7 +5300,7 @@ mod tests {
 
         /// create a test case for DictionaryArray<$INDEX_TY>
         macro_rules! make_str_dict_test_case {
-            ($INPUT:expr, $INDEX_TY:ident) => {{
+            ($INPUT:expr_2021, $INDEX_TY:ident) => {{
                 TestCase {
                     array: Arc::new(
                         $INPUT
@@ -6350,7 +6350,7 @@ mod tests {
     #[allow(arithmetic_overflow)] // we want to test them
     fn test_scalar_negative_overflows() -> Result<()> {
         macro_rules! test_overflow_on_value {
-            ($($val:expr),* $(,)?) => {$(
+            ($($val:expr_2021),* $(,)?) => {$(
                 {
                     let value: ScalarValue = $val;
                     let err = value.arithmetic_negate().expect_err("Should receive overflow error on negating {value:?}");
@@ -6429,7 +6429,7 @@ mod tests {
     }
 
     macro_rules! expect_operation_error {
-        ($TEST_NAME:ident, $FUNCTION:ident, $EXPECTED_ERROR:expr) => {
+        ($TEST_NAME:ident, $FUNCTION:ident, $EXPECTED_ERROR:expr_2021) => {
             #[test]
             fn $TEST_NAME() {
                 let lhs = ScalarValue::UInt64(Some(12));
@@ -6467,7 +6467,7 @@ mod tests {
     );
 
     macro_rules! decimal_op_test_cases {
-    ($OPERATION:ident, [$([$L_VALUE:expr, $L_PRECISION:expr, $L_SCALE:expr, $R_VALUE:expr, $R_PRECISION:expr, $R_SCALE:expr, $O_VALUE:expr, $O_PRECISION:expr, $O_SCALE:expr]),+]) => {
+    ($OPERATION:ident, [$([$L_VALUE:expr_2021, $L_PRECISION:expr_2021, $L_SCALE:expr_2021, $R_VALUE:expr_2021, $R_PRECISION:expr_2021, $R_SCALE:expr_2021, $O_VALUE:expr_2021, $O_PRECISION:expr_2021, $O_SCALE:expr_2021]),+]) => {
             $(
 
                 let left = ScalarValue::Decimal128($L_VALUE, $L_PRECISION, $L_SCALE);

@@ -203,11 +203,11 @@ impl ScalarUDFImpl for LogFunc {
         })?;
         let number_datatype = info.get_data_type(&number)?;
         // default to base 10
-        let base = if let Some(base) = args.pop() {
+        let base = match args.pop() { Some(base) => {
             base
-        } else {
+        } _ => {
             lit(ScalarValue::new_ten(&number_datatype)?)
-        };
+        }};
 
         match number {
             Expr::Literal(value) if value == ScalarValue::new_one(&number_datatype)? => {

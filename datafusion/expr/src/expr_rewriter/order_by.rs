@@ -89,12 +89,12 @@ fn rewrite_in_terms_of_projection(
         // (e.g. "c1" --> "t.c1") because that normalization is done
         // at the input of the aggregate.
 
-        let normalized_expr = if let Ok(e) = normalize_col(expr.clone(), input) {
+        let normalized_expr = match normalize_col(expr.clone(), input) { Ok(e) => {
             e
-        } else {
+        } _ => {
             // The expr is not based on Aggregate plan output. Skip it.
             return Ok(Transformed::no(expr));
-        };
+        }};
 
         // expr is an actual expr like min(t.c2), but we are looking
         // for a column with the same "MIN(C2)", so translate there

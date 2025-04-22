@@ -41,7 +41,7 @@
 /// - `Vec<Expr>` argument (single argument followed by a comma)
 /// - Variable number of `Expr` arguments (zero or more arguments, must be without commas)
 macro_rules! export_functions {
-    ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
+    ($(($FUNC:ident, $DOC:expr_2021, $($arg:tt)*)),*) => {
         $(
             // switch to single-function cases below
             export_functions!(single $FUNC, $DOC, $($arg)*);
@@ -49,7 +49,7 @@ macro_rules! export_functions {
     };
 
     // single vector argument (a single argument followed by a comma)
-    (single $FUNC:ident, $DOC:expr, $arg:ident,) => {
+    (single $FUNC:ident, $DOC:expr_2021, $arg:ident,) => {
         #[doc = $DOC]
         pub fn $FUNC($arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
             super::$FUNC().call($arg)
@@ -57,7 +57,7 @@ macro_rules! export_functions {
     };
 
     // variadic arguments (zero or more arguments, without commas)
-    (single $FUNC:ident, $DOC:expr, $($arg:ident)*) => {
+    (single $FUNC:ident, $DOC:expr_2021, $($arg:ident)*) => {
         #[doc = $DOC]
         pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
             super::$FUNC().call(vec![$($arg),*])
@@ -117,7 +117,7 @@ macro_rules! make_stub_package {
 /// $ARRAY_TYPE: the type of array to cast the argument to
 #[macro_export]
 macro_rules! downcast_named_arg {
-    ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
+    ($ARG:expr_2021, $NAME:expr_2021, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
             internal_datafusion_err!(
                 "could not cast {} to {}",
@@ -135,7 +135,7 @@ macro_rules! downcast_named_arg {
 /// $ARRAY_TYPE: the type of array to cast the argument to
 #[macro_export]
 macro_rules! downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
+    ($ARG:expr_2021, $ARRAY_TYPE:ident) => {{
         downcast_named_arg!($ARG, "", $ARRAY_TYPE)
     }};
 }
@@ -151,7 +151,7 @@ macro_rules! downcast_arg {
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
 /// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_unary_udf {
-    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr) => {
+    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr_2021, $EVALUATE_BOUNDS:expr_2021, $GET_DOC:expr_2021) => {
         make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
@@ -265,7 +265,7 @@ macro_rules! make_math_unary_udf {
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
 /// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_binary_udf {
-    ($UDF:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr, $GET_DOC:expr) => {
+    ($UDF:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr_2021, $GET_DOC:expr_2021) => {
         make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {

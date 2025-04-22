@@ -1651,7 +1651,7 @@ mod test {
     /// `$PLAN`: the plan to optimized
     ///
     macro_rules! assert_plan {
-        ($EXPECTED_PLAN_LINES: expr,  $PLAN: expr) => {
+        ($EXPECTED_PLAN_LINES: expr_2021,  $PLAN: expr_2021) => {
             let physical_plan = $PLAN;
             let formatted = crate::displayable(&physical_plan).indent(true).to_string();
             let actual: Vec<&str> = formatted.trim().lines().collect();

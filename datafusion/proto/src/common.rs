@@ -38,7 +38,7 @@ pub(crate) fn byte_to_string(b: u8, description: &str) -> Result<String> {
 
 #[macro_export]
 macro_rules! convert_required {
-    ($PB:expr) => {{
+    ($PB:expr_2021) => {{
         if let Some(field) = $PB.as_ref() {
             Ok(field.try_into()?)
         } else {
@@ -49,7 +49,7 @@ macro_rules! convert_required {
 
 #[macro_export]
 macro_rules! into_required {
-    ($PB:expr) => {{
+    ($PB:expr_2021) => {{
         if let Some(field) = $PB.as_ref() {
             Ok(field.into())
         } else {
@@ -60,7 +60,7 @@ macro_rules! into_required {
 
 #[macro_export]
 macro_rules! convert_box_required {
-    ($PB:expr) => {{
+    ($PB:expr_2021) => {{
         if let Some(field) = $PB.as_ref() {
             field.as_ref().try_into()
         } else {

@@ -109,11 +109,11 @@ pub type HashSet<T, S = DefaultHashBuilder> = hashbrown::HashSet<T, S>;
 /// Example: `let array = downcast_value!(values, Int32Array)`
 #[macro_export]
 macro_rules! downcast_value {
-    ($Value: expr, $Type: ident) => {{
+    ($Value: expr_2021, $Type: ident) => {{
         use $crate::__private::DowncastArrayHelper;
         $Value.downcast_array_helper::<$Type>()?
     }};
-    ($Value: expr, $Type: ident, $T: tt) => {{
+    ($Value: expr_2021, $Type: ident, $T: tt) => {{
         use $crate::__private::DowncastArrayHelper;
         $Value.downcast_array_helper::<$Type<$T>>()?
     }};

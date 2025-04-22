@@ -63,7 +63,7 @@ unsafe impl Sync for FFI_SessionConfig {}
 
 unsafe extern "C" fn config_options_fn_wrapper(
     config: &FFI_SessionConfig,
-) -> RHashMap<RString, RString> {
+) -> RHashMap<RString, RString> { unsafe {
     let private_data = config.private_data as *mut SessionConfigPrivateData;
     let config_options = &(*private_data).config;
 
@@ -75,15 +75,15 @@ unsafe extern "C" fn config_options_fn_wrapper(
     }
 
     options
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(config: &mut FFI_SessionConfig) {
+unsafe extern "C" fn release_fn_wrapper(config: &mut FFI_SessionConfig) { unsafe {
     let private_data =
         Box::from_raw(config.private_data as *mut SessionConfigPrivateData);
     drop(private_data);
-}
+}}
 
-unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_SessionConfig {
+unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_SessionConfig { unsafe {
     let old_private_data = config.private_data as *mut SessionConfigPrivateData;
     let old_config = &(*old_private_data).config;
 
@@ -97,7 +97,7 @@ unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_Session
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
     }
-}
+}}
 
 struct SessionConfigPrivateData {
     pub config: ConfigOptions,

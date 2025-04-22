@@ -398,7 +398,7 @@ fn _regexp_replace_early_abort<T: ArrayAccessor>(
 /// Note: If the array is empty or the first argument is null,
 /// then calls the given early abort function.
 macro_rules! fetch_string_arg {
-    ($ARG:expr, $NAME:expr, $T:ident, $EARLY_ABORT:ident, $ARRAY_SIZE:expr) => {{
+    ($ARG:expr_2021, $NAME:expr_2021, $T:ident, $EARLY_ABORT:ident, $ARRAY_SIZE:expr_2021) => {{
         let array = as_generic_string_array::<$T>($ARG)?;
         if array.len() == 0 || array.is_null(0) {
             return $EARLY_ABORT(array, $ARRAY_SIZE);

@@ -622,11 +622,11 @@ impl ExprIntervalGraph {
         given_range: Interval,
     ) -> Result<PropagationResult> {
         // Adjust the root node with the given range:
-        if let Some(interval) = self.graph[self.root].interval.intersect(given_range)? {
+        match self.graph[self.root].interval.intersect(given_range)? { Some(interval) => {
             self.graph[self.root].interval = interval;
-        } else {
+        } _ => {
             return Ok(PropagationResult::Infeasible);
-        }
+        }}
 
         let mut bfs = Bfs::new(&self.graph, self.root);
 
@@ -701,7 +701,7 @@ fn propagate_time_interval_at_left(
     // If so, we return it as is without propagating. Otherwise, we first convert
     // the time intervals to the `Duration` type, then propagate, and then convert
     // the bounds to time intervals again.
-    let result = if let Some(duration) = convert_interval_type_to_duration(left_child) {
+    let result = match convert_interval_type_to_duration(left_child) { Some(duration) => {
         match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
             Some(value) => {
                 let left = convert_duration_type_to_interval(&value);
@@ -713,10 +713,10 @@ fn propagate_time_interval_at_left(
             }
             None => None,
         }
-    } else {
+    } _ => {
         propagate_right(left_child, parent, right_child, op, inverse_op)?
             .map(|right| (left_child.clone(), right))
-    };
+    }};
     Ok(result)
 }
 
@@ -737,7 +737,7 @@ fn propagate_time_interval_at_right(
     // If so, we return it as is without propagating. Otherwise, we first convert
     // the time intervals to the `Duration` type, then propagate, and then convert
     // the bounds to time intervals again.
-    let result = if let Some(duration) = convert_interval_type_to_duration(right_child) {
+    let result = match convert_interval_type_to_duration(right_child) { Some(duration) => {
         match apply_operator(inverse_op, parent, &duration)?.intersect(left_child)? {
             Some(value) => {
                 propagate_right(left_child, parent, &duration, op, inverse_op)?
@@ -746,11 +746,11 @@ fn propagate_time_interval_at_right(
             }
             None => None,
         }
-    } else {
+    } _ => {
         apply_operator(inverse_op, parent, right_child)?
             .intersect(left_child)?
             .map(|value| (value, right_child.clone()))
-    };
+    }};
     Ok(result)
 }
 

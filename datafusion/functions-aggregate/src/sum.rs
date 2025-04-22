@@ -176,14 +176,14 @@ impl AggregateUDFImpl for Sum {
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if args.is_distinct {
             macro_rules! helper {
-                ($t:ty, $dt:expr) => {
+                ($t:ty, $dt:expr_2021) => {
                     Ok(Box::new(DistinctSumAccumulator::<$t>::try_new(&$dt)?))
                 };
             }
             downcast_sum!(args, helper)
         } else {
             macro_rules! helper {
-                ($t:ty, $dt:expr) => {
+                ($t:ty, $dt:expr_2021) => {
                     Ok(Box::new(SumAccumulator::<$t>::new($dt.clone())))
                 };
             }
@@ -221,7 +221,7 @@ impl AggregateUDFImpl for Sum {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         macro_rules! helper {
-            ($t:ty, $dt:expr) => {
+            ($t:ty, $dt:expr_2021) => {
                 Ok(Box::new(PrimitiveGroupsAccumulator::<$t, _>::new(
                     &$dt,
                     |x, y| *x = x.add_wrapping(y),
@@ -236,7 +236,7 @@ impl AggregateUDFImpl for Sum {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
         macro_rules! helper {
-            ($t:ty, $dt:expr) => {
+            ($t:ty, $dt:expr_2021) => {
                 Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
             };
         }

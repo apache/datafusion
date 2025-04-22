@@ -62,7 +62,7 @@ impl DecimalArrayGenerator {
         // pick num_decimals randomly from the distinct decimal table
         let indices: UInt32Array = (0..self.num_decimals)
             .map(|_| {
-                if self.rng.gen::<f64>() < self.null_pct {
+                if self.rng.r#gen::<f64>() < self.null_pct {
                     None
                 } else if self.num_distinct_decimals > 1 {
                     let range = 1..(self.num_distinct_decimals as u32);

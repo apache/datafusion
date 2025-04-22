@@ -81,39 +81,39 @@ struct ProviderPrivateData {
 }
 
 impl FFI_CatalogProvider {
-    unsafe fn inner(&self) -> &Arc<dyn CatalogProvider + Send> {
+    unsafe fn inner(&self) -> &Arc<dyn CatalogProvider + Send> { unsafe {
         let private_data = self.private_data as *const ProviderPrivateData;
         &(*private_data).provider
-    }
+    }}
 
-    unsafe fn runtime(&self) -> Option<Handle> {
+    unsafe fn runtime(&self) -> Option<Handle> { unsafe {
         let private_data = self.private_data as *const ProviderPrivateData;
         (*private_data).runtime.clone()
-    }
+    }}
 }
 
 unsafe extern "C" fn schema_names_fn_wrapper(
     provider: &FFI_CatalogProvider,
-) -> RVec<RString> {
+) -> RVec<RString> { unsafe {
     let names = provider.inner().schema_names();
     names.into_iter().map(|s| s.into()).collect()
-}
+}}
 
 unsafe extern "C" fn schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
     name: RString,
-) -> ROption<FFI_SchemaProvider> {
+) -> ROption<FFI_SchemaProvider> { unsafe {
     let maybe_schema = provider.inner().schema(name.as_str());
     maybe_schema
         .map(|schema| FFI_SchemaProvider::new(schema, provider.runtime()))
         .into()
-}
+}}
 
 unsafe extern "C" fn register_schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
     name: RString,
     schema: &FFI_SchemaProvider,
-) -> RResult<ROption<FFI_SchemaProvider>, RString> {
+) -> RResult<ROption<FFI_SchemaProvider>, RString> { unsafe {
     let runtime = provider.runtime();
     let provider = provider.inner();
     let schema = Arc::new(ForeignSchemaProvider::from(schema));
@@ -124,13 +124,13 @@ unsafe extern "C" fn register_schema_fn_wrapper(
             .into();
 
     RResult::ROk(returned_schema)
-}
+}}
 
 unsafe extern "C" fn deregister_schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
     name: RString,
     cascade: bool,
-) -> RResult<ROption<FFI_SchemaProvider>, RString> {
+) -> RResult<ROption<FFI_SchemaProvider>, RString> { unsafe {
     let runtime = provider.runtime();
     let provider = provider.inner();
 
@@ -142,16 +142,16 @@ unsafe extern "C" fn deregister_schema_fn_wrapper(
             .map(|schema| FFI_SchemaProvider::new(schema, runtime))
             .into(),
     )
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_CatalogProvider) {
+unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_CatalogProvider) { unsafe {
     let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
     drop(private_data);
-}
+}}
 
 unsafe extern "C" fn clone_fn_wrapper(
     provider: &FFI_CatalogProvider,
-) -> FFI_CatalogProvider {
+) -> FFI_CatalogProvider { unsafe {
     let old_private_data = provider.private_data as *const ProviderPrivateData;
     let runtime = (*old_private_data).runtime.clone();
 
@@ -170,7 +170,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         version: super::version,
         private_data,
     }
-}
+}}
 
 impl Drop for FFI_CatalogProvider {
     fn drop(&mut self) {

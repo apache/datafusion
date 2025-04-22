@@ -212,7 +212,7 @@ mod tests {
     use paste::paste;
 
     macro_rules! test_array_negative_op {
-        ($DATA_TY:tt, $($VALUE:expr),*   ) => {
+        ($DATA_TY:tt, $($VALUE:expr_2021),*   ) => {
             let schema = Schema::new(vec![Field::new("a", DataType::$DATA_TY, true)]);
             let expr = negative(col("a", &schema)?, &schema)?;
             assert_eq!(expr.data_type(&schema)?, DataType::$DATA_TY);

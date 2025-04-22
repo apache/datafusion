@@ -115,7 +115,7 @@ mod tests {
     use bigdecimal::{num_bigint::BigInt, BigDecimal};
 
     macro_rules! assert_decimal_str_eq {
-        ($integer:expr, $scale:expr, $expected:expr) => {
+        ($integer:expr_2021, $scale:expr_2021, $expected:expr_2021) => {
             assert_eq!(
                 big_decimal_to_str(BigDecimal::from_bigint(
                     BigInt::from($integer),

@@ -326,11 +326,11 @@ impl JoinFuzzTestCase {
     /// schema as a union of origin filter intermediate schema and
     /// on-condition schema
     fn intermediate_schema(&self) -> Schema {
-        let filter_schema = if let Some(filter) = self.join_filter() {
+        let filter_schema = match self.join_filter() { Some(filter) => {
             filter.schema().as_ref().to_owned()
-        } else {
+        } _ => {
             Schema::empty()
-        };
+        }};
 
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
@@ -364,14 +364,14 @@ impl JoinFuzzTestCase {
     /// of original filter expression and on-condition expression
     fn composite_filter_expression(&self) -> PhysicalExprRef {
         let (filter_expression, column_idx_offset) =
-            if let Some(filter) = self.join_filter() {
+            match self.join_filter() { Some(filter) => {
                 (
                     filter.expression().to_owned(),
                     filter.schema().fields().len(),
                 )
-            } else {
+            } _ => {
                 (Arc::new(Literal::new(ScalarValue::from(true))) as _, 0)
-            };
+            }};
 
         let equal_a = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", column_idx_offset)),
@@ -396,11 +396,11 @@ impl JoinFuzzTestCase {
     /// of original filter column indices and on-condition column indices.
     /// Result must match intermediate schema.
     fn column_indices(&self) -> Vec<ColumnIndex> {
-        let mut column_indices = if let Some(filter) = self.join_filter() {
+        let mut column_indices = match self.join_filter() { Some(filter) => {
             filter.column_indices().to_vec()
-        } else {
+        } _ => {
             vec![]
-        };
+        }};
 
         let on_column_indices = vec![
             ColumnIndex {

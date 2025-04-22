@@ -668,7 +668,7 @@ impl SessionContext {
                 match ddl {
                     DdlStatement::CreateExternalTable(cmd) => {
                         (Box::pin(async move { self.create_external_table(&cmd).await })
-                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>)
+                            as std::pin::Pin<Box<dyn Future<Output = _> + Send>>)
                             .await
                     }
                     DdlStatement::CreateMemoryTable(cmd) => {
@@ -1015,13 +1015,13 @@ impl SessionContext {
                     state.config_options().catalog.default_catalog.to_string()
                 }
             };
-            if let Some(catalog) = state.catalog_list().catalog(&catalog_name) {
+            match state.catalog_list().catalog(&catalog_name) { Some(catalog) => {
                 catalog
-            } else if allow_missing {
+            } _ => if allow_missing {
                 return self.return_empty_dataframe();
             } else {
                 return self.schema_doesnt_exist_err(name);
-            }
+            }}
         };
         let dereg = catalog.deregister_schema(name.schema_name(), cascade)?;
         match (dereg, allow_missing) {

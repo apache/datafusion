@@ -147,7 +147,7 @@ mod tests {
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     macro_rules! test_ascii {
-        ($INPUT:expr, $EXPECTED:expr) => {
+        ($INPUT:expr_2021, $EXPECTED:expr_2021) => {
             test_function!(
                 AsciiFunc::new(),
                 vec![ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],

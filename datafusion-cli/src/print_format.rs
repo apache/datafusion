@@ -49,7 +49,7 @@ impl FromStr for PrintFormat {
 }
 
 macro_rules! batches_to_json {
-    ($WRITER: ident, $writer: expr, $batches: expr) => {{
+    ($WRITER: ident, $writer: expr_2021, $batches: expr_2021) => {{
         {
             if !$batches.is_empty() {
                 let mut json_writer = $WRITER::new(&mut *$writer);
@@ -65,10 +65,10 @@ macro_rules! batches_to_json {
 }
 
 macro_rules! json_finish {
-    (ArrayWriter, $writer: expr) => {{
+    (ArrayWriter, $writer: expr_2021) => {{
         writeln!($writer)?;
     }};
-    (LineDelimitedWriter, $writer: expr) => {{}};
+    (LineDelimitedWriter, $writer: expr_2021) => {{}};
 }
 
 fn print_batches_with_sep<W: std::io::Write>(

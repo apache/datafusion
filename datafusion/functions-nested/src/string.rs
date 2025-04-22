@@ -53,7 +53,7 @@ use datafusion_macros::user_doc;
 use std::sync::Arc;
 
 macro_rules! call_array_function {
-    ($DATATYPE:expr, false) => {
+    ($DATATYPE:expr_2021, false) => {
         match $DATATYPE {
             DataType::Utf8 => array_function!(StringArray),
             DataType::Utf8View => array_function!(StringViewArray),
@@ -72,7 +72,7 @@ macro_rules! call_array_function {
             dt => not_impl_err!("Unsupported data type in array_to_string: {dt}"),
         }
     };
-    ($DATATYPE:expr, $INCLUDE_LIST:expr) => {{
+    ($DATATYPE:expr_2021, $INCLUDE_LIST:expr_2021) => {{
         match $DATATYPE {
             DataType::List(_) => array_function!(ListArray),
             DataType::Utf8 => array_function!(StringArray),
@@ -95,7 +95,7 @@ macro_rules! call_array_function {
 }
 
 macro_rules! to_string {
-    ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
+    ($ARG:expr_2021, $ARRAY:expr_2021, $DELIMITER:expr_2021, $NULL_STRING:expr_2021, $WITH_NULL_STRING:expr_2021, $ARRAY_TYPE:ident) => {{
         let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
         for x in arr {
             match x {
@@ -427,7 +427,7 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     ) -> Result<StringArray> {
         let mut res: Vec<Option<String>> = Vec::new();
         for (arr, &delimiter) in list_arr.iter().zip(delimiters.iter()) {
-            if let (Some(arr), Some(delimiter)) = (arr, delimiter) {
+            match (arr, delimiter) { (Some(arr), Some(delimiter)) => {
                 let mut arg = String::from("");
                 let s = compute_array_to_string(
                     &mut arg,
@@ -443,9 +443,9 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 } else {
                     res.push(Some(s));
                 }
-            } else {
+            } _ => {
                 res.push(None);
-            }
+            }}
         }
 
         Ok(StringArray::from(res))

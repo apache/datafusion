@@ -55,7 +55,7 @@ where
     let mut rng = rand::thread_rng();
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.r#gen::<f32>() < null_density {
                 None
             } else {
                 Some(rng.sample(&dist))

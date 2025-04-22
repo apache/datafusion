@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 /// Downcasts $LEFT and $RIGHT to $ARRAY_TYPE and then calls $KERNEL($LEFT, $RIGHT)
 macro_rules! call_bitwise_kernel {
-    ($LEFT:expr, $RIGHT:expr, $KERNEL:expr, $ARRAY_TYPE:ident) => {{
+    ($LEFT:expr_2021, $RIGHT:expr_2021, $KERNEL:expr_2021, $ARRAY_TYPE:ident) => {{
         let left = $LEFT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
         let right = $RIGHT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
         let result: $ARRAY_TYPE = $KERNEL(left, right)?;
@@ -88,7 +88,7 @@ create_dyn_kernel!(bitwise_shift_left_dyn, bitwise_shift_left);
 
 /// Downcasts $LEFT as $ARRAY_TYPE and $RIGHT as TYPE and calls $KERNEL($LEFT, $RIGHT)
 macro_rules! call_bitwise_scalar_kernel {
-    ($LEFT:expr, $RIGHT:expr, $KERNEL:ident, $ARRAY_TYPE:ident, $TYPE:ty) => {{
+    ($LEFT:expr_2021, $RIGHT:expr_2021, $KERNEL:ident, $ARRAY_TYPE:ident, $TYPE:ty) => {{
         let len = $LEFT.len();
         let array = $LEFT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
         let scalar = $RIGHT;

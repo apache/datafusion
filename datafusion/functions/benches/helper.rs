@@ -39,7 +39,7 @@ pub fn gen_string_array(
 
     let mut output_string_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     for _ in 0..n_rows {
-        let rand_num = rng_ref.gen::<f32>(); // [0.0, 1.0)
+        let rand_num = rng_ref.r#gen::<f32>(); // [0.0, 1.0)
         if rand_num < null_density {
             output_string_vec.push(None);
         } else if rand_num < null_density + utf8_density {

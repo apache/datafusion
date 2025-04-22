@@ -215,14 +215,14 @@ impl<'a> BinaryTypeCoercer<'a> {
                 result.map(|x| x.data_type().clone())
             };
 
-            if let Ok(ret) = get_result(self.lhs, self.rhs) {
+            match get_result(self.lhs, self.rhs) { Ok(ret) => {
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
                     lhs: self.lhs.clone(),
                     rhs: self.rhs.clone(),
                     ret,
                 })
-            } else if let Some(coerced) = temporal_coercion_strict_timezone(self.lhs, self.rhs) {
+            } _ => if let Some(coerced) = temporal_coercion_strict_timezone(self.lhs, self.rhs) {
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
                 let ret = get_result(&coerced, &coerced).map_err(|e| {
@@ -254,7 +254,7 @@ impl<'a> BinaryTypeCoercer<'a> {
                 plan_err!(
                     "Cannot coerce arithmetic expression {} {} {} to valid types", self.lhs, self.op, self.rhs
                 )
-            }
+            }}
         },
         IntegerDivide | Arrow | LongArrow | HashArrow | HashLongArrow
         | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe => {
@@ -1647,7 +1647,7 @@ mod tests {
     /// Applies coercion rules for `$LHS_TYPE $OP $RHS_TYPE` and asserts that
     /// the result type is `$RESULT_TYPE`
     macro_rules! test_coercion_binary_rule {
-        ($LHS_TYPE:expr, $RHS_TYPE:expr, $OP:expr, $RESULT_TYPE:expr) => {{
+        ($LHS_TYPE:expr_2021, $RHS_TYPE:expr_2021, $OP:expr_2021, $RESULT_TYPE:expr_2021) => {{
             let (lhs, rhs) =
                 BinaryTypeCoercer::new(&$LHS_TYPE, &$OP, &$RHS_TYPE).get_input_types()?;
             assert_eq!(lhs, $RESULT_TYPE);
@@ -1661,7 +1661,7 @@ mod tests {
     /// `$LHS_TYPE $OP RHS_TYPE` and asserts that the result type is `$RESULT_TYPE`.
     /// Also tests that the inverse `RHS_TYPE $OP $LHS_TYPE` is true
     macro_rules! test_coercion_binary_rule_multiple {
-        ($LHS_TYPE:expr, $RHS_TYPES:expr, $OP:expr, $RESULT_TYPE:expr) => {{
+        ($LHS_TYPE:expr_2021, $RHS_TYPES:expr_2021, $OP:expr_2021, $RESULT_TYPE:expr_2021) => {{
             for rh_type in $RHS_TYPES {
                 let (lhs, rhs) = BinaryTypeCoercer::new(&$LHS_TYPE, &$OP, &rh_type)
                     .get_input_types()?;
@@ -1683,7 +1683,7 @@ mod tests {
     ///
     /// And asserts the result type is `$RESULT_TYPE`
     macro_rules! test_like_rule {
-        ($LHS_TYPE:expr, $RHS_TYPE:expr, $RESULT_TYPE:expr) => {{
+        ($LHS_TYPE:expr_2021, $RHS_TYPE:expr_2021, $RESULT_TYPE:expr_2021) => {{
             println!("Coercing {} LIKE {}", $LHS_TYPE, $RHS_TYPE);
             let result = like_coercion(&$LHS_TYPE, &$RHS_TYPE);
             assert_eq!(result, $RESULT_TYPE);

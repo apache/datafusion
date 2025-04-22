@@ -77,10 +77,10 @@ fn create_data(size: usize, null_density: f64) -> Vec<Option<f64>> {
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f64>() > null_density {
+            if rng.r#gen::<f64>() > null_density {
                 None
             } else {
-                Some(rng.gen::<f64>())
+                Some(rng.r#gen::<f64>())
             }
         })
         .collect()
@@ -92,10 +92,10 @@ fn create_integer_data(size: usize, value_density: f64) -> Vec<Option<u64>> {
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f64>() > value_density {
+            if rng.r#gen::<f64>() > value_density {
                 None
             } else {
-                Some(rng.gen::<u64>())
+                Some(rng.r#gen::<u64>())
             }
         })
         .collect()
@@ -217,7 +217,7 @@ pub(crate) fn make_data(
 
         let mut ts_builder = Int64Builder::new();
         let gen_id = |rng: &mut rand::rngs::SmallRng| {
-            rng.gen::<[u8; 16]>()
+            rng.r#gen::<[u8; 16]>()
                 .iter()
                 .fold(String::new(), |mut output, b| {
                     let _ = write!(output, "{b:02X}");

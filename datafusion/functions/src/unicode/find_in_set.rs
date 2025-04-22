@@ -454,7 +454,7 @@ mod tests {
     }
 
     macro_rules! test_find_in_set {
-        ($test_name:ident, $args:expr, $expected:expr) => {
+        ($test_name:ident, $args:expr_2021, $expected:expr_2021) => {
             #[test]
             fn $test_name() -> Result<()> {
                 let fis = crate::unicode::find_in_set();

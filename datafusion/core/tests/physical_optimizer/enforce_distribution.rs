@@ -366,7 +366,7 @@ fn ensure_distribution_helper(
 
 /// Test whether plan matches with expected plan
 macro_rules! plans_matches_expected {
-    ($EXPECTED_LINES: expr, $PLAN: expr) => {
+    ($EXPECTED_LINES: expr_2021, $PLAN: expr_2021) => {
         let physical_plan = $PLAN;
         let actual = get_plan_string(&physical_plan);
 
@@ -533,7 +533,7 @@ impl TestConfig {
 }
 
 macro_rules! assert_plan_txt {
-    ($EXPECTED_LINES: expr, $PLAN: expr) => {
+    ($EXPECTED_LINES: expr_2021, $PLAN: expr_2021) => {
         let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
         // Now format correctly
         let actual_lines = get_plan_string(&$PLAN);

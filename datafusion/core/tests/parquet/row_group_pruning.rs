@@ -291,7 +291,7 @@ async fn prune_disabled() {
 // https://github.com/apache/datafusion/issues/9779 bug so that tests pass
 // if and only if Bloom filters on Int8 and Int16 columns are still buggy.
 macro_rules! int_tests {
-    ($bits:expr) => {
+    ($bits:expr_2021) => {
         paste::item! {
             #[tokio::test]
             async fn [<prune_int $bits _lt >]() {
@@ -457,7 +457,7 @@ int_tests!(64);
 // https://github.com/apache/datafusion/issues/9779 bug so that tests pass
 // if and only if Bloom filters on UInt8 and UInt16 columns are still buggy.
 macro_rules! uint_tests {
-    ($bits:expr) => {
+    ($bits:expr_2021) => {
         paste::item! {
             #[tokio::test]
             async fn [<prune_uint $bits _lt >]() {

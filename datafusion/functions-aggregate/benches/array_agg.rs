@@ -61,10 +61,10 @@ where
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.r#gen::<f32>() < null_density {
                 None
             } else {
-                Some(rng.gen())
+                Some(rng.r#gen())
             }
         })
         .collect()
@@ -85,14 +85,14 @@ where
     let mut rng = seedable_rng();
 
     let offsets = OffsetBuffer::from_lengths((0..size).map(|_| {
-        let is_null = rng.gen::<f32>() < null_density;
+        let is_null = rng.r#gen::<f32>() < null_density;
 
         let mut length = rng.gen_range(1..10);
 
         if is_null {
             nulls_builder.append_null();
 
-            if rng.gen::<f32>() <= zero_length_lists_probability {
+            if rng.r#gen::<f32>() <= zero_length_lists_probability {
                 length = 0;
             }
         } else {

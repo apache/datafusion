@@ -42,7 +42,7 @@ pub const DEFAULT_MAX_SIZE: usize = 100;
 // Cast a non-null [`ScalarValue::Float64`] to an [`f64`], or
 // panic.
 macro_rules! cast_scalar_f64 {
-    ($value:expr ) => {
+    ($value:expr_2021 ) => {
         match &$value {
             ScalarValue::Float64(Some(v)) => *v,
             v => panic!("invalid type {:?}", v),
@@ -53,7 +53,7 @@ macro_rules! cast_scalar_f64 {
 // Cast a non-null [`ScalarValue::UInt64`] to an [`u64`], or
 // panic.
 macro_rules! cast_scalar_u64 {
-    ($value:expr ) => {
+    ($value:expr_2021 ) => {
         match &$value {
             ScalarValue::UInt64(Some(v)) => *v,
             v => panic!("invalid type {:?}", v),

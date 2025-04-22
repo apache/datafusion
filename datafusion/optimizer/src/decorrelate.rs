@@ -190,16 +190,16 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 let pull_up_expr_opt = if let Some(expr_result_map) =
                     self.collected_count_expr_map.get(plan_filter.input.deref())
                 {
-                    if let Some(expr) = conjunction(subquery_filters.clone()) {
+                    match conjunction(subquery_filters.clone()) { Some(expr) => {
                         filter_exprs_evaluation_result_on_empty_batch(
                             &expr,
                             Arc::clone(plan_filter.input.schema()),
                             expr_result_map,
                             &mut expr_result_map_for_count_bug,
                         )?
-                    } else {
+                    } _ => {
                         None
-                    }
+                    }}
                 } else {
                     None
                 };

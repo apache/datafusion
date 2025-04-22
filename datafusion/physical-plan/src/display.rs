@@ -183,7 +183,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     ///       RepartitionExec: partitioning=RoundRobinBatch(16)
     ///         DataSourceExec: source=...",
     /// ```
-    pub fn indent(&self, verbose: bool) -> impl fmt::Display + 'a {
+    pub fn indent(&self, verbose: bool) -> impl fmt::Display + 'a + use<'a> {
         let format_type = if verbose {
             DisplayFormatType::Verbose
         } else {
@@ -229,7 +229,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     //     0 -> 1
     // }
     /// ```
-    pub fn graphviz(&self) -> impl fmt::Display + 'a {
+    pub fn graphviz(&self) -> impl fmt::Display + 'a + use<'a> {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
@@ -267,7 +267,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Formats the plan using a ASCII art like tree
     ///
     /// See [`DisplayFormatType::TreeRender`] for more details.
-    pub fn tree_render(&self) -> impl fmt::Display + 'a {
+    pub fn tree_render(&self) -> impl fmt::Display + 'a + use<'a> {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
         }
@@ -282,7 +282,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
 
     /// Return a single-line summary of the root of the plan
     /// Example: `ProjectionExec: expr=[a@0 as a]`.
-    pub fn one_line(&self) -> impl fmt::Display + 'a {
+    pub fn one_line(&self) -> impl fmt::Display + 'a + use<'a> {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,

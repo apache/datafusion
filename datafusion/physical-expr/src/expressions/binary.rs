@@ -168,7 +168,7 @@ fn boolean_op(
 }
 
 macro_rules! binary_string_array_flag_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+    ($LEFT:expr_2021, $RIGHT:expr_2021, $OP:ident, $NOT:expr_2021, $FLAG:expr_2021) => {{
         match $LEFT.data_type() {
             DataType::Utf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
@@ -189,7 +189,7 @@ macro_rules! binary_string_array_flag_op {
 
 /// Invoke a compute kernel on a pair of binary data arrays with flags
 macro_rules! compute_utf8_flag_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+    ($LEFT:expr_2021, $RIGHT:expr_2021, $OP:ident, $ARRAYTYPE:ident, $NOT:expr_2021, $FLAG:expr_2021) => {{
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$ARRAYTYPE>()
@@ -214,7 +214,7 @@ macro_rules! compute_utf8_flag_op {
 
 /// Invoke a compute kernel on a pair of binary data arrays with flags
 macro_rules! compute_utf8view_flag_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+    ($LEFT:expr_2021, $RIGHT:expr_2021, $OP:ident, $ARRAYTYPE:ident, $NOT:expr_2021, $FLAG:expr_2021) => {{
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$ARRAYTYPE>()
@@ -238,7 +238,7 @@ macro_rules! compute_utf8view_flag_op {
 }
 
 macro_rules! binary_string_array_flag_op_scalar {
-    ($LEFT:ident, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+    ($LEFT:ident, $RIGHT:expr_2021, $OP:ident, $NOT:expr_2021, $FLAG:expr_2021) => {{
         // This macro is slightly different from binary_string_array_flag_op because, when comparing with a scalar value,
         // the query can be optimized in such a way that operands will be dicts, so we need to support it here
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
@@ -284,7 +284,7 @@ macro_rules! binary_string_array_flag_op_scalar {
 
 /// Invoke a compute kernel on a data array and a scalar value with flag
 macro_rules! compute_utf8_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+    ($LEFT:expr_2021, $RIGHT:expr_2021, $OP:ident, $ARRAYTYPE:ident, $NOT:expr_2021, $FLAG:expr_2021) => {{
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$ARRAYTYPE>()
@@ -312,7 +312,7 @@ macro_rules! compute_utf8_flag_op_scalar {
 
 /// Invoke a compute kernel on a data array and a scalar value with flag
 macro_rules! compute_utf8view_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+    ($LEFT:expr_2021, $RIGHT:expr_2021, $OP:ident, $ARRAYTYPE:ident, $NOT:expr_2021, $FLAG:expr_2021) => {{
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$ARRAYTYPE>()
@@ -421,7 +421,7 @@ impl PhysicalExpr for BinaryExpr {
         let result_type = self.data_type(input_schema)?;
 
         // If the left-hand side is an array and the right-hand side is a non-null scalar, try the optimized kernel.
-        if let (ColumnarValue::Array(array), ColumnarValue::Scalar(ref scalar)) =
+        if let (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) =
             (&lhs, &rhs)
         {
             if !scalar.is_null() {
@@ -1186,7 +1186,7 @@ mod tests {
     // 4. verify that the resulting expression is of type C
     // 5. verify that the results of evaluation are $VEC
     macro_rules! test_coercion {
-        ($A_ARRAY:ident, $A_TYPE:expr, $A_VEC:expr, $B_ARRAY:ident, $B_TYPE:expr, $B_VEC:expr, $OP:expr, $C_ARRAY:ident, $C_TYPE:expr, $VEC:expr,) => {{
+        ($A_ARRAY:ident, $A_TYPE:expr_2021, $A_VEC:expr_2021, $B_ARRAY:ident, $B_TYPE:expr_2021, $B_VEC:expr_2021, $OP:expr_2021, $C_ARRAY:ident, $C_TYPE:expr_2021, $VEC:expr_2021,) => {{
             let schema = Schema::new(vec![
                 Field::new("a", $A_TYPE, false),
                 Field::new("b", $B_TYPE, false),

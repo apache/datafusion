@@ -77,11 +77,11 @@ fn coerce_output(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPla
         return Ok(plan);
     }
 
-    if let Some(dfschema) = transform_schema_to_nonview(plan.schema()) {
+    match transform_schema_to_nonview(plan.schema()) { Some(dfschema) => {
         coerce_plan_expr_for_schema(plan, &dfschema?)
-    } else {
+    } _ => {
         Ok(plan)
-    }
+    }}
 }
 
 impl AnalyzerRule for TypeCoercion {
@@ -1912,7 +1912,7 @@ mod test {
     }
 
     macro_rules! test_case_expression {
-        ($expr:expr, $when_then:expr, $case_when_type:expr, $then_else_type:expr, $schema:expr) => {
+        ($expr:expr_2021, $when_then:expr_2021, $case_when_type:expr_2021, $then_else_type:expr_2021, $schema:expr_2021) => {
             let case = Case {
                 expr: $expr.map(|e| Box::new(col(e))),
                 when_then_expr: $when_then,

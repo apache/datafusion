@@ -199,16 +199,16 @@ impl SortQueryFuzzer {
         // Execute until either`max_rounds` or `time_limit` is reached
         let max_rounds = self.max_rounds.unwrap_or(usize::MAX);
         for round in 0..max_rounds {
-            let init_seed = self.runner_rng.gen();
+            let init_seed = self.runner_rng.r#gen();
             for query_i in 0..self.queries_per_round {
-                let query_seed = self.runner_rng.gen();
+                let query_seed = self.runner_rng.r#gen();
                 let mut expected_results: Option<Vec<RecordBatch>> = None; // use first config's result as the expected result
                 for config_i in 0..self.config_variations_per_query {
                     if self.should_stop_due_to_time_limit(start_time, round, query_i) {
                         return Ok(());
                     }
 
-                    let config_seed = self.runner_rng.gen();
+                    let config_seed = self.runner_rng.r#gen();
 
                     println!(
                         "[SortQueryFuzzer] Round {}, Query {} (Config {})",
@@ -355,7 +355,7 @@ impl SortFuzzerTestGenerator {
                     max_nrow,
                     self.selected_columns.clone(),
                 )
-                .with_seed(rng.gen());
+                .with_seed(rng.r#gen());
 
                 let record_batch = record_batch_generator.generate().unwrap();
                 num_rows += record_batch.num_rows();

@@ -386,7 +386,7 @@ fn rewrite_extension_inputs<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalP
 /// This macro is used to determine continuation during combined transforming
 /// traversals.
 macro_rules! handle_transform_recursion {
-    ($F_DOWN:expr, $F_CHILD:expr, $F_UP:expr) => {{
+    ($F_DOWN:expr_2021, $F_CHILD:expr_2021, $F_UP:expr_2021) => {{
         $F_DOWN?
             .transform_children(|n| {
                 n.map_subqueries($F_CHILD)?

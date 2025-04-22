@@ -290,7 +290,7 @@ mod tests {
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     macro_rules! test_lpad {
-        ($INPUT:expr, $LENGTH:expr, $EXPECTED:expr) => {
+        ($INPUT:expr_2021, $LENGTH:expr_2021, $EXPECTED:expr_2021) => {
             test_function!(
                 LPadFunc::new(),
                 vec![
@@ -328,7 +328,7 @@ mod tests {
             );
         };
 
-        ($INPUT:expr, $LENGTH:expr, $REPLACE:expr, $EXPECTED:expr) => {
+        ($INPUT:expr_2021, $LENGTH:expr_2021, $REPLACE:expr_2021, $EXPECTED:expr_2021) => {
             // utf8, utf8
             test_function!(
                 LPadFunc::new(),

@@ -529,17 +529,17 @@ pub fn get_best_fitting_window(
     };
 
     let window_expr = if should_reverse {
-        if let Some(reversed_window_expr) = window_exprs
+        match window_exprs
             .iter()
             .map(|e| e.get_reverse_expr())
             .collect::<Option<Vec<_>>>()
-        {
+        { Some(reversed_window_expr) => {
             reversed_window_expr
-        } else {
+        } _ => {
             // Cannot take reverse of any of the window expr
             // In this case, with existing ordering window cannot be run
             return Ok(None);
-        }
+        }}
     } else {
         window_exprs.to_vec()
     };

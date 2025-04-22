@@ -959,7 +959,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
     let batch_size = 50;
 
     let mut i = 0;
-    let gen = std::iter::from_fn(move || {
+    let r#gen = std::iter::from_fn(move || {
         // create values like
         // 0000000001
         // 0000000002
@@ -982,7 +982,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
 
     let num_batches = 5;
 
-    let batches: Vec<_> = gen.take(num_batches).collect();
+    let batches: Vec<_> = r#gen.take(num_batches).collect();
 
     batches.iter().enumerate().for_each(|(i, batch)| {
         println!("Dict batch[{i}] size is: {}", batch.get_array_memory_size());

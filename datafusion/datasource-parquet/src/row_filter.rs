@@ -316,18 +316,18 @@ impl<'schema> PushdownChecker<'schema> {
     }
 
     fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
-        if let Ok(idx) = self.table_schema.index_of(column_name) {
+        match self.table_schema.index_of(column_name) { Ok(idx) => {
             self.required_columns.insert(idx);
             if DataType::is_nested(self.table_schema.field(idx).data_type()) {
                 self.non_primitive_columns = true;
                 return Some(TreeNodeRecursion::Jump);
             }
-        } else {
+        } _ => {
             // If the column does not exist in the (un-projected) table schema then
             // it must be a projected column.
             self.projected_columns = true;
             return Some(TreeNodeRecursion::Jump);
-        }
+        }}
 
         None
     }

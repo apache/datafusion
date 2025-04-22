@@ -1112,11 +1112,11 @@ impl Unparser<'_> {
             // SubqueryAlias could be rewritten to a plan with a projection as the top node by [rewrite::subquery_alias_inner_query_and_columns].
             // The inner table scan could be a scan with pushdown operations.
             LogicalPlan::Projection(projection) => {
-                if let Some(plan) = Self::unparse_table_scan_pushdown(
+                match Self::unparse_table_scan_pushdown(
                     &projection.input,
                     alias.clone(),
                     already_projected,
-                )? {
+                )? { Some(plan) => {
                     let exprs = if alias.is_some() {
                         let mut alias_rewriter =
                             alias.as_ref().map(|alias_name| TableAliasRewriter {
@@ -1141,9 +1141,9 @@ impl Unparser<'_> {
                     Ok(Some(
                         LogicalPlanBuilder::from(plan).project(exprs)?.build()?,
                     ))
-                } else {
+                } _ => {
                     Ok(None)
-                }
+                }}
             }
             _ => Ok(None),
         }

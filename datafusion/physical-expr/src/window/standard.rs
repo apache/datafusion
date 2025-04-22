@@ -260,13 +260,13 @@ impl WindowExpr for StandardWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        if let Ok(evaluator) = self.expr.create_evaluator() {
+        match self.expr.create_evaluator() { Ok(evaluator) => {
             evaluator.supports_bounded_execution()
                 && (!evaluator.uses_window_frame()
                     || !self.window_frame.end_bound.is_unbounded())
-        } else {
+        } _ => {
             false
-        }
+        }}
     }
 }
 

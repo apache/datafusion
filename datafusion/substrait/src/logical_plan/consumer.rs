@@ -2129,12 +2129,12 @@ pub async fn from_scalar_function(
 
     // try to first match the requested function into registered udfs, then built-in ops
     // and finally built-in expressions
-    if let Ok(func) = consumer.get_function_registry().udf(fn_name) {
+    match consumer.get_function_registry().udf(fn_name) { Ok(func) => {
         Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             func.to_owned(),
             args,
         )))
-    } else if let Some(op) = name_to_op(fn_name) {
+    } _ => if let Some(op) = name_to_op(fn_name) {
         if f.arguments.len() < 2 {
             return not_impl_err!(
                         "Expect at least two arguments for binary operator {op:?}, the provided number of operators is {:?}",
@@ -2162,7 +2162,7 @@ pub async fn from_scalar_function(
         builder.build(consumer, f, input_schema).await
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
-    }
+    }}
 }
 
 pub async fn from_literal(
@@ -2217,17 +2217,17 @@ pub async fn from_window_function(
     let fn_name = substrait_fun_name(fn_signature);
 
     // check udwf first, then udaf, then built-in window and aggregate functions
-    let fun = if let Ok(udwf) = consumer.get_function_registry().udwf(fn_name) {
+    let fun = match consumer.get_function_registry().udwf(fn_name) { Ok(udwf) => {
         Ok(WindowFunctionDefinition::WindowUDF(udwf))
-    } else if let Ok(udaf) = consumer.get_function_registry().udaf(fn_name) {
+    } _ => { match consumer.get_function_registry().udaf(fn_name) { Ok(udaf) => {
         Ok(WindowFunctionDefinition::AggregateUDF(udaf))
-    } else {
+    } _ => {
         not_impl_err!(
             "Window function {} is not supported: function anchor = {:?}",
             fn_name,
             window.function_reference
         )
-    }?;
+    }}}}?;
 
     let mut order_by =
         from_substrait_sorts(consumer, &window.sorts, input_schema).await?;

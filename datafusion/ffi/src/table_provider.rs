@@ -166,21 +166,21 @@ struct ProviderPrivateData {
     runtime: Option<Handle>,
 }
 
-unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedSchema {
+unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedSchema { unsafe {
     let private_data = provider.private_data as *const ProviderPrivateData;
     let provider = &(*private_data).provider;
 
     provider.schema().into()
-}
+}}
 
 unsafe extern "C" fn table_type_fn_wrapper(
     provider: &FFI_TableProvider,
-) -> FFI_TableType {
+) -> FFI_TableType { unsafe {
     let private_data = provider.private_data as *const ProviderPrivateData;
     let provider = &(*private_data).provider;
 
     provider.table_type().into()
-}
+}}
 
 fn supports_filters_pushdown_internal(
     provider: &Arc<dyn TableProvider + Send>,
@@ -212,14 +212,14 @@ fn supports_filters_pushdown_internal(
 unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     provider: &FFI_TableProvider,
     filters_serialized: RVec<u8>,
-) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> {
+) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> { unsafe {
     let private_data = provider.private_data as *const ProviderPrivateData;
     let provider = &(*private_data).provider;
 
     supports_filters_pushdown_internal(provider, &filters_serialized)
         .map_err(|e| e.to_string().into())
         .into()
-}
+}}
 
 unsafe extern "C" fn scan_fn_wrapper(
     provider: &FFI_TableProvider,
@@ -227,7 +227,7 @@ unsafe extern "C" fn scan_fn_wrapper(
     projections: RVec<usize>,
     filters_serialized: RVec<u8>,
     limit: ROption<usize>,
-) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
+) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> { unsafe {
     let private_data = provider.private_data as *mut ProviderPrivateData;
     let internal_provider = &(*private_data).provider;
     let session_config = session_config.clone();
@@ -273,14 +273,14 @@ unsafe extern "C" fn scan_fn_wrapper(
         ))
     }
     .into_ffi()
-}
+}}
 
 unsafe extern "C" fn insert_into_fn_wrapper(
     provider: &FFI_TableProvider,
     session_config: &FFI_SessionConfig,
     input: &FFI_ExecutionPlan,
     insert_op: FFI_InsertOp,
-) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
+) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> { unsafe {
     let private_data = provider.private_data as *mut ProviderPrivateData;
     let internal_provider = &(*private_data).provider;
     let session_config = session_config.clone();
@@ -312,14 +312,14 @@ unsafe extern "C" fn insert_into_fn_wrapper(
         ))
     }
     .into_ffi()
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) {
+unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) { unsafe {
     let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
     drop(private_data);
-}
+}}
 
-unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_TableProvider {
+unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_TableProvider { unsafe {
     let old_private_data = provider.private_data as *const ProviderPrivateData;
     let runtime = (*old_private_data).runtime.clone();
 
@@ -339,7 +339,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_Table
         version: super::version,
         private_data,
     }
-}
+}}
 
 impl Drop for FFI_TableProvider {
     fn drop(&mut self) {

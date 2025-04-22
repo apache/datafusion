@@ -78,7 +78,7 @@ impl Literal for ScalarValue {
 }
 
 macro_rules! make_literal {
-    ($TYPE:ty, $SCALAR:ident, $DOC: expr) => {
+    ($TYPE:ty, $SCALAR:ident, $DOC: expr_2021) => {
         #[doc = $DOC]
         impl Literal for $TYPE {
             fn lit(&self) -> Expr {
@@ -89,7 +89,7 @@ macro_rules! make_literal {
 }
 
 macro_rules! make_nonzero_literal {
-    ($TYPE:ty, $SCALAR:ident, $DOC: expr) => {
+    ($TYPE:ty, $SCALAR:ident, $DOC: expr_2021) => {
         #[doc = $DOC]
         impl Literal for $TYPE {
             fn lit(&self) -> Expr {
@@ -100,7 +100,7 @@ macro_rules! make_nonzero_literal {
 }
 
 macro_rules! make_timestamp_literal {
-    ($TYPE:ty, $SCALAR:ident, $DOC: expr) => {
+    ($TYPE:ty, $SCALAR:ident, $DOC: expr_2021) => {
         #[doc = $DOC]
         impl TimestampLiteral for $TYPE {
             fn lit_timestamp_nano(&self) -> Expr {

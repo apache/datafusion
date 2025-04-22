@@ -167,7 +167,7 @@ pub struct RecordBatchGenerator {
 }
 
 macro_rules! generate_decimal_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT: expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $PRECISION: ident, $SCALE: ident, $ARROW_TYPE: ident) => {{
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT: expr_2021, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $PRECISION: ident, $SCALE: ident, $ARROW_TYPE: ident) => {{
         let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
 
@@ -186,7 +186,7 @@ macro_rules! generate_decimal_array {
 
 // Generating `BooleanArray` due to it being a special type in Arrow (bit-packed)
 macro_rules! generate_boolean_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE: ident) => {{
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr_2021, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE: ident) => {{
         // Select a null percentage from the candidate percentages
         let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
@@ -205,7 +205,7 @@ macro_rules! generate_boolean_array {
 }
 
 macro_rules! generate_primitive_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {{
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr_2021, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {{
         let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
 
@@ -248,8 +248,8 @@ impl RecordBatchGenerator {
 
     pub fn generate(&mut self) -> Result<RecordBatch> {
         let num_rows = self.rng.gen_range(self.min_rows_num..=self.max_rows_num);
-        let array_gen_rng = StdRng::from_seed(self.rng.gen());
-        let mut batch_gen_rng = StdRng::from_seed(self.rng.gen());
+        let array_gen_rng = StdRng::from_seed(self.rng.r#gen());
+        let mut batch_gen_rng = StdRng::from_seed(self.rng.r#gen());
         let columns = self.columns.clone();
 
         // Build arrays

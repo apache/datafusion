@@ -215,7 +215,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
 
 #[macro_export]
 macro_rules! into_logical_plan {
-    ($PB:expr, $CTX:expr, $CODEC:expr) => {{
+    ($PB:expr_2021, $CTX:expr_2021, $CODEC:expr_2021) => {{
         if let Some(field) = $PB.as_ref() {
             field.as_ref().try_into_logical_plan($CTX, $CODEC)
         } else {

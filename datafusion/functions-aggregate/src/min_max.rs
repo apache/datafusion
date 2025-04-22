@@ -385,7 +385,7 @@ impl AggregateUDFImpl for Max {
 
 // Statically-typed version of min/max(array) -> ScalarValue for string types
 macro_rules! typed_min_max_batch_string {
-    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
+    ($VALUES:expr_2021, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = downcast_value!($VALUES, $ARRAYTYPE);
         let value = compute::$OP(array);
         let value = value.and_then(|e| Some(e.to_string()));
@@ -394,7 +394,7 @@ macro_rules! typed_min_max_batch_string {
 }
 // Statically-typed version of min/max(array) -> ScalarValue for binary types.
 macro_rules! typed_min_max_batch_binary {
-    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
+    ($VALUES:expr_2021, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = downcast_value!($VALUES, $ARRAYTYPE);
         let value = compute::$OP(array);
         let value = value.and_then(|e| Some(e.to_vec()));
@@ -404,7 +404,7 @@ macro_rules! typed_min_max_batch_binary {
 
 // Statically-typed version of min/max(array) -> ScalarValue for non-string types.
 macro_rules! typed_min_max_batch {
-    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident $(, $EXTRA_ARGS:ident)*) => {{
+    ($VALUES:expr_2021, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident $(, $EXTRA_ARGS:ident)*) => {{
         let array = downcast_value!($VALUES, $ARRAYTYPE);
         let value = compute::$OP(array);
         ScalarValue::$SCALAR(value, $($EXTRA_ARGS.clone()),*)
@@ -414,7 +414,7 @@ macro_rules! typed_min_max_batch {
 // Statically-typed version of min/max(array) -> ScalarValue  for non-string types.
 // this is a macro to support both operations (min and max).
 macro_rules! min_max_batch {
-    ($VALUES:expr, $OP:ident) => {{
+    ($VALUES:expr_2021, $OP:ident) => {{
         match $VALUES.data_type() {
             DataType::Null => ScalarValue::Null,
             DataType::Decimal128(precision, scale) => {
@@ -659,7 +659,7 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
 
 // min/max of two non-string scalar values.
 macro_rules! typed_min_max {
-    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident $(, $EXTRA_ARGS:ident)*) => {{
+    ($VALUE:expr_2021, $DELTA:expr_2021, $SCALAR:ident, $OP:ident $(, $EXTRA_ARGS:ident)*) => {{
         ScalarValue::$SCALAR(
             match ($VALUE, $DELTA) {
                 (None, None) => None,
@@ -672,7 +672,7 @@ macro_rules! typed_min_max {
     }};
 }
 macro_rules! typed_min_max_float {
-    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
+    ($VALUE:expr_2021, $DELTA:expr_2021, $SCALAR:ident, $OP:ident) => {{
         ScalarValue::$SCALAR(match ($VALUE, $DELTA) {
             (None, None) => None,
             (Some(a), None) => Some(*a),
@@ -687,7 +687,7 @@ macro_rules! typed_min_max_float {
 
 // min/max of two scalar string values.
 macro_rules! typed_min_max_string {
-    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
+    ($VALUE:expr_2021, $DELTA:expr_2021, $SCALAR:ident, $OP:ident) => {{
         ScalarValue::$SCALAR(match ($VALUE, $DELTA) {
             (None, None) => None,
             (Some(a), None) => Some(a.clone()),
@@ -707,7 +707,7 @@ macro_rules! choose_min_max {
 }
 
 macro_rules! interval_min_max {
-    ($OP:tt, $LHS:expr, $RHS:expr) => {{
+    ($OP:tt, $LHS:expr_2021, $RHS:expr_2021) => {{
         match $LHS.partial_cmp(&$RHS) {
             Some(choose_min_max!($OP)) => $RHS.clone(),
             Some(_) => $LHS.clone(),
@@ -720,7 +720,7 @@ macro_rules! interval_min_max {
 
 // min/max of two scalar values of the same type
 macro_rules! min_max {
-    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
+    ($VALUE:expr_2021, $DELTA:expr_2021, $OP:ident) => {{
         Ok(match ($VALUE, $DELTA) {
             (ScalarValue::Null, ScalarValue::Null) => ScalarValue::Null,
             (

@@ -575,8 +575,8 @@ impl DefaultPhysicalPlanner {
                     Expr::WindowFunction(WindowFunction {
                         params:
                             WindowFunctionParams {
-                                ref partition_by,
-                                ref order_by,
+                                partition_by,
+                                order_by,
                                 ..
                             },
                         ..
@@ -587,8 +587,8 @@ impl DefaultPhysicalPlanner {
                             Expr::WindowFunction(WindowFunction {
                                 params:
                                     WindowFunctionParams {
-                                        ref partition_by,
-                                        ref order_by,
+                                        partition_by,
+                                        order_by,
                                         ..
                                     },
                                 ..

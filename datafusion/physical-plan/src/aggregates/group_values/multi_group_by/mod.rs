@@ -879,7 +879,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 /// `$t`: the primitive type of the builder
 ///
 macro_rules! instantiate_primitive {
-    ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
+    ($v:expr_2021, $nullable:expr_2021, $t:ty, $data_type:ident) => {
         if $nullable {
             let b = PrimitiveGroupValueBuilder::<$t, true>::new($data_type.to_owned());
             $v.push(Box::new(b) as _)

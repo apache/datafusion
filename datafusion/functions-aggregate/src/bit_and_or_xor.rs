@@ -47,7 +47,7 @@ use std::sync::LazyLock;
 /// This macro helps create group accumulators based on bitwise operations typically used internally
 /// and might not be necessary for users to call directly.
 macro_rules! group_accumulator_helper {
-    ($t:ty, $dt:expr, $opr:expr) => {
+    ($t:ty, $dt:expr_2021, $opr:expr_2021) => {
         match $opr {
             BitwiseOperationType::And => Ok(Box::new(
                 PrimitiveGroupsAccumulator::<$t, _>::new($dt, |x, y| x.bitand_assign(y))
@@ -65,7 +65,7 @@ macro_rules! group_accumulator_helper {
 
 /// `accumulator_helper` is a macro accepting (ArrowPrimitiveType, BitwiseOperationType, bool)
 macro_rules! accumulator_helper {
-    ($t:ty, $opr:expr, $is_distinct: expr) => {
+    ($t:ty, $opr:expr_2021, $is_distinct: expr_2021) => {
         match $opr {
             BitwiseOperationType::And => Ok(Box::<BitAndAccumulator<$t>>::default()),
             BitwiseOperationType::Or => Ok(Box::<BitOrAccumulator<$t>>::default()),
@@ -86,7 +86,7 @@ macro_rules! accumulator_helper {
 /// `opr` is [BitwiseOperationType]
 /// `is_distinct` is boolean value indicating whether the operation is distinct or not.
 macro_rules! downcast_bitwise_accumulator {
-    ($args:ident, $opr:expr, $is_distinct: expr) => {
+    ($args:ident, $opr:expr_2021, $is_distinct: expr_2021) => {
         match $args.return_type {
             DataType::Int8 => accumulator_helper!(Int8Type, $opr, $is_distinct),
             DataType::Int16 => accumulator_helper!(Int16Type, $opr, $is_distinct),
@@ -115,7 +115,7 @@ macro_rules! downcast_bitwise_accumulator {
 /// `OPR_TYPE` is an expression that evaluates to the type of bitwise operation to be performed.
 /// `DOCUMENTATION` documentation for the UDAF
 macro_rules! make_bitwise_udaf_expr_and_func {
-    ($EXPR_FN:ident, $AGGREGATE_UDF_FN:ident, $OPR_TYPE:expr, $DOCUMENTATION:expr) => {
+    ($EXPR_FN:ident, $AGGREGATE_UDF_FN:ident, $OPR_TYPE:expr_2021, $DOCUMENTATION:expr_2021) => {
         make_udaf_expr!(
             $EXPR_FN,
             expr_x,

@@ -246,7 +246,7 @@ pub(super) fn subquery_alias_inner_query_and_columns(
     //     Projection: j1.j1_id AS id
     //       Projection: j1.j1_id
     for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
-        let Expr::Alias(ref outer_alias) = &outer_projections.expr[i] else {
+        let Expr::Alias(outer_alias) = &outer_projections.expr[i] else {
             return (plan, vec![]);
         };
 
@@ -406,13 +406,13 @@ impl TreeNodeRewriter for TableAliasRewriter<'_> {
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match expr {
             Expr::Column(column) => {
-                if let Ok(field) = self.table_schema.field_with_name(&column.name) {
+                match self.table_schema.field_with_name(&column.name) { Ok(field) => {
                     let new_column =
                         Column::new(Some(self.alias_name.clone()), field.name().clone());
                     Ok(Transformed::yes(Expr::Column(new_column)))
-                } else {
+                } _ => {
                     Ok(Transformed::no(Expr::Column(column)))
-                }
+                }}
             }
             _ => Ok(Transformed::no(expr)),
         }

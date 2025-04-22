@@ -151,7 +151,7 @@ impl ExprStatisticsGraph {
         // Adjust the root node with the given statistics:
         let root_range = self.graph[self.root].dist.range()?;
         let given_range = given_stats.range()?;
-        if let Some(interval) = root_range.intersect(&given_range)? {
+        match root_range.intersect(&given_range)? { Some(interval) => {
             if interval != root_range {
                 // If the given statistics enable us to obtain a more precise
                 // range for the root, update it:
@@ -164,9 +164,9 @@ impl ExprStatisticsGraph {
                     Distribution::new_from_interval(interval)?
                 };
             }
-        } else {
+        } _ => {
             return Ok(PropagationResult::Infeasible);
-        }
+        }}
 
         let mut bfs = Bfs::new(&self.graph, self.root);
 

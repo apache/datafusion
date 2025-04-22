@@ -104,10 +104,10 @@ unsafe extern "C" fn call_fn_wrapper(
     RResult::ROk(FFI_TableProvider::new(table_provider, false, runtime))
 }
 
-unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) {
+unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) { unsafe {
     let private_data = Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
     drop(private_data);
-}
+}}
 
 unsafe extern "C" fn clone_fn_wrapper(udtf: &FFI_TableFunction) -> FFI_TableFunction {
     let runtime = udtf.runtime();

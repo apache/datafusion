@@ -93,11 +93,11 @@
 /// ```
 #[macro_export]
 macro_rules! get_or_init_udwf {
-    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
+    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr_2021) => {
         get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC, $UDWF::default);
     };
 
-    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr, $CTOR:path) => {
+    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr_2021, $CTOR:path) => {
         paste::paste! {
             #[doc = concat!(" Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for [`", stringify!($OUT_FN_NAME), "`].")]
             #[doc = ""]
@@ -295,7 +295,7 @@ macro_rules! get_or_init_udwf {
 #[macro_export]
 macro_rules! create_udwf_expr {
     // zero arguments
-    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
+    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr_2021) => {
         paste::paste! {
             #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
             #[doc = concat!(" `", stringify!($UDWF), "` user-defined window function.")]
@@ -308,7 +308,7 @@ macro_rules! create_udwf_expr {
     };
 
     // 1 or more arguments
-    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr) => {
+    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr_2021) => {
         paste::paste! {
             #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
             #[doc = concat!(" `", stringify!($UDWF), "` user-defined window function.")]
@@ -656,28 +656,28 @@ macro_rules! create_udwf_expr {
 macro_rules! define_udwf_and_expr {
     // Defines UDWF with default constructor
     // Defines expression API with zero parameters
-    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
+    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr_2021) => {
         get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC);
         create_udwf_expr!($UDWF, $OUT_FN_NAME, $DOC);
     };
 
     // Defines UDWF by passing a custom constructor
     // Defines expression API with zero parameters
-    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr, $CTOR:path) => {
+    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr_2021, $CTOR:path) => {
         get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC, $CTOR);
         create_udwf_expr!($UDWF, $OUT_FN_NAME, $DOC);
     };
 
     // Defines UDWF with default constructor
     // Defines expression API with multiple parameters
-    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr) => {
+    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr_2021) => {
         get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC);
         create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM),+], $DOC);
     };
 
     // Defines UDWF by passing a custom constructor
     // Defines expression API with multiple parameters
-    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr, $CTOR:path) => {
+    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr_2021, $CTOR:path) => {
         get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC, $CTOR);
         create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM),+], $DOC);
     };

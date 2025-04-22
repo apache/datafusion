@@ -311,7 +311,7 @@ fn make_staggered_i32_batches(len: usize) -> Vec<RecordBatch> {
             RecordBatch::try_from_iter(vec![(
                 "x",
                 Arc::new(Int32Array::from_iter_values(
-                    (0..to_read).map(|_| rng.gen()),
+                    (0..to_read).map(|_| rng.r#gen()),
                 )) as ArrayRef,
             )])
             .unwrap(),
@@ -336,7 +336,7 @@ fn make_staggered_utf8_batches(len: usize) -> Vec<RecordBatch> {
             RecordBatch::try_from_iter(vec![(
                 "x",
                 Arc::new(StringArray::from_iter_values(
-                    (0..to_read).map(|_| format!("test_string_{}", rng.gen::<u32>())),
+                    (0..to_read).map(|_| format!("test_string_{}", rng.r#gen::<u32>())),
                 )) as ArrayRef,
             )])
             .unwrap(),
@@ -363,13 +363,13 @@ fn make_staggered_i32_utf8_batches(len: usize) -> Vec<RecordBatch> {
                 (
                     "x",
                     Arc::new(Int32Array::from_iter_values(
-                        (0..to_read).map(|_| rng.gen()),
+                        (0..to_read).map(|_| rng.r#gen()),
                     )) as ArrayRef,
                 ),
                 (
                     "y",
                     Arc::new(StringArray::from_iter_values(
-                        (0..to_read).map(|_| format!("test_string_{}", rng.gen::<u32>())),
+                        (0..to_read).map(|_| format!("test_string_{}", rng.r#gen::<u32>())),
                     )) as ArrayRef,
                 ),
             ])

@@ -73,9 +73,9 @@ pub fn simplify_regex_expr(
                             return Ok(expr);
                         }
                     }
-                } else if let Some(expr) = lower_simple(&mode, &left, &hir) {
+                } else { match lower_simple(&mode, &left, &hir) { Some(expr) => {
                     return Ok(expr);
-                }
+                } _ => {}}}
             }
             Err(e) => {
                 // error out early since the execution may fail anyways
@@ -348,7 +348,7 @@ fn lower_alt(mode: &OperatorMode, left: &Expr, alts: &[Hir]) -> Option<Expr> {
     let mut accu: Option<Expr> = None;
 
     for part in alts {
-        if let Some(expr) = lower_simple(mode, left, part) {
+        match lower_simple(mode, left, part) { Some(expr) => {
             accu = match accu {
                 Some(accu) => {
                     if mode.not {
@@ -359,9 +359,9 @@ fn lower_alt(mode: &OperatorMode, left: &Expr, alts: &[Hir]) -> Option<Expr> {
                 }
                 None => Some(expr),
             };
-        } else {
+        } _ => {
             return None;
-        }
+        }}
     }
 
     Some(accu.expect("at least two alts"))

@@ -194,7 +194,7 @@ mod test {
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     macro_rules! test_like {
-        ($A_VEC:expr, $B_VEC:expr, $VEC:expr, $NULLABLE: expr, $NEGATED:expr, $CASE_INSENSITIVE:expr,) => {{
+        ($A_VEC:expr_2021, $B_VEC:expr_2021, $VEC:expr_2021, $NULLABLE: expr_2021, $NEGATED:expr_2021, $CASE_INSENSITIVE:expr_2021,) => {{
             let schema = Schema::new(vec![
                 Field::new("a", DataType::Utf8, $NULLABLE),
                 Field::new("b", DataType::Utf8, $NULLABLE),

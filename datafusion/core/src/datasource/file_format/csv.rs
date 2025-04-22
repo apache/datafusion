@@ -1169,7 +1169,7 @@ mod tests {
     fn csv_deserializer(
         batch_size: usize,
         schema: &Arc<Schema>,
-    ) -> impl BatchDeserializer<Bytes> {
+    ) -> impl BatchDeserializer<Bytes> + use<> {
         let decoder = ReaderBuilder::new(schema.clone())
             .with_batch_size(batch_size)
             .build_decoder();

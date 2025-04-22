@@ -1265,7 +1265,7 @@ impl BuildProbeJoinMetrics {
 /// * `$match_case`: An expression that evaluates to a `Result<StatefulStreamResult<_>>`.
 #[macro_export]
 macro_rules! handle_state {
-    ($match_case:expr) => {
+    ($match_case:expr_2021) => {
         match $match_case {
             Ok(StatefulStreamResult::Continue) => continue,
             Ok(StatefulStreamResult::Ready(result)) => {

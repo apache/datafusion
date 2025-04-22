@@ -515,11 +515,11 @@ pub fn snapshot_physical_expr(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     expr.transform_up(|e| {
-        if let Some(snapshot) = e.snapshot()? {
+        match e.snapshot()? { Some(snapshot) => {
             Ok(Transformed::yes(snapshot))
-        } else {
+        } _ => {
             Ok(Transformed::no(Arc::clone(&e)))
-        }
+        }}
     })
     .data()
 }

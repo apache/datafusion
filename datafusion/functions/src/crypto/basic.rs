@@ -40,7 +40,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 macro_rules! define_digest_function {
-    ($NAME: ident, $METHOD: ident, $DOC: expr) => {
+    ($NAME: ident, $METHOD: ident, $DOC: expr_2021) => {
         #[doc = $DOC]
         pub fn $NAME(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             let [data] = take_function_args(&DigestAlgorithm::$METHOD.to_string(), args)?;
@@ -85,7 +85,7 @@ define_digest_function!(
 );
 
 macro_rules! digest_to_scalar {
-    ($METHOD: ident, $INPUT:expr) => {{
+    ($METHOD: ident, $INPUT:expr_2021) => {{
         ScalarValue::Binary($INPUT.as_ref().map(|v| {
             let mut digest = $METHOD::default();
             digest.update(v);
@@ -217,7 +217,7 @@ pub fn utf8_or_binary_to_binary_type(
     })
 }
 macro_rules! digest_to_array {
-    ($METHOD:ident, $INPUT:expr) => {{
+    ($METHOD:ident, $INPUT:expr_2021) => {{
         let binary_array: BinaryArray = $INPUT
             .iter()
             .map(|x| {

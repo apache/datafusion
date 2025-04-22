@@ -481,7 +481,7 @@ where
     {
         // 0 ~ len - 1
         let adjusted_zero_index = if index < 0 {
-            if let Ok(index) = index.try_into() {
+            match index.try_into() { Ok(index) => {
                 // When index < 0 and -index > length, index is clamped to the beginning of the list.
                 // Otherwise, when index < 0, the index is counted from the end of the list.
                 //
@@ -493,16 +493,16 @@ where
                 } else {
                     index + len
                 }
-            } else {
+            } _ => {
                 return exec_err!("array_slice got invalid index: {}", index);
-            }
+            }}
         } else {
             // array_slice(arr, 1, to) is the same as array_slice(arr, 0, to)
-            if let Ok(index) = index.try_into() {
+            match index.try_into() { Ok(index) => {
                 std::cmp::max(index - O::usize_as(1), O::usize_as(0))
-            } else {
+            } _ => {
                 return exec_err!("array_slice got invalid index: {}", index);
-            }
+            }}
         };
 
         if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {
@@ -520,18 +520,18 @@ where
         // 0 ~ len - 1
         let adjusted_zero_index = if index < 0 {
             // array_slice in duckdb with negative to_index is python-like, so index itself is exclusive
-            if let Ok(index) = index.try_into() {
+            match index.try_into() { Ok(index) => {
                 index + len
-            } else {
+            } _ => {
                 return exec_err!("array_slice got invalid index: {}", index);
-            }
+            }}
         } else {
             // array_slice(arr, from, len + 1) is the same as array_slice(arr, from, len)
-            if let Ok(index) = index.try_into() {
+            match index.try_into() { Ok(index) => {
                 std::cmp::min(index - O::usize_as(1), len - O::usize_as(1))
-            } else {
+            } _ => {
                 return exec_err!("array_slice got invalid index: {}", index);
-            }
+            }}
         };
 
         if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {

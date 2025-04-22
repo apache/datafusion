@@ -47,7 +47,7 @@ impl StringArrayGenerator {
         // pick num_strings randomly from the distinct string table
         let indices: UInt32Array = (0..self.num_strings)
             .map(|_| {
-                if self.rng.gen::<f64>() < self.null_pct {
+                if self.rng.r#gen::<f64>() < self.null_pct {
                     None
                 } else if self.num_distinct_strings > 1 {
                     let range = 1..(self.num_distinct_strings as u32);
@@ -71,7 +71,7 @@ impl StringArrayGenerator {
         // pick num_strings randomly from the distinct string table
         let indices: UInt32Array = (0..self.num_strings)
             .map(|_| {
-                if self.rng.gen::<f64>() < self.null_pct {
+                if self.rng.r#gen::<f64>() < self.null_pct {
                     None
                 } else if self.num_distinct_strings > 1 {
                     let range = 1..(self.num_distinct_strings as u32);
@@ -92,7 +92,7 @@ fn random_string(rng: &mut StdRng, max_len: usize) -> String {
     // pick characters at random (not just ascii)
     match max_len {
         0 => "".to_string(),
-        1 => String::from(rng.gen::<char>()),
+        1 => String::from(rng.r#gen::<char>()),
         _ => {
             let len = rng.gen_range(1..=max_len);
             rng.sample_iter::<char, _>(rand::distributions::Standard)

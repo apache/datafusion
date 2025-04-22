@@ -55,7 +55,7 @@ use std::{error::Error, path::PathBuf};
 /// ```
 #[macro_export]
 macro_rules! assert_batches_eq {
-    ($EXPECTED_LINES: expr, $CHUNKS: expr) => {
+    ($EXPECTED_LINES: expr_2021, $CHUNKS: expr_2021) => {
         let expected_lines: Vec<String> =
             $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
 
@@ -112,7 +112,7 @@ pub fn batches_to_sort_string(batches: &[RecordBatch]) -> String {
 /// `assert_batch_sorted_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
 #[macro_export]
 macro_rules! assert_batches_sorted_eq {
-    ($EXPECTED_LINES: expr, $CHUNKS: expr) => {
+    ($EXPECTED_LINES: expr_2021, $CHUNKS: expr_2021) => {
         let mut expected_lines: Vec<String> =
             $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
 
@@ -157,7 +157,7 @@ macro_rules! assert_batches_sorted_eq {
 /// Both arguments must be convertable into Strings ([`Into`]<[`String`]>)
 #[macro_export]
 macro_rules! assert_contains {
-    ($ACTUAL: expr, $EXPECTED: expr) => {
+    ($ACTUAL: expr_2021, $EXPECTED: expr_2021) => {
         let actual_value: String = $ACTUAL.into();
         let expected_value: String = $EXPECTED.into();
         assert!(
@@ -180,7 +180,7 @@ macro_rules! assert_contains {
 /// Both arguments must be convertable into Strings ([`Into`]<[`String`]>)
 #[macro_export]
 macro_rules! assert_not_contains {
-    ($ACTUAL: expr, $UNEXPECTED: expr) => {
+    ($ACTUAL: expr_2021, $UNEXPECTED: expr_2021) => {
         let actual_value: String = $ACTUAL.into();
         let unexpected_value: String = $UNEXPECTED.into();
         assert!(
@@ -309,43 +309,43 @@ pub fn get_data_dir(
 
 #[macro_export]
 macro_rules! create_array {
-    (Boolean, $values: expr) => {
+    (Boolean, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::BooleanArray::from($values))
     };
-    (Int8, $values: expr) => {
+    (Int8, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::Int8Array::from($values))
     };
-    (Int16, $values: expr) => {
+    (Int16, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::Int16Array::from($values))
     };
-    (Int32, $values: expr) => {
+    (Int32, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::Int32Array::from($values))
     };
-    (Int64, $values: expr) => {
+    (Int64, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::Int64Array::from($values))
     };
-    (UInt8, $values: expr) => {
+    (UInt8, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::UInt8Array::from($values))
     };
-    (UInt16, $values: expr) => {
+    (UInt16, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::UInt16Array::from($values))
     };
-    (UInt32, $values: expr) => {
+    (UInt32, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::UInt32Array::from($values))
     };
-    (UInt64, $values: expr) => {
+    (UInt64, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::UInt64Array::from($values))
     };
-    (Float16, $values: expr) => {
+    (Float16, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::Float16Array::from($values))
     };
-    (Float32, $values: expr) => {
+    (Float32, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::Float32Array::from($values))
     };
-    (Float64, $values: expr) => {
+    (Float64, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::Float64Array::from($values))
     };
-    (Utf8, $values: expr) => {
+    (Utf8, $values: expr_2021) => {
         std::sync::Arc::new(arrow::array::StringArray::from($values))
     };
 }
@@ -364,7 +364,7 @@ macro_rules! create_array {
 /// ```
 #[macro_export]
 macro_rules! record_batch {
-    ($(($name: expr, $type: ident, $values: expr)),*) => {
+    ($(($name: expr_2021, $type: ident, $values: expr_2021)),*) => {
         {
             let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
                 $(
@@ -404,26 +404,31 @@ mod tests {
         let non_existing = cwd.join("non-existing-dir").display().to_string();
         let non_existing_str = non_existing.as_str();
 
-        env::set_var(udf_env, non_existing_str);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var(udf_env, non_existing_str) };
         let res = get_data_dir(udf_env, existing_str);
         assert!(res.is_err());
 
-        env::set_var(udf_env, "");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var(udf_env, "") };
         let res = get_data_dir(udf_env, existing_str);
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), existing_pb);
 
-        env::set_var(udf_env, " ");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var(udf_env, " ") };
         let res = get_data_dir(udf_env, existing_str);
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), existing_pb);
 
-        env::set_var(udf_env, existing_str);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var(udf_env, existing_str) };
         let res = get_data_dir(udf_env, existing_str);
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), existing_pb);
 
-        env::remove_var(udf_env);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var(udf_env) };
         let res = get_data_dir(udf_env, non_existing_str);
         assert!(res.is_err());
 

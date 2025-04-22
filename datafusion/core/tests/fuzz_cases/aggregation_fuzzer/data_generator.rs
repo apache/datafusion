@@ -211,8 +211,8 @@ mod test {
             sort_keys_set: vec![vec!["b".to_string()]],
         };
 
-        let mut gen = DatasetGenerator::new(config);
-        let datasets = gen.generate().unwrap();
+        let mut r#gen = DatasetGenerator::new(config);
+        let datasets = r#gen.generate().unwrap();
 
         // Should Generate 2 datasets
         assert_eq!(datasets.len(), 2);

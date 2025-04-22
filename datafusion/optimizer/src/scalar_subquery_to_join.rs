@@ -99,9 +99,8 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = filter.input.as_ref().clone();
                 for (subquery, alias) in subqueries {
-                    if let Some((optimized_subquery, expr_check_map)) =
-                        build_join(&subquery, &cur_input, &alias)?
-                    {
+                    match build_join(&subquery, &cur_input, &alias)?
+                    { Some((optimized_subquery, expr_check_map)) => {
                         if !expr_check_map.is_empty() {
                             rewrite_expr = rewrite_expr
                                 .transform_up(|expr| {
@@ -118,10 +117,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                 .data()?;
                         }
                         cur_input = optimized_subquery;
-                    } else {
+                    } _ => {
                         // if we can't handle all of the subqueries then bail for now
                         return Ok(Transformed::no(LogicalPlan::Filter(filter)));
-                    }
+                    }}
                 }
                 let new_plan = LogicalPlanBuilder::from(cur_input)
                     .filter(rewrite_expr)?
@@ -153,9 +152,8 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueries {
-                    if let Some((optimized_subquery, expr_check_map)) =
-                        build_join(&subquery, &cur_input, &alias)?
-                    {
+                    match build_join(&subquery, &cur_input, &alias)?
+                    { Some((optimized_subquery, expr_check_map)) => {
                         cur_input = optimized_subquery;
                         if !expr_check_map.is_empty() {
                             if let Some(expr) = subquery_to_expr_map.get(&subquery) {
@@ -181,10 +179,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                 }
                             }
                         }
-                    } else {
+                    } _ => {
                         // if we can't handle all of the subqueries then bail for now
                         return Ok(Transformed::no(LogicalPlan::Projection(projection)));
-                    }
+                    }}
                 }
 
                 let mut proj_exprs = vec![];

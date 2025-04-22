@@ -1255,7 +1255,7 @@ mod tests {
     }
 
     macro_rules! test_stack_overflow {
-        ($num_expr:expr) => {
+        ($num_expr:expr_2021) => {
             paste::item! {
                 #[test]
                 fn [<test_stack_overflow_ $num_expr>]() {

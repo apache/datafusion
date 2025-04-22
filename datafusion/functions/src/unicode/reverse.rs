@@ -156,7 +156,7 @@ mod tests {
     use crate::utils::test::test_function;
 
     macro_rules! test_reverse {
-        ($INPUT:expr, $EXPECTED:expr) => {
+        ($INPUT:expr_2021, $EXPECTED:expr_2021) => {
             test_function!(
                 ReverseFunc::new(),
                 vec![ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],

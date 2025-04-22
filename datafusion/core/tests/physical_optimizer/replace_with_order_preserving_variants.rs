@@ -64,7 +64,7 @@ use url::Url;
 ///   the flag `prefer_existing_sort` is `true`.
 /// * `$PLAN`: The plan to optimize.
 macro_rules! assert_optimized_prefer_sort_on_off {
-    ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $PREFER_EXISTING_SORT: expr, $SOURCE_UNBOUNDED: expr) => {
+    ($EXPECTED_PLAN_LINES: expr_2021, $EXPECTED_OPTIMIZED_PLAN_LINES: expr_2021, $EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr_2021, $PLAN: expr_2021, $PREFER_EXISTING_SORT: expr_2021, $SOURCE_UNBOUNDED: expr_2021) => {
         if $PREFER_EXISTING_SORT {
             assert_optimized!(
                 $EXPECTED_PLAN_LINES,
@@ -102,7 +102,7 @@ macro_rules! assert_optimized_prefer_sort_on_off {
 /// * `$PLAN`: The plan to optimize.
 /// * `$SOURCE_UNBOUNDED`: Whether the given plan contains an unbounded source.
 macro_rules! assert_optimized_in_all_boundedness_situations {
-    ($EXPECTED_UNBOUNDED_PLAN_LINES: expr,  $EXPECTED_BOUNDED_PLAN_LINES: expr, $EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $SOURCE_UNBOUNDED: expr, $PREFER_EXISTING_SORT: expr) => {
+    ($EXPECTED_UNBOUNDED_PLAN_LINES: expr_2021,  $EXPECTED_BOUNDED_PLAN_LINES: expr_2021, $EXPECTED_UNBOUNDED_OPTIMIZED_PLAN_LINES: expr_2021, $EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES: expr_2021, $EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr_2021, $PLAN: expr_2021, $SOURCE_UNBOUNDED: expr_2021, $PREFER_EXISTING_SORT: expr_2021) => {
         if $SOURCE_UNBOUNDED {
             assert_optimized_prefer_sort_on_off!(
                 $EXPECTED_UNBOUNDED_PLAN_LINES,
@@ -136,7 +136,7 @@ macro_rules! assert_optimized_in_all_boundedness_situations {
 /// * `$PREFER_EXISTING_SORT`: Value of the `prefer_existing_sort` flag.
 #[macro_export]
 macro_rules! assert_optimized {
-        ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $PREFER_EXISTING_SORT: expr, $SOURCE_UNBOUNDED: expr) => {
+        ($EXPECTED_PLAN_LINES: expr_2021, $EXPECTED_OPTIMIZED_PLAN_LINES: expr_2021, $PLAN: expr_2021, $PREFER_EXISTING_SORT: expr_2021, $SOURCE_UNBOUNDED: expr_2021) => {
             let physical_plan = $PLAN;
             let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
             let actual: Vec<&str> = formatted.trim().lines().collect();

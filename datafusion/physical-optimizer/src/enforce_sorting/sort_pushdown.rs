@@ -166,7 +166,7 @@ fn pushdown_sorts_helper(
             child.data.ordering_requirement = order;
             child.data.fetch = min_fetch(parent_req_fetch, child.data.fetch);
         }
-    } else if let Some(adjusted) = pushdown_requirement_to_children(plan, &parent_reqs)? {
+    } else { match pushdown_requirement_to_children(plan, &parent_reqs)? { Some(adjusted) => {
         // For operators that can take a sort pushdown.
 
         // Continue pushdown, with updated requirements:
@@ -177,7 +177,7 @@ fn pushdown_sorts_helper(
             child.data.fetch = min_fetch(current_fetch, parent_fetch);
         }
         sort_push_down.data.ordering_requirement = None;
-    } else {
+    } _ => {
         // Can not push down requirements, add new `SortExec`:
         let sort_reqs = sort_push_down
             .data
@@ -187,7 +187,7 @@ fn pushdown_sorts_helper(
         let fetch = sort_push_down.data.fetch;
         sort_push_down = add_sort_above(sort_push_down, sort_reqs, fetch);
         assign_initial_requirements(&mut sort_push_down);
-    }
+    }}}
 
     Ok(Transformed::yes(sort_push_down))
 }

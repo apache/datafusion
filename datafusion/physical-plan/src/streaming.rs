@@ -131,7 +131,7 @@ impl StreamingTableExec {
         &self.projected_schema
     }
 
-    pub fn projected_output_ordering(&self) -> impl IntoIterator<Item = LexOrdering> {
+    pub fn projected_output_ordering(&self) -> impl IntoIterator<Item = LexOrdering> + use<> {
         self.projected_output_ordering.clone()
     }
 

@@ -83,7 +83,7 @@ struct PlanPropertiesPrivateData {
 
 unsafe extern "C" fn output_partitioning_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> RResult<RVec<u8>, RString> {
+) -> RResult<RVec<u8>, RString> { unsafe {
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
 
@@ -93,27 +93,27 @@ unsafe extern "C" fn output_partitioning_fn_wrapper(
     let output_partitioning = partitioning_data.encode_to_vec();
 
     ROk(output_partitioning.into())
-}
+}}
 
 unsafe extern "C" fn emission_type_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> FFI_EmissionType {
+) -> FFI_EmissionType { unsafe {
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
     props.emission_type.into()
-}
+}}
 
 unsafe extern "C" fn boundedness_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> FFI_Boundedness {
+) -> FFI_Boundedness { unsafe {
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
     props.boundedness.into()
-}
+}}
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> RResult<RVec<u8>, RString> {
+) -> RResult<RVec<u8>, RString> { unsafe {
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
 
@@ -132,21 +132,21 @@ unsafe extern "C" fn output_ordering_fn_wrapper(
         None => Vec::default(),
     };
     ROk(output_ordering.into())
-}
+}}
 
-unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> WrappedSchema {
+unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> WrappedSchema { unsafe {
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
 
     let schema: SchemaRef = Arc::clone(props.eq_properties.schema());
     schema.into()
-}
+}}
 
-unsafe extern "C" fn release_fn_wrapper(props: &mut FFI_PlanProperties) {
+unsafe extern "C" fn release_fn_wrapper(props: &mut FFI_PlanProperties) { unsafe {
     let private_data =
         Box::from_raw(props.private_data as *mut PlanPropertiesPrivateData);
     drop(private_data);
-}
+}}
 
 impl Drop for FFI_PlanProperties {
     fn drop(&mut self) {

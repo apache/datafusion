@@ -162,13 +162,13 @@ impl BatchBuilder {
         } else {
             self.client_addr.append_value(format!(
                 "{}.{}.{}.{}",
-                rng.gen::<u8>(),
-                rng.gen::<u8>(),
-                rng.gen::<u8>(),
-                rng.gen::<u8>()
+                rng.r#gen::<u8>(),
+                rng.r#gen::<u8>(),
+                rng.r#gen::<u8>(),
+                rng.r#gen::<u8>()
             ));
         }
-        self.request_duration.append_value(rng.gen());
+        self.request_duration.append_value(rng.r#gen());
         self.request_user_agent
             .append_value(random_string(rng, 20..100));
         self.request_method
@@ -177,9 +177,9 @@ impl BatchBuilder {
             .append_value(format!("https://{service}.mydomain.com"));
 
         self.request_bytes
-            .append_option(rng.gen_bool(0.9).then(|| rng.gen()));
+            .append_option(rng.gen_bool(0.9).then(|| rng.r#gen()));
         self.response_bytes
-            .append_option(rng.gen_bool(0.9).then(|| rng.gen()));
+            .append_option(rng.gen_bool(0.9).then(|| rng.r#gen()));
         self.response_status
             .append_value(status[rng.gen_range(0..status.len())]);
         self.prices_status.append_value(self.row_count as i128);

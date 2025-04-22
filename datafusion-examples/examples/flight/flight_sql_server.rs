@@ -51,7 +51,7 @@ use uuid::Uuid;
 static GLOBAL: MiMalloc = MiMalloc;
 
 macro_rules! status {
-    ($desc:expr, $err:expr) => {
+    ($desc:expr_2021, $err:expr_2021) => {
         Status::internal(format!("{}: {} at {}:{}", $desc, $err, file!(), line!()))
     };
 }
@@ -131,31 +131,31 @@ impl FlightSqlServiceImpl {
         }
         let auth = authorization[bearer.len()..].to_string();
 
-        if let Some(context) = self.contexts.get(&auth) {
+        match self.contexts.get(&auth) { Some(context) => {
             Ok(context.clone())
-        } else {
+        } _ => {
             Err(Status::internal(format!(
                 "Context handle not found: {auth}"
             )))?
-        }
+        }}
     }
 
     fn get_plan(&self, handle: &str) -> Result<LogicalPlan, Status> {
-        if let Some(plan) = self.statements.get(handle) {
+        match self.statements.get(handle) { Some(plan) => {
             Ok(plan.clone())
-        } else {
+        } _ => {
             Err(Status::internal(format!("Plan handle not found: {handle}")))?
-        }
+        }}
     }
 
     fn get_result(&self, handle: &str) -> Result<Vec<RecordBatch>, Status> {
-        if let Some(result) = self.results.get(handle) {
+        match self.results.get(handle) { Some(result) => {
             Ok(result.clone())
-        } else {
+        } _ => {
             Err(Status::internal(format!(
                 "Request handle not found: {handle}"
             )))?
-        }
+        }}
     }
 
     async fn tables(&self, ctx: Arc<SessionContext>) -> RecordBatch {

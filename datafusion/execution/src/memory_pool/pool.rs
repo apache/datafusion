@@ -528,7 +528,7 @@ mod tests {
         assert!(
             matches!(
                 &res,
-                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
+                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(&expected)
             ),
             "should provide list of top memory consumers, instead found {:?}",
             res
@@ -551,7 +551,7 @@ mod tests {
         assert!(
             matches!(
                 &res,
-                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
+                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(&expected)
             ),
             "should provide proper error when no reservations have been made yet, instead found {:?}", res
         );
@@ -569,7 +569,7 @@ mod tests {
         assert!(
             matches!(
                 &res,
-                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
+                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(&expected)
             ),
             "should provide proper error for 2 consumers, instead found {:?}",
             res
@@ -582,7 +582,7 @@ mod tests {
         assert!(
             matches!(
                 &res,
-                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
+                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(&expected)
             ),
             "should provide proper error for 2 consumers(one foo=20 bytes, another foo=10 bytes, available=70), instead found {:?}", res
         );
@@ -597,7 +597,7 @@ mod tests {
         assert!(
             matches!(
                 &res,
-                Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
+                Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(&expected)
             ),
             "should provide proper error with 3 separate consumers(1 = 20 bytes, 2 = 10 bytes, 3 = 0 bytes), instead found {:?}", res
         );
@@ -618,7 +618,7 @@ mod tests {
             assert!(
                 matches!(
                     &res,
-                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected)
+                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(&expected)
                 ),
                 "should provide proper error with both consumers, instead found {:?}",
                 res
@@ -632,7 +632,7 @@ mod tests {
             assert!(
                 matches!(
                     &res,
-                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(&expected_consumers)
+                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(&expected_consumers)
                 ),
                 "should provide proper error with only 1 consumer left registered, instead found {:?}", res
             );
@@ -644,7 +644,7 @@ mod tests {
             assert!(
                 matches!(
                     &res,
-                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected_90_available)
+                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected_90_available)
                 ),
                 "should find that the inner pool will still count all bytes for the deregistered consumer until the reservation is dropped, instead found {:?}", res
             );
@@ -656,7 +656,7 @@ mod tests {
             assert!(
                 matches!(
                     &res,
-                    Err(DataFusionError::ResourcesExhausted(ref e)) if e.to_string().contains(expected_90_available)
+                    Err(DataFusionError::ResourcesExhausted(e)) if e.to_string().contains(expected_90_available)
                 ),
                 "should correctly account the total bytes after reservation is free, instead found {:?}", res
             );

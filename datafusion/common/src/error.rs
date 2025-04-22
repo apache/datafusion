@@ -155,7 +155,7 @@ pub enum DataFusionError {
 
 #[macro_export]
 macro_rules! context {
-    ($desc:expr, $err:expr) => {
+    ($desc:expr_2021, $err:expr_2021) => {
         $err.context(format!("{} at {}:{}", $desc, file!(), line!()))
     };
 }
@@ -339,11 +339,11 @@ impl From<GenericError> for DataFusionError {
     fn from(err: GenericError) -> Self {
         // If the error is already a DataFusionError, not wrapping it.
         if err.is::<DataFusionError>() {
-            if let Ok(e) = err.downcast::<DataFusionError>() {
+            match err.downcast::<DataFusionError>() { Ok(e) => {
                 *e
-            } else {
+            } _ => {
                 unreachable!()
-            }
+            }}
         } else {
             DataFusionError::External(err)
         }
@@ -759,7 +759,7 @@ macro_rules! make_error {
             /// Macro wraps `$ERR` to add backtrace feature
             #[macro_export]
             macro_rules! $NAME_DF_ERR {
-                ($d($d args:expr),*) => {
+                ($d($d args:expr_2021),*) => {
                     $crate::DataFusionError::$ERR(
                         ::std::format!(
                             "{}{}",
@@ -773,7 +773,7 @@ macro_rules! make_error {
             /// Macro wraps Err(`$ERR`) to add backtrace feature
             #[macro_export]
             macro_rules! $NAME_ERR {
-                ($d($d args:expr),*) => {
+                ($d($d args:expr_2021),*) => {
                     Err($crate::[<_ $NAME_DF_ERR>]!($d($d args),*))
                 }
             }
@@ -816,7 +816,7 @@ make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
 // Exposes a macro to create `DataFusionError::SQL` with optional backtrace
 #[macro_export]
 macro_rules! sql_datafusion_err {
-    ($ERR:expr) => {
+    ($ERR:expr_2021) => {
         DataFusionError::SQL($ERR, Some(DataFusionError::get_back_trace()))
     };
 }
@@ -824,7 +824,7 @@ macro_rules! sql_datafusion_err {
 // Exposes a macro to create `Err(DataFusionError::SQL)` with optional backtrace
 #[macro_export]
 macro_rules! sql_err {
-    ($ERR:expr) => {
+    ($ERR:expr_2021) => {
         Err(datafusion_common::sql_datafusion_err!($ERR))
     };
 }
@@ -832,7 +832,7 @@ macro_rules! sql_err {
 // Exposes a macro to create `DataFusionError::ArrowError` with optional backtrace
 #[macro_export]
 macro_rules! arrow_datafusion_err {
-    ($ERR:expr) => {
+    ($ERR:expr_2021) => {
         DataFusionError::ArrowError($ERR, Some(DataFusionError::get_back_trace()))
     };
 }
@@ -840,7 +840,7 @@ macro_rules! arrow_datafusion_err {
 // Exposes a macro to create `Err(DataFusionError::ArrowError)` with optional backtrace
 #[macro_export]
 macro_rules! arrow_err {
-    ($ERR:expr) => {
+    ($ERR:expr_2021) => {
         Err(datafusion_common::arrow_datafusion_err!($ERR))
     };
 }
@@ -848,7 +848,7 @@ macro_rules! arrow_err {
 // Exposes a macro to create `DataFusionError::SchemaError` with optional backtrace
 #[macro_export]
 macro_rules! schema_datafusion_err {
-    ($ERR:expr) => {
+    ($ERR:expr_2021) => {
         $crate::error::DataFusionError::SchemaError(
             $ERR,
             Box::new(Some($crate::error::DataFusionError::get_back_trace())),
@@ -859,7 +859,7 @@ macro_rules! schema_datafusion_err {
 // Exposes a macro to create `Err(DataFusionError::SchemaError)` with optional backtrace
 #[macro_export]
 macro_rules! schema_err {
-    ($ERR:expr) => {
+    ($ERR:expr_2021) => {
         Err($crate::error::DataFusionError::SchemaError(
             $ERR,
             Box::new(Some($crate::error::DataFusionError::get_back_trace())),

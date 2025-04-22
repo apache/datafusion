@@ -345,10 +345,11 @@ mod tests {
         } else {
             "/home/user"
         };
-        env::set_var(
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var(
             if cfg!(windows) { "USERPROFILE" } else { "HOME" },
             test_home_path,
-        );
+        ) };
         let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
         let expected = format!(
             "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
@@ -364,11 +365,13 @@ mod tests {
         let actual = substitute_tilde(input.to_string());
         assert_eq!(actual, expected);
         match original_home {
-            Some(home_path) => env::set_var(
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            Some(home_path) => unsafe { env::set_var(
                 if cfg!(windows) { "USERPROFILE" } else { "HOME" },
                 home_path.to_str().unwrap(),
-            ),
-            None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
+            ) },
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            None => unsafe { env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) },
         }
     }
 }

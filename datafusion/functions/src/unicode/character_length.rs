@@ -183,7 +183,7 @@ mod tests {
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     macro_rules! test_character_length {
-        ($INPUT:expr, $EXPECTED:expr) => {
+        ($INPUT:expr_2021, $EXPECTED:expr_2021) => {
             test_function!(
                 CharacterLengthFunc::new(),
                 vec![ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],

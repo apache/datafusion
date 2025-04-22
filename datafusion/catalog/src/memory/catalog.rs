@@ -115,7 +115,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         name: &str,
         cascade: bool,
     ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
-        if let Some(schema) = self.schema(name) {
+        match self.schema(name) { Some(schema) => {
             let table_names = schema.table_names();
             match (table_names.is_empty(), cascade) {
                 (true, _) | (false, true) => {
@@ -128,8 +128,8 @@ impl CatalogProvider for MemoryCatalogProvider {
                     itertools::join(table_names.iter(), ", ")
                 ),
             }
-        } else {
+        } _ => {
             Ok(None)
-        }
+        }}
     }
 }

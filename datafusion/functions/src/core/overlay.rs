@@ -119,7 +119,7 @@ impl ScalarUDFImpl for OverlayFunc {
 
 macro_rules! process_overlay {
     // For the three-argument case
-    ($string_array:expr, $characters_array:expr, $pos_num:expr) => {{
+    ($string_array:expr_2021, $characters_array:expr_2021, $pos_num:expr_2021) => {{
         $string_array
         .iter()
         .zip($characters_array.iter())
@@ -153,7 +153,7 @@ macro_rules! process_overlay {
     }};
 
     // For the four-argument case
-    ($string_array:expr, $characters_array:expr, $pos_num:expr, $len_num:expr) => {{
+    ($string_array:expr_2021, $characters_array:expr_2021, $pos_num:expr_2021, $len_num:expr_2021) => {{
         $string_array
         .iter()
         .zip($characters_array.iter())

@@ -127,7 +127,7 @@ fn csv_exec_sorted(
 /// `REPARTITION_SORTS`: Flag to set `config.options.optimizer.repartition_sorts` option.
 ///
 macro_rules! assert_optimized {
-    ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $REPARTITION_SORTS: expr) => {
+    ($EXPECTED_PLAN_LINES: expr_2021, $EXPECTED_OPTIMIZED_PLAN_LINES: expr_2021, $PLAN: expr_2021, $REPARTITION_SORTS: expr_2021) => {
         let mut config = ConfigOptions::new();
         config.optimizer.repartition_sorts = $REPARTITION_SORTS;
 
@@ -1250,7 +1250,7 @@ async fn test_not_replaced_with_partial_sort_for_bounded_input() -> Result<()> {
 /// `REPARTITION_SORTS`: Flag to set `config.options.optimizer.repartition_sorts` option.
 /// `$CASE_NUMBER` (optional): The test case number to print on failure.
 macro_rules! assert_optimized {
-    ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $REPARTITION_SORTS: expr $(, $CASE_NUMBER: expr)?) => {
+    ($EXPECTED_PLAN_LINES: expr_2021, $EXPECTED_OPTIMIZED_PLAN_LINES: expr_2021, $PLAN: expr_2021, $REPARTITION_SORTS: expr_2021 $(, $CASE_NUMBER: expr_2021)?) => {
         let mut config = ConfigOptions::new();
         config.optimizer.repartition_sorts = $REPARTITION_SORTS;
 

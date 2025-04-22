@@ -143,7 +143,7 @@ impl AggregateUDFImpl for Median {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         macro_rules! helper {
-            ($t:ty, $dt:expr) => {
+            ($t:ty, $dt:expr_2021) => {
                 if acc_args.is_distinct {
                     Ok(Box::new(DistinctMedianAccumulator::<$t> {
                         data_type: $dt.clone(),
@@ -193,7 +193,7 @@ impl AggregateUDFImpl for Median {
         let dt = args.exprs[0].data_type(args.schema)?;
 
         macro_rules! helper {
-            ($t:ty, $dt:expr) => {
+            ($t:ty, $dt:expr_2021) => {
                 Ok(Box::new(MedianGroupsAccumulator::<$t>::new($dt)))
             };
         }

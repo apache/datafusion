@@ -40,7 +40,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut rng = seedable_rng();
         (0..size)
             .map(|_| {
-                if rng.gen::<f32>() < null_density {
+                if rng.r#gen::<f32>() < null_density {
                     None
                 } else {
                     Some(rng.gen_range::<i64, _>(1i64..10_000))

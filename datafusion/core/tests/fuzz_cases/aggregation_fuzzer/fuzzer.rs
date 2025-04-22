@@ -348,7 +348,7 @@ impl AggregationFuzzTestTask {
 }
 
 /// Pretty prints the `RecordBatch`es, limited to the first 100 rows
-fn format_batches_with_limit(batches: &[RecordBatch]) -> impl std::fmt::Display {
+fn format_batches_with_limit(batches: &[RecordBatch]) -> impl std::fmt::Display + use<> {
     const MAX_ROWS: usize = 100;
     let mut row_count = 0;
     let to_print = batches

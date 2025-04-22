@@ -905,19 +905,19 @@ impl ExecutionPlan for HashJoinExec {
             return Ok(None);
         }
 
-        if let Some(JoinData {
-            projected_left_child,
-            projected_right_child,
-            join_filter,
-            join_on,
-        }) = try_pushdown_through_join(
+        match try_pushdown_through_join(
             projection,
             self.left(),
             self.right(),
             self.on(),
             self.schema(),
             self.filter(),
-        )? {
+        )? { Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            join_on,
+        }) => {
             Ok(Some(Arc::new(HashJoinExec::try_new(
                 Arc::new(projected_left_child),
                 Arc::new(projected_right_child),
@@ -929,9 +929,9 @@ impl ExecutionPlan for HashJoinExec {
                 *self.partition_mode(),
                 self.null_equals_null,
             )?)))
-        } else {
+        } _ => {
             try_embed_projection(projection, self)
-        }
+        }}
     }
 }
 

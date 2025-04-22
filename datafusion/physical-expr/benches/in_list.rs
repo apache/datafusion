@@ -71,11 +71,11 @@ fn do_benches(
     }
 
     let values: Float32Array = (0..array_length)
-        .map(|_| rng.gen_bool(null_percent).then(|| rng.gen()))
+        .map(|_| rng.gen_bool(null_percent).then(|| rng.r#gen()))
         .collect();
 
     let in_list: Vec<_> = (0..in_list_length)
-        .map(|_| ScalarValue::Float32(Some(rng.gen())))
+        .map(|_| ScalarValue::Float32(Some(rng.r#gen())))
         .collect();
 
     do_bench(
@@ -86,11 +86,11 @@ fn do_benches(
     );
 
     let values: Int32Array = (0..array_length)
-        .map(|_| rng.gen_bool(null_percent).then(|| rng.gen()))
+        .map(|_| rng.gen_bool(null_percent).then(|| rng.r#gen()))
         .collect();
 
     let in_list: Vec<_> = (0..in_list_length)
-        .map(|_| ScalarValue::Int32(Some(rng.gen())))
+        .map(|_| ScalarValue::Int32(Some(rng.r#gen())))
         .collect();
 
     do_bench(

@@ -2415,7 +2415,7 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
 
 #[macro_export]
 macro_rules! expr_vec_fmt {
-    ( $ARRAY:expr ) => {{
+    ( $ARRAY:expr_2021 ) => {{
         $ARRAY
             .iter()
             .map(|e| format!("{e}"))

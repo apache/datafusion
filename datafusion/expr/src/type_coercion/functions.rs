@@ -663,7 +663,7 @@ fn get_valid_types(
             vec![current_types.to_vec()]
         }
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
-        TypeSignature::ArraySignature(ref function_signature) => match function_signature {
+        TypeSignature::ArraySignature(function_signature) => match function_signature {
             ArrayFunctionSignature::Array { arguments, array_coercion, } => {
                 array_valid_types(function_name, current_types, arguments, array_coercion.as_ref())?
             }

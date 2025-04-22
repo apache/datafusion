@@ -287,9 +287,9 @@ fn roundtrip_crossjoin() -> Result<()> {
 #[macro_export]
 macro_rules! roundtrip_statement_with_dialect_helper {
     (
-        sql: $sql:expr,
-        parser_dialect: $parser_dialect:expr,
-        unparser_dialect: $unparser_dialect:expr,
+        sql: $sql:expr_2021,
+        parser_dialect: $parser_dialect:expr_2021,
+        unparser_dialect: $unparser_dialect:expr_2021,
         expected: @ $expected:literal $(,)?
     ) => {{
         let statement = Parser::new(&$parser_dialect)
@@ -1975,13 +1975,13 @@ fn test_unparse_extension_to_statement() -> Result<()> {
         @r#"SELECT j1.j1_id, j1.j1_string FROM j1"#
     );
 
-    if let Some(err) = plan_to_sql(&extension).err() {
+    match plan_to_sql(&extension).err() { Some(err) => {
         assert_contains!(
             err.to_string(),
             "This feature is not implemented: Unsupported extension node: MockUserDefinedLogicalPlan");
-    } else {
+    } _ => {
         panic!("Expected error");
-    }
+    }}
     Ok(())
 }
 
@@ -2040,14 +2040,14 @@ fn test_unparse_extension_to_sql() -> Result<()> {
         @r#"SELECT j1.j1_id AS user_id FROM (SELECT j1.j1_id, j1.j1_string FROM j1)"#
     );
 
-    if let Some(err) = plan_to_sql(&plan).err() {
+    match plan_to_sql(&plan).err() { Some(err) => {
         assert_contains!(
             err.to_string(),
             "This feature is not implemented: Unsupported extension node: MockUserDefinedLogicalPlan"
         );
-    } else {
+    } _ => {
         panic!("Expected error")
-    }
+    }}
     Ok(())
 }
 
@@ -2090,11 +2090,11 @@ fn test_unparse_optimized_multi_union() -> Result<()> {
         schema: dfschema.clone(),
     });
 
-    if let Some(err) = plan_to_sql(&plan).err() {
+    match plan_to_sql(&plan).err() { Some(err) => {
         assert_contains!(err.to_string(), "UNION operator requires at least 2 inputs");
-    } else {
+    } _ => {
         panic!("Expected error")
-    }
+    }}
 
     Ok(())
 }

@@ -557,7 +557,7 @@ fn general_array_has_for_all_and_any<O: OffsetSizeTrait>(
     let converter = RowConverter::new(vec![SortField::new(haystack.value_type())])?;
 
     for (arr, sub_arr) in haystack.iter().zip(needle.iter()) {
-        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
+        match (arr, sub_arr) { (Some(arr), Some(sub_arr)) => {
             let arr_values = converter.convert_columns(&[arr])?;
             let sub_arr_values = converter.convert_columns(&[sub_arr])?;
             boolean_builder.append_value(general_array_has_all_and_any_kernel(
@@ -565,9 +565,9 @@ fn general_array_has_for_all_and_any<O: OffsetSizeTrait>(
                 sub_arr_values,
                 comparison_type,
             ));
-        } else {
+        } _ => {
             boolean_builder.append_null();
-        }
+        }}
     }
 
     Ok(Arc::new(boolean_builder.finish()))

@@ -120,9 +120,9 @@ macro_rules! config_namespace {
                 $(#[deprecated($($field_depr:tt)*)])? // Optional field-level deprecated attribute
                 $(#[allow($($field_de:tt)*)])?
                 $field_vis:vis $field_name:ident : $field_type:ty,
-                $(warn = $warn:expr,)?
-                $(transform = $transform:expr,)?
-                default = $default:expr
+                $(warn = $warn:expr_2021,)?
+                $(transform = $transform:expr_2021,)?
+                default = $default:expr_2021
             )*$(,)*
         }
     ) => {
@@ -1123,7 +1123,7 @@ macro_rules! config_field {
         config_field!($t, value => default_transform(value)?);
     };
 
-    ($t:ty, $arg:ident => $transform:expr) => {
+    ($t:ty, $arg:ident => $transform:expr_2021) => {
         impl ConfigField for $t {
             fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
                 v.some(key, self, description)
@@ -1251,7 +1251,7 @@ macro_rules! extensions_options {
      $vis:vis struct $struct_name:ident {
         $(
         $(#[doc = $d:tt])*
-        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr
+        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr_2021
         )*$(,)*
     }
     ) => {
@@ -1708,7 +1708,7 @@ macro_rules! config_namespace_with_hashmap {
         $(
         $(#[doc = $d:tt])*
         $(#[deprecated($($field_depr:tt)*)])? // Optional field-level deprecated attribute
-        $field_vis:vis $field_name:ident : $field_type:ty, $(transform = $transform:expr,)? default = $default:expr
+        $field_vis:vis $field_name:ident : $field_type:ty, $(transform = $transform:expr_2021,)? default = $default:expr_2021
         )*$(,)*
     }
     ) => {

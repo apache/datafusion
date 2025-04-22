@@ -89,12 +89,12 @@ impl FFI_RecordBatchStream {
 
 unsafe impl Send for FFI_RecordBatchStream {}
 
-unsafe extern "C" fn schema_fn_wrapper(stream: &FFI_RecordBatchStream) -> WrappedSchema {
+unsafe extern "C" fn schema_fn_wrapper(stream: &FFI_RecordBatchStream) -> WrappedSchema { unsafe {
     let private_data = stream.private_data as *const RecordBatchStreamPrivateData;
     let stream = &(*private_data).rbs;
 
     (*stream).schema().into()
-}
+}}
 
 fn record_batch_to_wrapped_array(
     record_batch: RecordBatch,
@@ -124,7 +124,7 @@ fn maybe_record_batch_to_wrapped_stream(
 unsafe extern "C" fn poll_next_fn_wrapper(
     stream: &FFI_RecordBatchStream,
     cx: &mut FfiContext,
-) -> FfiPoll<ROption<RResult<WrappedArray, RString>>> {
+) -> FfiPoll<ROption<RResult<WrappedArray, RString>>> { unsafe {
     let private_data = stream.private_data as *mut RecordBatchStreamPrivateData;
     let stream = &mut (*private_data).rbs;
 
@@ -137,7 +137,7 @@ unsafe extern "C" fn poll_next_fn_wrapper(
     });
 
     poll_result.into()
-}
+}}
 
 impl RecordBatchStream for FFI_RecordBatchStream {
     fn schema(&self) -> arrow::datatypes::SchemaRef {

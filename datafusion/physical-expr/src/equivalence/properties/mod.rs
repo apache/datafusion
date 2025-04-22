@@ -997,15 +997,14 @@ impl EquivalenceProperties {
             referred_dependencies(&dependency_map, source)
                 .into_iter()
                 .filter_map(|relevant_deps| {
-                    if let Ok(SortProperties::Ordered(options)) =
-                        get_expr_properties(source, &relevant_deps, &self.schema)
+                    match get_expr_properties(source, &relevant_deps, &self.schema)
                             .map(|prop| prop.sort_properties)
-                    {
+                    { Ok(SortProperties::Ordered(options)) => {
                         Some((options, relevant_deps))
-                    } else {
+                    } _ => {
                         // Do not consider unordered cases
                         None
-                    }
+                    }}
                 })
                 .flat_map(|(options, relevant_deps)| {
                     let sort_expr = PhysicalSortExpr {
@@ -1584,14 +1583,14 @@ fn get_expr_properties(
     dependencies: &Dependencies,
     schema: &SchemaRef,
 ) -> Result<ExprProperties> {
-    if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
+    match dependencies.iter().find(|&order| expr.eq(&order.expr)) { Some(column_order) => {
         // If exact match is found, return its ordering.
         Ok(ExprProperties {
             sort_properties: SortProperties::Ordered(column_order.options),
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
         })
-    } else if expr.as_any().downcast_ref::<Column>().is_some() {
+    } _ => if expr.as_any().downcast_ref::<Column>().is_some() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Unordered,
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
@@ -1612,7 +1611,7 @@ fn get_expr_properties(
             .collect::<Result<Vec<_>>>()?;
         // Calculate expression ordering using ordering of its children.
         expr.get_properties(&child_states)
-    }
+    }}
 }
 
 /// Wrapper struct for `Arc<dyn PhysicalExpr>` to use them as keys in a hash map.

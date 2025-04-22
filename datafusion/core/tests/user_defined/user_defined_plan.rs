@@ -517,8 +517,8 @@ impl OptimizerRule for TopKOptimizerRule {
         };
 
         if let LogicalPlan::Sort(Sort {
-            ref expr,
-            ref input,
+            expr,
+            input,
             ..
         }) = limit.input.as_ref()
         {

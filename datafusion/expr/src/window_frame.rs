@@ -536,7 +536,7 @@ mod tests {
     }
 
     macro_rules! test_bound {
-        ($unit:ident, $value:expr, $expected:expr) => {
+        ($unit:ident, $value:expr_2021, $expected:expr_2021) => {
             let preceding = WindowFrameBound::try_parse(
                 ast::WindowFrameBound::Preceding($value),
                 &ast::WindowFrameUnits::$unit,
@@ -551,7 +551,7 @@ mod tests {
     }
 
     macro_rules! test_bound_err {
-        ($unit:ident, $value:expr, $expected:expr) => {
+        ($unit:ident, $value:expr_2021, $expected:expr_2021) => {
             let err = WindowFrameBound::try_parse(
                 ast::WindowFrameBound::Preceding($value),
                 &ast::WindowFrameUnits::$unit,

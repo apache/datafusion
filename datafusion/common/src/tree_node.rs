@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 /// These macros are used to determine continuation during transforming traversals.
 macro_rules! handle_transform_recursion {
-    ($F_DOWN:expr, $F_CHILD:expr, $F_UP:expr) => {{
+    ($F_DOWN:expr_2021, $F_CHILD:expr_2021, $F_UP:expr_2021) => {{
         $F_DOWN?
             .transform_children(|n| n.map_children($F_CHILD))?
             .transform_parent($F_UP)
@@ -1845,7 +1845,7 @@ pub(crate) mod tests {
     }
 
     macro_rules! visit_test {
-        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED_VISITS:expr) => {
+        ($NAME:ident, $F_DOWN:expr_2021, $F_UP:expr_2021, $EXPECTED_VISITS:expr_2021) => {
             #[test]
             fn $NAME() -> Result<()> {
                 let tree = test_tree();
@@ -1859,7 +1859,7 @@ pub(crate) mod tests {
     }
 
     macro_rules! test_apply {
-        ($NAME:ident, $F:expr, $EXPECTED_VISITS:expr) => {
+        ($NAME:ident, $F:expr_2021, $EXPECTED_VISITS:expr_2021) => {
             #[test]
             fn $NAME() -> Result<()> {
                 let tree = test_tree();
@@ -1936,7 +1936,7 @@ pub(crate) mod tests {
     }
 
     macro_rules! rewrite_test {
-        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED_TREE:expr) => {
+        ($NAME:ident, $F_DOWN:expr_2021, $F_UP:expr_2021, $EXPECTED_TREE:expr_2021) => {
             #[test]
             fn $NAME() -> Result<()> {
                 let tree = test_tree();
@@ -1949,7 +1949,7 @@ pub(crate) mod tests {
     }
 
     macro_rules! transform_test {
-        ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED_TREE:expr) => {
+        ($NAME:ident, $F_DOWN:expr_2021, $F_UP:expr_2021, $EXPECTED_TREE:expr_2021) => {
             #[test]
             fn $NAME() -> Result<()> {
                 let tree = test_tree();
@@ -1961,7 +1961,7 @@ pub(crate) mod tests {
     }
 
     macro_rules! transform_down_test {
-        ($NAME:ident, $F:expr, $EXPECTED_TREE:expr) => {
+        ($NAME:ident, $F:expr_2021, $EXPECTED_TREE:expr_2021) => {
             #[test]
             fn $NAME() -> Result<()> {
                 let tree = test_tree();
@@ -1973,7 +1973,7 @@ pub(crate) mod tests {
     }
 
     macro_rules! transform_up_test {
-        ($NAME:ident, $F:expr, $EXPECTED_TREE:expr) => {
+        ($NAME:ident, $F:expr_2021, $EXPECTED_TREE:expr_2021) => {
             #[test]
             fn $NAME() -> Result<()> {
                 let tree = test_tree();

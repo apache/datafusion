@@ -1943,15 +1943,15 @@ fn are_inlist_and_eq_and_match_neg(
 fn are_inlist_and_eq(left: &Expr, right: &Expr) -> bool {
     let left = as_inlist(left);
     let right = as_inlist(right);
-    if let (Some(lhs), Some(rhs)) = (left, right) {
+    match (left, right) { (Some(lhs), Some(rhs)) => {
         matches!(lhs.expr.as_ref(), Expr::Column(_))
             && matches!(rhs.expr.as_ref(), Expr::Column(_))
             && lhs.expr == rhs.expr
             && !lhs.negated
             && !rhs.negated
-    } else {
+    } _ => {
         false
-    }
+    }}
 }
 
 /// Try to convert an expression to an in-list expression

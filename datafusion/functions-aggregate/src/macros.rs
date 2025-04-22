@@ -16,7 +16,7 @@
 // under the License.
 
 macro_rules! make_udaf_expr {
-    ($EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+    ($EXPR_FN:ident, $($arg:ident)*, $DOC:expr_2021, $AGGREGATE_UDF_FN:ident) => {
         // "fluent expr_fn" style function
         #[doc = $DOC]
         pub fn $EXPR_FN(
@@ -35,11 +35,11 @@ macro_rules! make_udaf_expr {
 }
 
 macro_rules! make_udaf_expr_and_func {
-    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+    ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr_2021, $AGGREGATE_UDF_FN:ident) => {
         make_udaf_expr!($EXPR_FN, $($arg)*, $DOC, $AGGREGATE_UDF_FN);
         create_func!($UDAF, $AGGREGATE_UDF_FN);
     };
-    ($UDAF:ty, $EXPR_FN:ident, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
+    ($UDAF:ty, $EXPR_FN:ident, $DOC:expr_2021, $AGGREGATE_UDF_FN:ident) => {
         // "fluent expr_fn" style function
         #[doc = $DOC]
         pub fn $EXPR_FN(
@@ -63,7 +63,7 @@ macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
         create_func!($UDAF, $AGGREGATE_UDF_FN, <$UDAF>::default());
     };
-    ($UDAF:ty, $AGGREGATE_UDF_FN:ident, $CREATE:expr) => {
+    ($UDAF:ty, $AGGREGATE_UDF_FN:ident, $CREATE:expr_2021) => {
         paste::paste! {
             #[doc = concat!("AggregateFunction that returns a [`AggregateUDF`](datafusion_expr::AggregateUDF) for [`", stringify!($UDAF), "`]")]
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<datafusion_expr::AggregateUDF> {

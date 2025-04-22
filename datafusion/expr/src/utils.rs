@@ -674,14 +674,14 @@ where
 {
     let mut err = Ok(());
     expr.apply(|expr| {
-        if let Err(e) = f(expr) {
+        match f(expr) { Err(e) => {
             // Save the error for later (it may not be a DataFusionError)
             err = Err(e);
             Ok(TreeNodeRecursion::Stop)
-        } else {
+        } _ => {
             // keep going
             Ok(TreeNodeRecursion::Continue)
-        }
+        }}
     })
     // The closure always returns OK, so this will always too
     .expect("no way to return error during recursion");

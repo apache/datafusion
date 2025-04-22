@@ -42,7 +42,7 @@ use datafusion_macros::user_doc;
 
 // returns the new value after bool_and/bool_or with the new values, taking nullability into account
 macro_rules! typed_bool_and_or_batch {
-    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
+    ($VALUES:expr_2021, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = downcast_value!($VALUES, $ARRAYTYPE);
         let delta = $OP(array);
         Ok(ScalarValue::$SCALAR(delta))
@@ -51,7 +51,7 @@ macro_rules! typed_bool_and_or_batch {
 
 // bool_and/bool_or the array and returns a ScalarValue of its corresponding type.
 macro_rules! bool_and_or_batch {
-    ($VALUES:expr, $OP:ident) => {{
+    ($VALUES:expr_2021, $OP:ident) => {{
         match $VALUES.data_type() {
             DataType::Boolean => {
                 typed_bool_and_or_batch!($VALUES, BooleanArray, Boolean, $OP)

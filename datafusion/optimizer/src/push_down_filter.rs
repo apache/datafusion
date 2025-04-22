@@ -514,11 +514,11 @@ fn push_down_all_join(
 
     // wrap the join on the filter whose predicates must be kept, if any
     let plan = LogicalPlan::Join(join);
-    let plan = if let Some(predicate) = conjunction(keep_predicates) {
+    let plan = match conjunction(keep_predicates) { Some(predicate) => {
         LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(plan))?)
-    } else {
+    } _ => {
         plan
-    };
+    }};
     Ok(Transformed::yes(plan))
 }
 
@@ -972,21 +972,21 @@ impl OptimizerRule for PushDownFilter {
                 Transformed::yes(LogicalPlan::Aggregate(agg))
                     .transform_data(|new_plan| {
                         // If we have a filter to push, we push it down to the input of the aggregate
-                        if let Some(predicate) = conjunction(replaced_push_predicates) {
+                        match conjunction(replaced_push_predicates) { Some(predicate) => {
                             let new_filter = make_filter(predicate, agg_input)?;
                             insert_below(new_plan, new_filter)
-                        } else {
+                        } _ => {
                             Ok(Transformed::no(new_plan))
-                        }
+                        }}
                     })?
                     .map_data(|child_plan| {
                         // if there are any remaining predicates we can't push, add them
                         // back as a filter
-                        if let Some(predicate) = conjunction(keep_predicates) {
+                        match conjunction(keep_predicates) { Some(predicate) => {
                             make_filter(predicate, Arc::new(child_plan))
-                        } else {
+                        } _ => {
                             Ok(child_plan)
-                        }
+                        }}
                     })
             }
             // Tries to push filters based on the partition key(s) of the window function(s) used.
@@ -1065,21 +1065,21 @@ impl OptimizerRule for PushDownFilter {
                 Transformed::yes(LogicalPlan::Window(window))
                     .transform_data(|new_plan| {
                         // If we have a filter to push, we push it down to the input of the window
-                        if let Some(predicate) = conjunction(push_predicates) {
+                        match conjunction(push_predicates) { Some(predicate) => {
                             let new_filter = make_filter(predicate, window_input)?;
                             insert_below(new_plan, new_filter)
-                        } else {
+                        } _ => {
                             Ok(Transformed::no(new_plan))
-                        }
+                        }}
                     })?
                     .map_data(|child_plan| {
                         // if there are any remaining predicates we can't push, add them
                         // back as a filter
-                        if let Some(predicate) = conjunction(keep_predicates) {
+                        match conjunction(keep_predicates) { Some(predicate) => {
                             make_filter(predicate, Arc::new(child_plan))
-                        } else {
+                        } _ => {
                             Ok(child_plan)
-                        }
+                        }}
                     })
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
@@ -1133,11 +1133,11 @@ impl OptimizerRule for PushDownFilter {
                 });
 
                 Transformed::yes(new_scan).transform_data(|new_scan| {
-                    if let Some(predicate) = conjunction(new_predicate) {
+                    match conjunction(new_predicate) { Some(predicate) => {
                         make_filter(predicate, Arc::new(new_scan)).map(Transformed::yes)
-                    } else {
+                    } _ => {
                         Ok(Transformed::no(new_scan))
-                    }
+                    }}
                 })
             }
             LogicalPlan::Extension(extension_plan) => {
@@ -1321,12 +1321,12 @@ fn insert_below(
 ) -> Result<Transformed<LogicalPlan>> {
     let mut new_child = Some(new_child);
     let transformed_plan = plan.map_children(|_child| {
-        if let Some(new_child) = new_child.take() {
+        match new_child.take() { Some(new_child) => {
             Ok(Transformed::yes(new_child))
-        } else {
+        } _ => {
             // already took the new child
             internal_err!("node had more than one input")
-        }
+        }}
     })?;
 
     // make sure we did the actual replacement

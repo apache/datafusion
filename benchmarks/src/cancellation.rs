@@ -319,8 +319,8 @@ fn random_data(column_type: &DataType, rows: usize) -> Arc<dyn Array> {
 
 fn random_value(rng: &mut ThreadRng, column_type: &DataType) -> ScalarValue {
     match column_type {
-        DataType::Float64 => ScalarValue::Float64(Some(rng.gen())),
-        DataType::Boolean => ScalarValue::Boolean(Some(rng.gen())),
+        DataType::Float64 => ScalarValue::Float64(Some(rng.r#gen())),
+        DataType::Boolean => ScalarValue::Boolean(Some(rng.r#gen())),
         DataType::Utf8 => ScalarValue::Utf8(Some(
             rng.sample_iter(&Alphanumeric)
                 .take(10)

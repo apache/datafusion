@@ -256,22 +256,19 @@ impl UnionEquivalentOrderingBuilder {
         {
             // If the next expressions are equal, add the next match
             // otherwise try and match with a constant
-            if let Some(expr) =
-                advance_if_match(&mut sort_expr_iter, &mut existing_sort_expr_iter)
-            {
+            match advance_if_match(&mut sort_expr_iter, &mut existing_sort_expr_iter)
+            { Some(expr) => {
                 augmented_ordering.push(expr);
-            } else if let Some(expr) =
-                advance_if_matches_constant(&mut sort_expr_iter, existing_constants)
-            {
+            } _ => { match advance_if_matches_constant(&mut sort_expr_iter, existing_constants)
+            { Some(expr) => {
                 augmented_ordering.push(expr);
-            } else if let Some(expr) =
-                advance_if_matches_constant(&mut existing_sort_expr_iter, constants)
-            {
+            } _ => { match advance_if_matches_constant(&mut existing_sort_expr_iter, constants)
+            { Some(expr) => {
                 augmented_ordering.push(expr);
-            } else {
+            } _ => {
                 // no match, can't continue the ordering, return what we have
                 break;
-            }
+            }}}}}}
         }
 
         Some(augmented_ordering)

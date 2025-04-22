@@ -76,7 +76,7 @@ impl StringBatchGenerator {
                     num_strings,
                     num_distinct_strings,
                     null_pct,
-                    rng: StdRng::from_seed(rng.gen()),
+                    rng: StdRng::from_seed(rng.r#gen()),
                 }))
             }
         }

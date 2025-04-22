@@ -1321,9 +1321,8 @@ fn build_is_null_column_expr(
 
         let null_count_field = &Field::new(field.name(), DataType::UInt64, true);
         if with_not {
-            if let Ok(row_count_expr) =
-                required_columns.row_count_column_expr(col, expr, null_count_field)
-            {
+            match required_columns.row_count_column_expr(col, expr, null_count_field)
+            { Ok(row_count_expr) => {
                 required_columns
                     .null_count_column_expr(col, expr, null_count_field)
                     .map(|null_count_column_expr| {
@@ -1335,9 +1334,9 @@ fn build_is_null_column_expr(
                         )) as _
                     })
                     .ok()
-            } else {
+            } _ => {
                 None
-            }
+            }}
         } else {
             required_columns
                 .null_count_column_expr(col, expr, null_count_field)

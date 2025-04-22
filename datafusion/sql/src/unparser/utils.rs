@@ -199,16 +199,15 @@ pub(crate) fn unproject_agg_exprs(
             if let Expr::Column(c) = sub_expr {
                 if let Some(unprojected_expr) = find_agg_expr(agg, &c)? {
                     Ok(Transformed::yes(unprojected_expr.clone()))
-                } else if let Some(unprojected_expr) =
-                    windows.and_then(|w| find_window_expr(w, &c.name).cloned())
-                {
+                } else { match windows.and_then(|w| find_window_expr(w, &c.name).cloned())
+                { Some(unprojected_expr) => {
                     // Window function can contain an aggregation columns, e.g., 'avg(sum(ss_sales_price)) over ...' that needs to be unprojected
                     return Ok(Transformed::yes(unproject_agg_exprs(unprojected_expr, agg, None)?));
-                } else {
+                } _ => {
                     internal_err!(
                         "Tried to unproject agg expr for column '{}' that was not found in the provided Aggregate!", &c.name
                     )
-                }
+                }}}
             } else {
                 Ok(Transformed::no(sub_expr))
             }
@@ -237,7 +236,7 @@ pub(crate) fn unproject_window_exprs(expr: Expr, windows: &[&Window]) -> Result<
 }
 
 fn find_agg_expr<'a>(agg: &'a Aggregate, column: &Column) -> Result<Option<&'a Expr>> {
-    if let Ok(index) = agg.schema.index_of_column(column) {
+    match agg.schema.index_of_column(column) { Ok(index) => {
         if matches!(agg.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
             // For grouping set expr, we must operate by expression list from the grouping set
             let grouping_expr = grouping_set_to_exprlist(agg.group_expr.as_slice())?;
@@ -255,9 +254,9 @@ fn find_agg_expr<'a>(agg: &'a Aggregate, column: &Column) -> Result<Option<&'a E
         } else {
             Ok(agg.group_expr.iter().chain(agg.aggr_expr.iter()).nth(index))
         }
-    } else {
+    } _ => {
         Ok(None)
-    }
+    }}
 }
 
 fn find_window_expr<'a>(

@@ -24,7 +24,7 @@ use crate::arrow_wrappers::WrappedSchema;
 /// DataFusion result.
 #[macro_export]
 macro_rules! df_result {
-    ( $x:expr ) => {
+    ( $x:expr_2021 ) => {
         match $x {
             abi_stable::std_types::RResult::ROk(v) => Ok(v),
             abi_stable::std_types::RResult::RErr(e) => {
@@ -37,7 +37,7 @@ macro_rules! df_result {
 /// This macro is a helpful conversion utility to conver from a DataFusion Result to an abi_stable::RResult
 #[macro_export]
 macro_rules! rresult {
-    ( $x:expr ) => {
+    ( $x:expr_2021 ) => {
         match $x {
             Ok(v) => abi_stable::std_types::RResult::ROk(v),
             Err(e) => abi_stable::std_types::RResult::RErr(
@@ -52,7 +52,7 @@ macro_rules! rresult {
 /// to mimic the pattern.
 #[macro_export]
 macro_rules! rresult_return {
-    ( $x:expr ) => {
+    ( $x:expr_2021 ) => {
         match $x {
             Ok(v) => v,
             Err(e) => {

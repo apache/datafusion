@@ -349,7 +349,7 @@ async fn test_join_with_swap_semi() {
 
 /// Compare the input plan with the plan after running the probe order optimizer.
 macro_rules! assert_optimized {
-    ($EXPECTED_LINES: expr, $PLAN: expr) => {
+    ($EXPECTED_LINES: expr_2021, $PLAN: expr_2021) => {
         let expected_lines = $EXPECTED_LINES.iter().map(|s| *s).collect::<Vec<&str>>();
 
         let plan = Arc::new($PLAN);

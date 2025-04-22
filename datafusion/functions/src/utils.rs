@@ -32,7 +32,7 @@ use datafusion_expr::ColumnarValue;
 ///
 /// If the input type is `Utf8View` the return type is $utf8Type,
 macro_rules! get_optimal_return_type {
-    ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
+    ($FUNC:ident, $largeUtf8Type:expr_2021, $utf8Type:expr_2021) => {
         pub(crate) fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
             Ok(match arg_type {
                 // LargeBinary inputs are automatically coerced to Utf8
@@ -129,7 +129,7 @@ pub mod test {
     /// $EXPECTED_DATA_TYPE is the expected result type
     /// $ARRAY_TYPE is the column type after function applied
     macro_rules! test_function {
-        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
+        ($FUNC:expr_2021, $ARGS:expr_2021, $EXPECTED:expr_2021, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr_2021, $ARRAY_TYPE:ident) => {
             let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
             let func = $FUNC;
 
