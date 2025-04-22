@@ -758,23 +758,23 @@ config_namespace! {
     pub struct FormatOptions {
         /// If set to `true` any formatting errors will be written to the output
         /// instead of being converted into a [`std::fmt::Error`]
-        safe: bool, default = true
+        pub safe: bool, default = true
         /// Format string for nulls
-        null: String, default = "NULL".into()
+        pub null: String, default = "".into()
         /// Date format for date arrays
-        date_format: Option<String>, default = None
+        pub date_format: Option<String>, default = None
         /// Format for DateTime arrays
-        datetime_format: Option<String>, default = None
+        pub datetime_format: Option<String>, default = None
         /// Timestamp format for timestamp arrays
-        timestamp_format: Option<String>, default = None
+        pub timestamp_format: Option<String>, default = None
         /// Timestamp format for timestamp with timezone arrays
-        timestamp_tz_format: Option<String>, default = None
+        pub timestamp_tz_format: Option<String>, default = None
         /// Time format for time arrcays
-        time_format: Option<String>, default = None
+        pub time_format: Option<String>, default = None
         /// Duration format. Can be either Pretty or ISO8601
-        duration_format: String, default = "pretty".into()
+        pub duration_format: String, default = "pretty".into()
         /// Show types in visual representation batches
-        types_info: bool, default = false
+        pub types_info: bool, default = false
     }
 }
 

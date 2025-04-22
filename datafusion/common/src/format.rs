@@ -18,11 +18,9 @@
 use arrow::compute::CastOptions;
 use arrow::util::display::{DurationFormat, FormatOptions};
 
-// todo: remove completely?
-// The default [`FormatOptions`] to use within DataFusion
-pub const DEFAULT_FORMAT_OPTIONS: FormatOptions<'static> = FormatOptions::new()
-    .with_duration_format(DurationFormat::Pretty)
-    .with_null("NULL");
+/// The default [`FormatOptions`] to use within DataFusion
+pub const DEFAULT_FORMAT_OPTIONS: FormatOptions<'static> =
+    FormatOptions::new().with_duration_format(DurationFormat::Pretty);
 
 /// The default [`CastOptions`] to use within DataFusion
 pub const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
