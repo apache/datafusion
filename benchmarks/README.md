@@ -83,12 +83,24 @@ To run for specific query, for example Q21
 ./bench.sh run tpch10 21
 ```
 
-## Select join algorithm
+## Benchmark with modified configurations
+### Select join algorithm
 The benchmark runs with `prefer_hash_join == true` by default, which enforces HASH join algorithm.
 To run TPCH benchmarks with join other than HASH:
 ```shell
 PREFER_HASH_JOIN=false ./bench.sh run tpch
 ```
+
+### Configure with environment variables
+Any [datafusion options](https://datafusion.apache.org/user-guide/configs.html) that are provided  environment variables are
+also considered by the benchmarks.
+The following configuration runs the TPCH benchmark with datafusion configured to *not* repartition join keys.
+```shell
+DATAFUSION_OPTIMIZER_REPARTITION_JOINS=false ./bench.sh run tpch
+```
+You might want to adjust the results location to avoid overwriting previous results.
+Environment configuration that was picked up by datafusion is logged at `info` level.
+To verify that datafusion picked up your configuration, run the benchmarks with `RUST_LOG=info` or higher.
 
 ## Comparing performance of main and a branch
 
