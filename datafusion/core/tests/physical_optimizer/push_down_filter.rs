@@ -283,12 +283,14 @@ fn test_filter_with_projection() {
     let scan = test_scan(true);
     let projection = vec![1, 0];
     let predicate = col_lit_predicate("a", "foo", schema());
-    let plan = Arc::new(
-        FilterExec::try_new(predicate, Arc::clone(&scan))
+    let filter = Arc::new(
+        FilterExec::try_new(Arc::clone(&predicate), Arc::clone(&scan))
             .unwrap()
             .with_projection(Some(projection))
             .unwrap(),
     );
+    let predicate = col_lit_predicate("b", "bar", &filter.schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, filter).unwrap());
 
     // expect the predicate to be pushed down into the DataSource but the FilterExec to be converted to ProjectionExec
     insta::assert_snapshot!(
@@ -296,12 +298,13 @@ fn test_filter_with_projection() {
         @r"
     OptimizationTest:
       input:
-        - FilterExec: a@0 = foo, projection=[b@1, a@0]
-        -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        - FilterExec: b@0 = bar
+        -   FilterExec: a@0 = foo, projection=[b@1, a@0]
+        -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - ProjectionExec: expr=[b@1 as b, a@0 as a]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@1 = foo
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     ",
     );
 
@@ -324,7 +327,7 @@ fn test_filter_with_projection() {
       output:
         Ok:
           - ProjectionExec: expr=[b@1 as b]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@1 = foo
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "
     );
 }

@@ -461,30 +461,36 @@ impl ExecutionPlan for FilterExec {
             let inverse_projection = projection_indices
                 .iter()
                 .enumerate()
-                .map(|(i, &p)| (i, p))
+                .map(|(i, &p)| (p, i))
                 .collect::<HashMap<_, _>>();
-            let predicate = Arc::clone(&self.predicate)
-                .transform_up(|expr| {
-                    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                        let index = col.index();
-                        let index_in_input_schema =
-                            inverse_projection.get(&index).ok_or_else(|| {
-                                DataFusionError::Internal(format!(
-                                    "Column {} not found in projection",
-                                    index
+            let parent_filters = parent_filters
+                .iter()
+                .map(|f| {
+                    Arc::clone(f)
+                        .transform_up(|expr| {
+                            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                                let index = col.index();
+                                let index_in_input_schema =
+                                    inverse_projection.get(&index).ok_or_else(|| {
+                                        DataFusionError::Internal(format!(
+                                            "Column {} not found in projection",
+                                            index
+                                        ))
+                                    })?;
+                                Ok(Transformed::yes(Arc::new(Column::new(
+                                    col.name(),
+                                    *index_in_input_schema,
                                 ))
-                            })?;
-                        Ok(Transformed::yes(Arc::new(Column::new(
-                            col.name(),
-                            *index_in_input_schema,
-                        )) as _))
-                    } else {
-                        Ok(Transformed::no(expr))
-                    }
+                                    as _))
+                            } else {
+                                Ok(Transformed::no(expr))
+                            }
+                        })
+                        .data()
                 })
-                .data()?;
-            Ok(FilterPushdownPlan::all_supported(parent_filters, 1)
-                .with_self_filters_for_children(vec![vec![predicate]]))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(FilterPushdownPlan::all_supported(&parent_filters, 1)
+                .with_self_filters_for_children(vec![vec![Arc::clone(&self.predicate)]]))
         } else {
             Ok(FilterPushdownPlan::all_supported(parent_filters, 1)
                 .with_self_filters_for_children(vec![vec![Arc::clone(&self.predicate)]]))
