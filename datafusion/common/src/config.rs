@@ -113,7 +113,7 @@ macro_rules! config_namespace {
         $(#[doc = $struct_d:tt])* // Struct-level documentation attributes
         $(#[deprecated($($struct_depr:tt)*)])? // Optional struct-level deprecated attribute
         $(#[allow($($struct_de:tt)*)])?
-        $vis:vis struct $struct_name:ident $(<$lt:lifetime>)? {
+        $vis:vis struct $struct_name:ident {
             $(
                 $(#[doc = $d:tt])* // Field-level documentation attributes
                 $(#[deprecated($($field_depr:tt)*)])? // Optional field-level deprecated attribute
@@ -129,7 +129,7 @@ macro_rules! config_namespace {
         $(#[deprecated($($struct_depr)*)])? // Apply struct deprecation
         $(#[allow($($struct_de)*)])?
         #[derive(Debug, Clone, PartialEq)]
-        $vis struct $struct_name $(<$lt>)? {
+        $vis struct $struct_name {
             $(
                 $(#[doc = $d])* // Apply field documentation
                 $(#[deprecated($($field_depr)*)])? // Apply field deprecation
@@ -138,7 +138,7 @@ macro_rules! config_namespace {
             )*
         }
 
-        impl $(<$lt>)?  $crate::config::ConfigField for $struct_name $(<$lt>)? {
+        impl $crate::config::ConfigField for $struct_name {
             fn set(&mut self, key: &str, value: &str) -> $crate::error::Result<()> {
                 let (key, rem) = key.split_once('.').unwrap_or((key, ""));
                 match key {
