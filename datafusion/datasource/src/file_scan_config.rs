@@ -616,46 +616,6 @@ impl DataSource for FileScanConfig {
             }
         }
     }
-
-    // fn try_pushdown_filters(
-    //     &self,
-    //     parent_filters: &[Arc<dyn PhysicalExpr>],
-    //     config: &ConfigOptions,
-    // ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
-    //     // let FilterPushdownResult {
-    //     //     support,
-    //     //     remaining_description,
-    //     // } = self.file_source.try_pushdown_filters(fd, config)?;
-
-    //     // match support {
-    //     //     FilterPushdownSupport::Supported {
-    //     //         child_descriptions,
-    //     //         op,
-    //     //         revisit,
-    //     //     } => {
-    //     //         let new_data_source = Arc::new(
-    //     //             FileScanConfigBuilder::from(self.clone())
-    //     //                 .with_source(op)
-    //     //                 .build(),
-    //     //         );
-
-    //     //         debug_assert!(child_descriptions.is_empty());
-    //     //         debug_assert!(!revisit);
-
-    //     //         Ok(FilterPushdownResult {
-    //     //             support: FilterPushdownSupport::Supported {
-    //     //                 child_descriptions,
-    //     //                 op: new_data_source,
-    //     //                 revisit,
-    //     //             },
-    //     //             remaining_description,
-    //     //         })
-    //     //     }
-    //     //     FilterPushdownSupport::NotSupported => {
-    //     //         Ok(filter_pushdown_not_supported(remaining_description))
-    //     //     }
-    //     // }
-    // }
 }
 
 impl FileScanConfig {
