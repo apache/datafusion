@@ -47,8 +47,7 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::push_down_filter::PushdownFilter;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
+    FilterPushdownPropagation, FilterPushdowns,
 };
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
@@ -154,29 +153,25 @@ impl FileSource for TestSource {
 
     fn try_pushdown_filters(
         &self,
-        mut fd: FilterDescription,
+        filters: &[Arc<dyn PhysicalExpr>],
         config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn FileSource>>> {
+    ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
+        let mut all_filters = filters.iter().map(Arc::clone).collect::<Vec<_>>();
         if self.support && config.execution.parquet.pushdown_filters {
             if let Some(internal) = self.predicate.as_ref() {
-                fd.filters.push(Arc::clone(internal));
+                all_filters.push(Arc::clone(internal));
             }
-            let all_filters = fd.take_description();
-
-            Ok(FilterPushdownResult {
-                support: FilterPushdownSupport::Supported {
-                    child_descriptions: vec![],
-                    op: Arc::new(TestSource {
-                        support: true,
-                        predicate: Some(conjunction(all_filters)),
-                        statistics: self.statistics.clone(), // should be updated in reality
-                    }),
-                    revisit: false,
-                },
-                remaining_description: FilterDescription::empty(),
+            let new_node = Arc::new(TestSource {
+                support: true,
+                predicate: Some(conjunction(all_filters.clone())),
+                statistics: self.statistics.clone(), // should be updated in reality
+            });
+            Ok(FilterPushdownPropagation {
+                parent_filter_result: FilterPushdowns::all_supported(&all_filters),
+                new_node: Some(new_node),
             })
         } else {
-            Ok(filter_pushdown_not_supported(fd))
+            Ok(FilterPushdownPropagation::unsupported(filters))
         }
     }
 }

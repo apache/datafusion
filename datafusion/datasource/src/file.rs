@@ -28,10 +28,8 @@ use crate::file_stream::FileOpener;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, Statistics};
-use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-};
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
@@ -113,9 +111,9 @@ pub trait FileSource: Send + Sync {
     /// [`ExecutionPlan::try_pushdown_filters`]: datafusion_physical_plan::ExecutionPlan::try_pushdown_filters
     fn try_pushdown_filters(
         &self,
-        fd: FilterDescription,
+        filters: &[Arc<dyn PhysicalExpr>],
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn FileSource>>> {
-        Ok(filter_pushdown_not_supported(fd))
+    ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
+        Ok(FilterPushdownPropagation::unsupported(filters))
     }
 }

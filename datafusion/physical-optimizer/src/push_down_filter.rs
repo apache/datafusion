@@ -19,15 +19,13 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{config::ConfigOptions, Result};
-use datafusion_physical_expr::conjunction;
-use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
-    FilterDescription, FilterPushdownResult, FilterPushdownSupport,
+    ChildPushdownResult, FilterPushdown, FilterPushdownPropagation, FilterPushdowns,
 };
-use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use itertools::izip;
 
 /// Attempts to recursively push given filters from the top of the tree into leafs.
 ///
@@ -363,14 +361,123 @@ use datafusion_physical_plan::ExecutionPlan;
 /// [`AggregateExec`]: datafusion_physical_plan::aggregates::AggregateExec
 #[derive(Debug)]
 pub struct PushdownFilter {}
-
 impl Default for PushdownFilter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-pub type FilterDescriptionContext = PlanContext<FilterDescription>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilterPushdownState {
+    NoChildren,
+    Unsupported,
+    Supported,
+}
+
+fn push_down_filters(
+    node: &Arc<dyn ExecutionPlan>,
+    parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+    config: &ConfigOptions,
+) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+    let pushdown_plan = node.gather_filters_for_pushdown(&parent_filters, config)?;
+    let children = node
+        .children()
+        .into_iter()
+        .map(Arc::clone)
+        .collect::<Vec<_>>();
+    let mut parent_pushdown_result =
+        vec![FilterPushdownState::NoChildren; parent_filters.len()];
+    let mut self_filter_pushdown_result = vec![];
+    let mut new_children = vec![];
+    for (child, parent_filters, mut filters_for_child) in izip!(
+        children,
+        pushdown_plan.parent_filters_for_children,
+        pushdown_plan.self_filters_for_children
+    ) {
+        let mut parent_filter_indices = vec![];
+        let num_self_filters = filters_for_child.len();
+        for (idx, filter) in parent_filters.into_iter().enumerate() {
+            // Check if we can push this filter down to our children
+            match filter {
+                FilterPushdown::Supported(f) => {
+                    // Queue this filter up for pushdown to this child
+                    filters_for_child.push(f);
+                    parent_filter_indices.push(idx);
+                    // Mark this filter as supported by our children if no child has marked it as unsupported
+                    if matches!(
+                        parent_pushdown_result[idx],
+                        FilterPushdownState::NoChildren
+                    ) {
+                        parent_pushdown_result[idx] = FilterPushdownState::Supported;
+                    }
+                }
+                FilterPushdown::Unsupported(_) => {
+                    // Mark as unsupported by our children
+                    parent_pushdown_result[idx] = FilterPushdownState::Unsupported;
+                }
+            }
+        }
+        // Any filters that could not be pushed down to a child are marked as not-supported to our parents
+        let result = push_down_filters(&child, filters_for_child, config)?;
+        if let Some(new_child) = result.new_node {
+            // If we have a filter pushdown result, we need to update our children
+            new_children.push(new_child);
+        } else {
+            // If we don't have a filter pushdown result, we need to update our children
+            new_children.push(child);
+        }
+        // Our child doesn't know the difference between filters that were passed down from our parents
+        // and filters that the current node injected.
+        // We need to de-entangle this since we do need to distinguish between them.
+        let parent_filters = result.parent_filter_result.into_inner();
+        let (self_filters, parent_filters) = parent_filters.split_at(num_self_filters);
+        self_filter_pushdown_result
+            .push(FilterPushdowns::new(self_filters.to_vec()));
+        for (idx, result) in parent_filter_indices.iter().zip(parent_filters) {
+            let current_node_state = match result {
+                FilterPushdown::Supported(_) => FilterPushdownState::Supported,
+                FilterPushdown::Unsupported(_) => FilterPushdownState::Unsupported,
+            };
+            match (current_node_state, parent_pushdown_result[*idx]) {
+                (r, FilterPushdownState::NoChildren) => {
+                    // If we have no result, use the current state from this child
+                    parent_pushdown_result[*idx] = r;
+                }
+                (FilterPushdownState::Supported, FilterPushdownState::Supported) => {
+                    // If the current child and all previous children are supported the filter continue to support it
+                    parent_pushdown_result[*idx] = FilterPushdownState::Supported;
+                }
+                _ => {
+                    // Either the current child or a previous child marked this filter as unsupported
+                    parent_pushdown_result[*idx] = FilterPushdownState::Unsupported;
+                }
+            }
+        }
+    }
+    // Re-create this node with new children
+    let node = with_new_children_if_necessary(Arc::clone(node), new_children)?;
+    // Remap the result onto the parent filters as they were given to us.
+    // Any filters that were not pushed down to any children are marked as unsupported.
+    let parent_pushdown_result = FilterPushdowns::new(
+        parent_pushdown_result
+            .into_iter()
+            .zip(parent_filters)
+            .map(|(state, filter)| match state {
+                FilterPushdownState::NoChildren => FilterPushdown::Unsupported(filter),
+                FilterPushdownState::Unsupported => FilterPushdown::Unsupported(filter),
+                FilterPushdownState::Supported => FilterPushdown::Supported(filter),
+            })
+            .collect(),
+    );
+    // Check what the current node wants to do given the result of pushdown to it's children
+    Arc::clone(&node).handle_child_pushdown_result(
+        ChildPushdownResult {
+            parent_filters: parent_pushdown_result,
+            self_filters: self_filter_pushdown_result,
+        },
+        config,
+    )
+}
 
 impl PhysicalOptimizerRule for PushdownFilter {
     fn optimize(
@@ -378,31 +485,9 @@ impl PhysicalOptimizerRule for PushdownFilter {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let context = FilterDescriptionContext::new_default(plan);
-
-        context
-            .transform_up(|node| {
-                if node.plan.as_any().downcast_ref::<FilterExec>().is_some() {
-                    let initial_plan = Arc::clone(&node.plan);
-                    let mut accept_updated = false;
-                    let updated_node = node.transform_down(|filter_node| {
-                        Self::try_pushdown(filter_node, config, &mut accept_updated)
-                    });
-
-                    if accept_updated {
-                        updated_node
-                    } else {
-                        Ok(Transformed::no(FilterDescriptionContext::new_default(
-                            initial_plan,
-                        )))
-                    }
-                }
-                // Other filter introducing operators extends here
-                else {
-                    Ok(Transformed::no(node))
-                }
-            })
-            .map(|updated| updated.data.plan)
+        Ok(push_down_filters(&plan, vec![], config)?
+            .new_node
+            .unwrap_or(Arc::clone(&plan)))
     }
 
     fn name(&self) -> &str {
@@ -418,118 +503,4 @@ impl PushdownFilter {
     pub fn new() -> Self {
         Self {}
     }
-
-    fn try_pushdown(
-        mut node: FilterDescriptionContext,
-        config: &ConfigOptions,
-        accept_updated: &mut bool,
-    ) -> Result<Transformed<FilterDescriptionContext>> {
-        let initial_description = FilterDescription {
-            filters: node.data.take_description(),
-        };
-
-        let FilterPushdownResult {
-            support,
-            remaining_description,
-        } = node
-            .plan
-            .try_pushdown_filters(initial_description, config)?;
-
-        match support {
-            FilterPushdownSupport::Supported {
-                mut child_descriptions,
-                op,
-                revisit,
-            } => {
-                if revisit {
-                    // This check handles cases where the current operator is entirely removed
-                    // from the plan and replaced with its child. In such cases, to not skip
-                    // over the new node, we need to explicitly re-apply this pushdown logic
-                    // to the new node.
-                    //
-                    // TODO: If TreeNodeRecursion supports a Revisit mechanism in the future,
-                    //       this manual recursion could be removed.
-
-                    // If the operator is removed, it should not leave any filters as remaining
-                    debug_assert!(remaining_description.filters.is_empty());
-                    // Operators having 2 children cannot be removed
-                    debug_assert_eq!(child_descriptions.len(), 1);
-                    debug_assert_eq!(node.children.len(), 1);
-
-                    node.plan = op;
-                    node.data = child_descriptions.swap_remove(0);
-                    node.children = node.children.swap_remove(0).children;
-                    Self::try_pushdown(node, config, accept_updated)
-                } else {
-                    if remaining_description.filters.is_empty() {
-                        // Filter can be pushed down safely
-                        node.plan = op;
-                        if node.children.is_empty() {
-                            *accept_updated = true;
-                        } else {
-                            for (child, descr) in
-                                node.children.iter_mut().zip(child_descriptions)
-                            {
-                                child.data = descr;
-                            }
-                        }
-                    } else {
-                        // Filter cannot be pushed down
-                        node = insert_filter_exec(
-                            node,
-                            child_descriptions,
-                            remaining_description,
-                        )?;
-                    }
-                    Ok(Transformed::yes(node))
-                }
-            }
-            FilterPushdownSupport::NotSupported => {
-                if remaining_description.filters.is_empty() {
-                    Ok(Transformed {
-                        data: node,
-                        transformed: false,
-                        tnr: TreeNodeRecursion::Stop,
-                    })
-                } else {
-                    node = insert_filter_exec(
-                        node,
-                        vec![FilterDescription::empty(); 1],
-                        remaining_description,
-                    )?;
-                    Ok(Transformed {
-                        data: node,
-                        transformed: true,
-                        tnr: TreeNodeRecursion::Stop,
-                    })
-                }
-            }
-        }
-    }
-}
-
-fn insert_filter_exec(
-    node: FilterDescriptionContext,
-    mut child_descriptions: Vec<FilterDescription>,
-    remaining_description: FilterDescription,
-) -> Result<FilterDescriptionContext> {
-    let mut new_child_node = node;
-
-    // Filter has one child
-    if !child_descriptions.is_empty() {
-        debug_assert_eq!(child_descriptions.len(), 1);
-        new_child_node.data = child_descriptions.swap_remove(0);
-    }
-    let new_plan = Arc::new(FilterExec::try_new(
-        conjunction(remaining_description.filters),
-        Arc::clone(&new_child_node.plan),
-    )?);
-    let new_children = vec![new_child_node];
-    let new_data = FilterDescription::empty();
-
-    Ok(FilterDescriptionContext::new(
-        new_plan,
-        new_data,
-        new_children,
-    ))
 }

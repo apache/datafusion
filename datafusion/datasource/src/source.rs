@@ -33,11 +33,10 @@ use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
+    ChildPushdownResult, FilterPushdownPropagation,
 };
 
 /// A source of data, typically a list of files or memory
@@ -98,10 +97,10 @@ pub trait DataSource: Send + Sync + Debug {
     /// See [`ExecutionPlan::try_pushdown_filters`] for more details.
     fn try_pushdown_filters(
         &self,
-        fd: FilterDescription,
+        filters: &[Arc<dyn PhysicalExpr>],
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
-        Ok(filter_pushdown_not_supported(fd))
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        Ok(FilterPushdownPropagation::unsupported(filters))
     }
 }
 
@@ -237,39 +236,31 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.try_swapping_with_projection(projection)
     }
 
-    fn try_pushdown_filters(
+    fn handle_child_pushdown_result(
         &self,
-        fd: FilterDescription,
+        child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
-        let FilterPushdownResult {
-            support,
-            remaining_description,
-        } = self.data_source.try_pushdown_filters(fd, config)?;
-
-        match support {
-            FilterPushdownSupport::Supported {
-                child_descriptions,
-                op,
-                revisit,
-            } => {
-                let new_exec = Arc::new(DataSourceExec::new(op));
-
-                debug_assert!(child_descriptions.is_empty());
-                debug_assert!(!revisit);
-
-                Ok(FilterPushdownResult {
-                    support: FilterPushdownSupport::Supported {
-                        child_descriptions,
-                        op: new_exec,
-                        revisit,
-                    },
-                    remaining_description,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // Push any remaining filters into our data source
+        let res = self.data_source.try_pushdown_filters(
+            &child_pushdown_result.parent_filters.unpack(),
+            config,
+        )?;
+        match res.new_node {
+            Some(data_source) => {
+                let mut new_node = self.clone();
+                new_node.data_source = data_source;
+                new_node.cache =
+                    Self::compute_properties(Arc::clone(&new_node.data_source));
+                Ok(FilterPushdownPropagation {
+                    parent_filter_result: res.parent_filter_result,
+                    new_node: Some(Arc::new(new_node)),
                 })
             }
-            FilterPushdownSupport::NotSupported => {
-                Ok(filter_pushdown_not_supported(remaining_description))
-            }
+            None => Ok(FilterPushdownPropagation {
+                parent_filter_result: res.parent_filter_result,
+                new_node: None,
+            }),
         }
     }
 }
