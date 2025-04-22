@@ -840,6 +840,9 @@ impl MemorySourceConfig {
     /// Repartition into evenly sized chunks (as much as possible without batch splitting),
     /// disregarding any ordering.
     ///
+    /// Current implementation uses a first-fit-decreasing bin packing, modified to enable
+    /// us to still return the desired count of `target_partitions`.
+    ///
     /// Returns `Ok(None)` if cannot fulfill the requested repartitioning, such
     /// as having too few batches to fulfill the `target_partitions`.
     fn repartition_evenly_by_size(
@@ -847,37 +850,43 @@ impl MemorySourceConfig {
         target_partitions: usize,
     ) -> Result<Option<Vec<Vec<RecordBatch>>>> {
         // determine if we have enough total batches to fulfill request
-        let flatten_batches = self.partitions.clone().into_iter().flatten().collect_vec();
+        let mut flatten_batches =
+            self.partitions.clone().into_iter().flatten().collect_vec();
         if flatten_batches.len() < target_partitions {
             return Ok(None);
         }
 
         // Take all flattened batches (all in 1 partititon/vec) and divide evenly into the desired number of `target_partitions`.
         let total_num_rows = flatten_batches.iter().map(|b| b.num_rows()).sum::<usize>();
-        let target_partition_size = total_num_rows.div_ceil(target_partitions);
+        // sort by size, so we pack multiple smaller batches into the same partition
+        flatten_batches.sort_by_key(|b| std::cmp::Reverse(b.num_rows()));
+
+        // Divide.
         let mut partitions =
             vec![Vec::with_capacity(flatten_batches.len()); target_partitions];
-        let mut curr_row_count = 0;
-        let mut next_idx = 0;
+        let mut target_partition_size = total_num_rows.div_ceil(target_partitions);
+        let mut total_rows_seen = 0;
+        let mut curr_bin_row_count = 0;
+        let mut idx = 0;
         for batch in flatten_batches {
             let row_cnt = batch.num_rows();
+            idx = std::cmp::min(idx, target_partitions - 1);
 
-            // handle very lopsided batch sizing
-            if partitions[next_idx].is_empty() {
-                partitions[next_idx].push(batch);
-            } else {
-                // have at least 1 batch per partition
-                let idx =
-                    std::cmp::min(next_idx + 1, curr_row_count / target_partition_size);
-                if let Some(partition) = partitions.get_mut(idx) {
-                    partition.push(batch);
-                } else {
-                    partitions[target_partitions - 1].push(batch);
+            partitions[idx].push(batch);
+            curr_bin_row_count += row_cnt;
+            total_rows_seen += row_cnt;
+
+            if curr_bin_row_count >= target_partition_size {
+                idx += 1;
+                curr_bin_row_count = 0;
+
+                // update target_partition_size, to handle very lopsided batch distributions
+                // while still returning the count of `target_partitions`
+                if total_rows_seen < total_num_rows {
+                    target_partition_size = (total_num_rows - total_rows_seen)
+                        .div_ceil(target_partitions - idx);
                 }
-                next_idx = idx;
             }
-
-            curr_row_count += row_cnt;
         }
 
         Ok(Some(partitions))
@@ -1308,6 +1317,24 @@ mod tests {
             .try_with_sort_information(sort_information)
     }
 
+    fn memorysrcconfig_2_partition_with_extreme_sized_batches(
+        sort_information: Vec<LexOrdering>,
+    ) -> Result<MemorySourceConfig> {
+        let partitions = vec![
+            vec![
+                batch(100_000),
+                batch(1),
+                batch(1),
+                batch(1),
+                batch(1),
+                batch(0),
+            ],
+            vec![batch(1), batch(1), batch(1), batch(1), batch(0), batch(100)],
+        ];
+        MemorySourceConfig::try_new(&partitions, schema(), None)?
+            .try_with_sort_information(sort_information)
+    }
+
     /// Assert that we get the expected count of partitions after repartitioning.
     ///
     /// If None, then we expected the [`DataSource::repartitioned`] to return None.
@@ -1474,7 +1501,9 @@ mod tests {
         // Test: common set of functionality
         run_all_test_scenarios(no_output_ordering.clone(), no_sort.clone())?;
 
-        // Test: does not preserve separate partitions (with own internal ordering) on even split
+        // Test: how no-sort-order divides differently.
+        //    * does not preserve separate partitions (with own internal ordering) on even split,
+        //    * nor does it preserve ordering (re-orders batch(2_000) vs batch(1_000)).
         let target_partitions = 3;
         let mem_src_config =
             memorysrcconfig_2_partition_with_different_sized_batches(no_sort)?;
@@ -1499,11 +1528,73 @@ mod tests {
         // p2=batch(10_000)
         assert_eq!(p2.len(), 1);
         assert_eq!(p2[0].num_rows(), 10_000);
-        // p3= batch(1_000), batch(2_000), batch(20)
+        // p3= batch(2_000), batch(1_000), batch(20)
         assert_eq!(p3.len(), 3);
-        assert_eq!(p3[0].num_rows(), 1_000);
-        assert_eq!(p3[1].num_rows(), 2_000);
+        assert_eq!(p3[0].num_rows(), 2_000);
+        assert_eq!(p3[1].num_rows(), 1_000);
         assert_eq!(p3[2].num_rows(), 20);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_repartition_no_sort_information_no_output_ordering_lopsized_batches(
+    ) -> Result<()> {
+        let no_sort = vec![];
+        let no_output_ordering = None;
+
+        // Test: case has two input partitions:
+        //     b(100_000), b(1), b(1), b(1), b(1), b(0)
+        //     b(1), b(1), b(1), b(1), b(0), b(100)
+        //
+        // We want an output with target_partitions=5, which means the ideal division is:
+        //     b(100_000)
+        //     b(100)
+        //     b(1), b(1), b(1)
+        //     b(1), b(1), b(1)
+        //     b(1), b(1), b(0)
+        let target_partitions = 5;
+        let mem_src_config =
+            memorysrcconfig_2_partition_with_extreme_sized_batches(no_sort)?;
+        let partitioned_datasrc = mem_src_config.clone().repartitioned(
+            target_partitions,
+            usize::MAX,
+            no_output_ordering,
+        )?;
+        assert_partitioning(partitioned_datasrc.clone(), Some(5));
+        // Starting partition 1 = batch(100_000), batch(1), batch(1), batch(1), batch(1), batch(0)
+        // Starting partition 1 = batch(1), batch(1), batch(1), batch(1), batch(0), batch(100)
+        // It should have split as p1=batch(100_000), p2=batch(100), p3=[batch(1),batch(1)], p4=[batch(1),batch(1)], p5=[batch(1),batch(1),batch(0),batch(0)]
+        let repartitioned_raw_batches = mem_src_config
+            .repartition_evenly_by_size(target_partitions)?
+            .unwrap();
+        assert_eq!(repartitioned_raw_batches.len(), 5);
+        let [ref p1, ref p2, ref p3, ref p4, ref p5] = repartitioned_raw_batches[..]
+        else {
+            unreachable!()
+        };
+        // p1=batch(100_000)
+        assert_eq!(p1.len(), 1);
+        assert_eq!(p1[0].num_rows(), 100_000);
+        // p2=batch(100)
+        assert_eq!(p2.len(), 1);
+        assert_eq!(p2[0].num_rows(), 100);
+        // p3=[batch(1),batch(1),batch(1)]
+        assert_eq!(p3.len(), 3);
+        assert_eq!(p3[0].num_rows(), 1);
+        assert_eq!(p3[1].num_rows(), 1);
+        assert_eq!(p3[2].num_rows(), 1);
+        // p4=[batch(1),batch(1),batch(1)]
+        assert_eq!(p4.len(), 3);
+        assert_eq!(p4[0].num_rows(), 1);
+        assert_eq!(p4[1].num_rows(), 1);
+        assert_eq!(p4[2].num_rows(), 1);
+        // p5=[batch(1),batch(1),batch(0),batch(0)]
+        assert_eq!(p5.len(), 4);
+        assert_eq!(p5[0].num_rows(), 1);
+        assert_eq!(p5[1].num_rows(), 1);
+        assert_eq!(p5[2].num_rows(), 0);
+        assert_eq!(p5[3].num_rows(), 0);
 
         Ok(())
     }
