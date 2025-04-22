@@ -431,8 +431,7 @@ fn push_down_filters(
         // We need to de-entangle this since we do need to distinguish between them.
         let parent_filters = result.parent_filter_result.into_inner();
         let (self_filters, parent_filters) = parent_filters.split_at(num_self_filters);
-        self_filter_pushdown_result
-            .push(FilterPushdowns::new(self_filters.to_vec()));
+        self_filter_pushdown_result.push(FilterPushdowns::new(self_filters.to_vec()));
         for (idx, result) in parent_filter_indices.iter().zip(parent_filters) {
             let current_node_state = match result {
                 FilterPushdown::Supported(_) => FilterPushdownState::Supported,
@@ -455,7 +454,7 @@ fn push_down_filters(
         }
     }
     // Re-create this node with new children
-    let node = with_new_children_if_necessary(Arc::clone(node), new_children)?;
+    let new_node = with_new_children_if_necessary(Arc::clone(node), new_children)?;
     // Remap the result onto the parent filters as they were given to us.
     // Any filters that were not pushed down to any children are marked as unsupported.
     let parent_pushdown_result = FilterPushdowns::new(
@@ -470,13 +469,20 @@ fn push_down_filters(
             .collect(),
     );
     // Check what the current node wants to do given the result of pushdown to it's children
-    Arc::clone(&node).handle_child_pushdown_result(
+    let mut res = Arc::clone(&new_node).handle_child_pushdown_result(
         ChildPushdownResult {
             parent_filters: parent_pushdown_result,
             self_filters: self_filter_pushdown_result,
         },
         config,
-    )
+    )?;
+    // Compare pointers for new_node and node, if they are different we must replace ourselves because of
+    // changes in our children.
+    // So updated res.
+    if res.new_node.is_none() && !Arc::ptr_eq(&new_node, node) {
+        res.new_node = Some(new_node)
+    }
+    Ok(res)
 }
 
 impl PhysicalOptimizerRule for PushdownFilter {
@@ -487,7 +493,7 @@ impl PhysicalOptimizerRule for PushdownFilter {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(push_down_filters(&plan, vec![], config)?
             .new_node
-            .unwrap_or(Arc::clone(&plan)))
+            .unwrap_or(plan))
     }
 
     fn name(&self) -> &str {

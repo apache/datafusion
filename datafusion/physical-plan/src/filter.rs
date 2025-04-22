@@ -505,7 +505,6 @@ impl ExecutionPlan for FilterExec {
             1,
             "FilterExec should only have one child"
         );
-        println!("child_pushdown_result: {:?}", child_pushdown_result);
         let child_filter = child_pushdown_result
             .self_filters
             .into_iter()

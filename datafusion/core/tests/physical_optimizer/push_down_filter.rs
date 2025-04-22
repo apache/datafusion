@@ -273,7 +273,7 @@ fn test_filter_collapse() {
         -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar AND a@0 = foo
+          - DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     "
     );
 }
@@ -301,7 +301,7 @@ fn test_filter_with_projection() {
       output:
         Ok:
           - ProjectionExec: expr=[b@1 as b, a@0 as a]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@1 = foo
     ",
     );
 
@@ -322,9 +322,8 @@ fn test_filter_with_projection() {
         - FilterExec: a@0 = foo, projection=[b@1]
         -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
-        Ok:
-          - ProjectionExec: expr=[b@1 as b]
-          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+        Err: Internal error: Column 0 not found in projection.
+    This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
     "
     );
 }
@@ -357,7 +356,7 @@ fn test_push_down_through_transparent_nodes() {
         Ok:
           - RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=0
           -   CoalesceBatchesExec: target_batch_size=1
-          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar AND a@0 = foo
+          -     DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     "
     );
 }
