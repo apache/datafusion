@@ -864,7 +864,7 @@ impl ConfigOptions {
         for key in keys.0 {
             let env = key.to_uppercase().replace('.', "_");
             if let Some(var) = std::env::var_os(env) {
-                let value =  var.to_string_lossy();
+                let value = var.to_string_lossy();
                 log::info!("Set {key} to {value} from the environment variable");
                 ret.set(&key, value.as_ref())?;
             }
