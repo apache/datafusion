@@ -461,7 +461,7 @@ impl ExecutionPlan for FilterExec {
             let inverse_projection = projection_indices
                 .iter()
                 .enumerate()
-                .map(|(i, &p)| (p, i))
+                .map(|(i, &p)| (i, p))
                 .collect::<HashMap<_, _>>();
             let predicate = Arc::clone(&self.predicate)
                 .transform_up(|expr| {

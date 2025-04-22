@@ -322,8 +322,9 @@ fn test_filter_with_projection() {
         - FilterExec: a@0 = foo, projection=[b@1]
         -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
-        Err: Internal error: Column 0 not found in projection.
-    This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+        Ok:
+          - ProjectionExec: expr=[b@1 as b]
+          -   DataSourceExec: file_groups={0 groups: []}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@1 = foo
     "
     );
 }
