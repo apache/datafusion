@@ -170,6 +170,13 @@ fn roundtrip_statement() -> Result<()> {
                 UNION ALL
                 SELECT j3_string AS col1, j3_id AS id FROM j3
             ) AS subquery GROUP BY col1, id ORDER BY col1 ASC, id ASC"#,
+            r#"SELECT col1, id FROM (
+                SELECT j1_string AS col1, j1_id AS id FROM j1
+                UNION
+                SELECT j2_string AS col1, j2_id AS id FROM j2
+                UNION
+                SELECT j3_string AS col1, j3_id AS id FROM j3
+            ) AS subquery ORDER BY col1 ASC, id ASC"#,
             "SELECT id, count(*) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             last_name, sum(id) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             first_name from person",
