@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use super::demux::DemuxedStreamReceiver;
-use super::{create_writer_with_size, BatchSerializer};
+use super::{BatchSerializer, ObjectWriterBuilder};
 use crate::file_compression_type::FileCompressionType;
 use datafusion_common::error::Result;
 
@@ -256,17 +256,16 @@ pub async fn spawn_writer_tasks_and_join(
         stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt).await
     });
     while let Some((location, rb_stream)) = file_stream_rx.recv().await {
-        let writer = create_writer_with_size(
-            compression,
-            &location,
-            Arc::clone(&object_store),
-            context
-                .session_config()
-                .options()
-                .execution
-                .objectstore_writer_buffer_size,
-        )
-        .await?;
+        let writer =
+            ObjectWriterBuilder::new(compression, &location, Arc::clone(&object_store))
+                .with_buffer_size(Some(
+                    context
+                        .session_config()
+                        .options()
+                        .execution
+                        .objectstore_writer_buffer_size,
+                ))
+                .build()?;
 
         if tx_file_bundle
             .send((rb_stream, Arc::clone(&serializer), writer))

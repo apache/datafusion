@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use super::file_compression_type::FileCompressionType;
 use super::write::demux::DemuxedStreamReceiver;
-use super::write::{create_writer_with_size, SharedBuffer};
+use super::write::SharedBuffer;
 use super::FileFormatFactory;
 use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::file_format::FileFormat;
@@ -51,6 +51,7 @@ use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
+use datafusion_datasource::write::ObjectWriterBuilder;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
@@ -241,17 +242,19 @@ impl FileSink for ArrowFileSink {
                 &get_writer_schema(&self.config),
                 ipc_options.clone(),
             )?;
-            let mut object_store_writer = create_writer_with_size(
+            let mut object_store_writer = ObjectWriterBuilder::new(
                 FileCompressionType::UNCOMPRESSED,
                 &path,
                 Arc::clone(&object_store),
+            )
+            .with_buffer_size(Some(
                 context
                     .session_config()
                     .options()
                     .execution
                     .objectstore_writer_buffer_size,
-            )
-            .await?;
+            ))
+            .build()?;
             file_write_tasks.spawn(async move {
                 let mut row_count = 0;
                 while let Some(batch) = rx.recv().await {

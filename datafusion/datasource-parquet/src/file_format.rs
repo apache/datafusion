@@ -28,7 +28,7 @@ use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::write::{
-    create_writer_with_size, get_writer_schema, SharedBuffer,
+    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
 };
 
 use datafusion_datasource::file_format::{
@@ -1178,19 +1178,21 @@ impl FileSink for ParquetSink {
                     Ok((path, file_metadata))
                 });
             } else {
-                let writer = create_writer_with_size(
+                let writer = ObjectWriterBuilder::new(
                     // Parquet files as a whole are never compressed, since they
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
                     &path,
                     Arc::clone(&object_store),
+                )
+                .with_buffer_size(Some(
                     context
                         .session_config()
                         .options()
                         .execution
                         .objectstore_writer_buffer_size,
-                )
-                .await?;
+                ))
+                .build()?;
                 let schema = get_writer_schema(&self.config);
                 let props = parquet_props.clone();
                 let parallel_options_clone = parallel_options.clone();
