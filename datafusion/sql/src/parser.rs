@@ -475,92 +475,7 @@ impl<'a> DFParser<'a> {
                         // use sqlparser-rs parser
                         let mut stmt = self.parser.parse_statement()?;
 
-                        use sqlparser::ast::{DataType, Expr, Spanned, Value};
-
-                        if let sqlparser::ast::Statement::Query(query) = &mut stmt {
-                            if let sqlparser::ast::SetExpr::Select(select) =
-                                &mut *query.body
-                            {
-                                // if missing from
-                                if select.from.is_empty() {
-                                    let mut new_projection = Vec::new();
-
-                                    for expr in &select.projection {
-                                        match expr {
-                                            sqlparser::ast::SelectItem::UnnamedExpr(
-                                                cast_expr,
-                                            ) => {
-                                                if let Expr::Cast {
-                                                    expr: inner_expr,
-                                                    data_type,
-                                                    ..
-                                                } = cast_expr
-                                                {
-                                                    let inner_str = match &**inner_expr {
-                                                            Expr::Value(sqlparser::ast::ValueWithSpan { value: Value::SingleQuotedString(s), .. }) => {
-                                                                format!("'{}'", s)
-                                                            },
-                                                            Expr::Value(sqlparser::ast::ValueWithSpan { value: Value::Number(n, _), .. }) => {
-                                                                n.clone()
-                                                            },
-                                                            // TODO: need to take care of other types of values, like TimeStamp, etc...
-                                                            _ => format!("{:?}", inner_expr),
-                                                        };
-
-                                                    // get cast to type string
-                                                    let type_str = match data_type {
-                                                        DataType::Int(_) => "INT",
-                                                        DataType::BigInt(_) => "BIGINT",
-                                                        DataType::SmallInt(_) => {
-                                                            "SMALLINT"
-                                                        }
-                                                        DataType::Boolean => "BOOLEAN",
-                                                        DataType::Varchar(_) => "VARCHAR",
-                                                        DataType::Float(_) => "FLOAT",
-                                                        DataType::Double(_) => "DOUBLE",
-                                                        DataType::Text => "TEXT",
-                                                        // TODO: need to support more DataType, probably use an Extension Trait
-                                                        _ => &format!("{:?}", data_type),
-                                                    };
-
-                                                    let cast_str = format!(
-                                                        "cast({} as {})",
-                                                        inner_str, type_str
-                                                    );
-                                                    println!(
-                                                        "Generated alias: {}",
-                                                        cast_str
-                                                    );
-
-                                                    // create identifier
-                                                    let alias = sqlparser::ast::Ident {
-                                                        value: cast_str,
-                                                        quote_style: None,
-                                                        span: inner_expr.span().clone(),
-                                                    };
-
-                                                    // create new expression
-                                                    let new_expr = sqlparser::ast::SelectItem::ExprWithAlias {
-                                                            expr: cast_expr.clone(),
-                                                            alias,
-                                                        };
-
-                                                    new_projection.push(new_expr);
-                                                } else {
-                                                    // not Cast expression, keep as is
-                                                    new_projection.push(expr.clone());
-                                                }
-                                            }
-                                            // other types of SelectItem, keep as is
-                                            _ => new_projection.push(expr.clone()),
-                                        }
-                                    }
-
-                                    // replace projection
-                                    select.projection = new_projection;
-                                }
-                            }
-                        }
+                        Self::replace_empty_cast_with_alias(&mut stmt);
 
                         dbg!(&stmt);
                         Ok(Statement::Statement(Box::from(stmt)))
@@ -576,6 +491,201 @@ impl<'a> DFParser<'a> {
                 Ok(Statement::Statement(Box::from(
                     self.parser.parse_statement()?,
                 )))
+            }
+        }
+    }
+
+    fn replace_empty_cast_with_alias(stmt: &mut sqlparser::ast::Statement) {
+        use sqlparser::ast::{
+            DataType, Expr, Ident, SelectItem, SetExpr, Spanned, Value, ValueWithSpan,
+        };
+
+        if let sqlparser::ast::Statement::Query(query) = stmt {
+            if let SetExpr::Select(select) = query.body.as_mut() {
+                // if missing from, replace all unnamed expressions with cast to alias
+                if select.from.is_empty() {
+                    let mut new_projection = Vec::new();
+
+                    for expr in &select.projection {
+                        match expr {
+                            SelectItem::UnnamedExpr(cast_expr) => {
+                                if let Expr::Cast {
+                                    expr: inner_expr,
+                                    data_type,
+                                    ..
+                                } = cast_expr
+                                {
+                                    let inner_str = match &**inner_expr {
+                                        Expr::Value(ValueWithSpan {
+                                            value: Value::SingleQuotedString(s),
+                                            ..
+                                        }) => {
+                                            format!("'{}'", s)
+                                        }
+                                        Expr::Value(ValueWithSpan {
+                                            value: Value::Number(n, _),
+                                            ..
+                                        }) => n.clone(),
+                                        // TODO: need to take care of other types of values, like TimeStamp, etc...
+                                        _ => format!("{:?}", inner_expr),
+                                    };
+
+                                    // get cast to type string
+                                    let type_str = match data_type {
+                                        DataType::Table(_) => "TABLE",
+                                        DataType::Character(_) => "CHARACTER",
+                                        DataType::Char(_) => "CHAR",
+                                        DataType::CharacterVarying(_) => {
+                                            "CHARACTER VARYING"
+                                        }
+                                        DataType::CharVarying(_) => "CHAR VARYING",
+                                        DataType::Varchar(_) => "VARCHAR",
+                                        DataType::Nvarchar(_) => "NVARCHAR",
+                                        DataType::Uuid => "UUID",
+                                        DataType::CharacterLargeObject(_) => {
+                                            "CHARACTER LARGE OBJECT"
+                                        }
+                                        DataType::CharLargeObject(_) => {
+                                            "CHAR LARGE OBJECT"
+                                        }
+                                        DataType::Clob(_) => "CLOB",
+                                        DataType::Binary(_) => "BINARY",
+                                        DataType::Varbinary(_) => "VARBINARY",
+                                        DataType::Blob(_) => "BLOB",
+                                        DataType::TinyBlob => "TINYBLOB",
+                                        DataType::MediumBlob => "MEDIUMBLOB",
+                                        DataType::LongBlob => "LONGBLOB",
+                                        DataType::Bytes(_) => "BYTES",
+                                        DataType::Numeric(_) => "NUMERIC",
+                                        DataType::Decimal(_) => "DECIMAL",
+                                        DataType::BigNumeric(_) => "BIGNUMERIC",
+                                        DataType::BigDecimal(_) => "BIGDECIMAL",
+                                        DataType::Dec(_) => "DEC",
+                                        DataType::Float(_) => "FLOAT",
+                                        DataType::TinyInt(_) => "TINYINT",
+                                        DataType::TinyIntUnsigned(_) => {
+                                            "TINYINT UNSIGNED"
+                                        }
+                                        DataType::Int2(_) => "INT2",
+                                        DataType::Int2Unsigned(_) => "INT2 UNSIGNED",
+                                        DataType::SmallInt(_) => "SMALLINT",
+                                        DataType::SmallIntUnsigned(_) => {
+                                            "SMALLINT UNSIGNED"
+                                        }
+                                        DataType::MediumInt(_) => "MEDIUMINT",
+                                        DataType::MediumIntUnsigned(_) => {
+                                            "MEDIUMINT UNSIGNED"
+                                        }
+                                        DataType::Int(_) => "INT",
+                                        DataType::Int4(_) => "INT4",
+                                        DataType::Int8(_) => "INT8",
+                                        DataType::Int16 => "INT16",
+                                        DataType::Int32 => "INT32",
+                                        DataType::Int64 => "INT64",
+                                        DataType::Int128 => "INT128",
+                                        DataType::Int256 => "INT256",
+                                        DataType::Integer(_) => "INTEGER",
+                                        DataType::IntUnsigned(_) => "INT UNSIGNED",
+                                        DataType::Int4Unsigned(_) => "INT4 UNSIGNED",
+                                        DataType::IntegerUnsigned(_) => {
+                                            "INTEGER UNSIGNED"
+                                        }
+                                        DataType::UInt8 => "UINT8",
+                                        DataType::UInt16 => "UINT16",
+                                        DataType::UInt32 => "UINT32",
+                                        DataType::UInt64 => "UINT64",
+                                        DataType::UInt128 => "UINT128",
+                                        DataType::UInt256 => "UINT256",
+                                        DataType::BigInt(_) => "BIGINT",
+                                        DataType::BigIntUnsigned(_) => "BIGINT UNSIGNED",
+                                        DataType::Int8Unsigned(_) => "INT8 UNSIGNED",
+                                        DataType::Signed => "SIGNED",
+                                        DataType::SignedInteger => "SIGNED INTEGER",
+                                        DataType::Unsigned => "UNSIGNED",
+                                        DataType::UnsignedInteger => "UNSIGNED INTEGER",
+                                        DataType::Float4 => "FLOAT4",
+                                        DataType::Float32 => "FLOAT32",
+                                        DataType::Float64 => "FLOAT64",
+                                        DataType::Real => "REAL",
+                                        DataType::Float8 => "FLOAT8",
+                                        DataType::Double(_) => "DOUBLE",
+                                        DataType::DoublePrecision => "DOUBLE PRECISION",
+                                        DataType::Bool => "BOOL",
+                                        DataType::Boolean => "BOOLEAN",
+                                        DataType::Date => "DATE",
+                                        DataType::Date32 => "DATE32",
+                                        DataType::Time(_, _) => "TIME",
+                                        DataType::Datetime(_) => "DATETIME",
+                                        DataType::Datetime64(_, _) => "DATETIME64",
+                                        DataType::Timestamp(_, _) => "TIMESTAMP",
+                                        DataType::Interval => "INTERVAL",
+                                        DataType::JSON => "JSON",
+                                        DataType::JSONB => "JSONB",
+                                        DataType::Regclass => "REGCLASS",
+                                        DataType::Text => "TEXT",
+                                        DataType::TinyText => "TINYTEXT",
+                                        DataType::MediumText => "MEDIUMTEXT",
+                                        DataType::LongText => "LONGTEXT",
+                                        DataType::String(_) => "STRING",
+                                        DataType::FixedString(_) => "FIXEDSTRING",
+                                        DataType::Bytea => "BYTEA",
+                                        DataType::Bit(_) => "BIT",
+                                        DataType::BitVarying(_) => "BIT VARYING",
+                                        DataType::VarBit(_) => "VARBIT",
+                                        DataType::Custom(name, _) => &name.to_string(),
+                                        DataType::Array(_) => "ARRAY",
+                                        DataType::Map(_, _) => "MAP",
+                                        DataType::Tuple(_) => "TUPLE",
+                                        DataType::Nested(_) => "NESTED",
+                                        DataType::Enum(_, _) => "ENUM",
+                                        DataType::Set(_) => "SET",
+                                        DataType::Struct(_, _) => "STRUCT",
+                                        DataType::Union(_) => "UNION",
+                                        DataType::Nullable(inner) => {
+                                            &format!("Nullable({})", inner)
+                                        }
+                                        DataType::LowCardinality(inner) => {
+                                            &format!("LowCardinality({})", inner)
+                                        }
+                                        DataType::Unspecified => "UNSPECIFIED",
+                                        DataType::Trigger => "TRIGGER",
+                                        DataType::AnyType => "ANY TYPE",
+                                        DataType::GeometricType(kind) => {
+                                            &format!("{}", kind)
+                                        }
+                                    };
+
+                                    let cast_str =
+                                        format!("cast({} as {})", inner_str, type_str);
+                                    println!("Generated alias: {}", cast_str);
+
+                                    // create identifier
+                                    let alias = Ident {
+                                        value: cast_str,
+                                        quote_style: None,
+                                        span: inner_expr.span().clone(),
+                                    };
+
+                                    // create new expression
+                                    let new_expr = SelectItem::ExprWithAlias {
+                                        expr: cast_expr.clone(),
+                                        alias,
+                                    };
+
+                                    new_projection.push(new_expr);
+                                } else {
+                                    // not Cast expression, keep as is
+                                    new_projection.push(expr.clone());
+                                }
+                            }
+                            // other types of SelectItem, keep as is
+                            _ => new_projection.push(expr.clone()),
+                        }
+                    }
+
+                    // replace projection
+                    select.projection = new_projection;
+                }
             }
         }
     }
