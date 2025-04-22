@@ -60,11 +60,11 @@ pub fn physical_exprs_bag_equal(
     multi_set_lhs == multi_set_rhs
 }
 
-use crate::{expressions, LexOrdering, PhysicalSortExpr};
+use crate::{LexOrdering, PhysicalSortExpr, expressions};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
-use datafusion_common::plan_err;
 use datafusion_common::Result;
+use datafusion_common::plan_err;
 use datafusion_expr::{Expr, SortExpr};
 
 /// Converts logical sort expressions to physical sort expressions

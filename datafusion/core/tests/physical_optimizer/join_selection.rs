@@ -24,30 +24,30 @@ use std::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::JoinSide;
-use datafusion_common::{stats::Precision, ColumnStatistics, JoinType, ScalarValue};
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{ColumnStatistics, JoinType, ScalarValue, stats::Precision};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
+use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion_physical_optimizer::join_selection::{
-    hash_join_swap_subrule, JoinSelection,
-};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::join_selection::{
+    JoinSelection, hash_join_swap_subrule,
+};
+use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
 use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::{
-    execution_plan::{Boundedness, EmissionType},
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    execution_plan::{Boundedness, EmissionType},
 };
 
 use futures::Stream;
@@ -413,15 +413,15 @@ async fn test_nested_join_swap() {
     // left is the F(small IJ big) which has an estimated cardinality of 2000 rows (vs medium which
     // has an exact cardinality of 10_000 rows).
     let expected = [
-            "ProjectionExec: expr=[medium_col@2 as medium_col, big_col@0 as big_col, small_col@1 as small_col]",
-            "  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(small_col@1, medium_col@0)]",
-            "    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]",
-            "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]",
-            "        StatisticsExec: col_count=1, row_count=Inexact(1000)",
-            "        StatisticsExec: col_count=1, row_count=Inexact(100000)",
-            "    StatisticsExec: col_count=1, row_count=Inexact(10000)",
-            "",
-        ];
+        "ProjectionExec: expr=[medium_col@2 as medium_col, big_col@0 as big_col, small_col@1 as small_col]",
+        "  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(small_col@1, medium_col@0)]",
+        "    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]",
+        "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]",
+        "        StatisticsExec: col_count=1, row_count=Inexact(1000)",
+        "        StatisticsExec: col_count=1, row_count=Inexact(100000)",
+        "    StatisticsExec: col_count=1, row_count=Inexact(10000)",
+        "",
+    ];
     assert_optimized!(expected, join);
 }
 
@@ -986,9 +986,10 @@ pub struct StatisticsExec {
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
         assert_eq!(
-                stats.column_statistics.len(), schema.fields().len(),
-                "if defined, the column statistics vector length should be the number of fields"
-            );
+            stats.column_statistics.len(),
+            schema.fields().len(),
+            "if defined, the column statistics vector length should be the number of fields"
+        );
         let cache = Self::compute_properties(Arc::new(schema.clone()));
         Self {
             stats,

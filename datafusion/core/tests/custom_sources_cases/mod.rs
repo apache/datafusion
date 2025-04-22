@@ -28,11 +28,11 @@ use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_expr::{
-    col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
+    Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE, col,
 };
 use datafusion::physical_plan::{
-    collect, ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics, collect,
 };
 use datafusion::scalar::ScalarValue;
 use datafusion_catalog::Session;
@@ -40,9 +40,9 @@ use datafusion_common::cast::as_primitive_array;
 use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::PlanProperties;
 
 use async_trait::async_trait;
 use futures::stream::Stream;

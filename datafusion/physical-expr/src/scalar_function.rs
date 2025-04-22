@@ -34,17 +34,17 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::expressions::Literal;
 use crate::PhysicalExpr;
+use crate::expressions::Literal;
 
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
+    ColumnarValue, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF, expr_vec_fmt,
 };
 
 /// Physical expression of a scalar function
@@ -206,8 +206,12 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 return if preserve_scalar {
                     ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
                 } else {
-                    internal_err!("UDF {} returned a different number of rows than expected. Expected: {}, Got: {}",
-                            self.name, batch.num_rows(), array.len())
+                    internal_err!(
+                        "UDF {} returned a different number of rows than expected. Expected: {}, Got: {}",
+                        self.name,
+                        batch.num_rows(),
+                        array.len()
+                    )
                 };
             }
         }

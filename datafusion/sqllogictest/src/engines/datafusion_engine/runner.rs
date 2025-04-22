@@ -18,7 +18,7 @@
 use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
-use super::{error::Result, normalize, DFSqlLogicTestError};
+use super::{DFSqlLogicTestError, error::Result, normalize};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;

@@ -17,8 +17,8 @@
 
 use std::sync::Arc;
 
-use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
-use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
+use arrow::array::{Array, ArrayRef, BooleanArray, MutableArrayData, make_array};
+use arrow::compute::{SlicesIterator, and_kleene, is_not_null};
 
 use datafusion_common::Result;
 use datafusion_expr_common::sort_properties::ExprProperties;

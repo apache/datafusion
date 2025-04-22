@@ -26,15 +26,15 @@ use arrow::{
 };
 
 use datafusion_common::ScalarValue;
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{Result, not_impl_err, plan_err};
+use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
-use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature,
 };
 use datafusion_functions_aggregate_common::tdigest::{
-    Centroid, TDigest, DEFAULT_MAX_SIZE,
+    Centroid, DEFAULT_MAX_SIZE, TDigest,
 };
 use datafusion_macros::user_doc;
 
@@ -138,7 +138,9 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
             );
         }
         if arg_types[2] != DataType::Float64 {
-            return plan_err!("approx_percentile_cont_with_weight requires float64 percentile input types");
+            return plan_err!(
+                "approx_percentile_cont_with_weight requires float64 percentile input types"
+            );
         }
         Ok(arg_types[0].clone())
     }

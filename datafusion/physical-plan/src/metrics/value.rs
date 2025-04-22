@@ -21,8 +21,8 @@ use std::{
     borrow::{Borrow, Cow},
     fmt::Display,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };

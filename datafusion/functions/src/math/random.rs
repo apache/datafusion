@@ -21,9 +21,9 @@ use std::sync::Arc;
 use arrow::array::Float64Array;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;

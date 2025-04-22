@@ -17,10 +17,10 @@
 
 //! `cume_dist` window function implementation
 
+use datafusion_common::Result;
 use datafusion_common::arrow::array::{ArrayRef, Float64Array};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::Result;
 use datafusion_expr::{
     Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };

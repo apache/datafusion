@@ -32,8 +32,8 @@ use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, plan_err, utils::take_function_args,
-    DataFusionError, Result,
+    DataFusionError, Result, exec_err, internal_datafusion_err, plan_err,
+    utils::take_function_args,
 };
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
@@ -163,10 +163,12 @@ impl ScalarUDFImpl for ArrayElement {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field)
-            | LargeList(field)
-            | FixedSizeList(field, _) => Ok(field.data_type().clone()),
-            DataType::Null => Ok(List(Arc::new(Field::new_list_field(DataType::Int64, true)))),
+            List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                Ok(field.data_type().clone())
+            }
+            DataType::Null => {
+                Ok(List(Arc::new(Field::new_list_field(DataType::Int64, true))))
+            }
             _ => plan_err!(
                 "ArrayElement can only accept List, LargeList or FixedSizeList as the first argument"
             ),
@@ -481,28 +483,32 @@ where
     {
         // 0 ~ len - 1
         let adjusted_zero_index = if index < 0 {
-            match index.try_into() { Ok(index) => {
-                // When index < 0 and -index > length, index is clamped to the beginning of the list.
-                // Otherwise, when index < 0, the index is counted from the end of the list.
-                //
-                // Note, we actually test the contrapositive, index < -length, because negating a
-                // negative will panic if the negative is equal to the smallest representable value
-                // while negating a positive is always safe.
-                if index < (O::zero() - O::one()) * len {
-                    O::zero()
-                } else {
-                    index + len
+            match index.try_into() {
+                Ok(index) => {
+                    // When index < 0 and -index > length, index is clamped to the beginning of the list.
+                    // Otherwise, when index < 0, the index is counted from the end of the list.
+                    //
+                    // Note, we actually test the contrapositive, index < -length, because negating a
+                    // negative will panic if the negative is equal to the smallest representable value
+                    // while negating a positive is always safe.
+                    if index < (O::zero() - O::one()) * len {
+                        O::zero()
+                    } else {
+                        index + len
+                    }
                 }
-            } _ => {
-                return exec_err!("array_slice got invalid index: {}", index);
-            }}
+                _ => {
+                    return exec_err!("array_slice got invalid index: {}", index);
+                }
+            }
         } else {
             // array_slice(arr, 1, to) is the same as array_slice(arr, 0, to)
-            match index.try_into() { Ok(index) => {
-                std::cmp::max(index - O::usize_as(1), O::usize_as(0))
-            } _ => {
-                return exec_err!("array_slice got invalid index: {}", index);
-            }}
+            match index.try_into() {
+                Ok(index) => std::cmp::max(index - O::usize_as(1), O::usize_as(0)),
+                _ => {
+                    return exec_err!("array_slice got invalid index: {}", index);
+                }
+            }
         };
 
         if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {
@@ -520,18 +526,20 @@ where
         // 0 ~ len - 1
         let adjusted_zero_index = if index < 0 {
             // array_slice in duckdb with negative to_index is python-like, so index itself is exclusive
-            match index.try_into() { Ok(index) => {
-                index + len
-            } _ => {
-                return exec_err!("array_slice got invalid index: {}", index);
-            }}
+            match index.try_into() {
+                Ok(index) => index + len,
+                _ => {
+                    return exec_err!("array_slice got invalid index: {}", index);
+                }
+            }
         } else {
             // array_slice(arr, from, len + 1) is the same as array_slice(arr, from, len)
-            match index.try_into() { Ok(index) => {
-                std::cmp::min(index - O::usize_as(1), len - O::usize_as(1))
-            } _ => {
-                return exec_err!("array_slice got invalid index: {}", index);
-            }}
+            match index.try_into() {
+                Ok(index) => std::cmp::min(index - O::usize_as(1), len - O::usize_as(1)),
+                _ => {
+                    return exec_err!("array_slice got invalid index: {}", index);
+                }
+            }
         };
 
         if O::usize_as(0) <= adjusted_zero_index && adjusted_zero_index < len {
@@ -906,9 +914,9 @@ impl ScalarUDFImpl for ArrayAnyValue {
     }
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field)
-            | LargeList(field)
-            | FixedSizeList(field, _) => Ok(field.data_type().clone()),
+            List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                Ok(field.data_type().clone())
+            }
             _ => plan_err!(
                 "array_any_value can only accept List, LargeList or FixedSizeList as the argument"
             ),

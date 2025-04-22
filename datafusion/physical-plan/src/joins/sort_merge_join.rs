@@ -29,49 +29,49 @@ use std::io::BufReader;
 use std::mem::size_of;
 use std::ops::Range;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
-    JoinOnRef,
+    JoinFilter, JoinOn, JoinOnRef, build_join_schema, check_join_is_valid,
+    estimate_join_statistics, reorder_output_after_swap,
+    symmetric_join_output_partitioning,
 };
 use crate::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics,
 };
 use crate::projection::{
-    join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, update_join_on, ProjectionExec,
+    ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs, update_join_on,
 };
 use crate::spill::spill_manager::SpillManager;
 use crate::{
-    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics, metrics,
 };
 
 use arrow::array::{types::UInt64Type, *};
 use arrow::compute::{
-    self, concat_batches, filter_record_batch, is_not_null, take, SortOptions,
+    self, SortOptions, concat_batches, filter_record_batch, is_not_null, take,
 };
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::ipc::reader::StreamReader;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, HashSet, JoinSide,
-    JoinType, Result,
+    DataFusionError, HashSet, JoinSide, JoinType, Result, exec_err, internal_err,
+    not_impl_err, plan_err,
 };
+use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
@@ -2314,10 +2314,14 @@ fn fetch_right_columns_from_batch_by_idxs(
                 });
             }
 
-                Ok(buffered_cols)
-            }
+            Ok(buffered_cols)
+        }
         // Invalid combination
-        (spill, batch) => internal_err!("Unexpected buffered batch spill status. Spill exists: {}. In-memory exists: {}", spill.is_some(), batch.is_some()),
+        (spill, batch) => internal_err!(
+            "Unexpected buffered batch spill status. Spill exists: {}. In-memory exists: {}",
+            spill.is_some(),
+            batch.is_some()
+        ),
     }
 }
 
@@ -2561,33 +2565,33 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        builder::{BooleanBuilder, UInt64Builder},
         BooleanArray, Date32Array, Date64Array, Int32Array, RecordBatch, UInt64Array,
+        builder::{BooleanBuilder, UInt64Builder},
     };
-    use arrow::compute::{concat_batches, filter_record_batch, SortOptions};
+    use arrow::compute::{SortOptions, concat_batches, filter_record_batch};
     use arrow::datatypes::{DataType, Field, Schema};
 
     use datafusion_common::JoinType::*;
-    use datafusion_common::{assert_batches_eq, assert_contains, JoinType, Result};
     use datafusion_common::{
-        test_util::{batches_to_sort_string, batches_to_string},
         JoinSide,
+        test_util::{batches_to_sort_string, batches_to_string},
     };
+    use datafusion_common::{JoinType, Result, assert_batches_eq, assert_contains};
+    use datafusion_execution::TaskContext;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::disk_manager::DiskManagerConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_execution::TaskContext;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::BinaryExpr;
     use insta::{allow_duplicates, assert_snapshot};
 
     use crate::expressions::Column;
-    use crate::joins::sort_merge_join::{get_corrected_filter_mask, JoinedRecordBatches};
-    use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
     use crate::joins::SortMergeJoinExec;
+    use crate::joins::sort_merge_join::{JoinedRecordBatches, get_corrected_filter_mask};
+    use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
     use crate::test::TestMemoryExec;
     use crate::test::{build_table_i32, build_table_i32_two_cols};
-    use crate::{common, ExecutionPlan};
+    use crate::{ExecutionPlan, common};
 
     fn build_table(
         a: (&str, &Vec<i32>),

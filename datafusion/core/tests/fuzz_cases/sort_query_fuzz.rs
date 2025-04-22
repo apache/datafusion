@@ -24,9 +24,9 @@ use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::{instant::Instant, Result};
+use datafusion_common::{Result, instant::Instant};
 use datafusion_execution::memory_pool::{
-    human_readable_size, MemoryPool, UnboundedMemoryPool,
+    MemoryPool, UnboundedMemoryPool, human_readable_size,
 };
 use datafusion_expr::display_schema;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
@@ -38,12 +38,12 @@ use datafusion_execution::{
     runtime_env::RuntimeEnvBuilder,
 };
 use rand::Rng;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 
 use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
 
 use super::aggregation_fuzzer::ColumnDescr;
-use super::record_batch_generator::{get_supported_types_columns, RecordBatchGenerator};
+use super::record_batch_generator::{RecordBatchGenerator, get_supported_types_columns};
 
 /// Entry point for executing the sort query fuzzer.
 ///

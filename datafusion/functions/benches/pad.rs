@@ -20,11 +20,11 @@ use arrow::datatypes::{DataType, Int64Type};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::{lpad, rpad};
-use rand::distributions::{Distribution, Uniform};
 use rand::Rng;
+use rand::distributions::{Distribution, Uniform};
 use std::sync::Arc;
 
 struct Filter<Dist> {

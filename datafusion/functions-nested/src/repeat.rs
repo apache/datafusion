@@ -19,8 +19,8 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    new_null_array, Array, ArrayRef, Capacities, GenericListArray, ListArray,
-    MutableArrayData, OffsetSizeTrait, UInt64Array,
+    Array, ArrayRef, Capacities, GenericListArray, ListArray, MutableArrayData,
+    OffsetSizeTrait, UInt64Array, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
@@ -31,7 +31,7 @@ use arrow::datatypes::{
     Field,
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };

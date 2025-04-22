@@ -22,8 +22,8 @@ use arrow::array::{Array, AsArray};
 use arrow::datatypes::Fields;
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
-use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
 use datafusion::common::DataFusionError;
+use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 

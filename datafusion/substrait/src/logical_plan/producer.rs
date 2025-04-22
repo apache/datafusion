@@ -43,20 +43,21 @@ use crate::variation_const::{
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::{
-    exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
-    substrait_err, Column, DFSchema, DFSchemaRef, ToDFSchema,
+    Column, DFSchema, DFSchemaRef, ToDFSchema, exec_err, internal_err, not_impl_err,
+    plan_err, substrait_datafusion_err, substrait_err,
 };
-use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::SessionState;
+use datafusion::execution::registry::SerializerRegistry;
 use datafusion::logical_expr::expr::{
     AggregateFunctionParams, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
     InSubquery, WindowFunction, WindowFunctionParams,
 };
 use datafusion::logical_expr::utils::conjunction;
-use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
+use datafusion::logical_expr::{Between, JoinConstraint, LogicalPlan, Operator, expr};
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
+use substrait::proto::expression::ScalarFunction;
 use substrait::proto::expression::cast::FailureBehavior;
 use substrait::proto::expression::field_reference::{RootReference, RootType};
 use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
@@ -67,40 +68,40 @@ use substrait::proto::expression::literal::{
 };
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
-use substrait::proto::expression::ScalarFunction;
 use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::rel_common::EmitKind::Emit;
 use substrait::proto::{
-    fetch_rel, rel_common, ExchangeRel, ExpressionReference, ExtendedExpression,
-    RelCommon,
+    ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon, fetch_rel,
+    rel_common,
 };
 use substrait::{
     proto::{
+        AggregateFunction, AggregateRel, AggregationPhase, Expression, ExtensionLeafRel,
+        ExtensionMultiRel, ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument,
+        JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel, RelRoot, SetRel,
+        SortField, SortRel,
         aggregate_function::AggregationInvocation,
         aggregate_rel::{Grouping, Measure},
         expression::{
+            FieldReference, IfThen, Literal, MaskExpression, ReferenceSegment, RexType,
+            SingularOrList, WindowFunction as SubstraitWindowFunction,
             field_reference::ReferenceType,
             if_then::IfClause,
             literal::{Decimal, LiteralType},
             mask_expression::{StructItem, StructSelect},
             reference_segment,
+            window_function::Bound,
             window_function::bound as SubstraitBound,
             window_function::bound::Kind as BoundKind,
-            window_function::Bound,
-            FieldReference, IfThen, Literal, MaskExpression, ReferenceSegment, RexType,
-            SingularOrList, WindowFunction as SubstraitWindowFunction,
         },
         function_argument::ArgType,
-        join_rel, plan_rel, r#type,
+        join_rel, plan_rel,
         read_rel::{NamedTable, ReadType},
         rel::RelType,
         set_rel,
         sort_field::{SortDirection, SortKind},
-        AggregateFunction, AggregateRel, AggregationPhase, Expression, ExtensionLeafRel,
-        ExtensionMultiRel, ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument,
-        JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel, RelRoot, SetRel,
-        SortField, SortRel,
+        r#type,
     },
     version,
 };
@@ -249,7 +250,9 @@ pub trait SubstraitProducer: Send + Sync + Sized {
     }
 
     fn handle_extension(&mut self, _plan: &Extension) -> Result<Box<Rel>> {
-        substrait_err!("Specify handling for LogicalPlan::Extension by implementing the SubstraitProducer trait")
+        substrait_err!(
+            "Specify handling for LogicalPlan::Extension by implementing the SubstraitProducer trait"
+        )
     }
 
     // Expression Methods
@@ -963,7 +966,7 @@ pub fn from_repartition(
         Partitioning::DistributeBy(_) => {
             return not_impl_err!(
                 "Physical plan does not support DistributeBy partitioning"
-            )
+            );
         }
     };
     // ref: https://substrait.io/relations/physical_relations/#exchange-types
@@ -981,7 +984,7 @@ pub fn from_repartition(
         Partitioning::DistributeBy(_) => {
             return not_impl_err!(
                 "Physical plan does not support DistributeBy partitioning"
-            )
+            );
         }
     };
     let exchange_rel = ExchangeRel {
@@ -1284,7 +1287,9 @@ pub fn to_substrait_agg_measure(
     schema: &DFSchemaRef,
 ) -> Result<Measure> {
     match expr {
-        Expr::AggregateFunction(agg_fn) => from_aggregate_function(producer, agg_fn, schema),
+        Expr::AggregateFunction(agg_fn) => {
+            from_aggregate_function(producer, agg_fn, schema)
+        }
         Expr::Alias(Alias { expr, .. }) => {
             to_substrait_agg_measure(producer, expr, schema)
         }
@@ -2562,9 +2567,9 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
 mod test {
     use super::*;
     use crate::logical_plan::consumer::{
-        from_substrait_extended_expr, from_substrait_literal_without_names,
-        from_substrait_named_struct, from_substrait_type_without_names,
-        DefaultSubstraitConsumer,
+        DefaultSubstraitConsumer, from_substrait_extended_expr,
+        from_substrait_literal_without_names, from_substrait_named_struct,
+        from_substrait_type_without_names,
     };
     use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion::arrow;
@@ -2572,8 +2577,8 @@ mod test {
         GenericListArray, Int64Builder, MapBuilder, StringBuilder,
     };
     use datafusion::arrow::datatypes::{Field, Fields, Schema};
-    use datafusion::common::scalar::ScalarStructBuilder;
     use datafusion::common::DFSchema;
+    use datafusion::common::scalar::ScalarStructBuilder;
     use datafusion::execution::{SessionState, SessionStateBuilder};
     use datafusion::prelude::SessionContext;
     use std::sync::LazyLock;

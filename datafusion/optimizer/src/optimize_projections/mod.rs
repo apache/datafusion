@@ -25,14 +25,14 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::{
-    get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    HashMap, JoinType, Result,
+    Column, HashMap, JoinType, Result, get_required_group_by_exprs_indices,
+    internal_datafusion_err, internal_err,
 };
-use datafusion_expr::expr::Alias;
 use datafusion_expr::Unnest;
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, projection_schema, Aggregate, Distinct, Expr, Projection,
-    TableScan, Window,
+    Aggregate, Distinct, Expr, Projection, TableScan, Window, logical_plan::LogicalPlan,
+    projection_schema,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -121,7 +121,7 @@ fn optimize_projections(
         LogicalPlan::Projection(proj) => {
             return merge_consecutive_projections(proj)?.transform_data(|proj| {
                 rewrite_projection_given_requirements(proj, config, &indices)
-            })
+            });
         }
         LogicalPlan::Aggregate(aggregate) => {
             // Split parent requirements to GROUP BY and aggregate sections:
@@ -332,9 +332,11 @@ fn optimize_projections(
             };
             let children = extension.node.inputs();
             if children.len() != necessary_children_indices.len() {
-                return internal_err!("Inconsistent length between children and necessary children indices. \
+                return internal_err!(
+                    "Inconsistent length between children and necessary children indices. \
                 Make sure `.necessary_children_exprs` implementation of the `UserDefinedLogicalNode` is \
-                consistent with actual children length for the node.");
+                consistent with actual children length for the node."
+                );
             }
             children
                 .into_iter()
@@ -816,14 +818,15 @@ mod tests {
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
-        binary_expr, build_join_schema,
+        BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator, Projection,
+        UserDefinedLogicalNodeCore, WindowFunctionDefinition, binary_expr,
+        build_join_schema,
         builder::table_scan_with_filters,
         col,
         expr::{self, Cast},
         lit,
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
-        not, try_cast, when, BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator,
-        Projection, UserDefinedLogicalNodeCore, WindowFunctionDefinition,
+        not, try_cast, when,
     };
 
     use datafusion_functions_aggregate::count::count_udaf;
@@ -1281,8 +1284,7 @@ mod tests {
             ])?
             .build()?;
 
-        let expected =
-            "Projection: a, CASE WHEN a = Int32(1) THEN Int32(10) ELSE d END AS d\
+        let expected = "Projection: a, CASE WHEN a = Int32(1) THEN Int32(10) ELSE d END AS d\
         \n  Projection: test.a + Int32(1) AS a, Int32(0) AS d\
         \n    TableScan: test projection=[a]";
         assert_optimized_plan_equal(plan, expected)

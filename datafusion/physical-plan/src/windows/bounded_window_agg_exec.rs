@@ -21,7 +21,7 @@
 //! infinite inputs.
 
 use std::any::Any;
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -52,19 +52,19 @@ use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
 use datafusion_common::{
-    arrow_datafusion_err, exec_err, DataFusionError, HashMap, Result,
+    DataFusionError, HashMap, Result, arrow_datafusion_err, exec_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use futures::stream::Stream;
-use futures::{ready, StreamExt};
+use futures::{StreamExt, ready};
 use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
@@ -172,7 +172,9 @@ impl BoundedWindowAggExec {
                 if self.window_expr()[0].partition_by().len()
                     != ordered_partition_by_indices.len()
                 {
-                    return exec_err!("All partition by columns should have an ordering in Sorted mode.");
+                    return exec_err!(
+                        "All partition by columns should have an ordering in Sorted mode."
+                    );
                 }
                 Box::new(SortedSearch {
                     partition_by_sort_keys,
@@ -1212,18 +1214,18 @@ mod tests {
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test::TestMemoryExec;
     use crate::windows::{
-        create_udwf_window_expr, create_window_expr, BoundedWindowAggExec, InputOrderMode,
+        BoundedWindowAggExec, InputOrderMode, create_udwf_window_expr, create_window_expr,
     };
-    use crate::{execute_stream, get_plan_string, ExecutionPlan};
+    use crate::{ExecutionPlan, execute_stream, get_plan_string};
 
     use arrow::array::{
-        builder::{Int64Builder, UInt64Builder},
         RecordBatch,
+        builder::{Int64Builder, UInt64Builder},
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{exec_datafusion_err, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::{
         RecordBatchStream, SendableRecordBatchStream, TaskContext,
@@ -1234,12 +1236,12 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_window::nth_value::last_value_udwf;
     use datafusion_functions_window::nth_value::nth_value_udwf;
-    use datafusion_physical_expr::expressions::{col, Column, Literal};
+    use datafusion_physical_expr::expressions::{Column, Literal, col};
     use datafusion_physical_expr::window::StandardWindowExpr;
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
     use futures::future::Shared;
-    use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
+    use futures::{FutureExt, Stream, StreamExt, pin_mut, ready};
     use insta::assert_snapshot;
     use itertools::Itertools;
     use tokio::time::timeout;

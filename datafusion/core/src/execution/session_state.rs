@@ -25,13 +25,13 @@ use std::sync::Arc;
 
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
 use crate::datasource::cte_worktable::CteWorkTable;
-use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
+use crate::datasource::file_format::{FileFormatFactory, format_as_file_type};
 use crate::datasource::provider_as_source;
-use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
+use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use datafusion_catalog::information_schema::{
-    InformationSchemaProvider, INFORMATION_SCHEMA,
+    INFORMATION_SCHEMA, InformationSchemaProvider,
 };
 
 use arrow::datatypes::{DataType, SchemaRef};
@@ -43,18 +43,18 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    config_err, exec_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
-    ResolvedTableReference, TableReference,
+    DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
+    exec_err, not_impl_err, plan_datafusion_err,
 };
+use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::{ExprPlanner, TypePlanner};
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
-use datafusion_expr::var_provider::{is_system_variables, VarType};
+use datafusion_expr::var_provider::{VarType, is_system_variables};
 use datafusion_expr::{
     AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, ScalarUDF, TableSource,
     WindowUDF,
@@ -65,8 +65,8 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 use datafusion_sql::parser::{DFParserBuilder, Statement};
@@ -763,10 +763,18 @@ impl SessionState {
         overwrite: bool,
     ) -> Result<(), DataFusionError> {
         let ext = file_format.get_ext().to_lowercase();
-        match (self.file_formats.entry(ext.clone()), overwrite){
-            (Entry::Vacant(e), _) => {e.insert(file_format);},
-            (Entry::Occupied(mut e), true)  => {e.insert(file_format);},
-            (Entry::Occupied(_), false) => return config_err!("File type already registered for extension {ext}. Set overwrite to true to replace this extension."),
+        match (self.file_formats.entry(ext.clone()), overwrite) {
+            (Entry::Vacant(e), _) => {
+                e.insert(file_format);
+            }
+            (Entry::Occupied(mut e), true) => {
+                e.insert(file_format);
+            }
+            (Entry::Occupied(_), false) => {
+                return config_err!(
+                    "File type already registered for extension {ext}. Set overwrite to true to replace this extension."
+                );
+            }
         };
         Ok(())
     }
@@ -1968,8 +1976,8 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
-    use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_optimizer::Optimizer;
+    use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -2043,13 +2051,15 @@ mod tests {
             .table_exist("employee");
         assert!(is_exist);
         let new_state = SessionStateBuilder::new_from_existing(session_state).build();
-        assert!(new_state
-            .catalog_list()
-            .catalog(default_catalog.as_str())
-            .unwrap()
-            .schema(default_schema.as_str())
-            .unwrap()
-            .table_exist("employee"));
+        assert!(
+            new_state
+                .catalog_list()
+                .catalog(default_catalog.as_str())
+                .unwrap()
+                .schema(default_schema.as_str())
+                .unwrap()
+                .table_exist("employee")
+        );
 
         // if `with_create_default_catalog_and_schema` is disabled, the new one shouldn't create default catalog and schema
         let disable_create_default =
@@ -2057,10 +2067,12 @@ mod tests {
         let without_default_state = SessionStateBuilder::new()
             .with_config(disable_create_default)
             .build();
-        assert!(without_default_state
-            .catalog_list()
-            .catalog(&default_catalog)
-            .is_none());
+        assert!(
+            without_default_state
+                .catalog_list()
+                .catalog(&default_catalog)
+                .is_none()
+        );
         let new_state =
             SessionStateBuilder::new_from_existing(without_default_state).build();
         assert!(new_state.catalog_list().catalog(&default_catalog).is_none());

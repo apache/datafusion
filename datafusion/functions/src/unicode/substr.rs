@@ -27,7 +27,7 @@ use arrow::array::{
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -116,16 +116,20 @@ impl ScalarUDFImpl for SubstrFunc {
         }
         let first_data_type = match &arg_types[0] {
             DataType::Null => Ok(DataType::Utf8),
-            DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => Ok(arg_types[0].clone()),
+            DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => {
+                Ok(arg_types[0].clone())
+            }
             DataType::Dictionary(key_type, value_type) => {
                 if key_type.is_integer() {
                     match value_type.as_ref() {
                         DataType::Null => Ok(DataType::Utf8),
-                        DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => Ok(*value_type.clone()),
+                        DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => {
+                            Ok(*value_type.clone())
+                        }
                         _ => plan_err!(
-                                "The first argument of the {} function can only be a string, but got {:?}.",
-                                self.name(),
-                                arg_types[0]
+                            "The first argument of the {} function can only be a string, but got {:?}.",
+                            self.name(),
+                            arg_types[0]
                         ),
                     }
                 } else {
@@ -140,7 +144,7 @@ impl ScalarUDFImpl for SubstrFunc {
                 "The first argument of the {} function can only be a string, but got {:?}.",
                 self.name(),
                 arg_types[0]
-            )
+            ),
         }?;
 
         if ![DataType::Int64, DataType::Int32, DataType::Null].contains(&arg_types[1]) {
@@ -404,7 +408,7 @@ fn string_view_substr(
         other => {
             return exec_err!(
                 "substr was called with {other} arguments. It requires 2 or 3."
-            )
+            );
         }
     }
 
@@ -510,7 +514,7 @@ mod tests {
     use arrow::array::{Array, StringViewArray};
     use arrow::datatypes::DataType::Utf8View;
 
-    use datafusion_common::{exec_err, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, exec_err};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use crate::unicode::substr::SubstrFunc;

@@ -23,10 +23,10 @@ use std::hash::{Hash, Hasher};
 use std::mem;
 use std::sync::Arc;
 
+use crate::Volatility;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::Volatility;
-use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
+use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF, udaf};
 
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
@@ -38,8 +38,8 @@ use datafusion_common::{
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
-    display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
-    NullTreatment, RenameSelectItem, ReplaceSelectElement,
+    ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, NullTreatment,
+    RenameSelectItem, ReplaceSelectElement, display_comma_separated,
 };
 
 /// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
@@ -3182,8 +3182,8 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 mod test {
     use crate::expr_fn::col;
     use crate::{
-        case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue,
-        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
+        lit, qualified_wildcard, wildcard, wildcard_with_options,
     };
     use sqlparser::ast;
     use sqlparser::ast::{Ident, IdentWithAlias};

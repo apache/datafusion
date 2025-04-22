@@ -23,13 +23,13 @@ use arrow::array::{
 };
 use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use arrow::datatypes::DataType;
-use chrono::format::{parse, Parsed, StrftimeItems};
 use chrono::LocalResult::Single;
+use chrono::format::{Parsed, StrftimeItems, parse};
 use chrono::{DateTime, TimeZone, Utc};
 
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
-    exec_err, unwrap_or_internal_err, DataFusionError, Result, ScalarType, ScalarValue,
+    DataFusionError, Result, ScalarType, ScalarValue, exec_err, unwrap_or_internal_err,
 };
 use datafusion_expr::ColumnarValue;
 
@@ -103,11 +103,10 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
             return Err(err(&e.to_string()));
         }
 
-        match &timezone.from_local_datetime(&ndt.unwrap()) { Single(e) => {
-            Ok(e.to_owned())
-        } _ => {
-            Err(err(&e.to_string()))
-        }}
+        match &timezone.from_local_datetime(&ndt.unwrap()) {
+            Single(e) => Ok(e.to_owned()),
+            _ => Err(err(&e.to_string())),
+        }
     } else {
         Ok(dt.unwrap().with_timezone(timezone))
     }
@@ -246,14 +245,24 @@ where
                             DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
                                 // all good
                             }
-                            other => return exec_err!("Unsupported data type {other:?} for function {name}, arg # {pos}"),
+                            other => {
+                                return exec_err!(
+                                    "Unsupported data type {other:?} for function {name}, arg # {pos}"
+                                );
+                            }
                         },
                         ColumnarValue::Scalar(arg) => {
                             match arg.data_type() {
-                                DataType::Utf8View| DataType::LargeUtf8 | DataType::Utf8 => {
+                                DataType::Utf8View
+                                | DataType::LargeUtf8
+                                | DataType::Utf8 => {
                                     // all good
                                 }
-                                other => return exec_err!("Unsupported data type {other:?} for function {name}, arg # {pos}"),
+                                other => {
+                                    return exec_err!(
+                                        "Unsupported data type {other:?} for function {name}, arg # {pos}"
+                                    );
+                                }
                             }
                         }
                     }
@@ -283,7 +292,9 @@ where
                         | ScalarValue::Utf8(x),
                     ) = v
                     else {
-                        return exec_err!("Unsupported data type {v:?} for function {name}, arg # {pos}");
+                        return exec_err!(
+                            "Unsupported data type {v:?} for function {name}, arg # {pos}"
+                        );
                     };
 
                     if let Some(s) = x {

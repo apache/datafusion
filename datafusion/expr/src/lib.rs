@@ -80,8 +80,8 @@ pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::signature::{
-    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature, TypeSignature,
-    TypeSignatureClass, Volatility, TIMEZONE_WILDCARD,
+    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature,
+    TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,
 };
 pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{
@@ -94,20 +94,20 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
-pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
+pub use literal::{Literal, TimestampLiteral, lit, lit_timestamp_nano};
 pub use logical_plan::*;
 pub use partition_evaluator::PartitionEvaluator;
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{
-    aggregate_doc_sections, AggregateUDF, AggregateUDFImpl, ReversedUDAF,
-    SetMonotonicity, StatisticsArgs,
+    AggregateUDF, AggregateUDFImpl, ReversedUDAF, SetMonotonicity, StatisticsArgs,
+    aggregate_doc_sections,
 };
 pub use udf::{
-    scalar_doc_sections, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl,
+    ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    scalar_doc_sections,
 };
-pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
+pub use udwf::{ReversedUDWF, WindowUDF, WindowUDFImpl, window_doc_sections};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 #[cfg(test)]

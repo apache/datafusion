@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_expr::Expr;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::Expr;
 
 use crate::optimizer::ApplyOrder;
 use crate::utils::NamePreserver;
@@ -161,8 +161,8 @@ mod tests {
     use datafusion_expr::*;
     use datafusion_functions_aggregate::expr_fn::{max, min};
 
-    use crate::test::{assert_fields_eq, test_table_scan_with_name};
     use crate::OptimizerContext;
+    use crate::test::{assert_fields_eq, test_table_scan_with_name};
 
     use super::*;
 
@@ -467,8 +467,7 @@ mod tests {
             .build()?;
 
         let actual = get_optimized_plan_formatted(plan, &time);
-        let expected =
-            "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
+        let expected = "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test";
 
         assert_eq!(expected, actual);
@@ -560,8 +559,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], false).not())?
             .build()?;
-        let expected =
-            "Filter: test.d != Int32(1) AND test.d != Int32(2) AND test.d != Int32(3)\
+        let expected = "Filter: test.d != Int32(1) AND test.d != Int32(2) AND test.d != Int32(3)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(plan, expected)
@@ -574,8 +572,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], true).not())?
             .build()?;
-        let expected =
-            "Filter: test.d = Int32(1) OR test.d = Int32(2) OR test.d = Int32(3)\
+        let expected = "Filter: test.d = Int32(1) OR test.d = Int32(2) OR test.d = Int32(3)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(plan, expected)

@@ -20,19 +20,19 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{
     BooleanType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
     IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
     Schema, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow_schema::{
     DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
     DECIMAL256_MAX_SCALE,
 };
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use datafusion_common::{DataFusionError, Result, arrow_datafusion_err};
+use rand::{Rng, SeedableRng, rngs::StdRng, thread_rng};
 use test_utils::array_gen::{
     BinaryArrayGenerator, BooleanArrayGenerator, DecimalArrayGenerator,
     PrimitiveArrayGenerator, StringArrayGenerator,

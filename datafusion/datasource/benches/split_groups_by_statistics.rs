@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{generate_test_files, verify_sort_integrity};
 use datafusion_physical_expr::PhysicalSortExpr;

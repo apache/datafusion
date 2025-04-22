@@ -25,24 +25,24 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
 
+use crate::ExecutionPlan;
 use crate::common;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
-use crate::ExecutionPlan;
 use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{
-    config::ConfigOptions, internal_err, project_schema, Result, Statistics,
+    Result, Statistics, config::ConfigOptions, internal_err, project_schema,
 };
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{
-    equivalence::ProjectionMapping, expressions::Column, utils::collect_columns,
-    EquivalenceProperties, LexOrdering, Partitioning,
+    EquivalenceProperties, LexOrdering, Partitioning, equivalence::ProjectionMapping,
+    expressions::Column, utils::collect_columns,
 };
 
 use futures::{Future, FutureExt};
@@ -105,10 +105,10 @@ impl DisplayAs for TestMemoryExec {
                     .map_or(String::new(), |limit| format!(", fetch={}", limit));
                 if self.show_sizes {
                     write!(
-                                f,
-                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                                partition_sizes.len(),
-                            )
+                        f,
+                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                        partition_sizes.len(),
+                    )
                 } else {
                     write!(
                         f,

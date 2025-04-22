@@ -21,15 +21,15 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::memory::MemoryStream;
-use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics, common};
 use crate::{
-    execution_plan::{Boundedness, EmissionType},
     DisplayFormatType, ExecutionPlan, Partitioning,
+    execution_plan::{Boundedness, EmissionType},
 };
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -132,7 +132,12 @@ impl ExecutionPlan for EmptyExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
 
         if partition >= self.partitions {
             return internal_err!(

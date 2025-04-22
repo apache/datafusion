@@ -25,17 +25,17 @@ pub mod string_utils;
 use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::{
-    cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
-    OffsetSizeTrait,
+    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
+    cast::AsArray,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::compute::{partition, SortColumn, SortOptions};
+use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::collections::HashSet;
 use std::num::NonZero;
 use std::ops::Range;

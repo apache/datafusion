@@ -115,21 +115,22 @@ impl CatalogProvider for MemoryCatalogProvider {
         name: &str,
         cascade: bool,
     ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
-        match self.schema(name) { Some(schema) => {
-            let table_names = schema.table_names();
-            match (table_names.is_empty(), cascade) {
-                (true, _) | (false, true) => {
-                    let (_, removed) = self.schemas.remove(name).unwrap();
-                    Ok(Some(removed))
+        match self.schema(name) {
+            Some(schema) => {
+                let table_names = schema.table_names();
+                match (table_names.is_empty(), cascade) {
+                    (true, _) | (false, true) => {
+                        let (_, removed) = self.schemas.remove(name).unwrap();
+                        Ok(Some(removed))
+                    }
+                    (false, false) => exec_err!(
+                        "Cannot drop schema {} because other tables depend on it: {}",
+                        name,
+                        itertools::join(table_names.iter(), ", ")
+                    ),
                 }
-                (false, false) => exec_err!(
-                    "Cannot drop schema {} because other tables depend on it: {}",
-                    name,
-                    itertools::join(table_names.iter(), ", ")
-                ),
             }
-        } _ => {
-            Ok(None)
-        }}
+            _ => Ok(None),
+        }
     }
 }

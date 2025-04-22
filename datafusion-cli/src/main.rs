@@ -22,19 +22,18 @@ use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::DiskManager;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::execution::DiskManager;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::ParquetMetadataFunc;
 use datafusion_cli::{
-    exec,
+    DATAFUSION_CLI_VERSION, exec,
     pool_type::PoolType,
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
-    DATAFUSION_CLI_VERSION,
 };
 
 use clap::Parser;
@@ -439,8 +438,7 @@ mod tests {
         ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
 
         // input with single quote
-        let sql =
-            "SELECT * FROM parquet_metadata('../datafusion/core/tests/data/fixed_size_list_array.parquet')";
+        let sql = "SELECT * FROM parquet_metadata('../datafusion/core/tests/data/fixed_size_list_array.parquet')";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
@@ -453,8 +451,7 @@ mod tests {
         "#);
 
         // input with double quote
-        let sql =
-            "SELECT * FROM parquet_metadata(\"../datafusion/core/tests/data/fixed_size_list_array.parquet\")";
+        let sql = "SELECT * FROM parquet_metadata(\"../datafusion/core/tests/data/fixed_size_list_array.parquet\")";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
         assert_snapshot!(batches_to_string(&rbs), @r#"
@@ -474,8 +471,7 @@ mod tests {
         ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
 
         // input with string columns
-        let sql =
-            "SELECT * FROM parquet_metadata('../parquet-testing/data/data_index_bloom_encoding_stats.parquet')";
+        let sql = "SELECT * FROM parquet_metadata('../parquet-testing/data/data_index_bloom_encoding_stats.parquet')";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 

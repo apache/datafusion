@@ -38,9 +38,9 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
-use datafusion_common::{assert_contains, Result};
+use datafusion_catalog::streaming::StreamingTable;
+use datafusion_common::{Result, assert_contains};
 use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
@@ -48,8 +48,8 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::{DiskManager, TaskContext};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::collect as collect_batches;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
@@ -574,8 +574,8 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
 
     let err = df.collect().await.unwrap_err();
     assert_contains!(
-    err.to_string(),
-    "The used disk space during the spilling process has exceeded the allowable limit"
+        err.to_string(),
+        "The used disk space during the spilling process has exceeded the allowable limit"
     );
 
     Ok(())

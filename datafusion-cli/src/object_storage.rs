@@ -549,7 +549,10 @@ mod tests {
                 .await
                 .unwrap_err();
 
-            assert_eq!(err.to_string().lines().next().unwrap_or_default(), "Invalid or Unsupported Configuration: Invalid endpoint: http://endpoint33. HTTP is not allowed for S3 endpoints. To allow HTTP, set 'aws.allow_http' to true");
+            assert_eq!(
+                err.to_string().lines().next().unwrap_or_default(),
+                "Invalid or Unsupported Configuration: Invalid endpoint: http://endpoint33. HTTP is not allowed for S3 endpoints. To allow HTTP, set 'aws.allow_http' to true"
+            );
         } else {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
@@ -589,7 +592,9 @@ mod tests {
 
         let table_url = ListingTableUrl::parse(location)?;
         let scheme = table_url.scheme();
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.oss.endpoint' '{endpoint}') LOCATION '{location}'");
+        let sql = format!(
+            "CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.oss.endpoint' '{endpoint}') LOCATION '{location}'"
+        );
 
         let ctx = SessionContext::new();
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
@@ -619,14 +624,15 @@ mod tests {
     #[tokio::test]
     async fn gcs_object_store_builder() -> Result<()> {
         let service_account_path = "fake_service_account_path";
-        let service_account_key =
-            "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\"}";
+        let service_account_key = "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\"}";
         let application_credentials_path = "fake_application_credentials_path";
         let location = "gcs://bucket/path/file.parquet";
 
         let table_url = ListingTableUrl::parse(location)?;
         let scheme = table_url.scheme();
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_path' '{service_account_path}', 'gcp.service_account_key' '{service_account_key}', 'gcp.application_credentials_path' '{application_credentials_path}') LOCATION '{location}'");
+        let sql = format!(
+            "CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_path' '{service_account_path}', 'gcp.service_account_key' '{service_account_key}', 'gcp.application_credentials_path' '{application_credentials_path}') LOCATION '{location}'"
+        );
 
         let ctx = SessionContext::new();
         let mut plan = ctx.state().create_logical_plan(&sql).await?;

@@ -27,14 +27,14 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, plan_err, Column, Result};
+use datafusion_common::{Column, Result, internal_err, plan_err};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, split_conjunction_owned};
 use datafusion_expr::{
-    exists, in_subquery, lit, not, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
-    LogicalPlan, LogicalPlanBuilder, Operator,
+    BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
+    in_subquery, lit, not, not_exists, not_in_subquery,
 };
 
 use log::debug;
@@ -1423,7 +1423,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected  = "Projection: customer.c_custkey [c_custkey:Int64]\
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
                         \n  LeftSemi Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8]\
                         \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
                         \n    SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]\
@@ -1642,7 +1642,7 @@ mod tests {
             .project(vec![col("test.c")])?
             .build()?;
 
-        let expected  = "Projection: test.c [c:UInt32]\
+        let expected = "Projection: test.c [c:UInt32]\
                         \n  LeftSemi Join:  Filter: test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]\
                         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
                         \n    SubqueryAlias: __correlated_sq_1 [c:UInt32, a:UInt32]\
@@ -1661,7 +1661,7 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        let expected  = "Projection: test.b [b:UInt32]\
+        let expected = "Projection: test.b [b:UInt32]\
                         \n  LeftSemi Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32]\
                         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
                         \n    SubqueryAlias: __correlated_sq_1 [c:UInt32]\
@@ -1679,7 +1679,7 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        let expected  = "Projection: test.b [b:UInt32]\
+        let expected = "Projection: test.b [b:UInt32]\
                         \n  LeftAnti Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32]\
                         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
                         \n    SubqueryAlias: __correlated_sq_1 [c:UInt32]\

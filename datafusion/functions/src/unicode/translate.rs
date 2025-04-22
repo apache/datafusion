@@ -26,7 +26,7 @@ use datafusion_common::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,

@@ -27,9 +27,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::PartitionedFile;
 use crate::file_meta::FileMeta;
 use crate::file_scan_config::{FileScanConfig, PartitionColumnProjector};
-use crate::PartitionedFile;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::error::Result;
 use datafusion_execution::RecordBatchStream;
@@ -39,12 +39,12 @@ use datafusion_physical_plan::metrics::{
 
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::instant::Instant;
 use datafusion_common::ScalarValue;
+use datafusion_common::instant::Instant;
 
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
-use futures::{ready, FutureExt as _, Stream, StreamExt as _};
+use futures::{FutureExt as _, Stream, StreamExt as _, ready};
 
 /// A stream that iterates record batch by record batch, file over file.
 pub struct FileStream {
@@ -315,7 +315,7 @@ impl FileStream {
                     }
                 }
                 FileStreamState::Error | FileStreamState::Limit => {
-                    return Poll::Ready(None)
+                    return Poll::Ready(None);
                 }
             }
         }
@@ -522,16 +522,16 @@ impl FileStreamMetrics {
 
 #[cfg(test)]
 mod tests {
+    use crate::PartitionedFile;
     use crate::file_scan_config::FileScanConfigBuilder;
     use crate::tests::make_partition;
-    use crate::PartitionedFile;
     use arrow::error::ArrowError;
     use datafusion_common::error::Result;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{FutureExt as _, StreamExt as _};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::file_meta::FileMeta;
     use crate::file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};

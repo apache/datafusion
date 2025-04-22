@@ -350,7 +350,7 @@ mod tests {
         EquivalenceClass, EquivalenceGroup, EquivalenceProperties,
         OrderingEquivalenceClass,
     };
-    use crate::expressions::{col, BinaryExpr, Column};
+    use crate::expressions::{BinaryExpr, Column, col};
     use crate::utils::tests::TestScalarUDF;
     use crate::{
         AcrossPartitions, ConstExpr, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
@@ -659,8 +659,9 @@ mod tests {
         ];
 
         for (orderings, eq_group, constants, reqs, expected) in test_cases {
-            let err_msg =
-                format!("error in test orderings: {orderings:?}, eq_group: {eq_group:?}, constants: {constants:?}, reqs: {reqs:?}, expected: {expected:?}");
+            let err_msg = format!(
+                "error in test orderings: {orderings:?}, eq_group: {eq_group:?}, constants: {constants:?}, reqs: {reqs:?}, expected: {expected:?}"
+            );
             let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
             let orderings = convert_to_orderings(&orderings);
             eq_properties.add_new_orderings(orderings);

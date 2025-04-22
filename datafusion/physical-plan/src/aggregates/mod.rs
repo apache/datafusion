@@ -34,18 +34,18 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
+use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
+use datafusion_common::{Constraint, Constraints, Result, internal_err, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
-    equivalence::ProjectionMapping, expressions::Column, physical_exprs_contains,
     ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
-    PhysicalSortRequirement,
+    PhysicalSortRequirement, equivalence::ProjectionMapping, expressions::Column,
+    physical_exprs_contains,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -468,7 +468,11 @@ impl AggregateExec {
     ) -> Result<Self> {
         // Make sure arguments are consistent in size
         if aggr_expr.len() != filter_expr.len() {
-            return internal_err!("Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match", aggr_expr, filter_expr);
+            return internal_err!(
+                "Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match",
+                aggr_expr,
+                filter_expr
+            );
         }
 
         let input_eq_properties = input.equivalence_properties();
@@ -960,23 +964,23 @@ impl ExecutionPlan for AggregateExec {
             _ => {
                 // When the input row count is 0 or 1, we can adopt that statistic keeping its reliability.
                 // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
-                let num_rows = match self.input().statistics()?.num_rows.get_value()
-                { Some(value) => {
-                    if *value > 1 {
-                        self.input().statistics()?.num_rows.to_inexact()
-                    } else if *value == 0 {
-                        // Aggregation on an empty table creates a null row.
-                        self.input()
-                            .statistics()?
-                            .num_rows
-                            .add(&Precision::Exact(1))
-                    } else {
-                        // num_rows = 1 case
-                        self.input().statistics()?.num_rows
+                let num_rows = match self.input().statistics()?.num_rows.get_value() {
+                    Some(value) => {
+                        if *value > 1 {
+                            self.input().statistics()?.num_rows.to_inexact()
+                        } else if *value == 0 {
+                            // Aggregation on an empty table creates a null row.
+                            self.input()
+                                .statistics()?
+                                .num_rows
+                                .add(&Precision::Exact(1))
+                        } else {
+                            // num_rows = 1 case
+                            self.input().statistics()?.num_rows
+                        }
                     }
-                } _ => {
-                    Precision::Absent
-                }};
+                    _ => Precision::Absent,
+                };
                 Ok(Statistics {
                     num_rows,
                     column_statistics,
@@ -1406,6 +1410,7 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::*;
+    use crate::RecordBatchStream;
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
@@ -1413,19 +1418,18 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::metrics::MetricValue;
-    use crate::test::assert_is_pending;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
-    use crate::RecordBatchStream;
+    use crate::test::assert_is_pending;
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
 
     use arrow::array::{
         DictionaryArray, Float32Array, Float64Array, Int32Array, StructArray,
         UInt32Array, UInt64Array,
     };
-    use arrow::compute::{concat_batches, SortOptions};
+    use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::{DataType, Int32Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{internal_err, DataFusionError, ScalarValue};
+    use datafusion_common::{DataFusionError, ScalarValue, internal_err};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -1435,11 +1439,11 @@ mod tests {
     use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
     use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
-    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::lit;
-    use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::Literal;
+    use datafusion_physical_expr::expressions::lit;
 
     use futures::{FutureExt, Stream};
     use insta::{allow_duplicates, assert_snapshot};
@@ -2510,12 +2514,13 @@ mod tests {
             ],
         );
 
-        let aggregates: Vec<Arc<AggregateFunctionExpr>> =
-            vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
                 .schema(Arc::clone(&schema))
                 .alias("1")
                 .build()
-                .map(Arc::new)?];
+                .map(Arc::new)?,
+        ];
 
         let input_batches = (0..4)
             .map(|_| {
@@ -2631,14 +2636,13 @@ mod tests {
             "labels".to_string(),
         )]);
 
-        let aggr_expr = vec![AggregateExprBuilder::new(
-            sum_udaf(),
-            vec![col("value", &batch.schema())?],
-        )
-        .schema(Arc::clone(&batch.schema()))
-        .alias(String::from("SUM(value)"))
-        .build()
-        .map(Arc::new)?];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &batch.schema())?])
+                .schema(Arc::clone(&batch.schema()))
+                .alias(String::from("SUM(value)"))
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let input = TestMemoryExec::try_new_exec(
             &[vec![batch.clone()]],
@@ -2682,14 +2686,13 @@ mod tests {
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
 
-        let aggr_expr =
-            vec![
-                AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias(String::from("COUNT(val)"))
-                    .build()
-                    .map(Arc::new)?,
-            ];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias(String::from("COUNT(val)"))
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let input_data = vec![
             RecordBatch::try_new(
@@ -2762,14 +2765,13 @@ mod tests {
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
 
-        let aggr_expr =
-            vec![
-                AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias(String::from("COUNT(val)"))
-                    .build()
-                    .map(Arc::new)?,
-            ];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias(String::from("COUNT(val)"))
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let input_data = vec![
             RecordBatch::try_new(
@@ -2848,14 +2850,13 @@ mod tests {
             Field::new("b", DataType::Float32, false),
         ]));
 
-        let aggr_expr =
-            vec![
-                AggregateExprBuilder::new(count_udaf(), vec![col("a", &input_schema)?])
-                    .schema(Arc::clone(&input_schema))
-                    .alias("COUNT(a)")
-                    .build()
-                    .map(Arc::new)?,
-            ];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("a", &input_schema)?])
+                .schema(Arc::clone(&input_schema))
+                .alias("COUNT(a)")
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let grouping_set = PhysicalGroupBy::new(
             vec![
@@ -3002,7 +3003,9 @@ mod tests {
                     "Expected spill but SpillCount metric not found or SpillCount was 0."
                 );
             } else if !expect_spill && spill_count > 0 {
-                panic!("Expected no spill but found SpillCount metric with value greater than 0.");
+                panic!(
+                    "Expected no spill but found SpillCount metric with value greater than 0."
+                );
             }
         } else {
             panic!("No metrics returned from the operator; cannot verify spilling.");

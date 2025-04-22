@@ -24,10 +24,10 @@ use arrow::{
 
 use datafusion::error::Result;
 use datafusion::logical_expr::{Aggregate, LogicalPlan, TableScan};
-use datafusion::physical_plan::collect;
-use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
+use datafusion::physical_plan::collect;
+use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::prelude::*;
 use datafusion::test_util;
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
@@ -331,8 +331,7 @@ async fn nyc() -> Result<()> {
     match &optimized_plan {
         LogicalPlan::Aggregate(Aggregate { input, .. }) => match input.as_ref() {
             LogicalPlan::TableScan(TableScan {
-                projected_schema,
-                ..
+                projected_schema, ..
             }) => {
                 assert_eq!(2, projected_schema.fields().len());
                 assert_eq!(projected_schema.field(0).name(), "passenger_count");

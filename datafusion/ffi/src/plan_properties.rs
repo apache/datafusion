@@ -18,27 +18,27 @@
 use std::{ffi::c_void, sync::Arc};
 
 use abi_stable::{
+    StableAbi,
     std_types::{
         RResult::{self, ROk},
         RString, RVec,
     },
-    StableAbi,
 };
 use arrow::datatypes::SchemaRef;
 use datafusion::{
     error::{DataFusionError, Result},
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        execution_plan::{Boundedness, EmissionType},
         PlanProperties,
+        execution_plan::{Boundedness, EmissionType},
     },
     prelude::SessionContext,
 };
 use datafusion_proto::{
     physical_plan::{
+        DefaultPhysicalExtensionCodec,
         from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
         to_proto::{serialize_partitioning, serialize_physical_sort_exprs},
-        DefaultPhysicalExtensionCodec,
     },
     protobuf::{Partitioning, PhysicalSortExprNodeCollection},
 };
@@ -83,70 +83,82 @@ struct PlanPropertiesPrivateData {
 
 unsafe extern "C" fn output_partitioning_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> RResult<RVec<u8>, RString> { unsafe {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
+) -> RResult<RVec<u8>, RString> {
+    unsafe {
+        let private_data = properties.private_data as *const PlanPropertiesPrivateData;
+        let props = &(*private_data).props;
 
-    let codec = DefaultPhysicalExtensionCodec {};
-    let partitioning_data =
-        rresult_return!(serialize_partitioning(props.output_partitioning(), &codec));
-    let output_partitioning = partitioning_data.encode_to_vec();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let partitioning_data =
+            rresult_return!(serialize_partitioning(props.output_partitioning(), &codec));
+        let output_partitioning = partitioning_data.encode_to_vec();
 
-    ROk(output_partitioning.into())
-}}
+        ROk(output_partitioning.into())
+    }
+}
 
 unsafe extern "C" fn emission_type_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> FFI_EmissionType { unsafe {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
-    props.emission_type.into()
-}}
+) -> FFI_EmissionType {
+    unsafe {
+        let private_data = properties.private_data as *const PlanPropertiesPrivateData;
+        let props = &(*private_data).props;
+        props.emission_type.into()
+    }
+}
 
 unsafe extern "C" fn boundedness_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> FFI_Boundedness { unsafe {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
-    props.boundedness.into()
-}}
+) -> FFI_Boundedness {
+    unsafe {
+        let private_data = properties.private_data as *const PlanPropertiesPrivateData;
+        let props = &(*private_data).props;
+        props.boundedness.into()
+    }
+}
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> RResult<RVec<u8>, RString> { unsafe {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
+) -> RResult<RVec<u8>, RString> {
+    unsafe {
+        let private_data = properties.private_data as *const PlanPropertiesPrivateData;
+        let props = &(*private_data).props;
 
-    let codec = DefaultPhysicalExtensionCodec {};
-    let output_ordering = match props.output_ordering() {
-        Some(ordering) => {
-            let physical_sort_expr_nodes = rresult_return!(
-                serialize_physical_sort_exprs(ordering.to_owned(), &codec)
-            );
-            let ordering_data = PhysicalSortExprNodeCollection {
-                physical_sort_expr_nodes,
-            };
+        let codec = DefaultPhysicalExtensionCodec {};
+        let output_ordering = match props.output_ordering() {
+            Some(ordering) => {
+                let physical_sort_expr_nodes = rresult_return!(
+                    serialize_physical_sort_exprs(ordering.to_owned(), &codec)
+                );
+                let ordering_data = PhysicalSortExprNodeCollection {
+                    physical_sort_expr_nodes,
+                };
 
-            ordering_data.encode_to_vec()
-        }
-        None => Vec::default(),
-    };
-    ROk(output_ordering.into())
-}}
+                ordering_data.encode_to_vec()
+            }
+            None => Vec::default(),
+        };
+        ROk(output_ordering.into())
+    }
+}
 
-unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> WrappedSchema { unsafe {
-    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
-    let props = &(*private_data).props;
+unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> WrappedSchema {
+    unsafe {
+        let private_data = properties.private_data as *const PlanPropertiesPrivateData;
+        let props = &(*private_data).props;
 
-    let schema: SchemaRef = Arc::clone(props.eq_properties.schema());
-    schema.into()
-}}
+        let schema: SchemaRef = Arc::clone(props.eq_properties.schema());
+        schema.into()
+    }
+}
 
-unsafe extern "C" fn release_fn_wrapper(props: &mut FFI_PlanProperties) { unsafe {
-    let private_data =
-        Box::from_raw(props.private_data as *mut PlanPropertiesPrivateData);
-    drop(private_data);
-}}
+unsafe extern "C" fn release_fn_wrapper(props: &mut FFI_PlanProperties) {
+    unsafe {
+        let private_data =
+            Box::from_raw(props.private_data as *mut PlanPropertiesPrivateData);
+        drop(private_data);
+    }
+}
 
 impl Drop for FFI_PlanProperties {
     fn drop(&mut self) {

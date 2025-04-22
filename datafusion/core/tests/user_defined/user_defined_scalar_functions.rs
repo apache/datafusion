@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use arrow::array::as_string_array;
 use arrow::array::{
-    builder::BooleanBuilder, cast::AsArray, Array, ArrayRef, Float32Array, Float64Array,
-    Int32Array, RecordBatch, StringArray,
+    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
+    builder::BooleanBuilder, cast::AsArray,
 };
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -34,8 +34,8 @@ use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
-    plan_err, DFSchema, DataFusionError, HashMap, Result, ScalarValue,
+    DFSchema, DataFusionError, HashMap, Result, ScalarValue, assert_batches_eq,
+    assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err, plan_err,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -420,9 +420,10 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
         .await
         .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Error during planning: Invalid function \'my_func\'"));
+    assert!(
+        err.to_string()
+            .contains("Error during planning: Invalid function \'my_func\'")
+    );
 
     // Can call it if you put quotes
     let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
@@ -1058,10 +1059,11 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     // Create the `better_add` function dynamically via CREATE FUNCTION statement
     assert!(ctx.sql(sql).await.is_ok());
     // try to `drop function` when sql options have allow ddl disabled
-    assert!(ctx
-        .sql_with_options("drop function better_add", options)
-        .await
-        .is_err());
+    assert!(
+        ctx.sql_with_options("drop function better_add", options)
+            .await
+            .is_err()
+    );
 
     let result = ctx
         .sql("select better_add(2.0, 2.0)")

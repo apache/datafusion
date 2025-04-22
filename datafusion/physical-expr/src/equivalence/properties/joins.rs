@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{equivalence::OrderingEquivalenceClass, PhysicalExprRef};
+use crate::{PhysicalExprRef, equivalence::OrderingEquivalenceClass};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{JoinSide, JoinType};
 

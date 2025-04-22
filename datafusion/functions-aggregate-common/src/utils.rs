@@ -28,7 +28,7 @@ use arrow::{
         ToByteSlice,
     },
 };
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -192,20 +192,23 @@ impl<T: DecimalType> DecimalAverager<T> {
     /// * count: total count, stored as a i128/i256 (*NOT* a Decimal128/Decimal256 value)
     #[inline(always)]
     pub fn avg(&self, sum: T::Native, count: T::Native) -> Result<T::Native> {
-        match sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul)) { Ok(value) => {
-            let new_value = value.div_wrapping(count);
+        match sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul)) {
+            Ok(value) => {
+                let new_value = value.div_wrapping(count);
 
-            let validate =
-                T::validate_decimal_precision(new_value, self.target_precision);
+                let validate =
+                    T::validate_decimal_precision(new_value, self.target_precision);
 
-            if validate.is_ok() {
-                Ok(new_value)
-            } else {
+                if validate.is_ok() {
+                    Ok(new_value)
+                } else {
+                    exec_err!("Arithmetic Overflow in AvgAccumulator")
+                }
+            }
+            _ => {
+                // can't convert the lit decimal to the returned data type
                 exec_err!("Arithmetic Overflow in AvgAccumulator")
             }
-        } _ => {
-            // can't convert the lit decimal to the returned data type
-            exec_err!("Arithmetic Overflow in AvgAccumulator")
-        }}
+        }
     }
 }

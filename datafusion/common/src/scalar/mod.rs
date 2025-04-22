@@ -37,7 +37,7 @@ use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
     as_fixed_size_binary_array, as_fixed_size_list_array,
 };
-use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
+use crate::error::{_exec_err, _internal_err, _not_impl_err, DataFusionError, Result};
 use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
@@ -47,18 +47,19 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::compute::kernels::{
-    cast::{cast_with_options, CastOptions},
+    cast::{CastOptions, cast_with_options},
     numeric::*,
 };
 use arrow::datatypes::{
-    i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
-    Date32Type, Date64Type, Field, Float32Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
+    ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType,
+    DECIMAL128_MAX_PRECISION, DataType, Date32Type, Date64Type, Field, Float32Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type, UnionFields,
+    UnionMode, i256,
 };
-use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
+use arrow::util::display::{ArrayFormatter, FormatOptions, array_value_to_string};
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
 
@@ -561,11 +562,7 @@ impl PartialOrd for ScalarValue {
             (Union(_, _, _), _) => None,
             (Dictionary(k1, v1), Dictionary(k2, v2)) => {
                 // Don't compare if the key types don't match (it is effectively a different datatype)
-                if k1 == k2 {
-                    v1.partial_cmp(v2)
-                } else {
-                    None
-                }
+                if k1 == k2 { v1.partial_cmp(v2) } else { None }
             }
             (Dictionary(_, _), _) => None,
             (Null, Null) => Some(Ordering::Equal),
@@ -585,7 +582,9 @@ fn first_array_for_list(arr: &dyn Array) -> ArrayRef {
     } else if let Some(arr) = arr.as_fixed_size_list_opt() {
         arr.value(0)
     } else {
-        unreachable!("Since only List / LargeList / FixedSizeList are supported, this should never happen")
+        unreachable!(
+            "Since only List / LargeList / FixedSizeList are supported, this should never happen"
+        )
     }
 }
 
@@ -1858,18 +1857,20 @@ impl ScalarValue {
         macro_rules! build_array_primitive {
             ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 {
-                    let array = scalars.map(|sv| {
-                        if let ScalarValue::$SCALAR_TY(v) = sv {
-                            Ok(v)
-                        } else {
-                            _exec_err!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
+                    let array = scalars
+                        .map(|sv| {
+                            if let ScalarValue::$SCALAR_TY(v) = sv {
+                                Ok(v)
+                            } else {
+                                _exec_err!(
+                                    "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
-                                data_type, sv
-                            )
-                        }
-                    })
-                    .collect::<Result<$ARRAY_TY>>()?;
+                                    data_type,
+                                    sv
+                                )
+                            }
+                        })
+                        .collect::<Result<$ARRAY_TY>>()?;
                     Arc::new(array)
                 }
             }};
@@ -1878,18 +1879,20 @@ impl ScalarValue {
         macro_rules! build_array_primitive_tz {
             ($ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr_2021) => {{
                 {
-                    let array = scalars.map(|sv| {
-                        if let ScalarValue::$SCALAR_TY(v, _) = sv {
-                            Ok(v)
-                        } else {
-                            _exec_err!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
+                    let array = scalars
+                        .map(|sv| {
+                            if let ScalarValue::$SCALAR_TY(v, _) = sv {
+                                Ok(v)
+                            } else {
+                                _exec_err!(
+                                    "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
-                                data_type, sv
-                            )
-                        }
-                    })
-                    .collect::<Result<$ARRAY_TY>>()?;
+                                    data_type,
+                                    sv
+                                )
+                            }
+                        })
+                        .collect::<Result<$ARRAY_TY>>()?;
                     Arc::new(array.with_timezone_opt($TZ.clone()))
                 }
             }};
@@ -1900,18 +1903,20 @@ impl ScalarValue {
         macro_rules! build_array_string {
             ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 {
-                    let array = scalars.map(|sv| {
-                        if let ScalarValue::$SCALAR_TY(v) = sv {
-                            Ok(v)
-                        } else {
-                            _exec_err!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
+                    let array = scalars
+                        .map(|sv| {
+                            if let ScalarValue::$SCALAR_TY(v) = sv {
+                                Ok(v)
+                            } else {
+                                _exec_err!(
+                                    "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
-                                data_type, sv
-                            )
-                        }
-                    })
-                    .collect::<Result<$ARRAY_TY>>()?;
+                                    data_type,
+                                    sv
+                                )
+                            }
+                        })
+                        .collect::<Result<$ARRAY_TY>>()?;
                     Arc::new(array)
                 }
             }};
@@ -3995,7 +4000,7 @@ mod tests {
     };
 
     use crate::test_util::batches_to_string;
-    use arrow::array::{types::Float64Type, NullBufferBuilder};
+    use arrow::array::{NullBufferBuilder, types::Float64Type};
     use arrow::buffer::{Buffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
     use arrow::datatypes::Fields;
@@ -4505,7 +4510,10 @@ mod tests {
             .sub_checked(&int_value_2)
             .unwrap_err()
             .strip_backtrace();
-        assert_eq!(err, "Arrow error: Arithmetic overflow: Overflow happened on: 9223372036854775807 - -9223372036854775808")
+        assert_eq!(
+            err,
+            "Arrow error: Arithmetic overflow: Overflow happened on: 9223372036854775807 - -9223372036854775808"
+        )
     }
 
     #[test]
@@ -4627,12 +4635,16 @@ mod tests {
         assert_eq!(123i128, array_decimal.value(0));
         assert_eq!(123i128, array_decimal.value(9));
         // test eq array
-        assert!(decimal_value
-            .eq_array(&array, 1)
-            .expect("Failed to compare arrays"));
-        assert!(decimal_value
-            .eq_array(&array, 5)
-            .expect("Failed to compare arrays"));
+        assert!(
+            decimal_value
+                .eq_array(&array, 1)
+                .expect("Failed to compare arrays")
+        );
+        assert!(
+            decimal_value
+                .eq_array(&array, 5)
+                .expect("Failed to compare arrays")
+        );
         // test try from array
         assert_eq!(
             decimal_value,
@@ -4677,18 +4689,24 @@ mod tests {
         assert_eq!(4, array.len());
         assert_eq!(DataType::Decimal128(10, 2), array.data_type().clone());
 
-        assert!(ScalarValue::try_new_decimal128(1, 10, 2)
-            .unwrap()
-            .eq_array(&array, 0)
-            .expect("Failed to compare arrays"));
-        assert!(ScalarValue::try_new_decimal128(2, 10, 2)
-            .unwrap()
-            .eq_array(&array, 1)
-            .expect("Failed to compare arrays"));
-        assert!(ScalarValue::try_new_decimal128(3, 10, 2)
-            .unwrap()
-            .eq_array(&array, 2)
-            .expect("Failed to compare arrays"));
+        assert!(
+            ScalarValue::try_new_decimal128(1, 10, 2)
+                .unwrap()
+                .eq_array(&array, 0)
+                .expect("Failed to compare arrays")
+        );
+        assert!(
+            ScalarValue::try_new_decimal128(2, 10, 2)
+                .unwrap()
+                .eq_array(&array, 1)
+                .expect("Failed to compare arrays")
+        );
+        assert!(
+            ScalarValue::try_new_decimal128(3, 10, 2)
+                .unwrap()
+                .eq_array(&array, 2)
+                .expect("Failed to compare arrays")
+        );
         assert_eq!(
             ScalarValue::Decimal128(None, 10, 2),
             ScalarValue::try_from_array(&array, 3).unwrap()
@@ -5422,7 +5440,9 @@ mod tests {
                 for other_index in 0..array.len() {
                     if index != other_index {
                         assert!(
-                            !scalar.eq_array(&array, other_index).expect("Failed to compare arrays"),
+                            !scalar
+                                .eq_array(&array, other_index)
+                                .expect("Failed to compare arrays"),
                             "Expected {scalar:?} to be NOT equal to {array:?} at index {other_index}"
                         );
                     }

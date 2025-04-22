@@ -18,7 +18,7 @@
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use arrow::util::bench_util::create_string_array_with_len;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string::concat;

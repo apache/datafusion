@@ -36,7 +36,7 @@ use datafusion_execution::TaskContext;
 use crate::coalesce::{BatchCoalescer, CoalescerState};
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    filter_pushdown_transparent, FilterDescription, FilterPushdownResult,
+    FilterDescription, FilterPushdownResult, filter_pushdown_transparent,
 };
 use datafusion_common::config::ConfigOptions;
 use futures::ready;

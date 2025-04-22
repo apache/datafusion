@@ -21,34 +21,34 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use crate::aggregates::group_values::{new_group_values, GroupValues};
+use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, AggregateMode,
-    PhysicalGroupBy,
+    AggregateMode, PhysicalGroupBy, create_schema, evaluate_group_by, evaluate_many,
+    evaluate_optional,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
+use crate::{ExecutionPlan, PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
-use super::order::GroupOrdering;
 use super::AggregateExec;
+use super::order::GroupOrdering;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::ready;
@@ -889,7 +889,9 @@ impl GroupedHashAggregateStream {
                     }
                     _ => {
                         if opt_filter.is_some() {
-                            return internal_err!("aggregate filter should be applied in partial stage, there should be no filter in final stage");
+                            return internal_err!(
+                                "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+                            );
                         }
 
                         // if aggregation is over intermediate states,

@@ -58,14 +58,14 @@
 use std::cmp::Ordering;
 
 use arrow::datatypes::{
-    DataType, TimeUnit, MAX_DECIMAL128_FOR_EACH_PRECISION,
-    MIN_DECIMAL128_FOR_EACH_PRECISION,
+    DataType, MAX_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION,
+    TimeUnit,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
-use datafusion_common::{internal_err, tree_node::Transformed};
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{lit, BinaryExpr};
-use datafusion_expr::{simplify::SimplifyInfo, Cast, Expr, Operator, TryCast};
+use datafusion_common::{internal_err, tree_node::Transformed};
+use datafusion_expr::{BinaryExpr, lit};
+use datafusion_expr::{Cast, Expr, Operator, TryCast, simplify::SimplifyInfo};
 
 pub(super) fn unwrap_cast_in_comparison_for_binary<S: SimplifyInfo>(
     info: &S,
@@ -528,7 +528,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::simplify_expressions::ExprSimplifier;
-    use arrow::compute::{cast_with_options, CastOptions};
+    use arrow::compute::{CastOptions, cast_with_options};
     use arrow::datatypes::Field;
     use datafusion_common::{DFSchema, DFSchemaRef};
     use datafusion_expr::execution_props::ExecutionProps;

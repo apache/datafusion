@@ -26,7 +26,7 @@ use arrow::datatypes::DataType::Utf8;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;

@@ -20,10 +20,10 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
-use rand::rngs::ThreadRng;
 use rand::Rng;
+use rand::rngs::ThreadRng;
 
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_trunc;

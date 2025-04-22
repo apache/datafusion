@@ -26,15 +26,15 @@ use crate::simplify_expressions::ExprSimplifier;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{plan_err, Column, DFSchemaRef, HashMap, Result, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef, HashMap, Result, ScalarValue, plan_err};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    expr, lit, BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator,
+    BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan, LogicalPlanBuilder,
+    Operator, expr, lit,
 };
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
@@ -190,16 +190,15 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 let pull_up_expr_opt = if let Some(expr_result_map) =
                     self.collected_count_expr_map.get(plan_filter.input.deref())
                 {
-                    match conjunction(subquery_filters.clone()) { Some(expr) => {
-                        filter_exprs_evaluation_result_on_empty_batch(
+                    match conjunction(subquery_filters.clone()) {
+                        Some(expr) => filter_exprs_evaluation_result_on_empty_batch(
                             &expr,
                             Arc::clone(plan_filter.input.schema()),
                             expr_result_map,
                             &mut expr_result_map_for_count_bug,
-                        )?
-                    } _ => {
-                        None
-                    }}
+                        )?,
+                        _ => None,
+                    }
                 } else {
                     None
                 };

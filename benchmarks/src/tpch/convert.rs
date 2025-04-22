@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 
 use datafusion::common::not_impl_err;
 
-use super::get_tbl_tpch_table_schema;
 use super::TPCH_TABLES;
+use super::get_tbl_tpch_table_schema;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use parquet::basic::Compression;

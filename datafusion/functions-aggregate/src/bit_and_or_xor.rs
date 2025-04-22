@@ -23,14 +23,14 @@ use std::fmt::{Display, Formatter};
 use std::mem::{size_of, size_of_val};
 
 use ahash::RandomState;
-use arrow::array::{downcast_integer, Array, ArrayRef, AsArray};
+use arrow::array::{Array, ArrayRef, AsArray, downcast_integer};
 use arrow::datatypes::{
-    ArrowNativeType, ArrowNumericType, DataType, Field, Int16Type, Int32Type, Int64Type,
-    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNumericType, DataType, Field, Int8Type, Int16Type, Int32Type,
+    Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 
 use datafusion_common::cast::as_list_array;
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::INTEGERS;
 use datafusion_expr::utils::format_state_name;

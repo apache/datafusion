@@ -26,13 +26,13 @@ use datafusion::{
     datasource::object_store::ObjectStoreUrl,
     logical_expr::Operator,
     physical_plan::{
-        expressions::{BinaryExpr, Column, Literal},
         PhysicalExpr,
+        expressions::{BinaryExpr, Column, Literal},
     },
     scalar::ScalarValue,
 };
-use datafusion_common::{config::ConfigOptions, Statistics};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
+use datafusion_common::{Statistics, config::ConfigOptions};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::{
@@ -41,23 +41,23 @@ use datafusion_datasource::{
 use datafusion_expr::test::function_stub::count_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{
-    aggregate::AggregateExprBuilder, conjunction, Partitioning,
+    Partitioning, aggregate::AggregateExprBuilder, conjunction,
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use datafusion_physical_optimizer::push_down_filter::PushdownFilter;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::push_down_filter::PushdownFilter;
 use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
+    FilterDescription, FilterPushdownResult, FilterPushdownSupport,
+    filter_pushdown_not_supported,
+};
+use datafusion_physical_plan::{
+    DisplayFormatType, ExecutionPlan, displayable, metrics::ExecutionPlanMetricsSet,
 };
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_batches::CoalesceBatchesExec,
     filter::FilterExec,
     repartition::RepartitionExec,
-};
-use datafusion_physical_plan::{
-    displayable, metrics::ExecutionPlanMetricsSet, DisplayFormatType, ExecutionPlan,
 };
 
 use object_store::ObjectStore;
@@ -381,15 +381,14 @@ fn test_no_pushdown_through_aggregates() {
         FilterExec::try_new(col_lit_predicate("a", "foo", schema()), coalesce).unwrap(),
     );
 
-    let aggregate_expr =
-        vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("a", schema()).unwrap()])
-                .schema(Arc::clone(schema()))
-                .alias("cnt")
-                .build()
-                .map(Arc::new)
-                .unwrap(),
-        ];
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(count_udaf(), vec![col("a", schema()).unwrap()])
+            .schema(Arc::clone(schema()))
+            .alias("cnt")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
     let group_by = PhysicalGroupBy::new_single(vec![
         (col("a", schema()).unwrap(), "a".to_string()),
         (col("b", schema()).unwrap(), "b".to_string()),

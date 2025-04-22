@@ -36,7 +36,10 @@ fn from_env() {
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { env::set_var(env_key, "ttruee") };
     let err = ConfigOptions::from_env().unwrap_err().strip_backtrace();
-    assert_eq!(err, "Error parsing 'ttruee' as bool\ncaused by\nExternal error: provided string was not `true` or `false`");
+    assert_eq!(
+        err,
+        "Error parsing 'ttruee' as bool\ncaused by\nExternal error: provided string was not `true` or `false`"
+    );
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { env::remove_var(env_key) };
 
@@ -52,7 +55,10 @@ fn from_env() {
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { env::set_var(env_key, "abc") };
     let err = ConfigOptions::from_env().unwrap_err().strip_backtrace();
-    assert_eq!(err, "Error parsing 'abc' as usize\ncaused by\nExternal error: invalid digit found in string");
+    assert_eq!(
+        err,
+        "Error parsing 'abc' as usize\ncaused by\nExternal error: invalid digit found in string"
+    );
 
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { env::remove_var(env_key) };

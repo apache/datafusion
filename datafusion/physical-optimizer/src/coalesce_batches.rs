@@ -26,8 +26,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
-    coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
-    repartition::RepartitionExec, ExecutionPlan,
+    ExecutionPlan, coalesce_batches::CoalesceBatchesExec, filter::FilterExec,
+    joins::HashJoinExec, repartition::RepartitionExec,
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};

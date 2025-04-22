@@ -20,7 +20,7 @@
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, DataFusionError, Result};
 
-use crate::{execution_props::ExecutionProps, Expr, ExprSchemable};
+use crate::{Expr, ExprSchemable, execution_props::ExecutionProps};
 
 /// Provides the information necessary to apply algebraic simplification to an
 /// [Expr]. See [SimplifyContext] for one concrete implementation.

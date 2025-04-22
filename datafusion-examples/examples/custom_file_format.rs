@@ -32,12 +32,12 @@ use datafusion::{
 };
 use datafusion::{
     datasource::{
+        MemTable,
         file_format::{
-            csv::CsvFormatFactory, file_compression_type::FileCompressionType,
-            FileFormat, FileFormatFactory,
+            FileFormat, FileFormatFactory, csv::CsvFormatFactory,
+            file_compression_type::FileCompressionType,
         },
         physical_plan::{FileScanConfig, FileSinkConfig},
-        MemTable,
     },
     error::Result,
     physical_plan::ExecutionPlan,

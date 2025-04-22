@@ -18,11 +18,11 @@
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
 use arrow::array::{Array, ArrayRef, NullArray};
-use arrow::compute::{kernels, CastOptions};
+use arrow::compute::{CastOptions, kernels};
 use arrow::datatypes::DataType;
 use arrow::util::pretty::pretty_format_columns;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use std::fmt;
 use std::sync::Arc;
 
@@ -183,7 +183,8 @@ impl ColumnarValue {
                         Some(array_len)
                     } else {
                         return internal_err!(
-                            "Arguments has mixed length. Expected length: {array_len}, found length: {}", a.len()
+                            "Arguments has mixed length. Expected length: {array_len}, found length: {}",
+                            a.len()
                         );
                     }
                 }
@@ -227,13 +228,14 @@ impl fmt::Display for ColumnarValue {
             ColumnarValue::Array(array) => {
                 pretty_format_columns("ColumnarValue(ArrayRef)", &[Arc::clone(array)])
             }
-            ColumnarValue::Scalar(_) => {
-                match self.to_array(1) { Ok(array) => {
+            ColumnarValue::Scalar(_) => match self.to_array(1) {
+                Ok(array) => {
                     pretty_format_columns("ColumnarValue(ScalarValue)", &[array])
-                } _ => {
+                }
+                _ => {
                     return write!(f, "Error formatting columnar value");
-                }}
-            }
+                }
+            },
         };
 
         if let Ok(formatted) = formatted {

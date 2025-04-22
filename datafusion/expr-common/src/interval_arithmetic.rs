@@ -22,16 +22,16 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
 
 use crate::operator::Operator;
-use crate::type_coercion::binary::{comparison_coercion_numeric, BinaryTypeCoercer};
+use crate::type_coercion::binary::{BinaryTypeCoercer, comparison_coercion_numeric};
 
-use arrow::compute::{cast_with_options, CastOptions};
+use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::{
-    DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit, TimeUnit,
+    DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit,
     MAX_DECIMAL128_FOR_EACH_PRECISION, MAX_DECIMAL256_FOR_EACH_PRECISION,
-    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION,
+    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION, TimeUnit,
 };
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 
 macro_rules! get_extreme_value {
     ($extreme:ident, $value:expr_2021) => {
@@ -1923,7 +1923,7 @@ impl NullableInterval {
 mod tests {
     use crate::{
         interval_arithmetic::{
-            handle_overflow, next_value, prev_value, satisfy_greater, Interval,
+            Interval, handle_overflow, next_value, prev_value, satisfy_greater,
         },
         operator::Operator,
     };
@@ -1968,10 +1968,12 @@ mod tests {
             ScalarValue::Float64(Some(1e-6)),
         ];
         values.into_iter().zip(eps).for_each(|(value, eps)| {
-            assert!(next_value(value.clone())
-                .sub(value.clone())
-                .unwrap()
-                .lt(&eps));
+            assert!(
+                next_value(value.clone())
+                    .sub(value.clone())
+                    .unwrap()
+                    .lt(&eps)
+            );
             assert!(value.sub(prev_value(value.clone())).unwrap().lt(&eps));
             assert_ne!(next_value(value.clone()), value);
             assert_ne!(prev_value(value.clone()), value);

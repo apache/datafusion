@@ -30,7 +30,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::instant::Instant;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -268,7 +268,7 @@ mod tests {
         collect,
         test::{
             assert_is_pending,
-            exec::{assert_strong_count_converges_to_zero, BlockingExec},
+            exec::{BlockingExec, assert_strong_count_converges_to_zero},
         },
     };
 

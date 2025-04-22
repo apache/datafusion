@@ -199,35 +199,45 @@ pub fn pushdown_limit_helper(
             // We have information in the global state and the plan pushes down,
             // continue:
             Ok((Transformed::no(pushdown_plan), global_state))
-        } else { match pushdown_plan.with_fetch(skip_and_fetch) { Some(plan_with_fetch) => {
-            // This plan is combining input partitions, so we need to add the
-            // fetch info to plan if possible. If not, we must add a `LimitExec`
-            // with the information from the global state.
-            let mut new_plan = plan_with_fetch;
-            // Execution plans can't (yet) handle skip, so if we have one,
-            // we still need to add a global limit
-            if global_state.skip > 0 {
-                new_plan =
-                    add_global_limit(new_plan, global_state.skip, global_state.fetch);
-            }
-            global_state.fetch = skip_and_fetch;
-            global_state.skip = 0;
-            global_state.satisfied = true;
-            Ok((Transformed::yes(new_plan), global_state))
-        } _ => if global_state.satisfied {
-            // If the plan is already satisfied, do not add a limit:
-            Ok((Transformed::no(pushdown_plan), global_state))
         } else {
-            global_state.satisfied = true;
-            Ok((
-                Transformed::yes(add_limit(
-                    pushdown_plan,
-                    global_state.skip,
-                    global_fetch,
-                )),
-                global_state,
-            ))
-        }}}
+            match pushdown_plan.with_fetch(skip_and_fetch) {
+                Some(plan_with_fetch) => {
+                    // This plan is combining input partitions, so we need to add the
+                    // fetch info to plan if possible. If not, we must add a `LimitExec`
+                    // with the information from the global state.
+                    let mut new_plan = plan_with_fetch;
+                    // Execution plans can't (yet) handle skip, so if we have one,
+                    // we still need to add a global limit
+                    if global_state.skip > 0 {
+                        new_plan = add_global_limit(
+                            new_plan,
+                            global_state.skip,
+                            global_state.fetch,
+                        );
+                    }
+                    global_state.fetch = skip_and_fetch;
+                    global_state.skip = 0;
+                    global_state.satisfied = true;
+                    Ok((Transformed::yes(new_plan), global_state))
+                }
+                _ => {
+                    if global_state.satisfied {
+                        // If the plan is already satisfied, do not add a limit:
+                        Ok((Transformed::no(pushdown_plan), global_state))
+                    } else {
+                        global_state.satisfied = true;
+                        Ok((
+                            Transformed::yes(add_limit(
+                                pushdown_plan,
+                                global_state.skip,
+                                global_fetch,
+                            )),
+                            global_state,
+                        ))
+                    }
+                }
+            }
+        }
     } else {
         // The plan does not support push down and it is not a limit. We will need
         // to add a limit or a fetch. If the plan is already satisfied, we will try

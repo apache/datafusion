@@ -28,15 +28,15 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
-use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use datafusion_expr::{TableType, Volatility};
+use datafusion_physical_plan::SendableRecordBatchStream;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::streaming::PartitionStream;
-use datafusion_physical_plan::SendableRecordBatchStream;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};

@@ -30,19 +30,19 @@ use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, LexicographicalComparator, SortColumn, SortOptions};
 use arrow::datatypes::{
     DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field, Float16Type,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
 use datafusion_common::{
-    arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, arrow_datafusion_err, internal_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt,
     GroupsAccumulator, Signature, SortExpr, Volatility,
@@ -1383,7 +1383,7 @@ fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<Sort
 #[cfg(test)]
 mod tests {
     use arrow::{array::Int64Array, compute::SortOptions, datatypes::Schema};
-    use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+    use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
 
     use super::*;
 

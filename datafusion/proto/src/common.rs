@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 
 pub(crate) fn str_to_byte(s: &String, description: &str) -> Result<u8> {
     if s.len() != 1 {

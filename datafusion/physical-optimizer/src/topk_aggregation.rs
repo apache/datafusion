@@ -21,16 +21,16 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 use arrow::datatypes::DataType;
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::Result;
-use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::ExecutionPlan;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
@@ -152,11 +152,10 @@ impl PhysicalOptimizerRule for TopKAggregation {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if config.optimizer.enable_topk_aggregation {
             plan.transform_down(|plan| {
-                Ok(match TopKAggregation::transform_sort(&plan) { Some(plan) => {
-                    Transformed::yes(plan)
-                } _ => {
-                    Transformed::no(plan)
-                }})
+                Ok(match TopKAggregation::transform_sort(&plan) {
+                    Some(plan) => Transformed::yes(plan),
+                    _ => Transformed::no(plan),
+                })
             })
             .data()
         } else {

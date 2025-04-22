@@ -26,15 +26,15 @@ use sqlparser::ast::{
 };
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
-    ScalarValue,
+    DFSchema, Result, ScalarValue, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
-    lit, Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
-    Operator, TryCast,
+    Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
+    Operator, TryCast, lit,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -549,7 +549,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     _ => {
                         return not_impl_err!(
                             "Unsupported ast node in sqltorel: {time_zone:?}"
-                        )
+                        );
                     }
                 },
             ))),
@@ -1173,8 +1173,8 @@ mod tests {
     use sqlparser::dialect::GenericDialect;
     use sqlparser::parser::Parser;
 
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::TableReference;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 

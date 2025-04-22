@@ -18,17 +18,16 @@
 use std::{cmp::Ordering, sync::Arc, vec};
 
 use super::{
-    dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
-    rewrite::TableAliasRewriter, Unparser,
+    Unparser, dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
+    rewrite::TableAliasRewriter,
 };
 use datafusion_common::{
-    internal_err,
+    Column, DataFusionError, Result, ScalarValue, internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
-    Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
-    LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
+    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Unnest,
+    Window, expr, utils::grouping_set_to_exprlist,
 };
 
 use indexmap::IndexSet;
@@ -236,27 +235,28 @@ pub(crate) fn unproject_window_exprs(expr: Expr, windows: &[&Window]) -> Result<
 }
 
 fn find_agg_expr<'a>(agg: &'a Aggregate, column: &Column) -> Result<Option<&'a Expr>> {
-    match agg.schema.index_of_column(column) { Ok(index) => {
-        if matches!(agg.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
-            // For grouping set expr, we must operate by expression list from the grouping set
-            let grouping_expr = grouping_set_to_exprlist(agg.group_expr.as_slice())?;
-            match index.cmp(&grouping_expr.len()) {
-                Ordering::Less => Ok(grouping_expr.into_iter().nth(index)),
-                Ordering::Equal => {
-                    internal_err!(
-                        "Tried to unproject column referring to internal grouping id"
-                    )
+    match agg.schema.index_of_column(column) {
+        Ok(index) => {
+            if matches!(agg.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
+                // For grouping set expr, we must operate by expression list from the grouping set
+                let grouping_expr = grouping_set_to_exprlist(agg.group_expr.as_slice())?;
+                match index.cmp(&grouping_expr.len()) {
+                    Ordering::Less => Ok(grouping_expr.into_iter().nth(index)),
+                    Ordering::Equal => {
+                        internal_err!(
+                            "Tried to unproject column referring to internal grouping id"
+                        )
+                    }
+                    Ordering::Greater => {
+                        Ok(agg.aggr_expr.get(index - grouping_expr.len() - 1))
+                    }
                 }
-                Ordering::Greater => {
-                    Ok(agg.aggr_expr.get(index - grouping_expr.len() - 1))
-                }
+            } else {
+                Ok(agg.group_expr.iter().chain(agg.aggr_expr.iter()).nth(index))
             }
-        } else {
-            Ok(agg.group_expr.iter().chain(agg.aggr_expr.iter()).nth(index))
         }
-    } _ => {
-        Ok(None)
-    }}
+        _ => Ok(None),
+    }
 }
 
 fn find_window_expr<'a>(

@@ -17,11 +17,11 @@
 
 use crate::signature::TypeSignature;
 use arrow::datatypes::{
-    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_SCALE, DataType, TimeUnit,
 };
 
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 
 pub static STRINGS: &[DataType] =
     &[DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View];

@@ -17,18 +17,17 @@
 
 use arrow::array::ArrowPrimitiveType;
 use arrow::datatypes::{
-    i256, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTime,
-    IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType,
-    IntervalYearMonthType, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    Date32Type, Date64Type, Decimal128Type, Decimal256Type, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTime, IntervalDayTimeType,
+    IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalYearMonthType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type, i256,
 };
+use rand::Rng;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::rngs::StdRng;
-use rand::Rng;
 
 /// Generate corresponding NativeType value randomly according to
 /// ArrowPrimitiveType.

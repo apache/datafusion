@@ -16,21 +16,21 @@
 // under the License.
 
 use super::{
+    Unparser,
     ast::{
         BuilderError, DerivedRelationBuilder, QueryBuilder, RelationBuilder,
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
     rewrite::{
-        inject_column_aliases_into_subquery, normalize_union_schema,
+        TableAliasRewriter, inject_column_aliases_into_subquery, normalize_union_schema,
         rewrite_plan_for_sort_on_non_projected_fields,
-        subquery_alias_inner_query_and_columns, TableAliasRewriter,
+        subquery_alias_inner_query_and_columns,
     },
     utils::{
         find_agg_node_within_select, find_unnest_node_within_select,
         find_window_nodes_within_select, try_transform_to_simple_table_scan_with_filters,
         unproject_sort_expr, unproject_unnest_expr, unproject_window_exprs,
     },
-    Unparser,
 };
 use crate::unparser::ast::UnnestRelationBuilder;
 use crate::unparser::extension_unparser::{
@@ -39,15 +39,15 @@ use crate::unparser::extension_unparser::{
 use crate::unparser::utils::{find_unnest_node_until_relation, unproject_agg_exprs};
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
-    internal_err, not_impl_err,
+    Column, DataFusionError, Result, ScalarValue, TableReference, internal_err,
+    not_impl_err,
     tree_node::{TransformedResult, TreeNode},
-    Column, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::OUTER_REFERENCE_COLUMN_PREFIX;
 use datafusion_expr::{
-    expr::Alias, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
-    UserDefinedLogicalNode,
+    UserDefinedLogicalNode, expr::Alias,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
 use std::sync::Arc;
@@ -786,7 +786,7 @@ impl Unparser<'_> {
                             Err(e) => {
                                 return internal_err!(
                                     "Failed to transform SubqueryAlias plan: {e}"
-                                )
+                                );
                             }
                         };
 
@@ -1116,34 +1116,35 @@ impl Unparser<'_> {
                     &projection.input,
                     alias.clone(),
                     already_projected,
-                )? { Some(plan) => {
-                    let exprs = if alias.is_some() {
-                        let mut alias_rewriter =
-                            alias.as_ref().map(|alias_name| TableAliasRewriter {
-                                table_schema: plan.schema().as_arrow(),
-                                alias_name: alias_name.clone(),
-                            });
-                        projection
-                            .expr
-                            .iter()
-                            .cloned()
-                            .map(|expr| {
-                                if let Some(ref mut rewriter) = alias_rewriter {
-                                    expr.rewrite(rewriter).data()
-                                } else {
-                                    Ok(expr)
-                                }
-                            })
-                            .collect::<Result<Vec<_>>>()?
-                    } else {
-                        projection.expr.clone()
-                    };
-                    Ok(Some(
-                        LogicalPlanBuilder::from(plan).project(exprs)?.build()?,
-                    ))
-                } _ => {
-                    Ok(None)
-                }}
+                )? {
+                    Some(plan) => {
+                        let exprs = if alias.is_some() {
+                            let mut alias_rewriter =
+                                alias.as_ref().map(|alias_name| TableAliasRewriter {
+                                    table_schema: plan.schema().as_arrow(),
+                                    alias_name: alias_name.clone(),
+                                });
+                            projection
+                                .expr
+                                .iter()
+                                .cloned()
+                                .map(|expr| {
+                                    if let Some(ref mut rewriter) = alias_rewriter {
+                                        expr.rewrite(rewriter).data()
+                                    } else {
+                                        Ok(expr)
+                                    }
+                                })
+                                .collect::<Result<Vec<_>>>()?
+                        } else {
+                            projection.expr.clone()
+                        };
+                        Ok(Some(
+                            LogicalPlanBuilder::from(plan).project(exprs)?.build()?,
+                        ))
+                    }
+                    _ => Ok(None),
+                }
             }
             _ => Ok(None),
         }

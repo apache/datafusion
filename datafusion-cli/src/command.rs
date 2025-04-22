@@ -19,7 +19,7 @@
 
 use crate::cli_context::CliSessionContext;
 use crate::exec::{exec_and_print, exec_from_lines};
-use crate::functions::{display_all_functions, Function};
+use crate::functions::{Function, display_all_functions};
 use crate::print_format::PrintFormat;
 use crate::print_options::PrintOptions;
 use clap::ValueEnum;

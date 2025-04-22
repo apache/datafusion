@@ -31,7 +31,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, utils::take_function_args, Result,
+    Result, exec_err, internal_datafusion_err, utils::take_function_args,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -107,7 +107,9 @@ impl ScalarUDFImpl for ArrayDistance {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types[0] {
             List(_) | LargeList(_) | FixedSizeList(_, _) => Ok(Float64),
-            _ => exec_err!("The array_distance function can only accept List/LargeList/FixedSizeList."),
+            _ => exec_err!(
+                "The array_distance function can only accept List/LargeList/FixedSizeList."
+            ),
         }
     }
 
@@ -116,8 +118,14 @@ impl ScalarUDFImpl for ArrayDistance {
         let mut result = Vec::new();
         for arg_type in arg_types {
             match arg_type {
-                List(_) | LargeList(_) | FixedSizeList(_, _) => result.push(coerced_fixed_size_list_to_list(arg_type)),
-                _ => return exec_err!("The array_distance function can only accept List/LargeList/FixedSizeList."),
+                List(_) | LargeList(_) | FixedSizeList(_, _) => {
+                    result.push(coerced_fixed_size_list_to_list(arg_type))
+                }
+                _ => {
+                    return exec_err!(
+                        "The array_distance function can only accept List/LargeList/FixedSizeList."
+                    );
+                }
             }
         }
 
@@ -147,7 +155,9 @@ pub fn array_distance_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         (List(_), List(_)) => general_array_distance::<i32>(args),
         (LargeList(_), LargeList(_)) => general_array_distance::<i64>(args),
         (array_type1, array_type2) => {
-            exec_err!("array_distance does not support types '{array_type1:?}' and '{array_type2:?}'")
+            exec_err!(
+                "array_distance does not support types '{array_type1:?}' and '{array_type2:?}'"
+            )
         }
     }
 }

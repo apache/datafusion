@@ -27,7 +27,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_err, qualified_name, Column, DFSchema, Result,
+    Column, DFSchema, Result, internal_err, plan_err, qualified_name,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -36,7 +36,7 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    and, or, BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown,
+    BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown, and, or,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -514,11 +514,12 @@ fn push_down_all_join(
 
     // wrap the join on the filter whose predicates must be kept, if any
     let plan = LogicalPlan::Join(join);
-    let plan = match conjunction(keep_predicates) { Some(predicate) => {
-        LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(plan))?)
-    } _ => {
-        plan
-    }};
+    let plan = match conjunction(keep_predicates) {
+        Some(predicate) => {
+            LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(plan))?)
+        }
+        _ => plan,
+    };
     Ok(Transformed::yes(plan))
 }
 
@@ -972,21 +973,23 @@ impl OptimizerRule for PushDownFilter {
                 Transformed::yes(LogicalPlan::Aggregate(agg))
                     .transform_data(|new_plan| {
                         // If we have a filter to push, we push it down to the input of the aggregate
-                        match conjunction(replaced_push_predicates) { Some(predicate) => {
-                            let new_filter = make_filter(predicate, agg_input)?;
-                            insert_below(new_plan, new_filter)
-                        } _ => {
-                            Ok(Transformed::no(new_plan))
-                        }}
+                        match conjunction(replaced_push_predicates) {
+                            Some(predicate) => {
+                                let new_filter = make_filter(predicate, agg_input)?;
+                                insert_below(new_plan, new_filter)
+                            }
+                            _ => Ok(Transformed::no(new_plan)),
+                        }
                     })?
                     .map_data(|child_plan| {
                         // if there are any remaining predicates we can't push, add them
                         // back as a filter
-                        match conjunction(keep_predicates) { Some(predicate) => {
-                            make_filter(predicate, Arc::new(child_plan))
-                        } _ => {
-                            Ok(child_plan)
-                        }}
+                        match conjunction(keep_predicates) {
+                            Some(predicate) => {
+                                make_filter(predicate, Arc::new(child_plan))
+                            }
+                            _ => Ok(child_plan),
+                        }
                     })
             }
             // Tries to push filters based on the partition key(s) of the window function(s) used.
@@ -1065,21 +1068,23 @@ impl OptimizerRule for PushDownFilter {
                 Transformed::yes(LogicalPlan::Window(window))
                     .transform_data(|new_plan| {
                         // If we have a filter to push, we push it down to the input of the window
-                        match conjunction(push_predicates) { Some(predicate) => {
-                            let new_filter = make_filter(predicate, window_input)?;
-                            insert_below(new_plan, new_filter)
-                        } _ => {
-                            Ok(Transformed::no(new_plan))
-                        }}
+                        match conjunction(push_predicates) {
+                            Some(predicate) => {
+                                let new_filter = make_filter(predicate, window_input)?;
+                                insert_below(new_plan, new_filter)
+                            }
+                            _ => Ok(Transformed::no(new_plan)),
+                        }
                     })?
                     .map_data(|child_plan| {
                         // if there are any remaining predicates we can't push, add them
                         // back as a filter
-                        match conjunction(keep_predicates) { Some(predicate) => {
-                            make_filter(predicate, Arc::new(child_plan))
-                        } _ => {
-                            Ok(child_plan)
-                        }}
+                        match conjunction(keep_predicates) {
+                            Some(predicate) => {
+                                make_filter(predicate, Arc::new(child_plan))
+                            }
+                            _ => Ok(child_plan),
+                        }
                     })
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
@@ -1099,7 +1104,8 @@ impl OptimizerRule for PushDownFilter {
                     return internal_err!(
                         "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
                         supported_filters.len(),
-                        non_volatile_filters.len());
+                        non_volatile_filters.len()
+                    );
                 }
 
                 // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
@@ -1133,11 +1139,11 @@ impl OptimizerRule for PushDownFilter {
                 });
 
                 Transformed::yes(new_scan).transform_data(|new_scan| {
-                    match conjunction(new_predicate) { Some(predicate) => {
-                        make_filter(predicate, Arc::new(new_scan)).map(Transformed::yes)
-                    } _ => {
-                        Ok(Transformed::no(new_scan))
-                    }}
+                    match conjunction(new_predicate) {
+                        Some(predicate) => make_filter(predicate, Arc::new(new_scan))
+                            .map(Transformed::yes),
+                        _ => Ok(Transformed::no(new_scan)),
+                    }
                 })
             }
             LogicalPlan::Extension(extension_plan) => {
@@ -1321,12 +1327,13 @@ fn insert_below(
 ) -> Result<Transformed<LogicalPlan>> {
     let mut new_child = Some(new_child);
     let transformed_plan = plan.map_children(|_child| {
-        match new_child.take() { Some(new_child) => {
-            Ok(Transformed::yes(new_child))
-        } _ => {
-            // already took the new child
-            internal_err!("node had more than one input")
-        }}
+        match new_child.take() {
+            Some(new_child) => Ok(Transformed::yes(new_child)),
+            _ => {
+                // already took the new child
+                internal_err!("node had more than one input")
+            }
+        }
     })?;
 
     // make sure we did the actual replacement
@@ -1395,16 +1402,16 @@ mod tests {
     use datafusion_expr::expr::{ScalarFunction, WindowFunction};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        col, in_list, in_subquery, lit, ColumnarValue, ExprFunctionExt, Extension,
-        LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
-        WindowFunctionDefinition,
+        ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
+        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col, in_list,
+        in_subquery, lit,
     };
 
+    use crate::OptimizerContext;
     use crate::optimizer::Optimizer;
     use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::*;
-    use crate::OptimizerContext;
     use datafusion_expr::test::function_stub::sum;
 
     use super::*;
@@ -1525,8 +1532,7 @@ mod tests {
             .aggregate(vec![add(col("b"), col("a"))], vec![sum(col("a")), col("b")])?
             .filter(col("test.b + test.a").gt(lit(10i64)))?
             .build()?;
-        let expected =
-            "Aggregate: groupBy=[[test.b + test.a]], aggr=[[sum(test.a), test.b]]\
+        let expected = "Aggregate: groupBy=[[test.b + test.a]], aggr=[[sum(test.a), test.b]]\
         \n  TableScan: test, full_filters=[test.b + test.a > Int64(10)]";
         assert_optimized_plan_eq(plan, expected)
     }

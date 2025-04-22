@@ -22,21 +22,23 @@
 use std::collections::HashMap;
 
 use datafusion_common::{TableReference, UnnestOptions};
+use datafusion_expr::WriteOp;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
     Like, Placeholder, ScalarFunction, Unnest,
 };
-use datafusion_expr::WriteOp;
 use datafusion_expr::{
-    logical_plan::PlanType, logical_plan::StringifiedPlan, Expr, JoinConstraint,
-    JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition,
+    Expr, JoinConstraint, JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunctionDefinition, logical_plan::PlanType,
+    logical_plan::StringifiedPlan,
 };
 
 use crate::protobuf::RecursionUnnestOption;
 use crate::protobuf::{
-    self,
+    self, AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode,
+    LogicalExprList, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
+    PlaceholderNode, RollupNode, ToProtoError as Error,
     plan_type::PlanTypeEnum::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
         FinalPhysicalPlan, FinalPhysicalPlanWithSchema, FinalPhysicalPlanWithStats,
@@ -44,9 +46,6 @@ use crate::protobuf::{
         InitialPhysicalPlanWithStats, OptimizedLogicalPlan, OptimizedPhysicalPlan,
         PhysicalPlanError,
     },
-    AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
-    OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
-    ToProtoError as Error,
 };
 
 use super::LogicalExtensionCodec;
@@ -389,7 +388,7 @@ pub fn serialize_expr(
         Expr::ScalarVariable(_, _) => {
             return Err(Error::General(
                 "Proto serialization error: Scalar Variable not supported".to_string(),
-            ))
+            ));
         }
         Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let mut buf = Vec::new();

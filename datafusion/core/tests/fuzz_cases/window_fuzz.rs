@@ -18,19 +18,19 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, StringArray};
-use arrow::compute::{concat_batches, SortOptions};
+use arrow::compute::{SortOptions, concat_batches};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
-    create_window_expr, schema_add_window_field, BoundedWindowAggExec, WindowAggExec,
+    BoundedWindowAggExec, WindowAggExec, create_window_expr, schema_add_window_field,
 };
-use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
-use datafusion::physical_plan::{collect, InputOrderMode};
+use datafusion::physical_plan::{InputOrderMode, collect};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::HashMap;
 use datafusion_common::{Result, ScalarValue};
@@ -691,7 +691,9 @@ async fn run_window_test(
 
     // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
     // Otherwise it means that we cannot generate result in running mode.
-    let err_msg = format!("Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, random_seed: {random_seed:?}, search_mode: {search_mode:?}, partition_by_columns:{partition_by_columns:?}, orderby_columns: {orderby_columns:?}");
+    let err_msg = format!(
+        "Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, random_seed: {random_seed:?}, search_mode: {search_mode:?}, partition_by_columns:{partition_by_columns:?}, orderby_columns: {orderby_columns:?}"
+    );
     // Below check makes sure that, streaming execution generates more chunks than the bulk execution.
     // Since algorithms and operators works on sliding windows in the streaming execution.
     // However, in the current test setup for some random generated window frame clauses: It is not guaranteed
@@ -723,8 +725,12 @@ async fn run_window_test(
         .enumerate()
     {
         if !usual_line.eq(running_line) {
-            println!("Inconsistent result for window_frame at line:{i:?}: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}");
-            println!("--------usual_formatted_sorted----------------running_formatted_sorted--------");
+            println!(
+                "Inconsistent result for window_frame at line:{i:?}: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}"
+            );
+            println!(
+                "--------usual_formatted_sorted----------------running_formatted_sorted--------"
+            );
             for (line1, line2) in
                 usual_formatted_sorted.iter().zip(running_formatted_sorted)
             {

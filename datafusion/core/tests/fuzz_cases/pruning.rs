@@ -29,9 +29,9 @@ use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::{collect, filter::FilterExec, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, collect, filter::FilterExec};
 use itertools::Itertools;
-use object_store::{memory::InMemory, path::Path, ObjectStore, PutPayload};
+use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
 use parquet::{
     arrow::ArrowWriter,
     file::properties::{EnabledStatistics, WriterProperties},

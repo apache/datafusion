@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
-use crate::datasource::{source_as_provider, DefaultTableSource};
+use crate::datasource::{DefaultTableSource, source_as_provider};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -52,26 +52,26 @@ use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
-    Partitioning, PhysicalExpr, WindowExpr,
+    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, Partitioning, PhysicalExpr,
+    WindowExpr, displayable, windows,
 };
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 
-use arrow::array::{builder::StringBuilder, RecordBatch};
+use arrow::array::{RecordBatch, builder::StringBuilder};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
-    ScalarValue,
+    DFSchema, ScalarValue, exec_err, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
-    physical_name, AggregateFunction, AggregateFunctionParams, Alias, GroupingSet,
-    WindowFunction, WindowFunctionParams,
+    AggregateFunction, AggregateFunctionParams, Alias, GroupingSet, WindowFunction,
+    WindowFunctionParams, physical_name,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -80,9 +80,9 @@ use datafusion_expr::{
     Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
     WindowFrameBound, WriteOp,
 };
+use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{Column, Literal};
-use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
@@ -92,7 +92,7 @@ use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
 use datafusion_datasource::file_groups::FileGroup;
 use futures::{StreamExt, TryStreamExt};
-use itertools::{multiunzip, Itertools};
+use itertools::{Itertools, multiunzip};
 use log::{debug, trace};
 use sqlparser::ast::NullTreatment;
 use tokio::sync::Mutex;
@@ -517,12 +517,23 @@ impl DefaultPhysicalPlanner {
 
                 let keep_partition_by_columns = match source_option_tuples
                     .get("execution.keep_partition_by_columns")
-                    .map(|v| v.trim()) {
-                    None => session_state.config().options().execution.keep_partition_by_columns,
+                    .map(|v| v.trim())
+                {
+                    None => {
+                        session_state
+                            .config()
+                            .options()
+                            .execution
+                            .keep_partition_by_columns
+                    }
                     Some("true") => true,
                     Some("false") => false,
-                    Some(value) =>
-                        return Err(DataFusionError::Configuration(format!("provided value for 'execution.keep_partition_by_columns' was not recognized: \"{}\"", value))),
+                    Some(value) => {
+                        return Err(DataFusionError::Configuration(format!(
+                            "provided value for 'execution.keep_partition_by_columns' was not recognized: \"{}\"",
+                            value
+                        )));
+                    }
                 };
 
                 let sink_format = file_type_to_format(file_type)?
@@ -601,11 +612,11 @@ impl DefaultPhysicalPlanner {
                 let sort_keys = get_sort_keys(&window_expr[0])?;
                 if window_expr.len() > 1 {
                     debug_assert!(
-                            window_expr[1..]
-                                .iter()
-                                .all(|expr| get_sort_keys(expr).unwrap() == sort_keys),
-                            "all window expressions shall have the same sort keys, as guaranteed by logical planning"
-                        );
+                        window_expr[1..]
+                            .iter()
+                            .all(|expr| get_sort_keys(expr).unwrap() == sort_keys),
+                        "all window expressions shall have the same sort keys, as guaranteed by logical planning"
+                    );
                 }
 
                 let logical_schema = node.schema();
@@ -692,10 +703,10 @@ impl DefaultPhysicalPlanner {
                             differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
                         }
                     }
-                    return internal_err!("Physical input schema should be the same as the one converted from logical input schema. Differences: {}", differences
-                        .iter()
-                        .map(|s| format!("\n\t- {}", s))
-                        .join(""));
+                    return internal_err!(
+                        "Physical input schema should be the same as the one converted from logical input schema. Differences: {}",
+                        differences.iter().map(|s| format!("\n\t- {}", s)).join("")
+                    );
                 }
 
                 let groups = self.create_grouping_physical_expr(
@@ -1195,19 +1206,24 @@ impl DefaultPhysicalPlanner {
                 }
 
                 let plan = match maybe_plan {
-                        Some(v) => Ok(v),
-                        _ => plan_err!("No installed planner was able to convert the custom node to an execution plan: {:?}", node)
-                    }?;
+                    Some(v) => Ok(v),
+                    _ => plan_err!(
+                        "No installed planner was able to convert the custom node to an execution plan: {:?}",
+                        node
+                    ),
+                }?;
 
                 // Ensure the ExecutionPlan's schema matches the
                 // declared logical schema to catch and warn about
                 // logic errors when creating user defined plans.
                 if !node.schema().matches_arrow_schema(&plan.schema()) {
                     return plan_err!(
-                            "Extension planner for {:?} created an ExecutionPlan with mismatched schema. \
+                        "Extension planner for {:?} created an ExecutionPlan with mismatched schema. \
                             LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
-                            node, node.schema(), plan.schema()
-                        );
+                        node,
+                        node.schema(),
+                        plan.schema()
+                    );
                 } else {
                     plan
                 }
@@ -1234,17 +1250,17 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Explain(_) => {
                 return internal_err!(
                     "Unsupported logical plan: Explain must be root of the plan"
-                )
+                );
             }
             LogicalPlan::Distinct(_) => {
                 return internal_err!(
                     "Unsupported logical plan: Distinct should be replaced to Aggregate"
-                )
+                );
             }
             LogicalPlan::Analyze(_) => {
                 return internal_err!(
                     "Unsupported logical plan: Analyze must be root of the plan"
-                )
+                );
             }
         };
         Ok(exec_node)
@@ -1526,9 +1542,10 @@ pub fn create_window_expr_with_name(
 
             if !is_window_frame_bound_valid(window_frame) {
                 return plan_err!(
-                        "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
-                        window_frame.start_bound, window_frame.end_bound
-                    );
+                    "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
+                    window_frame.start_bound,
+                    window_frame.end_bound
+                );
             }
 
             let window_frame = Arc::new(window_frame.clone());
@@ -2116,7 +2133,8 @@ impl<'a> OptimizationInvariantChecker<'a> {
     ) -> Result<()> {
         // if the rule is not permitted to change the schema, confirm that it did not change.
         if self.rule.schema_check() && plan.schema() != previous_schema {
-            internal_err!("PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
+            internal_err!(
+                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
                 self.rule.name(),
                 previous_schema,
                 plan.schema()
@@ -2179,11 +2197,11 @@ mod tests {
     use std::ops::{BitAnd, Not};
 
     use super::*;
-    use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
+    use crate::datasource::file_format::options::CsvReadOptions;
     use crate::physical_plan::{
-        expressions, DisplayAs, DisplayFormatType, PlanProperties,
-        SendableRecordBatchStream,
+        DisplayAs, DisplayFormatType, PlanProperties, SendableRecordBatchStream,
+        expressions,
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
@@ -2192,10 +2210,10 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
-    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_common::{DFSchemaRef, TableReference, assert_contains};
     use datafusion_execution::TaskContext;
-    use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_expr::{LogicalPlanBuilder, UserDefinedLogicalNodeCore, col, lit};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -2407,8 +2425,7 @@ mod tests {
             .create_physical_plan(&logical_plan, &session_state)
             .await;
 
-        let expected_error =
-            "No installed planner was able to convert the custom node to an execution plan: NoOp";
+        let expected_error = "No installed planner was able to convert the custom node to an execution plan: NoOp";
         match plan {
             Ok(_) => panic!("Expected planning failure"),
             Err(e) => assert!(
@@ -2669,18 +2686,27 @@ mod tests {
         if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
             let stringified_plans = plan.stringified_plans();
             assert!(stringified_plans.len() >= 4);
-            assert!(stringified_plans
-                .iter()
-                .any(|p| matches!(p.plan_type, PlanType::FinalLogicalPlan)));
-            assert!(stringified_plans
-                .iter()
-                .any(|p| matches!(p.plan_type, PlanType::InitialPhysicalPlan)));
-            assert!(stringified_plans
-                .iter()
-                .any(|p| matches!(p.plan_type, PlanType::OptimizedPhysicalPlan { .. })));
-            assert!(stringified_plans
-                .iter()
-                .any(|p| matches!(p.plan_type, PlanType::FinalPhysicalPlan)));
+            assert!(
+                stringified_plans
+                    .iter()
+                    .any(|p| matches!(p.plan_type, PlanType::FinalLogicalPlan))
+            );
+            assert!(
+                stringified_plans
+                    .iter()
+                    .any(|p| matches!(p.plan_type, PlanType::InitialPhysicalPlan))
+            );
+            assert!(
+                stringified_plans.iter().any(|p| matches!(
+                    p.plan_type,
+                    PlanType::OptimizedPhysicalPlan { .. }
+                ))
+            );
+            assert!(
+                stringified_plans
+                    .iter()
+                    .any(|p| matches!(p.plan_type, PlanType::FinalPhysicalPlan))
+            );
         } else {
             panic!(
                 "Plan was not an explain plan: {}",
@@ -3023,8 +3049,12 @@ digraph {
         }
         fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
             match check {
-                InvariantLevel::Always => plan_err!("extension node failed it's user-defined always-invariant check"),
-                InvariantLevel::Executable => panic!("the OptimizationInvariantChecker should not be checking for executableness"),
+                InvariantLevel::Always => plan_err!(
+                    "extension node failed it's user-defined always-invariant check"
+                ),
+                InvariantLevel::Executable => panic!(
+                    "the OptimizationInvariantChecker should not be checking for executableness"
+                ),
             }
         }
         fn schema(&self) -> SchemaRef {
@@ -3108,9 +3138,11 @@ digraph {
         let expected_err = OptimizationInvariantChecker::new(&rule)
             .check(&failing_node, ok_plan.schema())
             .unwrap_err();
-        assert!(expected_err
-            .to_string()
-            .contains("extension node failed it's user-defined always-invariant check"));
+        assert!(
+            expected_err.to_string().contains(
+                "extension node failed it's user-defined always-invariant check"
+            )
+        );
 
         // Test: should fail when descendent extension node fails
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
@@ -3121,9 +3153,11 @@ digraph {
         let expected_err = OptimizationInvariantChecker::new(&rule)
             .check(&invalid_plan, ok_plan.schema())
             .unwrap_err();
-        assert!(expected_err
-            .to_string()
-            .contains("extension node failed it's user-defined always-invariant check"));
+        assert!(
+            expected_err.to_string().contains(
+                "extension node failed it's user-defined always-invariant check"
+            )
+        );
 
         Ok(())
     }

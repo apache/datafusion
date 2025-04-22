@@ -22,7 +22,7 @@ use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::DataType;
-use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
+use datafusion_common::{ExprSchema, Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
 use std::cmp::Ordering;
@@ -945,6 +945,8 @@ The following regular expression functions are supported:"#,
     pub const DOC_SECTION_UNION: DocSection = DocSection {
         include: true,
         label: "Union Functions",
-        description: Some("Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator"),
+        description: Some(
+            "Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator",
+        ),
     };
 }

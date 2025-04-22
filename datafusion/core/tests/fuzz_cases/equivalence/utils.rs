@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::physical_plan::expressions::col;
 use datafusion::physical_plan::expressions::Column;
+use datafusion::physical_plan::expressions::col;
 use datafusion_physical_expr::{ConstExpr, EquivalenceProperties, PhysicalSortExpr};
 use std::any::Any;
 use std::cmp::Ordering;
@@ -24,10 +24,10 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
 use arrow::compute::SortOptions;
-use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn};
+use arrow::compute::{SortColumn, lexsort_to_indices, take_record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
-use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err, plan_datafusion_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,

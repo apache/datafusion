@@ -30,9 +30,9 @@ use arrow::datatypes::{DataType, Field};
 
 use crate::expr::WindowFunction;
 use crate::{
-    function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
+    Expr, PartitionEvaluator, Signature, function::WindowFunctionSimplification,
 };
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_doc::Documentation;
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;

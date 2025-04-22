@@ -23,7 +23,7 @@ use arrow::util::pretty::pretty_format_batches;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use rand::seq::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 
 use crate::fuzz_cases::aggregation_fuzzer::{
     check_equality_of_batches,

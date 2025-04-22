@@ -22,8 +22,8 @@ use crate::cache::CacheAccessor;
 use datafusion_common::Statistics;
 
 use dashmap::DashMap;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 
 /// Collected statistics for files
 /// Cache is invalided when file size or last modification has changed
@@ -78,7 +78,7 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
     }
 
     fn remove(&mut self, k: &Path) -> Option<Arc<Statistics>> {
-        self.statistics.remove(k).map(|x| x.1 .1)
+        self.statistics.remove(k).map(|x| x.1.1)
     }
 
     fn contains_key(&self, k: &Path) -> bool {
@@ -159,13 +159,13 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::cache_unit::{DefaultFileStatisticsCache, DefaultListFilesCache};
     use crate::cache::CacheAccessor;
+    use crate::cache::cache_unit::{DefaultFileStatisticsCache, DefaultListFilesCache};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
     use datafusion_common::Statistics;
-    use object_store::path::Path;
     use object_store::ObjectMeta;
+    use object_store::path::Path;
 
     #[test]
     fn test_statistics_cache() {

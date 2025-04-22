@@ -20,7 +20,7 @@
 use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
-use datafusion_common::{not_impl_err, plan_datafusion_err, HashMap, Result};
+use datafusion_common::{HashMap, Result, not_impl_err, plan_datafusion_err};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;

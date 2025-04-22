@@ -18,13 +18,13 @@
 use std::any::Any;
 use std::sync::{Arc, Weak};
 
-use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
+use crate::object_storage::{AwsOptions, GcpOptions, get_object_store};
 
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 
 use datafusion::common::plan_datafusion_err;
-use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::TableProvider;
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -346,10 +346,12 @@ mod tests {
             "/home/user"
         };
         // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { env::set_var(
-            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-            test_home_path,
-        ) };
+        unsafe {
+            env::set_var(
+                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+                test_home_path,
+            )
+        };
         let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
         let expected = format!(
             "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
@@ -366,12 +368,16 @@ mod tests {
         assert_eq!(actual, expected);
         match original_home {
             // TODO: Audit that the environment access only happens in single-threaded code.
-            Some(home_path) => unsafe { env::set_var(
-                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-                home_path.to_str().unwrap(),
-            ) },
+            Some(home_path) => unsafe {
+                env::set_var(
+                    if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+                    home_path.to_str().unwrap(),
+                )
+            },
             // TODO: Audit that the environment access only happens in single-threaded code.
-            None => unsafe { env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) },
+            None => unsafe {
+                env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            },
         }
     }
 }

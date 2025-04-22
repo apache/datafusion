@@ -40,9 +40,10 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
-    physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
+    EquivalenceProperties, PhysicalExpr, PhysicalExprRef, physical_exprs_equal,
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -55,10 +56,9 @@ use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
+use datafusion_physical_plan::union::{InterleaveExec, UnionExec, can_interleave};
 use datafusion_physical_plan::windows::WindowAggExec;
-use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
-use datafusion_physical_plan::ExecutionPlanProperties;
+use datafusion_physical_plan::windows::{BoundedWindowAggExec, get_best_fitting_window};
 use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use itertools::izip;

@@ -23,12 +23,12 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
-use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
+use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    calculate_range, FileRange, ListingTableUrl, RangeCalculation,
+    FileRange, ListingTableUrl, RangeCalculation, calculate_range,
 };
 
 use arrow::csv;
@@ -692,7 +692,7 @@ impl FileOpener for CsvOpener {
                 RangeCalculation::TerminateEarly => {
                     return Ok(
                         futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
-                    )
+                    );
                 }
             };
 

@@ -26,20 +26,21 @@ mod tests {
     use crate::{
         datasource::file_format::test_util::scan_format, prelude::SessionContext,
     };
-    use arrow::array::{as_string_array, Array};
+    use arrow::array::{Array, as_string_array};
     use datafusion_catalog::Session;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{
+        Result,
         cast::{
             as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
             as_int32_array, as_timestamp_microsecond_array,
         },
-        test_util, Result,
+        test_util,
     };
 
     use datafusion_datasource_avro::AvroFormat;
     use datafusion_execution::config::SessionConfig;
-    use datafusion_physical_plan::{collect, ExecutionPlan};
+    use datafusion_physical_plan::{ExecutionPlan, collect};
     use futures::StreamExt;
     use insta::assert_snapshot;
 
@@ -245,7 +246,10 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[1235865600000000, 1235865660000000, 1238544000000000, 1238544060000000, 1233446400000000, 1233446460000000, 1230768000000000, 1230768060000000]", format!("{values:?}"));
+        assert_eq!(
+            "[1235865600000000, 1235865660000000, 1238544000000000, 1238544060000000, 1233446400000000, 1233446460000000, 1230768000000000, 1230768060000000]",
+            format!("{values:?}")
+        );
 
         Ok(())
     }

@@ -17,8 +17,8 @@
 
 use crate::cache::CacheAccessor;
 use datafusion_common::{Result, Statistics};
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 

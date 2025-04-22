@@ -21,15 +21,15 @@ use arrow::array::builder::StringBuilder;
 use arrow::array::{ArrayRef, AsArray, Int64Array, StringArray, StringViewArray};
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use datafusion_functions::regex::regexpcount::regexp_count_func;
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
 use datafusion_functions::regex::regexpreplace::regexp_replace;
+use rand::Rng;
 use rand::distributions::Alphanumeric;
 use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
-use rand::Rng;
 use std::iter;
 use std::sync::Arc;
 fn data(rng: &mut ThreadRng) -> StringArray {

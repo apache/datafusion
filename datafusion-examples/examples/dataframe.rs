@@ -17,10 +17,10 @@
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::common::config::CsvOptions;
-use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::DataFusionError;
 use datafusion::common::ScalarValue;
+use datafusion::common::config::CsvOptions;
+use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg;

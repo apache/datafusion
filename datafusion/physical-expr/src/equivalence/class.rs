@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{add_offset_to_expr, ProjectionMapping};
+use super::{ProjectionMapping, add_offset_to_expr};
 use crate::{
-    expressions::Column, LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef,
-    PhysicalSortExpr, PhysicalSortRequirement,
+    LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    PhysicalSortRequirement, expressions::Column,
 };
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, ScalarValue};
@@ -546,24 +546,27 @@ impl EquivalenceGroup {
     ) -> Option<Arc<dyn PhysicalExpr>> {
         // First, we try to project expressions with an exact match. If we are
         // unable to do this, we consult equivalence classes.
-        match mapping.target_expr(expr) { Some(target) => {
-            // If we match the source, we can project directly:
-            return Some(target);
-        } _ => {
-            // If the given expression is not inside the mapping, try to project
-            // expressions considering the equivalence classes.
-            for (source, target) in mapping.iter() {
-                // If we match an equivalent expression to `source`, then we can
-                // project. For example, if we have the mapping `(a as a1, a + c)`
-                // and the equivalence class `(a, b)`, expression `b` projects to `a1`.
-                if self
-                    .get_equivalence_class(source)
-                    .is_some_and(|group| group.contains(expr))
-                {
-                    return Some(Arc::clone(target));
+        match mapping.target_expr(expr) {
+            Some(target) => {
+                // If we match the source, we can project directly:
+                return Some(target);
+            }
+            _ => {
+                // If the given expression is not inside the mapping, try to project
+                // expressions considering the equivalence classes.
+                for (source, target) in mapping.iter() {
+                    // If we match an equivalent expression to `source`, then we can
+                    // project. For example, if we have the mapping `(a as a1, a + c)`
+                    // and the equivalence class `(a, b)`, expression `b` projects to `a1`.
+                    if self
+                        .get_equivalence_class(source)
+                        .is_some_and(|group| group.contains(expr))
+                    {
+                        return Some(Arc::clone(target));
+                    }
                 }
             }
-        }}
+        }
         // Project a non-leaf expression by projecting its children.
         let children = expr.children();
         if children.is_empty() {
@@ -760,7 +763,7 @@ impl Display for EquivalenceGroup {
 mod tests {
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::{binary, col, lit, BinaryExpr, Literal};
+    use crate::expressions::{BinaryExpr, Literal, binary, col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
 
     use datafusion_common::{Result, ScalarValue};
@@ -945,8 +948,7 @@ mod tests {
                 left: Arc::clone(&col_a),
                 right: Arc::clone(&col_b),
                 expected: false,
-                description:
-                    "Columns in different equivalence classes should not be equal",
+                description: "Columns in different equivalence classes should not be equal",
             },
             // Literal tests
             TestCase {
@@ -974,8 +976,7 @@ mod tests {
                     Arc::clone(&col_y),
                 )) as Arc<dyn PhysicalExpr>,
                 expected: true,
-                description:
-                    "Binary expressions with equivalent operands should be equal",
+                description: "Binary expressions with equivalent operands should be equal",
             },
             TestCase {
                 left: Arc::new(BinaryExpr::new(
@@ -989,8 +990,7 @@ mod tests {
                     Arc::clone(&col_a),
                 )) as Arc<dyn PhysicalExpr>,
                 expected: false,
-                description:
-                    "Binary expressions with non-equivalent operands should not be equal",
+                description: "Binary expressions with non-equivalent operands should not be equal",
             },
             TestCase {
                 left: Arc::new(BinaryExpr::new(

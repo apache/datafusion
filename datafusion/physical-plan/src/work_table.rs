@@ -22,17 +22,17 @@ use std::sync::{Arc, Mutex};
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
-use crate::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    SendableRecordBatchStream, Statistics,
-};
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use crate::{
+    SendableRecordBatchStream, Statistics,
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_datafusion_err, internal_err, Result};
-use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_common::{Result, internal_datafusion_err, internal_err};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 /// A vector of record batches with a memory reservation.

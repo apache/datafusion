@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use object_store::{path::Path, ObjectMeta};
+use object_store::{ObjectMeta, path::Path};
 
 use crate::FileRange;
 

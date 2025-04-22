@@ -17,12 +17,12 @@
 
 use std::sync::Arc;
 
-use crate::expressions::Column;
 use crate::PhysicalExpr;
+use crate::expressions::Column;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 
 /// Stores the mapping between source expressions and target expressions for a
 /// projection.
@@ -138,11 +138,11 @@ fn project_index_to_exprs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::equivalence::EquivalenceProperties;
     use crate::equivalence::tests::{
         convert_to_orderings, convert_to_orderings_owned, output_schema,
     };
-    use crate::equivalence::EquivalenceProperties;
-    use crate::expressions::{col, BinaryExpr};
+    use crate::expressions::{BinaryExpr, col};
     use crate::utils::tests::TestScalarUDF;
     use crate::{PhysicalExprRef, ScalarFunctionExpr};
 

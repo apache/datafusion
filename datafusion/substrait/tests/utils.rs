@@ -17,14 +17,14 @@
 
 #[cfg(test)]
 pub mod test {
-    use datafusion::common::{substrait_datafusion_err, substrait_err, TableReference};
-    use datafusion::datasource::empty::EmptyTable;
+    use datafusion::common::{TableReference, substrait_datafusion_err, substrait_err};
     use datafusion::datasource::TableProvider;
+    use datafusion::datasource::empty::EmptyTable;
     use datafusion::error::Result;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::extensions::Extensions;
     use datafusion_substrait::logical_plan::consumer::{
-        from_substrait_named_struct, DefaultSubstraitConsumer, SubstraitConsumer,
+        DefaultSubstraitConsumer, SubstraitConsumer, from_substrait_named_struct,
     };
     use std::collections::HashMap;
     use std::fs::File;
@@ -32,9 +32,9 @@ pub mod test {
     use std::sync::Arc;
     use substrait::proto::exchange_rel::ExchangeKind;
     use substrait::proto::expand_rel::expand_field::FieldType;
+    use substrait::proto::expression::RexType;
     use substrait::proto::expression::nested::NestedType;
     use substrait::proto::expression::subquery::SubqueryType;
-    use substrait::proto::expression::RexType;
     use substrait::proto::function_argument::ArgType;
     use substrait::proto::read_rel::{NamedTable, ReadType};
     use substrait::proto::rel::RelType;
@@ -73,7 +73,10 @@ pub mod test {
                 if existing_table.schema() != schema {
                     return substrait_err!(
                         "Substrait plan contained the same table {} with different schemas.\nSchema 1: {}\nSchema 2: {}",
-                        table_reference, existing_table.schema(), schema);
+                        table_reference,
+                        existing_table.schema(),
+                        schema
+                    );
                 }
             }
         }

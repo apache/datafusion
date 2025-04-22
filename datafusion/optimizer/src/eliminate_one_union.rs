@@ -18,7 +18,7 @@
 //! [`EliminateOneUnion`]  eliminates single element `Union`
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{tree_node::Transformed, Result};
+use datafusion_common::{Result, tree_node::Transformed};
 use datafusion_expr::logical_plan::{LogicalPlan, Union};
 use std::sync::Arc;
 

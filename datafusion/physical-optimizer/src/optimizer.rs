@@ -35,8 +35,8 @@ use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which

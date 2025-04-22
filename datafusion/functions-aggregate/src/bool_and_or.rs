@@ -28,10 +28,10 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 
 use datafusion_common::internal_err;
-use datafusion_common::{downcast_value, not_impl_err};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{downcast_value, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
     Signature, Volatility,

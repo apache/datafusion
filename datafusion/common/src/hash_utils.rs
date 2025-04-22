@@ -33,9 +33,9 @@ use crate::cast::{
     as_generic_binary_array, as_large_list_array, as_list_array, as_map_array,
     as_string_array, as_string_view_array, as_struct_array,
 };
-use crate::error::Result;
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::error::_internal_err;
+use crate::error::Result;
 
 // Combines two hashes into one hash
 #[inline]

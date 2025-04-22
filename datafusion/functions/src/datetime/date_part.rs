@@ -21,15 +21,16 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
-use arrow::compute::{binary, date_part, DatePart};
+use arrow::compute::{DatePart, binary, date_part};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::types::{logical_date, NativeType};
+use datafusion_common::types::{NativeType, logical_date};
 
 use datafusion_common::{
+    Result, ScalarValue,
     cast::{
         as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
         as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
@@ -39,7 +40,6 @@ use datafusion_common::{
     exec_err, internal_err, not_impl_err,
     types::logical_string,
     utils::take_function_args,
-    Result, ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl, Signature,
@@ -195,31 +195,40 @@ impl ScalarUDFImpl for DatePartFunc {
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
-        let arr = match IntervalUnit::from_str(part_trim) { Ok(interval_unit) => {
-            match interval_unit {
-                IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
-                IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,
-                IntervalUnit::Week => date_part(array.as_ref(), DatePart::Week)?,
-                IntervalUnit::Day => date_part(array.as_ref(), DatePart::Day)?,
-                IntervalUnit::Hour => date_part(array.as_ref(), DatePart::Hour)?,
-                IntervalUnit::Minute => date_part(array.as_ref(), DatePart::Minute)?,
-                IntervalUnit::Second => seconds_as_i32(array.as_ref(), Second)?,
-                IntervalUnit::Millisecond => seconds_as_i32(array.as_ref(), Millisecond)?,
-                IntervalUnit::Microsecond => seconds_as_i32(array.as_ref(), Microsecond)?,
-                IntervalUnit::Nanosecond => seconds_as_i32(array.as_ref(), Nanosecond)?,
-                // century and decade are not supported by `DatePart`, although they are supported in postgres
-                _ => return exec_err!("Date part '{part}' not supported"),
+        let arr = match IntervalUnit::from_str(part_trim) {
+            Ok(interval_unit) => {
+                match interval_unit {
+                    IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
+                    IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,
+                    IntervalUnit::Week => date_part(array.as_ref(), DatePart::Week)?,
+                    IntervalUnit::Day => date_part(array.as_ref(), DatePart::Day)?,
+                    IntervalUnit::Hour => date_part(array.as_ref(), DatePart::Hour)?,
+                    IntervalUnit::Minute => date_part(array.as_ref(), DatePart::Minute)?,
+                    IntervalUnit::Second => seconds_as_i32(array.as_ref(), Second)?,
+                    IntervalUnit::Millisecond => {
+                        seconds_as_i32(array.as_ref(), Millisecond)?
+                    }
+                    IntervalUnit::Microsecond => {
+                        seconds_as_i32(array.as_ref(), Microsecond)?
+                    }
+                    IntervalUnit::Nanosecond => {
+                        seconds_as_i32(array.as_ref(), Nanosecond)?
+                    }
+                    // century and decade are not supported by `DatePart`, although they are supported in postgres
+                    _ => return exec_err!("Date part '{part}' not supported"),
+                }
             }
-        } _ => {
-            // special cases that can be extracted (in postgres) but are not interval units
-            match part_trim.to_lowercase().as_str() {
-                "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
-                "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
-                "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
-                "epoch" => epoch(array.as_ref())?,
-                _ => return exec_err!("Date part '{part}' not supported"),
+            _ => {
+                // special cases that can be extracted (in postgres) but are not interval units
+                match part_trim.to_lowercase().as_str() {
+                    "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
+                    "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
+                    "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
+                    "epoch" => epoch(array.as_ref())?,
+                    _ => return exec_err!("Date part '{part}' not supported"),
+                }
             }
-        }};
+        };
 
         Ok(if is_scalar {
             ColumnarValue::Scalar(ScalarValue::try_from_array(arr.as_ref(), 0)?)

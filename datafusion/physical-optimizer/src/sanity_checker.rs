@@ -32,7 +32,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
-use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
+use datafusion_physical_plan::{ExecutionPlanProperties, get_plan_string};
 
 use crate::PhysicalOptimizerRule;
 use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
@@ -82,8 +82,10 @@ pub fn check_finiteness_requirements(
         if !(optimizer_options.allow_symmetric_joins_without_pruning
             || (exec.check_if_order_information_available()? && is_prunable(exec)))
         {
-            return plan_err!("Join operation cannot operate on a non-prunable stream without enabling \
-                              the 'allow_symmetric_joins_without_pruning' configuration flag");
+            return plan_err!(
+                "Join operation cannot operate on a non-prunable stream without enabling \
+                              the 'allow_symmetric_joins_without_pruning' configuration flag"
+            );
         }
     }
 

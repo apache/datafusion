@@ -34,7 +34,7 @@ use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{
-    self, proto_error, window_agg_exec_node, ListUnnest as ProtoListUnnest,
+    self, ListUnnest as ProtoListUnnest, proto_error, window_agg_exec_node,
 };
 use crate::{convert_required, into_required};
 
@@ -54,8 +54,8 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
@@ -86,11 +86,11 @@ use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err, not_impl_err};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
-use prost::bytes::BufMut;
 use prost::Message;
+use prost::bytes::BufMut;
 
 pub mod from_proto;
 pub mod to_proto;
@@ -739,7 +739,9 @@ impl protobuf::PhysicalPlanNode {
             Ok(DataSourceExec::from_data_source(base_config))
         }
         #[cfg(not(feature = "parquet"))]
-        panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
+        panic!(
+            "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+        )
     }
 
     #[cfg_attr(not(feature = "avro"), allow(unused_variables))]

@@ -22,8 +22,8 @@
 use std::fmt::{self, Debug};
 use std::ops::IndexMut;
 
-use hashbrown::hash_table::Entry::{Occupied, Vacant};
 use hashbrown::HashTable;
+use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 ///

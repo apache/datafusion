@@ -19,7 +19,7 @@ use std::any::Any;
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,

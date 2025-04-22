@@ -16,15 +16,15 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::Result;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::udaf::{AggregateFunctionExpr, StatisticsArgs};
-use datafusion_physical_plan::{expressions, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, expressions};
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
@@ -48,49 +48,55 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match take_optimizable(&*plan) { Some(partial_agg_exec) => {
-            let partial_agg_exec = partial_agg_exec
-                .as_any()
-                .downcast_ref::<AggregateExec>()
-                .expect("take_optimizable() ensures that this is a AggregateExec");
-            let stats = partial_agg_exec.input().statistics()?;
-            let mut projections = vec![];
-            for expr in partial_agg_exec.aggr_expr() {
-                let field = expr.field();
-                let args = expr.expressions();
-                let statistics_args = StatisticsArgs {
-                    statistics: &stats,
-                    return_type: field.data_type(),
-                    is_distinct: expr.is_distinct(),
-                    exprs: args.as_slice(),
-                };
-                match take_optimizable_value_from_statistics(&statistics_args, expr)
-                { Some((optimizable_statistic, name)) => {
-                    projections
-                        .push((expressions::lit(optimizable_statistic), name.to_owned()));
-                } _ => {
-                    // TODO: we need all aggr_expr to be resolved (cf TODO fullres)
-                    break;
-                }}
-            }
+        match take_optimizable(&*plan) {
+            Some(partial_agg_exec) => {
+                let partial_agg_exec = partial_agg_exec
+                    .as_any()
+                    .downcast_ref::<AggregateExec>()
+                    .expect("take_optimizable() ensures that this is a AggregateExec");
+                let stats = partial_agg_exec.input().statistics()?;
+                let mut projections = vec![];
+                for expr in partial_agg_exec.aggr_expr() {
+                    let field = expr.field();
+                    let args = expr.expressions();
+                    let statistics_args = StatisticsArgs {
+                        statistics: &stats,
+                        return_type: field.data_type(),
+                        is_distinct: expr.is_distinct(),
+                        exprs: args.as_slice(),
+                    };
+                    match take_optimizable_value_from_statistics(&statistics_args, expr) {
+                        Some((optimizable_statistic, name)) => {
+                            projections.push((
+                                expressions::lit(optimizable_statistic),
+                                name.to_owned(),
+                            ));
+                        }
+                        _ => {
+                            // TODO: we need all aggr_expr to be resolved (cf TODO fullres)
+                            break;
+                        }
+                    }
+                }
 
-            // TODO fullres: use statistics even if not all aggr_expr could be resolved
-            if projections.len() == partial_agg_exec.aggr_expr().len() {
-                // input can be entirely removed
-                Ok(Arc::new(ProjectionExec::try_new(
-                    projections,
-                    Arc::new(PlaceholderRowExec::new(plan.schema())),
-                )?))
-            } else {
-                plan.map_children(|child| {
-                    self.optimize(child, config).map(Transformed::yes)
-                })
-                .data()
+                // TODO fullres: use statistics even if not all aggr_expr could be resolved
+                if projections.len() == partial_agg_exec.aggr_expr().len() {
+                    // input can be entirely removed
+                    Ok(Arc::new(ProjectionExec::try_new(
+                        projections,
+                        Arc::new(PlaceholderRowExec::new(plan.schema())),
+                    )?))
+                } else {
+                    plan.map_children(|child| {
+                        self.optimize(child, config).map(Transformed::yes)
+                    })
+                    .data()
+                }
             }
-        } _ => {
-            plan.map_children(|child| self.optimize(child, config).map(Transformed::yes))
-                .data()
-        }}
+            _ => plan
+                .map_children(|child| self.optimize(child, config).map(Transformed::yes))
+                .data(),
+        }
     }
 
     fn name(&self) -> &str {

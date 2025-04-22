@@ -19,11 +19,11 @@ use arrow::array::{
     Date32Builder, Decimal128Builder, Int32Builder, RecordBatch, StringBuilder,
 };
 use arrow::datatypes::{DataType, Field, Schema};
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_physical_plan::SpillManager;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
-use datafusion_physical_plan::SpillManager;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 

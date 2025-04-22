@@ -79,18 +79,18 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::{
     execution::context::TaskContext,
     physical_plan::{
+        ExecutionPlan, ExecutionPlanProperties,
         coalesce_partitions::CoalescePartitionsExec,
-        sorts::sort_preserving_merge::SortPreservingMergeExec, ExecutionPlan,
-        ExecutionPlanProperties,
+        sorts::sort_preserving_merge::SortPreservingMergeExec,
     },
     prelude::SessionContext,
 };
 use datafusion_datasource::memory::MemorySourceConfig;
-use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Benchmarks for SortPreservingMerge stream
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};

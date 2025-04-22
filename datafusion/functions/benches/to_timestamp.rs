@@ -23,7 +23,7 @@ use arrow::array::builder::StringBuilder;
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, TimeUnit};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_timestamp;

@@ -27,10 +27,10 @@ use crate::source::AvroSource;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::DEFAULT_AVRO_EXTENSION;
+use datafusion_common::GetExt;
 use datafusion_common::internal_err;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::GetExt;
-use datafusion_common::DEFAULT_AVRO_EXTENSION;
 use datafusion_common::{Result, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;

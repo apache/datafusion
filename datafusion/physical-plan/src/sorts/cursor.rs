@@ -18,8 +18,8 @@
 use std::cmp::Ordering;
 
 use arrow::array::{
-    types::ByteArrayType, Array, ArrowPrimitiveType, GenericByteArray,
-    GenericByteViewArray, OffsetSizeTrait, PrimitiveArray, StringViewArray,
+    Array, ArrowPrimitiveType, GenericByteArray, GenericByteViewArray, OffsetSizeTrait,
+    PrimitiveArray, StringViewArray, types::ByteArrayType,
 };
 use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::SortOptions;

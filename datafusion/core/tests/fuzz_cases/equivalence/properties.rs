@@ -16,12 +16,12 @@
 // under the License.
 
 use crate::fuzz_cases::equivalence::utils::{
-    create_random_schema, generate_table_for_eq_properties, is_table_same_after_sort,
-    TestScalarUDF,
+    TestScalarUDF, create_random_schema, generate_table_for_eq_properties,
+    is_table_same_after_sort,
 };
 use datafusion_common::Result;
 use datafusion_expr::{Operator, ScalarUDF};
-use datafusion_physical_expr::expressions::{col, BinaryExpr};
+use datafusion_physical_expr::expressions::{BinaryExpr, col};
 use datafusion_physical_expr::{PhysicalExprRef, ScalarFunctionExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};

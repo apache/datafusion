@@ -37,11 +37,11 @@ use async_recursion::async_recursion;
 use chrono::DateTime;
 use datafusion::datasource::memory::DataSourceExec;
 use object_store::ObjectMeta;
-use substrait::proto::r#type::{Kind, Nullability};
-use substrait::proto::read_rel::local_files::file_or_files::PathType;
 use substrait::proto::Type;
+use substrait::proto::read_rel::local_files::file_or_files::PathType;
+use substrait::proto::r#type::{Kind, Nullability};
 use substrait::proto::{
-    expression::MaskExpression, read_rel::ReadType, rel::RelType, Rel,
+    Rel, expression::MaskExpression, read_rel::ReadType, rel::RelType,
 };
 
 /// Convert Substrait Rel to DataFusion ExecutionPlan

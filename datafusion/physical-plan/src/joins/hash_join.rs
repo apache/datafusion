@@ -19,8 +19,8 @@
 
 use std::fmt;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 use std::{any::Any, vec};
 
@@ -28,62 +28,62 @@ use super::utils::{
     asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
     reorder_output_after_swap, swap_join_projection,
 };
-use super::{
-    utils::{OnceAsync, OnceFut},
-    PartitionMode, SharedBitmapBuilder,
-};
 use super::{JoinOn, JoinOnRef};
-use crate::execution_plan::{boundedness_from_children, EmissionType};
+use super::{
+    PartitionMode, SharedBitmapBuilder,
+    utils::{OnceAsync, OnceFut},
+};
+use crate::ExecutionPlanProperties;
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::projection::{
-    try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
-    ProjectionExec,
+    EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
+    try_pushdown_through_join,
 };
 use crate::spill::get_record_batch_memory_size;
-use crate::ExecutionPlanProperties;
 use crate::{
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
     common::can_project,
     handle_state,
     hash_utils::create_hashes,
     joins::join_hash_map::JoinHashMapOffset,
     joins::utils::{
-        adjust_indices_by_join_type, apply_join_filter_to_indices,
+        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMap, JoinHashMapType,
+        StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_from_indices, build_join_schema, check_join_is_valid,
         estimate_join_statistics, need_produce_result_in_final,
-        symmetric_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
-        JoinFilter, JoinHashMap, JoinHashMapType, StatefulStreamResult,
+        symmetric_join_output_partitioning,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{
-    cast::downcast_array, Array, ArrayRef, BooleanArray, BooleanBufferBuilder,
-    UInt32Array, UInt64Array,
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array,
+    cast::downcast_array,
 };
 use arrow::compute::kernels::cmp::{eq, not_distinct};
-use arrow::compute::{and, concat_batches, take, FilterBuilder};
+use arrow::compute::{FilterBuilder, and, concat_batches, take};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
-    JoinSide, JoinType, Result,
+    DataFusionError, JoinSide, JoinType, Result, internal_datafusion_err, internal_err,
+    plan_err, project_schema,
 };
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::Operator;
-use datafusion_physical_expr::equivalence::{
-    join_equivalence_properties, ProjectionMapping,
-};
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::equivalence::{
+    ProjectionMapping, join_equivalence_properties,
+};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, ready};
 use parking_lot::Mutex;
 
 /// HashTable and input data for the left (build side) of a join
@@ -912,26 +912,27 @@ impl ExecutionPlan for HashJoinExec {
             self.on(),
             self.schema(),
             self.filter(),
-        )? { Some(JoinData {
-            projected_left_child,
-            projected_right_child,
-            join_filter,
-            join_on,
-        }) => {
-            Ok(Some(Arc::new(HashJoinExec::try_new(
-                Arc::new(projected_left_child),
-                Arc::new(projected_right_child),
-                join_on,
+        )? {
+            Some(JoinData {
+                projected_left_child,
+                projected_right_child,
                 join_filter,
-                self.join_type(),
-                // Returned early if projection is not None
-                None,
-                *self.partition_mode(),
-                self.null_equals_null,
-            )?)))
-        } _ => {
-            try_embed_projection(projection, self)
-        }}
+                join_on,
+            }) => {
+                Ok(Some(Arc::new(HashJoinExec::try_new(
+                    Arc::new(projected_left_child),
+                    Arc::new(projected_right_child),
+                    join_on,
+                    join_filter,
+                    self.join_type(),
+                    // Returned early if projection is not None
+                    None,
+                    *self.partition_mode(),
+                    self.null_equals_null,
+                )?)))
+            }
+            _ => try_embed_projection(projection, self),
+        }
     }
 }
 
@@ -1413,11 +1414,12 @@ impl HashJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
         // build hash table from left (build) side, if not yet done
-        let left_data = ready!(self
-            .build_side
-            .try_as_initial_mut()?
-            .left_fut
-            .get_shared(cx))?;
+        let left_data = ready!(
+            self.build_side
+                .try_as_initial_mut()?
+                .left_fut
+                .get_shared(cx)
+        )?;
         build_timer.done();
 
         self.state = HashJoinStreamState::FetchProbeBatch;
@@ -1660,14 +1662,14 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
-        ScalarValue,
+        ScalarValue, assert_batches_eq, assert_batches_sorted_eq, assert_contains,
+        exec_err,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
     use rstest::*;
@@ -1795,7 +1797,7 @@ mod tests {
                 Partitioning::Hash(left_expr, partition_count),
             )?),
             PartitionMode::Auto => {
-                return internal_err!("Unexpected PartitionMode::Auto in join tests")
+                return internal_err!("Unexpected PartitionMode::Auto in join tests");
             }
         };
 
@@ -1816,7 +1818,7 @@ mod tests {
                 Partitioning::Hash(right_expr, partition_count),
             )?),
             PartitionMode::Auto => {
-                return internal_err!("Unexpected PartitionMode::Auto in join tests")
+                return internal_err!("Unexpected PartitionMode::Auto in join tests");
             }
         };
 
@@ -4140,7 +4142,6 @@ mod tests {
             assert_contains!(
                 err.to_string(),
                 "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
-
             );
 
             assert_contains!(

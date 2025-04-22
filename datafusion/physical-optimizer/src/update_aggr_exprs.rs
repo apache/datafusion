@@ -22,16 +22,16 @@ use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_common::{Result, plan_datafusion_err};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
-    reverse_order_bys, EquivalenceProperties, PhysicalSortRequirement,
+    EquivalenceProperties, PhysicalSortRequirement, reverse_order_bys,
 };
 use datafusion_physical_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::aggregates::concat_slices;
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{
-    aggregates::AggregateExec, ExecutionPlan, ExecutionPlanProperties,
+    ExecutionPlan, ExecutionPlanProperties, aggregates::AggregateExec,
 };
 
 use crate::PhysicalOptimizerRule;

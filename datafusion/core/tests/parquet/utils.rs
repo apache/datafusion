@@ -20,7 +20,7 @@
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_physical_plan::metrics::MetricsSet;
-use datafusion_physical_plan::{accept, ExecutionPlan, ExecutionPlanVisitor};
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
 /// Find the metrics from the first DataSourceExec encountered in the plan
 #[derive(Debug)]

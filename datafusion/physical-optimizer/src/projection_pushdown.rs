@@ -24,11 +24,11 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
-use datafusion_common::Result;
-use datafusion_physical_plan::projection::remove_unnecessary_projections;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::projection::remove_unnecessary_projections;
 
 /// This rule inspects `ProjectionExec`'s in the given physical plan and tries to
 /// remove or swap with its child.

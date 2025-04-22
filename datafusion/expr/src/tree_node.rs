@@ -24,10 +24,10 @@ use crate::expr::{
 };
 use crate::{Expr, ExprFunctionExt};
 
+use datafusion_common::Result;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRefContainer,
 };
-use datafusion_common::Result;
 
 /// Implementation of the [`TreeNode`] trait
 ///

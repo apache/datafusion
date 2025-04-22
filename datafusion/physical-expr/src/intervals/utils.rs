@@ -20,15 +20,15 @@
 use std::sync::Arc;
 
 use crate::{
-    expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
     PhysicalExpr,
+    expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
 };
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::Operator;
+use datafusion_expr::interval_arithmetic::Interval;
 
 /// Indicates whether interval arithmetic is supported for the given expression.
 /// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
@@ -42,17 +42,19 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
             && check_support(binary_expr.left(), schema)
             && check_support(binary_expr.right(), schema)
     } else if let Some(column) = expr_any.downcast_ref::<Column>() {
-        match schema.field_with_name(column.name()) { Ok(field) => {
-            is_datatype_supported(field.data_type())
-        } _ => {
-            return false;
-        }}
+        match schema.field_with_name(column.name()) {
+            Ok(field) => is_datatype_supported(field.data_type()),
+            _ => {
+                return false;
+            }
+        }
     } else if let Some(literal) = expr_any.downcast_ref::<Literal>() {
-        match literal.data_type(schema) { Ok(dt) => {
-            is_datatype_supported(&dt)
-        } _ => {
-            return false;
-        }}
+        match literal.data_type(schema) {
+            Ok(dt) => is_datatype_supported(&dt),
+            _ => {
+                return false;
+            }
+        }
     } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
         check_support(cast.expr(), schema)
     } else if let Some(negative) = expr_any.downcast_ref::<NegativeExpr>() {
@@ -112,11 +114,10 @@ pub fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval
     match (
         convert_interval_bound_to_duration(interval.lower()),
         convert_interval_bound_to_duration(interval.upper()),
-    ) { (Some(lower), Some(upper)) => {
-        Interval::try_new(lower, upper).ok()
-    } _ => {
-        None
-    }}
+    ) {
+        (Some(lower), Some(upper)) => Interval::try_new(lower, upper).ok(),
+        _ => None,
+    }
 }
 
 /// Converts an [`ScalarValue`] containing a time interval to one containing a `Duration`, if applicable. Otherwise, returns [`None`].
@@ -139,11 +140,10 @@ pub fn convert_duration_type_to_interval(interval: &Interval) -> Option<Interval
     match (
         convert_duration_bound_to_interval(interval.lower()),
         convert_duration_bound_to_interval(interval.upper()),
-    ) { (Some(lower), Some(upper)) => {
-        Interval::try_new(lower, upper).ok()
-    } _ => {
-        None
-    }}
+    ) {
+        (Some(lower), Some(upper)) => Interval::try_new(lower, upper).ok(),
+        _ => None,
+    }
 }
 
 /// Converts a [`ScalarValue`] containing a `Duration` to one containing a time interval, if applicable. Otherwise, returns [`None`].

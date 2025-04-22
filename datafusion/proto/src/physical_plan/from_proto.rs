@@ -22,8 +22,8 @@ use std::sync::Arc;
 use arrow::compute::SortOptions;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::dml::InsertOp;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::file_format::csv::CsvSink;
@@ -39,12 +39,12 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
+    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, not_impl_err};
 use datafusion_proto_common::common::proto_error;
 
 use crate::convert_required;

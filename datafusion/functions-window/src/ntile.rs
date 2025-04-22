@@ -26,7 +26,7 @@ use crate::utils::{
 };
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use datafusion_expr::{
     Documentation, Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };

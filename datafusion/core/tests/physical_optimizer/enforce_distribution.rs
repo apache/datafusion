@@ -32,22 +32,24 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
+use datafusion_common::ScalarValue;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::ScalarValue;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::{
-    expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
+    LexOrdering, PhysicalSortExpr, expressions::binary, expressions::lit,
 };
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::ExecutionPlanProperties;
+use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -61,10 +63,8 @@ use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
-use datafusion_physical_plan::ExecutionPlanProperties;
-use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::{
-    get_plan_string, DisplayAs, DisplayFormatType, Statistics,
+    DisplayAs, DisplayFormatType, Statistics, get_plan_string,
 };
 
 /// Models operators like BoundedWindowExec that require an input
@@ -578,7 +578,10 @@ fn multi_hash_joins() -> Result<()> {
     for join_type in join_types {
         let join = hash_join_exec(left.clone(), right.clone(), &join_on, &join_type);
         let join_plan = |shift| -> String {
-            format!("{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)]", " ".repeat(shift))
+            format!(
+                "{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)]",
+                " ".repeat(shift)
+            )
         };
         let join_plan_indent2 = join_plan(2);
         let join_plan_indent4 = join_plan(4);
@@ -602,12 +605,17 @@ fn multi_hash_joins() -> Result<()> {
                     &top_join_on,
                     &join_type,
                 );
-                let top_join_plan =
-                    format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)]");
+                let top_join_plan = format!(
+                    "HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)]"
+                );
 
                 let expected = match join_type {
                     // Should include 3 RepartitionExecs
-                    JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => vec![
+                    JoinType::Inner
+                    | JoinType::Left
+                    | JoinType::LeftSemi
+                    | JoinType::LeftAnti
+                    | JoinType::LeftMark => vec![
                         top_join_plan.as_str(),
                         &join_plan_indent2,
                         "    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
@@ -663,46 +671,49 @@ fn multi_hash_joins() -> Result<()> {
                 let top_join =
                     hash_join_exec(join, parquet_exec(), &top_join_on, &join_type);
                 let top_join_plan = match join_type {
-                    JoinType::RightSemi | JoinType::RightAnti =>
-                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@1, c@2)]"),
-                    _ =>
-                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@6, c@2)]"),
+                    JoinType::RightSemi | JoinType::RightAnti => format!(
+                        "HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@1, c@2)]"
+                    ),
+                    _ => format!(
+                        "HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@6, c@2)]"
+                    ),
                 };
 
                 let expected = match join_type {
                     // Should include 3 RepartitionExecs
-                    JoinType::Inner | JoinType::Right | JoinType::RightSemi | JoinType::RightAnti =>
-                        vec![
-                            top_join_plan.as_str(),
-                            &join_plan_indent2,
-                            "    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-                            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                            "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                            "    RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
-                            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                            "        ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                            "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-                            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                            "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                        ],
+                    JoinType::Inner
+                    | JoinType::Right
+                    | JoinType::RightSemi
+                    | JoinType::RightAnti => vec![
+                        top_join_plan.as_str(),
+                        &join_plan_indent2,
+                        "    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                        "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                        "    RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                        "        ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
+                        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                        "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                    ],
                     // Should include 4 RepartitionExecs
-                    _ =>
-                        vec![
-                            top_join_plan.as_str(),
-                            "  RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10",
-                            &join_plan_indent4,
-                            "      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-                            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                            "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                            "      RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
-                            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                            "          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                            "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-                            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                            "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                        ],
+                    _ => vec![
+                        top_join_plan.as_str(),
+                        "  RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10",
+                        &join_plan_indent4,
+                        "      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                        "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                        "      RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                        "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                        "          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
+                        "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                        "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                    ],
                 };
 
                 let test_config = TestConfig::default();
@@ -1180,8 +1191,10 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
             &top_join_on,
             &join_type,
         );
-        let top_join_plan =
-            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)]", &join_type);
+        let top_join_plan = format!(
+            "HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)]",
+            &join_type
+        );
 
         let reordered = reorder_join_keys_to_inputs(top_join)?;
 
@@ -1314,8 +1327,10 @@ fn reorder_join_keys_to_right_input() -> Result<()> {
             &top_join_on,
             &join_type,
         );
-        let top_join_plan =
-            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)]", &join_type);
+        let top_join_plan = format!(
+            "HashJoinExec: mode=Partitioned, join_type={:?}, on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)]",
+            &join_type
+        );
 
         let reordered = reorder_join_keys_to_inputs(top_join)?;
 
@@ -1403,24 +1418,26 @@ fn multi_smj_joins() -> Result<()> {
 
         let expected = match join_type {
             // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
-            JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti =>
-                vec![
-                    top_join_plan.as_str(),
-                    &join_plan_indent2,
-                    "    SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-                    "      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-                    "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                    "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                    "    SortExec: expr=[b1@1 ASC], preserve_partitioning=[true]",
-                    "      RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
-                    "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                    "          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                    "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                    "  SortExec: expr=[c@2 ASC], preserve_partitioning=[true]",
-                    "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-                    "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                    "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                ],
+            JoinType::Inner
+            | JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti => vec![
+                top_join_plan.as_str(),
+                &join_plan_indent2,
+                "    SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
+                "      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                "    SortExec: expr=[b1@1 ASC], preserve_partitioning=[true]",
+                "      RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                "          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
+                "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                "  SortExec: expr=[c@2 ASC], preserve_partitioning=[true]",
+                "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+            ],
             // Should include 7 RepartitionExecs (4 hash, 3 round-robin), 4 SortExecs
             // Since ordering of the left child is not preserved after SortMergeJoin
             // when mode is Right, RightSemi, RightAnti, Full
@@ -1431,24 +1448,24 @@ fn multi_smj_joins() -> Result<()> {
             // - We need to add one additional Hash Repartition after SortMergeJoin in contrast the test
             //   cases when mode is Inner, Left, LeftSemi, LeftAnti
             _ => vec![
-                    top_join_plan.as_str(),
-                    // Below 2 operators are differences introduced, when join mode is changed
-                    "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-                    "    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-                    &join_plan_indent6,
-                    "        SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-                    "          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-                    "            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                    "              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                    "        SortExec: expr=[b1@1 ASC], preserve_partitioning=[true]",
-                    "          RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
-                    "            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                    "              ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                    "                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                    "  SortExec: expr=[c@2 ASC], preserve_partitioning=[true]",
-                    "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-                    "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                    "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                top_join_plan.as_str(),
+                // Below 2 operators are differences introduced, when join mode is changed
+                "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
+                "    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                &join_plan_indent6,
+                "        SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
+                "          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                "            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                "              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                "        SortExec: expr=[b1@1 ASC], preserve_partitioning=[true]",
+                "          RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                "            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                "              ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
+                "                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                "  SortExec: expr=[c@2 ASC], preserve_partitioning=[true]",
+                "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
             ],
         };
         // TODO(wiedld): show different test result if enforce sorting first.
@@ -1456,24 +1473,26 @@ fn multi_smj_joins() -> Result<()> {
 
         let expected_first_sort_enforcement = match join_type {
             // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
-            JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti =>
-                vec![
-                    top_join_plan.as_str(),
-                    &join_plan_indent2,
-                    "    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC",
-                    "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                    "        SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-                    "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                    "    RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10, preserve_order=true, sort_exprs=b1@1 ASC",
-                    "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                    "        SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]",
-                    "          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                    "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                    "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=c@2 ASC",
-                    "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-                    "      SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-                    "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-                ],
+            JoinType::Inner
+            | JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti => vec![
+                top_join_plan.as_str(),
+                &join_plan_indent2,
+                "    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC",
+                "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                "        SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+                "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                "    RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10, preserve_order=true, sort_exprs=b1@1 ASC",
+                "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                "        SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]",
+                "          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
+                "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+                "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=c@2 ASC",
+                "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                "      SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
+                "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+            ],
             // Should include 8 RepartitionExecs (4 hash, 8 round-robin), 4 SortExecs
             // Since ordering of the left child is not preserved after SortMergeJoin
             // when mode is Right, RightSemi, RightAnti, Full
@@ -1566,7 +1585,7 @@ fn multi_smj_joins() -> Result<()> {
                         "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
                     ],
                     // this match arm cannot be reached
-                    _ => unreachable!()
+                    _ => unreachable!(),
                 };
                 // TODO(wiedld): show different test result if enforce sorting first.
                 test_config.run(&expected, top_join.clone(), &DISTRIB_DISTRIB_SORT)?;
@@ -1613,7 +1632,7 @@ fn multi_smj_joins() -> Result<()> {
                         "        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
                     ],
                     // this match arm cannot be reached
-                    _ => unreachable!()
+                    _ => unreachable!(),
                 };
 
                 // TODO(wiedld): show different test result if enforce distribution first.
@@ -3434,8 +3453,9 @@ fn optimize_away_unnecessary_repartition() -> Result<()> {
     ];
     plans_matches_expected!(expected, physical_plan.clone());
 
-    let expected =
-        &["DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet"];
+    let expected = &[
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+    ];
 
     let test_config = TestConfig::default();
     test_config.run(expected, physical_plan.clone(), &DISTRIB_DISTRIB_SORT)?;

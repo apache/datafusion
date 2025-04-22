@@ -21,7 +21,7 @@ use std::{any::Any, sync::Arc};
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::apply_cmp;
 

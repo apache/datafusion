@@ -20,13 +20,13 @@ extern crate criterion;
 use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
 use arrow::datatypes::DataType;
 use criterion::{
-    black_box, criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup,
-    Criterion, SamplingMode,
+    BenchmarkGroup, Criterion, SamplingMode, black_box, criterion_group, criterion_main,
+    measurement::Measurement,
 };
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string;
-use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, distributions::Alphanumeric, rngs::StdRng};
 use std::{fmt, sync::Arc};
 
 pub fn seedable_rng() -> StdRng {

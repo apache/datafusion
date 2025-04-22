@@ -20,8 +20,8 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    assert_plan_matches_expected, build_group_by, mock_data, parquet_exec_with_sort,
-    schema, TestAggregate,
+    TestAggregate, assert_plan_matches_expected, build_group_by, mock_data,
+    parquet_exec_with_sort, schema,
 };
 
 use arrow::datatypes::DataType;
@@ -31,13 +31,13 @@ use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::cast;
-use datafusion_physical_expr::{expressions, expressions::col, PhysicalSortExpr};
+use datafusion_physical_expr::{PhysicalSortExpr, expressions, expressions::col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::{
+    ExecutionPlan,
     aggregates::{AggregateExec, AggregateMode},
     collect,
     limit::{GlobalLimitExec, LocalLimitExec},
-    ExecutionPlan,
 };
 
 async fn assert_results_match_expected(

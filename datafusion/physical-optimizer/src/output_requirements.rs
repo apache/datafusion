@@ -32,7 +32,7 @@ use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
 use datafusion_physical_plan::projection::{
-    make_with_child, update_expr, ProjectionExec,
+    ProjectionExec, make_with_child, update_expr,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;

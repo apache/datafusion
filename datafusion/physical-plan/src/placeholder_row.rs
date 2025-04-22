@@ -22,12 +22,12 @@ use std::sync::Arc;
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
-use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics, common};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::array::{ArrayRef, NullArray};
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -148,7 +148,12 @@ impl ExecutionPlan for PlaceholderRowExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start PlaceholderRowExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start PlaceholderRowExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
 
         if partition >= self.partitions {
             return internal_err!(

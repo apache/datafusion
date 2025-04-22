@@ -25,14 +25,14 @@ use super::power::PowerFunc;
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
+    Result, ScalarValue, exec_err, internal_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    lit, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
-    TypeSignature::*,
+    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF, TypeSignature::*,
+    lit,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -147,7 +147,7 @@ impl ScalarUDFImpl for LogFunc {
                     Arc::new(result) as _
                 }
                 _ => {
-                    return exec_err!("log function requires a scalar or array for base")
+                    return exec_err!("log function requires a scalar or array for base");
                 }
             },
 
@@ -167,11 +167,11 @@ impl ScalarUDFImpl for LogFunc {
                     Arc::new(result) as _
                 }
                 _ => {
-                    return exec_err!("log function requires a scalar or array for base")
+                    return exec_err!("log function requires a scalar or array for base");
                 }
             },
             other => {
-                return exec_err!("Unsupported data type {other:?} for function log")
+                return exec_err!("Unsupported data type {other:?} for function log");
             }
         };
 
@@ -203,11 +203,10 @@ impl ScalarUDFImpl for LogFunc {
         })?;
         let number_datatype = info.get_data_type(&number)?;
         // default to base 10
-        let base = match args.pop() { Some(base) => {
-            base
-        } _ => {
-            lit(ScalarValue::new_ten(&number_datatype)?)
-        }};
+        let base = match args.pop() {
+            Some(base) => base,
+            _ => lit(ScalarValue::new_ten(&number_datatype)?),
+        };
 
         match number {
             Expr::Literal(value) if value == ScalarValue::new_one(&number_datatype)? => {
@@ -233,7 +232,7 @@ impl ScalarUDFImpl for LogFunc {
                         _ => {
                             return internal_err!(
                                 "Unexpected number of arguments in log::simplify"
-                            )
+                            );
                         }
                     };
                     Ok(ExprSimplifyResult::Original(args))
@@ -256,8 +255,8 @@ mod tests {
 
     use arrow::array::{Float32Array, Float64Array, Int64Array};
     use arrow::compute::SortOptions;
-    use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::DFSchema;
+    use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
 

@@ -20,9 +20,9 @@
 use crate::array_agg::ArrayAgg;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::Result;
-use datafusion_common::{internal_err, not_impl_err, ScalarValue};
+use datafusion_common::cast::as_generic_string_array;
+use datafusion_common::{ScalarValue, internal_err, not_impl_err};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature, Volatility,
@@ -194,7 +194,10 @@ impl Accumulator for StringAggAccumulator {
         let scalar = self.array_agg_acc.evaluate()?;
 
         let ScalarValue::List(list) = scalar else {
-            return internal_err!("Expected a DataType::List while evaluating underlying ArrayAggAccumulator, but got {}", scalar.data_type());
+            return internal_err!(
+                "Expected a DataType::List while evaluating underlying ArrayAggAccumulator, but got {}",
+                scalar.data_type()
+            );
         };
 
         let string_arr: Vec<_> = match list.value_type() {
@@ -210,7 +213,7 @@ impl Accumulator for StringAggAccumulator {
                 return internal_err!(
                     "Expected elements to of type Utf8 or LargeUtf8, but got {}",
                     list.value_type()
-                )
+                );
             }
         };
 

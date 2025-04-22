@@ -29,8 +29,8 @@ use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Column,
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
@@ -49,10 +49,10 @@ use datafusion_expr::type_coercion::other::{
 use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_utf8view_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
     AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, Limit, LogicalPlan,
     Operator, Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
+    WindowFrameUnits, is_false, is_not_false, is_not_true, is_not_unknown, is_true,
+    is_unknown, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -77,11 +77,10 @@ fn coerce_output(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPla
         return Ok(plan);
     }
 
-    match transform_schema_to_nonview(plan.schema()) { Some(dfschema) => {
-        coerce_plan_expr_for_schema(plan, &dfschema?)
-    } _ => {
-        Ok(plan)
-    }}
+    match transform_schema_to_nonview(plan.schema()) {
+        Some(dfschema) => coerce_plan_expr_for_schema(plan, &dfschema?),
+        _ => Ok(plan),
+    }
 }
 
 impl AnalyzerRule for TypeCoercion {
@@ -490,9 +489,9 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                                 list_expr.cast_to(&coerced_type, self.schema)
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        Ok(Transformed::yes(Expr::InList(InList ::new(
-                             Box::new(cast_expr),
-                             cast_list_expr,
+                        Ok(Transformed::yes(Expr::InList(InList::new(
+                            Box::new(cast_expr),
+                            cast_list_expr,
                             negated,
                         ))))
                     }
@@ -1056,10 +1055,10 @@ mod test {
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
 
-    use crate::analyzer::type_coercion::{
-        coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
-    };
     use crate::analyzer::Analyzer;
+    use crate::analyzer::type_coercion::{
+        TypeCoercion, TypeCoercionRewriter, coerce_case_expression,
+    };
     use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
@@ -1068,10 +1067,10 @@ mod test {
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
-        cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
-        BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
-        Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        SimpleAggregateUDF, Subquery, Union, Volatility,
+        AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
+        ExprSchemable, Filter, LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF,
+        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast,
+        col, create_udaf, is_true, lit,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
     use datafusion_sql::TableReference;
@@ -1489,8 +1488,7 @@ mod test {
             + lit(ScalarValue::new_interval_dt(123, 456));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        let expected =
-            "Projection: CAST(Utf8(\"1998-03-18\") AS Date32) + IntervalDayTime(\"IntervalDayTime { days: 123, milliseconds: 456 }\")\n  EmptyRelation";
+        let expected = "Projection: CAST(Utf8(\"1998-03-18\") AS Date32) + IntervalDayTime(\"IntervalDayTime { days: 123, milliseconds: 456 }\")\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }
@@ -1528,8 +1526,7 @@ mod test {
         );
         let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
-        let expected =
-            "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) AND CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\")\
+        let expected = "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) AND CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\")\
             \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
@@ -1545,8 +1542,7 @@ mod test {
         let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
         // TODO: we should cast col(a).
-        let expected =
-            "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AND CAST(Utf8(\"2002-12-08\") AS Date32)\
+        let expected = "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AND CAST(Utf8(\"2002-12-08\") AS Date32)\
             \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
@@ -1556,8 +1552,7 @@ mod test {
         let expr = lit(ScalarValue::Null).between(lit(ScalarValue::Null), lit(2i64));
         let empty = empty();
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
-        let expected =
-            "Filter: CAST(NULL AS Int64) BETWEEN CAST(NULL AS Int64) AND Int64(2)\
+        let expected = "Filter: CAST(NULL AS Int64) BETWEEN CAST(NULL AS Int64) AND Int64(2)\
             \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
@@ -1703,8 +1698,7 @@ mod test {
                 vec![expr],
                 Arc::clone(&empty),
             )?);
-            let expected =
-                "Projection: TestScalarUDF(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
+            let expected = "Projection: TestScalarUDF(a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         }
 
@@ -1758,8 +1752,7 @@ mod test {
         .eq(cast(lit("1998-03-18"), DataType::Date32));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        let expected =
-            "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8(\"1998-03-18\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation";
+        let expected = "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8(\"1998-03-18\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }
@@ -2149,8 +2142,7 @@ mod test {
         ));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        let expected =
-            "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) - CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None))\n  EmptyRelation";
+        let expected = "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) - CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
     }

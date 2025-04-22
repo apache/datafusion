@@ -20,10 +20,10 @@
 use crate::optimizer::ApplyOrder;
 use crate::push_down_filter::on_lr_is_preserved;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{logical_plan::Filter, Expr, ExprSchemable, LogicalPlan};
+use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, logical_plan::Filter};
 use std::sync::Arc;
 
 /// The FilterNullJoinKeys rule will identify joins with equi-join conditions
@@ -111,7 +111,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Column;
     use datafusion_expr::logical_plan::table_scan;
-    use datafusion_expr::{col, lit, JoinType, LogicalPlanBuilder};
+    use datafusion_expr::{JoinType, LogicalPlanBuilder, col, lit};
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(FilterNullJoinKeys {}), plan, expected)
@@ -255,8 +255,7 @@ mod tests {
                 None,
             )?
             .build()?;
-        let expected =
-            "Inner Join: t1.optional_id + UInt32(1) = t2.optional_id + UInt32(1)\
+        let expected = "Inner Join: t1.optional_id + UInt32(1) = t2.optional_id + UInt32(1)\
         \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
         \n    TableScan: t1\
         \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\

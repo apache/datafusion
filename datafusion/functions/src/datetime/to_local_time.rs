@@ -31,7 +31,7 @@ use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
-    exec_err, plan_err, utils::take_function_args, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, exec_err, plan_err, utils::take_function_args,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -217,15 +217,18 @@ impl ToLocalTimeFunc {
                                 transform_array::<TimestampSecondType>(array, tz)
                             }
                             _ => {
-                                exec_err!("to_local_time function requires timestamp argument in array, got {:?}", array.data_type())
+                                exec_err!(
+                                    "to_local_time function requires timestamp argument in array, got {:?}",
+                                    array.data_type()
+                                )
                             }
                         }
                     }
                     _ => {
                         exec_err!(
-                        "to_local_time function requires timestamp argument, got {:?}",
-                        time_value.data_type()
-                    )
+                            "to_local_time function requires timestamp argument, got {:?}",
+                            time_value.data_type()
+                        )
                     }
                 }
             }
@@ -361,8 +364,9 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         match time_value {
             Timestamp(timeunit, _) => Ok(Timestamp(*timeunit, None)),
             _ => exec_err!(
-                "The to_local_time function can only accept timestamp as the arg, got {:?}", time_value
-            )
+                "The to_local_time function can only accept timestamp as the arg, got {:?}",
+                time_value
+            ),
         }
     }
 
@@ -395,7 +399,9 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
                 Ok(vec![Timestamp(Millisecond, timezone.clone())])
             }
             Timestamp(Second, timezone) => Ok(vec![Timestamp(Second, timezone.clone())]),
-            _ => plan_err!("The to_local_time function can only accept Timestamp as the arg got {first_arg}"),
+            _ => plan_err!(
+                "The to_local_time function can only accept Timestamp as the arg got {first_arg}"
+            ),
         }
     }
     fn documentation(&self) -> Option<&Documentation> {
@@ -407,14 +413,14 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{types::TimestampNanosecondType, TimestampNanosecondArray};
+    use arrow::array::{TimestampNanosecondArray, types::TimestampNanosecondType};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
     use chrono::NaiveDateTime;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
-    use super::{adjust_to_local_time, ToLocalTimeFunc};
+    use super::{ToLocalTimeFunc, adjust_to_local_time};
 
     #[test]
     fn test_adjust_to_local_time() {

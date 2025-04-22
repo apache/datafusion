@@ -25,7 +25,7 @@ use indexmap::IndexSet;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
-use super::{expr_refers, ExprWrapper};
+use super::{ExprWrapper, expr_refers};
 
 // A list of sort expressions that can be calculated from a known set of
 /// dependencies.
@@ -428,19 +428,19 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::equivalence::ProjectionMapping;
     use crate::equivalence::tests::{
         convert_to_sort_exprs, convert_to_sort_reqs, create_test_params,
         create_test_schema, output_schema, parse_sort_expr,
     };
-    use crate::equivalence::ProjectionMapping;
-    use crate::expressions::{col, BinaryExpr, CastExpr, Column};
+    use crate::expressions::{BinaryExpr, CastExpr, Column, col};
     use crate::{ConstExpr, EquivalenceProperties, ScalarFunctionExpr};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::{Constraint, Constraints, Result};
-    use datafusion_expr::sort_properties::SortProperties;
     use datafusion_expr::Operator;
+    use datafusion_expr::sort_properties::SortProperties;
 
     use datafusion_functions::string::concat;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -1241,10 +1241,9 @@ mod tests {
 
         let orderings = eq_properties.oeq_class();
 
-        let expected_ordering1 =
-            LexOrdering::from(vec![
-                PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc()
-            ]);
+        let expected_ordering1 = LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc(),
+        ]);
         let expected_ordering2 = LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
@@ -1332,10 +1331,9 @@ mod tests {
 
         let orderings = eq_properties.oeq_class();
 
-        let expected_ordering1 = LexOrdering::from(vec![PhysicalSortExpr::new_default(
-            Arc::clone(&a_concat_b),
-        )
-        .asc()]);
+        let expected_ordering1 = LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&a_concat_b)).asc(),
+        ]);
         let expected_ordering2 = LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int64, Timestamp, Utf8};
 use arrow::datatypes::TimeUnit::Second;
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl, Signature,

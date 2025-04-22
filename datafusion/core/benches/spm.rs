@@ -19,14 +19,14 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::{collect, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, collect};
 
 use criterion::async_executor::FuturesExecutor;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use datafusion_datasource::memory::MemorySourceConfig;
 
 fn generate_spm_for_round_robin_tie_breaker(

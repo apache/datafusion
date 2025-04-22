@@ -48,15 +48,15 @@ pub mod execution_props {
 }
 
 pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
-pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
+pub use analysis::{AnalysisContext, ExprBoundaries, analyze};
 pub use equivalence::{
-    calculate_union, AcrossPartitions, ConstExpr, EquivalenceProperties,
+    AcrossPartitions, ConstExpr, EquivalenceProperties, calculate_union,
 };
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
-    create_ordering, create_physical_sort_expr, create_physical_sort_exprs,
-    physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
-    PhysicalExprRef,
+    PhysicalExprRef, create_ordering, create_physical_sort_expr,
+    create_physical_sort_exprs, physical_exprs_bag_equal, physical_exprs_contains,
+    physical_exprs_equal,
 };
 
 pub use datafusion_physical_expr_common::physical_expr::PhysicalExpr;

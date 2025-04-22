@@ -19,7 +19,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::cast::AsArray;
-use arrow::array::{new_null_array, Array, ArrayRef, StringArray};
+use arrow::array::{Array, ArrayRef, StringArray, new_null_array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Time32, Time64, Timestamp, Utf8,
@@ -28,10 +28,10 @@ use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 
-use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TIMEZONE_WILDCARD, Volatility,
 };
 use datafusion_macros::user_doc;
 

@@ -21,8 +21,8 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_integer, ArrowNumericType, BooleanArray, ListArray, PrimitiveArray,
-    PrimitiveBuilder,
+    ArrowNumericType, BooleanArray, ListArray, PrimitiveArray, PrimitiveBuilder,
+    downcast_integer,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
@@ -38,12 +38,12 @@ use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType};
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, DataFusionError, HashSet, Result, ScalarValue,
+    DataFusionError, HashSet, Result, ScalarValue, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
-    function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    function::AccumulatorArgs, utils::format_state_name,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;

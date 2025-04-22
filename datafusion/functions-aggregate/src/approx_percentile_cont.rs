@@ -24,15 +24,15 @@ use arrow::array::{Array, RecordBatch};
 use arrow::compute::{filter, is_not_null};
 use arrow::{
     array::{
-        ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
     },
     datatypes::{DataType, Field, Schema},
 };
 
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_datafusion_err, not_impl_err, plan_err,
-    Result, ScalarValue,
+    Result, ScalarValue, downcast_value, internal_err, not_impl_datafusion_err,
+    not_impl_err, plan_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
@@ -42,7 +42,7 @@ use datafusion_expr::{
     TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{
-    TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
+    DEFAULT_MAX_SIZE, TDigest, TryIntoF64,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -149,16 +149,17 @@ impl ApproxPercentileCont {
             | DataType::Float32
             | DataType::Float64) => {
                 if let Some(max_size) = tdigest_max_size {
-                    ApproxPercentileAccumulator::new_with_max_size(percentile, t, max_size)
-                }else{
+                    ApproxPercentileAccumulator::new_with_max_size(
+                        percentile, t, max_size,
+                    )
+                } else {
                     ApproxPercentileAccumulator::new(percentile, t)
-
                 }
             }
             other => {
                 return not_impl_err!(
                     "Support for 'APPROX_PERCENTILE_CONT' for data type {other} is not implemented"
-                )
+                );
             }
         };
 
@@ -169,27 +170,27 @@ impl ApproxPercentileCont {
 fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
     let empty_schema = Arc::new(Schema::empty());
     let batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
-    match expr.evaluate(&batch)? { ColumnarValue::Scalar(s) => {
-        Ok(s)
-    } _ => {
-        internal_err!("Didn't expect ColumnarValue::Array")
-    }}
+    match expr.evaluate(&batch)? {
+        ColumnarValue::Scalar(s) => Ok(s),
+        _ => {
+            internal_err!("Didn't expect ColumnarValue::Array")
+        }
+    }
 }
 
 fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
-    let percentile = match get_scalar_value(expr)
-        .map_err(|_| not_impl_datafusion_err!("Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal, got: {expr}"))? {
-        ScalarValue::Float32(Some(value)) => {
-            value as f64
-        }
-        ScalarValue::Float64(Some(value)) => {
-            value
-        }
+    let percentile = match get_scalar_value(expr).map_err(|_| {
+        not_impl_datafusion_err!(
+            "Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal, got: {expr}"
+        )
+    })? {
+        ScalarValue::Float32(Some(value)) => value as f64,
+        ScalarValue::Float64(Some(value)) => value,
         sv => {
             return not_impl_err!(
                 "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
                 sv.data_type()
-            )
+            );
         }
     };
 

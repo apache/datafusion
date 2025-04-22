@@ -24,7 +24,7 @@ use arrow::datatypes::DataType::Utf8;
 use rand::Rng;
 use uuid::Uuid;
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;

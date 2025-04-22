@@ -307,10 +307,10 @@ mod tests {
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
+        Operator::{And, Or},
         binary_expr, cast, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
         try_cast,
-        Operator::{And, Or},
     };
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {

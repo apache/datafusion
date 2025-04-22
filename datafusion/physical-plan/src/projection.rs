@@ -42,11 +42,11 @@ use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{internal_err, JoinSide, Result};
+use datafusion_common::{JoinSide, Result, internal_err};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::PhysicalExprRef;
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
@@ -230,7 +230,12 @@ impl ExecutionPlan for ProjectionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         Ok(Box::pin(ProjectionStream {
             schema: Arc::clone(&self.schema),
             expr: self.expr.iter().map(|x| Arc::clone(&x.0)).collect(),

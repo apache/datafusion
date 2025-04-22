@@ -18,8 +18,8 @@
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use datafusion_expr::{AggregateUDFImpl, GroupsAccumulator, function::AccumulatorArgs};
 use datafusion_functions_aggregate::sum::Sum;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;

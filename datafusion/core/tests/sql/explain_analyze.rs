@@ -646,17 +646,17 @@ async fn test_physical_plan_display_indent_multi_children() {
     let dataframe = ctx.sql(sql).await.unwrap();
     let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
-		"CoalesceBatchesExec: target_batch_size=4096",
-    	"  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)], projection=[c1@0]",
-    	"    CoalesceBatchesExec: target_batch_size=4096",
-    	"      RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
-    	"        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-    	"          DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true",
-    	"    CoalesceBatchesExec: target_batch_size=4096",
-    	"      RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000",
-    	"        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-    	"          ProjectionExec: expr=[c1@0 as c2]",
-    	"            DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true",
+        "CoalesceBatchesExec: target_batch_size=4096",
+        "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)], projection=[c1@0]",
+        "    CoalesceBatchesExec: target_batch_size=4096",
+        "      RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
+        "        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+        "          DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true",
+        "    CoalesceBatchesExec: target_batch_size=4096",
+        "      RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000",
+        "        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+        "          ProjectionExec: expr=[c1@0 as c2]",
+        "            DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true",
     ];
 
     let normalizer = ExplainNormalizer::new();
@@ -708,8 +708,7 @@ async fn csv_explain_analyze_order_by() {
 
     // Ensure that the ordering is not optimized away from the plan
     // https://github.com/apache/datafusion/issues/6379
-    let needle =
-        "SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=100, elapsed_compute";
+    let needle = "SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=100, elapsed_compute";
     assert_contains!(&formatted, needle);
 }
 
@@ -778,12 +777,14 @@ async fn explain_logical_plan_only() {
     let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
 
-    let expected = vec![
-        vec!["logical_plan", "Projection: count(Int64(1)) AS count(*)\
+    let expected = vec![vec![
+        "logical_plan",
+        "Projection: count(Int64(1)) AS count(*)\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n    SubqueryAlias: t\
         \n      Projection: \
-        \n        Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"]];
+        \n        Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",
+    ]];
     assert_eq!(expected, actual);
 }
 

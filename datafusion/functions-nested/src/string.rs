@@ -19,23 +19,23 @@
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, GenericListArray,
-    Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, ListBuilder,
-    OffsetSizeTrait, StringArray, StringBuilder, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    Int8Array, Int16Array, Int32Array, Int64Array, LargeStringArray, ListBuilder,
+    OffsetSizeTrait, StringArray, StringBuilder, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array,
 };
 use arrow::datatypes::{DataType, Field};
 
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, plan_err, DataFusionError, Result,
+    DataFusionError, Result, internal_datafusion_err, not_impl_err, plan_err,
 };
 
 use std::any::Any;
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
+    GenericStringArray, StringArrayType, StringViewArray,
     builder::{ArrayBuilder, LargeStringBuilder, StringViewBuilder},
     cast::AsArray,
-    GenericStringArray, StringArrayType, StringViewArray,
 };
 use arrow::compute::cast;
 use arrow::datatypes::DataType::{
@@ -188,7 +188,9 @@ impl ScalarUDFImpl for ArrayToString {
         Ok(match arg_types[0] {
             List(_) | LargeList(_) | FixedSizeList(_, _) => Utf8,
             _ => {
-                return plan_err!("The array_to_string function can only accept List/LargeList/FixedSizeList.");
+                return plan_err!(
+                    "The array_to_string function can only accept List/LargeList/FixedSizeList."
+                );
             }
         })
     }
@@ -331,7 +333,11 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         Utf8 => args[1].as_string::<i32>().iter().collect(),
         Utf8View => args[1].as_string_view().iter().collect(),
         LargeUtf8 => args[1].as_string::<i64>().iter().collect(),
-        other => return exec_err!("unsupported type for second argument to array_to_string function as {other:?}")
+        other => {
+            return exec_err!(
+                "unsupported type for second argument to array_to_string function as {other:?}"
+            );
+        }
     };
 
     let mut null_string = String::from("");
@@ -341,7 +347,11 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             Utf8 => args[2].as_string::<i32>().value(0).to_string(),
             Utf8View => args[2].as_string_view().value(0).to_string(),
             LargeUtf8 => args[2].as_string::<i64>().value(0).to_string(),
-            other => return exec_err!("unsupported type for second argument to array_to_string function as {other:?}")
+            other => {
+                return exec_err!(
+                    "unsupported type for second argument to array_to_string function as {other:?}"
+                );
+            }
         };
         with_null_string = true;
     }
@@ -427,25 +437,28 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     ) -> Result<StringArray> {
         let mut res: Vec<Option<String>> = Vec::new();
         for (arr, &delimiter) in list_arr.iter().zip(delimiters.iter()) {
-            match (arr, delimiter) { (Some(arr), Some(delimiter)) => {
-                let mut arg = String::from("");
-                let s = compute_array_to_string(
-                    &mut arg,
-                    arr,
-                    delimiter.to_string(),
-                    null_string.clone(),
-                    with_null_string,
-                )?
-                .clone();
+            match (arr, delimiter) {
+                (Some(arr), Some(delimiter)) => {
+                    let mut arg = String::from("");
+                    let s = compute_array_to_string(
+                        &mut arg,
+                        arr,
+                        delimiter.to_string(),
+                        null_string.clone(),
+                        with_null_string,
+                    )?
+                    .clone();
 
-                if let Some(s) = s.strip_suffix(delimiter) {
-                    res.push(Some(s.to_string()));
-                } else {
-                    res.push(Some(s));
+                    if let Some(s) = s.strip_suffix(delimiter) {
+                        res.push(Some(s.to_string()));
+                    } else {
+                        res.push(Some(s));
+                    }
                 }
-            } _ => {
-                res.push(None);
-            }}
+                _ => {
+                    res.push(None);
+                }
+            }
         }
 
         Ok(StringArray::from(res))
@@ -510,20 +523,40 @@ fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayR
     match args[0].data_type() {
         Utf8 => {
             let string_array = args[0].as_string::<T>();
-            let builder = StringBuilder::with_capacity(string_array.len(), string_array.get_buffer_memory_size());
-            string_to_array_inner_2::<&GenericStringArray<T>, StringBuilder>(args, string_array, builder)
+            let builder = StringBuilder::with_capacity(
+                string_array.len(),
+                string_array.get_buffer_memory_size(),
+            );
+            string_to_array_inner_2::<&GenericStringArray<T>, StringBuilder>(
+                args,
+                string_array,
+                builder,
+            )
         }
         Utf8View => {
             let string_array = args[0].as_string_view();
             let builder = StringViewBuilder::with_capacity(string_array.len());
-            string_to_array_inner_2::<&StringViewArray, StringViewBuilder>(args, string_array, builder)
+            string_to_array_inner_2::<&StringViewArray, StringViewBuilder>(
+                args,
+                string_array,
+                builder,
+            )
         }
         LargeUtf8 => {
             let string_array = args[0].as_string::<T>();
-            let builder = LargeStringBuilder::with_capacity(string_array.len(), string_array.get_buffer_memory_size());
-            string_to_array_inner_2::<&GenericStringArray<T>, LargeStringBuilder>(args, string_array, builder)
+            let builder = LargeStringBuilder::with_capacity(
+                string_array.len(),
+                string_array.get_buffer_memory_size(),
+            );
+            string_to_array_inner_2::<&GenericStringArray<T>, LargeStringBuilder>(
+                args,
+                string_array,
+                builder,
+            )
         }
-        other =>  exec_err!("unsupported type for first argument to string_to_array function as {other:?}")
+        other => exec_err!(
+            "unsupported type for first argument to string_to_array function as {other:?}"
+        ),
     }
 }
 
@@ -547,9 +580,11 @@ where
                     StringBuilderType,
                 >(string_array, delimiter_array, None, string_builder)
             } else {
-                string_to_array_inner_3::<StringArrType,
+                string_to_array_inner_3::<
+                    StringArrType,
                     &GenericStringArray<i32>,
-                    StringBuilderType>(args, string_array, delimiter_array, string_builder)
+                    StringBuilderType,
+                >(args, string_array, delimiter_array, string_builder)
             }
         }
         Utf8View => {
@@ -563,9 +598,11 @@ where
                     StringBuilderType,
                 >(string_array, delimiter_array, None, string_builder)
             } else {
-                string_to_array_inner_3::<StringArrType,
+                string_to_array_inner_3::<
+                    StringArrType,
                     &StringViewArray,
-                    StringBuilderType>(args, string_array, delimiter_array, string_builder)
+                    StringBuilderType,
+                >(args, string_array, delimiter_array, string_builder)
             }
         }
         LargeUtf8 => {
@@ -578,12 +615,16 @@ where
                     StringBuilderType,
                 >(string_array, delimiter_array, None, string_builder)
             } else {
-                string_to_array_inner_3::<StringArrType,
+                string_to_array_inner_3::<
+                    StringArrType,
                     &GenericStringArray<i64>,
-                    StringBuilderType>(args, string_array, delimiter_array, string_builder)
+                    StringBuilderType,
+                >(args, string_array, delimiter_array, string_builder)
             }
         }
-        other =>  exec_err!("unsupported type for second argument to string_to_array function as {other:?}")
+        other => exec_err!(
+            "unsupported type for second argument to string_to_array function as {other:?}"
+        ),
     }
 }
 

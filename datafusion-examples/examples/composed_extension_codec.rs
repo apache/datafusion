@@ -36,7 +36,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion::common::Result;
-use datafusion::common::{internal_err, DataFusionError};
+use datafusion::common::{DataFusionError, internal_err};
 use datafusion::logical_expr::registry::FunctionRegistry;
 use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};

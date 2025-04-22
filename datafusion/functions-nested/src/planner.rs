@@ -19,13 +19,14 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::ExprSchema;
-use datafusion_common::{plan_err, utils::list_ndims, DFSchema, Result};
+use datafusion_common::{DFSchema, Result, plan_err, utils::list_ndims};
+use datafusion_expr::AggregateUDF;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::AggregateUDF;
 use datafusion_expr::{
+    Expr, ExprSchemable, GetFieldAccess,
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
-    sqlparser, Expr, ExprSchemable, GetFieldAccess,
+    sqlparser,
 };
 use datafusion_functions::core::get_field as get_field_inner;
 use datafusion_functions::expr_fn::get_field;

@@ -33,10 +33,10 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::{exec_datafusion_err, DataFusionError, HashSet, Result};
+use datafusion_common::{DataFusionError, HashSet, Result, exec_datafusion_err};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::RecordBatchStream;
+use datafusion_execution::disk_manager::RefCountedTempFile;
 use futures::{FutureExt as _, Stream};
 
 /// Stream that reads spill files from disk where each batch is read in a spawned blocking task

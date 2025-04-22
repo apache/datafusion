@@ -32,7 +32,7 @@ use tokio::runtime::Runtime;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
     collect,
-    expressions::{col, PhysicalSortExpr},
+    expressions::{PhysicalSortExpr, col},
 };
 use datafusion::prelude::SessionContext;
 use datafusion_datasource::memory::MemorySourceConfig;

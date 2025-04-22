@@ -28,14 +28,14 @@ use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    internal_datafusion_err, plan_err, Column, DFSchemaRef, Result, ScalarValue,
+    Column, DFSchemaRef, Result, ScalarValue, internal_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
-    bitwise_and, bitwise_or, bitwise_shift_left, bitwise_shift_right, cast, Aggregate,
-    Expr, Projection,
+    Aggregate, Expr, Projection, bitwise_and, bitwise_or, bitwise_shift_left,
+    bitwise_shift_right, cast,
 };
 use itertools::Itertools;
 

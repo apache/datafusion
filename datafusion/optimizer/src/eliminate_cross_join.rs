@@ -20,14 +20,14 @@ use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
 use crate::join_key_set::JoinKeySet;
-use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
     Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
-use datafusion_expr::{and, build_join_schema, ExprSchemable, Operator};
+use datafusion_expr::{ExprSchemable, Operator, and, build_join_schema};
 
 #[derive(Default, Debug)]
 pub struct EliminateCrossJoin;
@@ -436,9 +436,9 @@ mod tests {
     use crate::test::*;
 
     use datafusion_expr::{
+        Operator::{And, Or},
         binary_expr, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
-        Operator::{And, Or},
     };
 
     fn assert_optimized_plan_eq(plan: LogicalPlan, expected: Vec<&str>) {
@@ -651,7 +651,7 @@ mod tests {
             "      Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
             "        TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]",
-            "      TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]"
+            "      TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
         ];
 
         assert_optimized_plan_eq(plan, expected);
@@ -1212,7 +1212,8 @@ mod tests {
             "Filter: t2.c < UInt32(20) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-            "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]"];
+            "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+        ];
 
         assert_optimized_plan_eq(plan, expected);
 

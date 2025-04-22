@@ -19,9 +19,9 @@
 
 use std::sync::Arc;
 
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::JoinType;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::tree_node::Transformed;
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, Projection, Union};
 
@@ -239,7 +239,7 @@ mod tests {
     use datafusion_common::{Column, DFSchema, JoinType};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Operator,
+        Operator, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
 
     use crate::eliminate_filter::EliminateFilter;

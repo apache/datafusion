@@ -18,8 +18,8 @@
 use std::{ffi::c_void, sync::Arc};
 
 use abi_stable::{
-    std_types::{RResult, RString, RVec},
     StableAbi,
+    std_types::{RResult, RString, RVec},
 };
 
 use datafusion::error::Result;
@@ -29,7 +29,7 @@ use datafusion::{
 };
 use datafusion_proto::{
     logical_plan::{
-        from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
+        DefaultLogicalExtensionCodec, from_proto::parse_exprs, to_proto::serialize_exprs,
     },
     protobuf::LogicalExprList,
 };
@@ -104,10 +104,13 @@ unsafe extern "C" fn call_fn_wrapper(
     RResult::ROk(FFI_TableProvider::new(table_provider, false, runtime))
 }
 
-unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) { unsafe {
-    let private_data = Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
-    drop(private_data);
-}}
+unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) {
+    unsafe {
+        let private_data =
+            Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
+        drop(private_data);
+    }
+}
 
 unsafe extern "C" fn clone_fn_wrapper(udtf: &FFI_TableFunction) -> FFI_TableFunction {
     let runtime = udtf.runtime();
@@ -196,7 +199,7 @@ impl TableFunctionImpl for ForeignTableFunction {
 mod tests {
     use arrow::{
         array::{
-            record_batch, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
+            ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array, record_batch,
         },
         datatypes::{DataType, Field, Schema},
     };

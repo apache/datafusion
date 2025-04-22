@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_err};
 use datafusion_common::{DFSchema, Result, ScalarValue};
-use datafusion_expr::planner::PlannerResult;
+use datafusion_common::{not_impl_err, plan_err};
 use datafusion_expr::Expr;
+use datafusion_expr::planner::PlannerResult;
 use sqlparser::ast::Expr as SQLExpr;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {

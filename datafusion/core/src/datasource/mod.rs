@@ -31,7 +31,7 @@ mod view_test;
 
 // backwards compatibility
 pub use self::default_table_source::{
-    provider_as_source, source_as_provider, DefaultTableSource,
+    DefaultTableSource, provider_as_source, source_as_provider,
 };
 pub use self::memory::MemTable;
 pub use self::view::ViewTable;
@@ -60,17 +60,17 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_datasource::PartitionedFile;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
-    use datafusion_datasource::PartitionedFile;
     use datafusion_datasource_parquet::source::ParquetSource;
 
     use datafusion_common::record_batch;
 
-    use ::object_store::path::Path;
     use ::object_store::ObjectMeta;
+    use ::object_store::path::Path;
     use datafusion_datasource::source::DataSourceExec;
     use datafusion_physical_plan::collect;
     use tempfile::TempDir;

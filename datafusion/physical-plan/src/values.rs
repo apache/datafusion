@@ -22,13 +22,13 @@ use std::sync::Arc;
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
-use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::{
     ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
+use crate::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics, common};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 

@@ -43,8 +43,8 @@ use crate::utils::{
     group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
-    Statement, TableProviderFilterPushDown, TableSource, WriteOp,
+    DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery, Statement,
+    TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, lit,
 };
 
 use super::dml::InsertOp;
@@ -54,9 +54,10 @@ use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference, ToDFSchema, UnnestOptions, exec_err,
+    get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
+    plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -190,7 +191,8 @@ impl LogicalPlanBuilder {
         if static_fields_len != recursive_fields_len {
             return plan_err!(
                 "Non-recursive term and recursive term must have the same number of columns ({} != {})",
-                static_fields_len, recursive_fields_len
+                static_fields_len,
+                recursive_fields_len
             );
         }
         // Ensure that the recursive term has the same field types as the static term
@@ -317,7 +319,9 @@ impl LogicalPlanBuilder {
                     // get common type of each column values.
                     let data_types = vec![prev_type.clone(), data_type.clone()];
                     let Some(new_type) = type_union_resolution(&data_types) else {
-                        return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}");
+                        return plan_err!(
+                            "Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}"
+                        );
                     };
                     common_type = Some(new_type);
                 } else {
@@ -741,7 +745,9 @@ impl LogicalPlanBuilder {
             .map(|col| col.flat_name())
             .collect::<String>();
 
-        plan_err!("For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list")
+        plan_err!(
+            "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list"
+        )
     }
 
     /// Apply a sort by provided expressions with default direction
@@ -2565,9 +2571,11 @@ mod tests {
         let err = nested_table_scan("test_table")?
             .unnest_column("scalar")
             .unwrap_err();
-        assert!(err
-            .to_string()
-            .starts_with("Internal error: trying to unnest on invalid data type UInt32"));
+        assert!(
+            err.to_string().starts_with(
+                "Internal error: trying to unnest on invalid data type UInt32"
+            )
+        );
 
         // Unnesting the strings list.
         let plan = nested_table_scan("test_table")?
@@ -2795,8 +2803,7 @@ mod tests {
                 .aggregate(vec![col("id")], vec![sum(col("salary"))])?
                 .build()?;
 
-        let expected =
-            "Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]\
+        let expected = "Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]\
         \n  TableScan: employee_csv projection=[id, state, salary]";
         assert_eq!(expected, format!("{plan}"));
 
@@ -2817,8 +2824,7 @@ mod tests {
                 .aggregate(vec![col("id")], vec![sum(col("salary"))])?
                 .build()?;
 
-        let expected =
-            "Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]\
+        let expected = "Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]\
         \n  TableScan: employee_csv projection=[id, state, salary]";
         assert_eq!(expected, format!("{plan}"));
 

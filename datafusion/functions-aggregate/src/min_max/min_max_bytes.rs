@@ -20,7 +20,7 @@ use arrow::array::{
     LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use std::mem::size_of;

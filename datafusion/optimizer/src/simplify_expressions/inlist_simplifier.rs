@@ -19,10 +19,10 @@
 
 use super::THRESHOLD_INLINE_INLIST;
 
-use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::Result;
-use datafusion_expr::expr::InList;
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_expr::Expr;
+use datafusion_expr::expr::InList;
 
 pub(super) struct ShortenInListSimplifier {}
 

@@ -35,7 +35,7 @@ use arrow::{
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use futures::stream::FuturesUnordered;
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use log::{debug, trace};
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -338,12 +338,7 @@ fn populate_partition_values<'a>(
     partition_values: &mut HashMap<&'a str, PartitionValue>,
     filter: &'a Expr,
 ) {
-    if let Expr::BinaryExpr(BinaryExpr {
-        left,
-        op,
-        right,
-    }) = filter
-    {
+    if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = filter {
         match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(Column { name, .. }), Expr::Literal(val))
@@ -508,10 +503,7 @@ where
             _ => {
                 debug!(
                     "Ignoring file: file_path='{}', table_path='{}', part='{}', partition_col='{}'",
-                    file_path,
-                    table_path,
-                    part,
-                    pn,
+                    file_path, table_path, part, pn,
                 );
                 return None;
             }
@@ -546,7 +538,7 @@ mod tests {
 
     use super::*;
     use datafusion_expr::{
-        case, col, lit, AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF,
+        AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF, case, col, lit,
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;

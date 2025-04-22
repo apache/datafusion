@@ -27,7 +27,7 @@ use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
 };
-use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
+use crate::{EquivalenceProperties, PhysicalExpr, reverse_order_bys};
 
 use arrow::array::Array;
 use arrow::record_batch::RecordBatch;

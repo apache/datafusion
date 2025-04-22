@@ -22,17 +22,17 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::{StandardWindowFunctionExpr, WindowExpr};
-use crate::window::window_expr::{get_orderby_values, WindowFn};
+use crate::window::window_expr::{WindowFn, get_orderby_values};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
-use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
-use arrow::array::{new_empty_array, ArrayRef};
+use crate::{EquivalenceProperties, PhysicalExpr, reverse_order_bys};
+use arrow::array::{ArrayRef, new_empty_array};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
+use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 /// A window expr that takes the form of a [`StandardWindowFunctionExpr`].
@@ -260,13 +260,14 @@ impl WindowExpr for StandardWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        match self.expr.create_evaluator() { Ok(evaluator) => {
-            evaluator.supports_bounded_execution()
-                && (!evaluator.uses_window_frame()
-                    || !self.window_frame.end_bound.is_unbounded())
-        } _ => {
-            false
-        }}
+        match self.expr.create_evaluator() {
+            Ok(evaluator) => {
+                evaluator.supports_bounded_execution()
+                    && (!evaluator.uses_window_frame()
+                        || !self.window_frame.end_bound.is_unbounded())
+            }
+            _ => false,
+        }
     }
 }
 

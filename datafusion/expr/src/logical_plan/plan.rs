@@ -24,16 +24,16 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 
+use super::DdlStatement;
 use super::dml::CopyTo;
 use super::invariants::{
-    assert_always_invariants_at_current_node, assert_executable_invariants,
-    InvariantLevel,
+    InvariantLevel, assert_always_invariants_at_current_node,
+    assert_executable_invariants,
 };
-use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams};
 use crate::expr_rewriter::{
-    create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
+    NamePreserver, create_col_from_scalar_expr, normalize_cols, normalize_sorts,
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -43,9 +43,9 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Execute,
-    Expr, ExprSchemable, LogicalPlanBuilder, Operator, Prepare,
-    TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
+    BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable,
+    LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown, TableSource,
+    WindowFunctionDefinition, build_join_schema, expr_vec_fmt,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -54,10 +54,10 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, ScalarValue, Spans, TableReference,
-    UnnestOptions,
+    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
+    FunctionalDependence, FunctionalDependencies, ParamValues, Result, ScalarValue,
+    Spans, TableReference, UnnestOptions, aggregate_functional_dependencies,
+    internal_err, plan_err,
 };
 use indexmap::IndexSet;
 
@@ -921,7 +921,9 @@ impl LogicalPlan {
                 let mut iter = expr.into_iter();
                 while let Some(left) = iter.next() {
                     let Some(right) = iter.next() else {
-                        internal_err!("Expected a pair of expressions to construct the join on expression")?
+                        internal_err!(
+                            "Expected a pair of expressions to construct the join on expression"
+                        )?
                     };
 
                     // SimplifyExpression rule may add alias to the equi_expr.
@@ -1049,7 +1051,10 @@ impl LogicalPlan {
                         let input = self.only_input(inputs)?;
                         let sort_expr = expr.split_off(on_expr.len() + select_expr.len());
                         let select_expr = expr.split_off(on_expr.len());
-                        assert!(sort_expr.is_empty(), "with_new_exprs for Distinct does not support sort expressions");
+                        assert!(
+                            sort_expr.is_empty(),
+                            "with_new_exprs for Distinct does not support sort expressions"
+                        );
                         Distinct::On(DistinctOn::try_new(
                             expr,
                             select_expr,
@@ -1843,18 +1848,19 @@ impl LogicalPlan {
                             .collect::<Vec<String>>()
                             .join(", ");
 
-                        write!(f, "CopyTo: format={} output_url={output_url} options: ({op_str})", file_type.get_ext())
+                        write!(
+                            f,
+                            "CopyTo: format={} output_url={output_url} options: ({op_str})",
+                            file_type.get_ext()
+                        )
                     }
                     LogicalPlan::Ddl(ddl) => {
                         write!(f, "{}", ddl.display())
                     }
                     LogicalPlan::Filter(Filter {
-                        predicate: expr,
-                        ..
+                        predicate: expr, ..
                     }) => write!(f, "Filter: {expr}"),
-                    LogicalPlan::Window(Window {
-                        window_expr, ..
-                    }) => {
+                    LogicalPlan::Window(Window { window_expr, .. }) => {
                         write!(
                             f,
                             "WindowAggr: windowExpr=[[{}]]",
@@ -1898,7 +1904,10 @@ impl LogicalPlan {
                             .as_ref()
                             .map(|expr| format!(" Filter: {expr}"))
                             .unwrap_or_else(|| "".to_string());
-                        let join_type = if filter.is_none() && keys.is_empty() && matches!(join_type, JoinType::Inner) {
+                        let join_type = if filter.is_none()
+                            && keys.is_empty()
+                            && matches!(join_type, JoinType::Inner)
+                        {
                             "Cross".to_string()
                         } else {
                             join_type.to_string()
@@ -1955,17 +1964,20 @@ impl LogicalPlan {
                         // Attempt to display `skip` and `fetch` as literals if possible, otherwise as expressions.
                         let skip_str = match limit.get_skip_type() {
                             Ok(SkipType::Literal(n)) => n.to_string(),
-                            _ => limit.skip.as_ref().map_or_else(|| "None".to_string(), |x| x.to_string()),
+                            _ => limit
+                                .skip
+                                .as_ref()
+                                .map_or_else(|| "None".to_string(), |x| x.to_string()),
                         };
                         let fetch_str = match limit.get_fetch_type() {
                             Ok(FetchType::Literal(Some(n))) => n.to_string(),
                             Ok(FetchType::Literal(None)) => "None".to_string(),
-                            _ => limit.fetch.as_ref().map_or_else(|| "None".to_string(), |x| x.to_string())
+                            _ => limit
+                                .fetch
+                                .as_ref()
+                                .map_or_else(|| "None".to_string(), |x| x.to_string()),
                         };
-                        write!(
-                            f,
-                            "Limit: skip={}, fetch={}", skip_str,fetch_str,
-                        )
+                        write!(f, "Limit: skip={}, fetch={}", skip_str, fetch_str,)
                     }
                     LogicalPlan::Subquery(Subquery { .. }) => {
                         write!(f, "Subquery:")
@@ -1988,7 +2000,11 @@ impl LogicalPlan {
                             "DistinctOn: on_expr=[[{}]], select_expr=[[{}]], sort_expr=[[{}]]",
                             expr_vec_fmt!(on_expr),
                             expr_vec_fmt!(select_expr),
-                            if let Some(sort_expr) = sort_expr { expr_vec_fmt!(sort_expr) } else { "".to_string() },
+                            if let Some(sort_expr) = sort_expr {
+                                expr_vec_fmt!(sort_expr)
+                            } else {
+                                "".to_string()
+                            },
                         ),
                     },
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
@@ -2001,22 +2017,31 @@ impl LogicalPlan {
                     LogicalPlan::Unnest(Unnest {
                         input: plan,
                         list_type_columns: list_col_indices,
-                        struct_type_columns: struct_col_indices, .. }) => {
+                        struct_type_columns: struct_col_indices,
+                        ..
+                    }) => {
                         let input_columns = plan.schema().columns();
                         let list_type_columns = list_col_indices
                             .iter()
-                            .map(|(i,unnest_info)|
-                                format!("{}|depth={}", &input_columns[*i].to_string(),
-                                unnest_info.depth))
+                            .map(|(i, unnest_info)| {
+                                format!(
+                                    "{}|depth={}",
+                                    &input_columns[*i].to_string(),
+                                    unnest_info.depth
+                                )
+                            })
                             .collect::<Vec<String>>();
                         let struct_type_columns = struct_col_indices
                             .iter()
                             .map(|i| &input_columns[*i])
                             .collect::<Vec<&Column>>();
                         // get items from input_columns indexed by list_col_indices
-                        write!(f, "Unnest: lists[{}] structs[{}]",
-                        expr_vec_fmt!(list_type_columns),
-                        expr_vec_fmt!(struct_type_columns))
+                        write!(
+                            f,
+                            "Unnest: lists[{}] structs[{}]",
+                            expr_vec_fmt!(list_type_columns),
+                            expr_vec_fmt!(struct_type_columns)
+                        )
                     }
                 }
             }
@@ -2148,7 +2173,11 @@ impl Projection {
         if !expr.iter().any(|e| matches!(e, Expr::Wildcard { .. }))
             && expr.len() != schema.fields().len()
         {
-            return plan_err!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len());
+            return plan_err!(
+                "Projection has mismatch between number of expressions ({}) and number of fields in schema ({})",
+                expr.len(),
+                schema.fields().len()
+            );
         }
         Ok(Self {
             expr,
@@ -3087,7 +3116,9 @@ impl FromStr for ExplainFormat {
             "pgjson" => Ok(ExplainFormat::PostgresJSON),
             "graphviz" => Ok(ExplainFormat::Graphviz),
             _ => {
-                plan_err!("Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got '{format}'")
+                plan_err!(
+                    "Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got '{format}'"
+                )
             }
         }
     }
@@ -3998,14 +4029,14 @@ mod tests {
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
     use crate::{
-        binary_expr, col, exists, in_subquery, lit, placeholder, scalar_subquery,
-        GroupingSet,
+        GroupingSet, binary_expr, col, exists, in_subquery, lit, placeholder,
+        scalar_subquery,
     };
 
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
-    use datafusion_common::{not_impl_err, Constraint, ScalarValue};
+    use datafusion_common::{Constraint, ScalarValue, not_impl_err};
 
     use crate::test::function_stub::count;
 
@@ -4415,7 +4446,10 @@ digraph {
             })),
             empty_schema,
         );
-        assert_eq!(p.err().unwrap().strip_backtrace(), "Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)");
+        assert_eq!(
+            p.err().unwrap().strip_backtrace(),
+            "Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)"
+        );
         Ok(())
     }
 
@@ -4500,14 +4534,18 @@ digraph {
 
         let output_schema = plan.schema();
 
-        assert!(output_schema
-            .field_with_name(None, "foo")
-            .unwrap()
-            .is_nullable(),);
-        assert!(output_schema
-            .field_with_name(None, "bar")
-            .unwrap()
-            .is_nullable());
+        assert!(
+            output_schema
+                .field_with_name(None, "foo")
+                .unwrap()
+                .is_nullable(),
+        );
+        assert!(
+            output_schema
+                .field_with_name(None, "bar")
+                .unwrap()
+                .is_nullable()
+        );
     }
 
     #[test]
@@ -4767,7 +4805,7 @@ digraph {
             .transform_down_with_subqueries(|plan| {
                 match plan {
                     LogicalPlan::Projection(..) => {
-                        return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                        return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump));
                     }
                     LogicalPlan::Filter(..) => filter_found = true,
                     _ => {}
@@ -4787,7 +4825,7 @@ digraph {
                                 plan,
                                 false,
                                 TreeNodeRecursion::Jump,
-                            ))
+                            ));
                         }
                         LogicalPlan::Filter(..) => filter_found = true,
                         _ => {}
@@ -4817,7 +4855,7 @@ digraph {
             fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
                 match node {
                     LogicalPlan::Projection(..) => {
-                        return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
+                        return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
                     }
                     LogicalPlan::Filter(..) => self.filter_found = true,
                     _ => {}

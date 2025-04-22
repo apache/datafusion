@@ -17,13 +17,13 @@
 
 //! A custom binary heap implementation for performant top K aggregation
 
+use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, downcast_primitive};
 use arrow::array::{
     cast::AsArray,
     types::{IntervalDayTime, IntervalMonthDayNano},
 };
-use arrow::array::{downcast_primitive, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{i256, DataType};
+use arrow::datatypes::{DataType, i256};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 
@@ -335,11 +335,7 @@ impl<VAL: ValueType> TopKHeap<VAL> {
     ) {
         if let Some(Some(hi)) = self.heap.get(idx) {
             let connector = if idx != 0 {
-                if is_tail {
-                    "└── "
-                } else {
-                    "├── "
-                }
+                if is_tail { "└── " } else { "├── " }
             } else {
                 ""
             };

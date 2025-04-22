@@ -18,9 +18,9 @@
 use std::mem::size_of;
 
 use arrow::array::{
-    make_view, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ByteView,
-    GenericStringArray, LargeStringArray, NullBufferBuilder, OffsetSizeTrait,
-    StringArray, StringViewArray, StringViewBuilder,
+    Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ByteView, GenericStringArray,
+    LargeStringArray, NullBufferBuilder, OffsetSizeTrait, StringArray, StringViewArray,
+    StringViewBuilder, make_view,
 };
 use arrow::buffer::{MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;

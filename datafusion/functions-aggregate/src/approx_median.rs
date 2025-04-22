@@ -23,7 +23,7 @@ use std::fmt::Debug;
 use arrow::datatypes::DataType::{Float64, UInt64};
 use arrow::datatypes::{DataType, Field};
 
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{Result, not_impl_err, plan_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;

@@ -19,17 +19,17 @@ use arrow::array::{
     ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
 };
 use arrow::datatypes::{
-    DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-    IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
-    DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_PRECISION, DataType, Field, Fields, Int32Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
+    UnionMode,
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
-use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
 use datafusion::optimizer::Optimizer;
+use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
 use datafusion_common::parsers::CompressionTypeVariant;
 use prost::Message;
 use std::any::Any;
@@ -43,9 +43,9 @@ use datafusion::catalog::{TableProvider, TableProviderFactory};
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
-use datafusion::datasource::file_format::{format_as_file_type, DefaultFileType};
-use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::datasource::file_format::{DefaultFileType, format_as_file_type};
 use datafusion::execution::FunctionRegistry;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::expr_fn::{
     approx_median, approx_percentile_cont, approx_percentile_cont_with_weight, count,
@@ -64,8 +64,8 @@ use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue, TableReference,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -97,7 +97,7 @@ use datafusion_proto::logical_plan::file_formats::{
 };
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::{
-    from_proto, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
+    DefaultLogicalExtensionCodec, LogicalExtensionCodec, from_proto,
 };
 use datafusion_proto::protobuf;
 

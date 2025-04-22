@@ -22,39 +22,39 @@ use crate::fuzz_cases::aggregation_fuzzer::{
 };
 
 use arrow::array::{
-    types::Int64Type, Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch,
-    StringArray,
+    Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch, StringArray,
+    types::Int64Type,
 };
-use arrow::compute::{concat_batches, SortOptions};
+use arrow::compute::{SortOptions, concat_batches};
 use arrow::datatypes::DataType;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{Field, Schema, SchemaRef};
 use datafusion::common::Result;
+use datafusion::datasource::MemTable;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::datasource::MemTable;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::HashMap;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common_runtime::JoinSet;
 use datafusion_functions_aggregate::sum::sum_udaf;
-use datafusion_physical_expr::expressions::{col, lit, Column};
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::expressions::{Column, col, lit};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::InputOrderMode;
-use test_utils::{add_empty_batches, StringBatchGenerator};
+use test_utils::{StringBatchGenerator, add_empty_batches};
 
+use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::MetricValue;
 use rand::rngs::StdRng;
-use rand::{random, thread_rng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, random, thread_rng};
 
 use super::record_batch_generator::get_supported_types_columns;
 
@@ -319,15 +319,14 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             .unwrap(),
     );
 
-    let aggregate_expr =
-        vec![
-            AggregateExprBuilder::new(sum_udaf(), vec![col("d", &schema).unwrap()])
-                .schema(Arc::clone(&schema))
-                .alias("sum1")
-                .build()
-                .map(Arc::new)
-                .unwrap(),
-        ];
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(sum_udaf(), vec![col("d", &schema).unwrap()])
+            .schema(Arc::clone(&schema))
+            .alias("sum1")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
     let expr = group_by_columns
         .iter()
         .map(|elem| (col(elem, &schema).unwrap(), elem.to_string()))
@@ -638,7 +637,9 @@ fn assert_spill_count_metric(expect_spill: bool, single_aggregate: Arc<Aggregate
         if expect_spill && spill_count == 0 {
             panic!("Expected spill but SpillCount metric not found or SpillCount was 0.");
         } else if !expect_spill && spill_count > 0 {
-            panic!("Expected no spill but found SpillCount metric with value greater than 0.");
+            panic!(
+                "Expected no spill but found SpillCount metric with value greater than 0."
+            );
         }
     } else {
         panic!("No metrics returned from the operator; cannot verify spilling.");

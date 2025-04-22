@@ -20,18 +20,18 @@ use std::sync::Arc;
 use crate::expressions::Literal;
 use crate::intervals::cp_solver::PropagationResult;
 use crate::physical_expr::PhysicalExpr;
-use crate::utils::{build_dag, ExprTreeNode};
+use crate::utils::{ExprTreeNode, build_dag};
 
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::statistics::Distribution;
 use datafusion_expr_common::interval_arithmetic::Interval;
 
+use petgraph::Outgoing;
 use petgraph::adj::DefaultIx;
 use petgraph::prelude::Bfs;
 use petgraph::stable_graph::{NodeIndex, StableGraph};
 use petgraph::visit::DfsPostOrder;
-use petgraph::Outgoing;
 
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute statistics/distributions for expressions hierarchically.
@@ -151,22 +151,25 @@ impl ExprStatisticsGraph {
         // Adjust the root node with the given statistics:
         let root_range = self.graph[self.root].dist.range()?;
         let given_range = given_stats.range()?;
-        match root_range.intersect(&given_range)? { Some(interval) => {
-            if interval != root_range {
-                // If the given statistics enable us to obtain a more precise
-                // range for the root, update it:
-                let subset = root_range.contains(given_range)?;
-                self.graph[self.root].dist = if subset == Interval::CERTAINLY_TRUE {
-                    // Given statistics is strictly more informative, use it as is:
-                    given_stats
-                } else {
-                    // Intersecting ranges gives us a more precise range:
-                    Distribution::new_from_interval(interval)?
-                };
+        match root_range.intersect(&given_range)? {
+            Some(interval) => {
+                if interval != root_range {
+                    // If the given statistics enable us to obtain a more precise
+                    // range for the root, update it:
+                    let subset = root_range.contains(given_range)?;
+                    self.graph[self.root].dist = if subset == Interval::CERTAINLY_TRUE {
+                        // Given statistics is strictly more informative, use it as is:
+                        given_stats
+                    } else {
+                        // Intersecting ranges gives us a more precise range:
+                        Distribution::new_from_interval(interval)?
+                    };
+                }
             }
-        } _ => {
-            return Ok(PropagationResult::Infeasible);
-        }}
+            _ => {
+                return Ok(PropagationResult::Infeasible);
+            }
+        }
 
         let mut bfs = Bfs::new(&self.graph, self.root);
 
@@ -205,7 +208,7 @@ impl ExprStatisticsGraph {
 mod tests {
     use std::sync::Arc;
 
-    use crate::expressions::{binary, try_cast, Column};
+    use crate::expressions::{Column, binary, try_cast};
     use crate::intervals::cp_solver::PropagationResult;
     use crate::statistics::stats_solver::ExprStatisticsGraph;
 

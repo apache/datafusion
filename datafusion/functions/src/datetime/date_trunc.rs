@@ -32,11 +32,11 @@ use arrow::array::{Array, PrimitiveArray};
 use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8, Utf8View};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TIMEZONE_WILDCARD, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -252,7 +252,9 @@ impl ScalarUDFImpl for DateTruncFunc {
                         )?,
                     }
                 } else {
-                    return exec_err!("second argument of `date_trunc` is an unsupported array type: {array_type}");
+                    return exec_err!(
+                        "second argument of `date_trunc` is an unsupported array type: {array_type}"
+                    );
                 }
             }
             _ => {
@@ -481,7 +483,7 @@ fn parse_tz(tz: &Option<Arc<str>>) -> Result<Option<Tz>> {
 mod tests {
     use std::sync::Arc;
 
-    use crate::datetime::date_trunc::{date_trunc_coarse, DateTruncFunc};
+    use crate::datetime::date_trunc::{DateTruncFunc, date_trunc_coarse};
 
     use arrow::array::cast::as_primitive_array;
     use arrow::array::types::TimestampNanosecondType;

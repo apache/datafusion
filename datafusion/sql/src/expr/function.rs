@@ -19,13 +19,13 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    DFSchema, Dependency, Diagnostic, Result, Span,
+    DFSchema, Dependency, Diagnostic, Result, Span, internal_datafusion_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::{ScalarFunction, Unnest, WildcardOptions};
 use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
 use datafusion_expr::{
-    expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
+    Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition, expr,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
@@ -144,34 +144,36 @@ impl FunctionArgs {
                 }
                 FunctionArgumentClause::OrderBy(oby) => {
                     if order_by.is_some() {
-                        return not_impl_err!("Calling {name}: Duplicated ORDER BY clause in function arguments");
+                        return not_impl_err!(
+                            "Calling {name}: Duplicated ORDER BY clause in function arguments"
+                        );
                     }
                     order_by = Some(oby);
                 }
                 FunctionArgumentClause::Limit(limit) => {
                     return not_impl_err!(
                         "Calling {name}: LIMIT not supported in function arguments: {limit}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::OnOverflow(overflow) => {
                     return not_impl_err!(
                         "Calling {name}: ON OVERFLOW not supported in function arguments: {overflow}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::Having(having) => {
                     return not_impl_err!(
                         "Calling {name}: HAVING not supported in function arguments: {having}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::Separator(sep) => {
                     return not_impl_err!(
                         "Calling {name}: SEPARATOR not supported in function arguments: {sep}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::JsonNullClause(jn) => {
                     return not_impl_err!(
                         "Calling {name}: JSON NULL clause not supported in function arguments: {jn}"
-                    )
+                    );
                 }
             }
         }
@@ -228,7 +230,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return plan_err!(
                         "Expected an identifier in function name, but found {:?}",
                         name.0[0]
-                    )
+                    );
                 }
             }
         };

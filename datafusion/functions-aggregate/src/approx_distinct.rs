@@ -23,13 +23,13 @@ use arrow::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{
-    ArrowPrimitiveType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    ArrowPrimitiveType, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
 };
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, DataFusionError, Result,
+    DataFusionError, Result, downcast_value, internal_err, not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -352,8 +352,8 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
             other => {
                 return not_impl_err!(
-                "Support for 'approx_distinct' for data type {other} is not implemented"
-            )
+                    "Support for 'approx_distinct' for data type {other} is not implemented"
+                );
             }
         };
         Ok(accumulator)

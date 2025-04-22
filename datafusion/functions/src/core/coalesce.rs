@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{new_null_array, BooleanArray};
+use arrow::array::{BooleanArray, new_null_array};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,

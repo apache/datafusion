@@ -38,8 +38,8 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::ScalarValue;
-use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::expressions::Literal;
 
 use itertools::Itertools;
 use rand::Rng;
@@ -326,11 +326,10 @@ impl JoinFuzzTestCase {
     /// schema as a union of origin filter intermediate schema and
     /// on-condition schema
     fn intermediate_schema(&self) -> Schema {
-        let filter_schema = match self.join_filter() { Some(filter) => {
-            filter.schema().as_ref().to_owned()
-        } _ => {
-            Schema::empty()
-        }};
+        let filter_schema = match self.join_filter() {
+            Some(filter) => filter.schema().as_ref().to_owned(),
+            _ => Schema::empty(),
+        };
 
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
@@ -363,15 +362,13 @@ impl JoinFuzzTestCase {
     /// Helper function for building NLJoin filter, returns the union
     /// of original filter expression and on-condition expression
     fn composite_filter_expression(&self) -> PhysicalExprRef {
-        let (filter_expression, column_idx_offset) =
-            match self.join_filter() { Some(filter) => {
-                (
-                    filter.expression().to_owned(),
-                    filter.schema().fields().len(),
-                )
-            } _ => {
-                (Arc::new(Literal::new(ScalarValue::from(true))) as _, 0)
-            }};
+        let (filter_expression, column_idx_offset) = match self.join_filter() {
+            Some(filter) => (
+                filter.expression().to_owned(),
+                filter.schema().fields().len(),
+            ),
+            _ => (Arc::new(Literal::new(ScalarValue::from(true))) as _, 0),
+        };
 
         let equal_a = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", column_idx_offset)),
@@ -396,11 +393,12 @@ impl JoinFuzzTestCase {
     /// of original filter column indices and on-condition column indices.
     /// Result must match intermediate schema.
     fn column_indices(&self) -> Vec<ColumnIndex> {
-        let mut column_indices = match self.join_filter() { Some(filter) => {
-            filter.column_indices().to_vec()
-        } _ => {
-            vec![]
-        }};
+        let mut column_indices = match self.join_filter() {
+            Some(filter) => filter.column_indices().to_vec(),
+            _ => {
+                vec![]
+            }
+        };
 
         let on_column_indices = vec![
             ColumnIndex {
@@ -545,7 +543,10 @@ impl JoinFuzzTestCase {
                 std::fs::remove_dir_all(fuzz_debug).unwrap_or(());
                 std::fs::create_dir_all(fuzz_debug).unwrap();
                 let out_dir_name = &format!("{fuzz_debug}/batch_size_{batch_size}");
-                println!("Test result data mismatch found. HJ rows {}, SMJ rows {}, NLJ rows {}", hj_rows, smj_rows, nlj_rows);
+                println!(
+                    "Test result data mismatch found. HJ rows {}, SMJ rows {}, NLJ rows {}",
+                    hj_rows, smj_rows, nlj_rows
+                );
                 println!("The debug is ON. Input data will be saved to {out_dir_name}");
 
                 Self::save_partitioned_batches_as_parquet(
@@ -597,10 +598,16 @@ impl JoinFuzzTestCase {
             }
 
             if join_tests.contains(&NljHj) {
-                let err_msg_rowcnt = format!("NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {}", batch_size);
+                let err_msg_rowcnt = format!(
+                    "NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {}",
+                    batch_size
+                );
                 assert_eq!(nlj_rows, hj_rows, "{}", err_msg_rowcnt.as_str());
 
-                let err_msg_contents = format!("NestedLoopJoinExec and HashJoinExec produced different results, batch_size: {}", batch_size);
+                let err_msg_contents = format!(
+                    "NestedLoopJoinExec and HashJoinExec produced different results, batch_size: {}",
+                    batch_size
+                );
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
                 for (i, (nlj_line, hj_line)) in nlj_formatted_sorted
@@ -618,10 +625,16 @@ impl JoinFuzzTestCase {
             }
 
             if join_tests.contains(&HjSmj) {
-                let err_msg_row_cnt = format!("HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {}", &batch_size);
+                let err_msg_row_cnt = format!(
+                    "HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {}",
+                    &batch_size
+                );
                 assert_eq!(hj_rows, smj_rows, "{}", err_msg_row_cnt.as_str());
 
-                let err_msg_contents = format!("SortMergeJoinExec and HashJoinExec produced different results, batch_size: {}", &batch_size);
+                let err_msg_contents = format!(
+                    "SortMergeJoinExec and HashJoinExec produced different results, batch_size: {}",
+                    &batch_size
+                );
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
                 if smj_rows > 0 || hj_rows > 0 {

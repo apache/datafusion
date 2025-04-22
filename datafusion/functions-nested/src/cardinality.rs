@@ -25,9 +25,9 @@ use arrow::datatypes::{
     DataType,
     DataType::{FixedSizeList, LargeList, List, Map, UInt64},
 };
+use datafusion_common::Result;
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
@@ -107,7 +107,9 @@ impl ScalarUDFImpl for Cardinality {
         Ok(match arg_types[0] {
             List(_) | LargeList(_) | FixedSizeList(_, _) | Map(_, _) => UInt64,
             _ => {
-                return plan_err!("The cardinality function can only accept List/LargeList/FixedSizeList/Map.");
+                return plan_err!(
+                    "The cardinality function can only accept List/LargeList/FixedSizeList/Map."
+                );
             }
         })
     }

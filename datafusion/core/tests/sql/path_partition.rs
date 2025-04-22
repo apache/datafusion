@@ -38,11 +38,11 @@ use datafusion::{
     test_util::{self, arrow_test_data, parquet_test_data},
 };
 use datafusion_catalog::TableProvider;
+use datafusion_common::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::test_util::batches_to_sort_string;
-use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
-use datafusion_expr::{col, lit, Expr, Operator};
+use datafusion_expr::{Expr, Operator, col, lit};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 
 use async_trait::async_trait;
@@ -50,11 +50,11 @@ use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::stream::{self, BoxStream};
 use insta::assert_snapshot;
-use object_store::{
-    path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
-    ObjectStore, PutOptions, PutResult,
-};
 use object_store::{Attributes, MultipartUpload, PutMultipartOpts, PutPayload};
+use object_store::{
+    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
+    PutOptions, PutResult, path::Path,
+};
 use url::Url;
 
 #[tokio::test]

@@ -83,7 +83,7 @@ mod tests {
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{
-        col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, LogicalPlan,
+        Expr, LogicalPlan, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
 
     use crate::eliminate_filter::EliminateFilter;

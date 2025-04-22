@@ -18,12 +18,11 @@
 use std::sync::Arc;
 
 use abi_stable::{
-    declare_root_module_statics, export_root_module,
+    StableAbi, declare_root_module_statics, export_root_module,
     library::{LibraryError, RootModule},
     package_version_strings,
     prefix_type::PrefixTypeTrait,
     sabi_types::VersionStrings,
-    StableAbi,
 };
 use catalog::create_catalog_provider;
 

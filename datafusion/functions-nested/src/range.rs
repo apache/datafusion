@@ -19,12 +19,12 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
+    Array, ArrayRef, Int64Array, ListArray, ListBuilder, NullArray, NullBufferBuilder,
+    TimestampNanosecondArray,
     builder::{Date32Builder, TimestampNanosecondBuilder},
     temporal_conversions::as_datetime_with_timezone,
     timezone::Tz,
     types::{Date32Type, IntervalMonthDayNanoType, TimestampNanosecondType as TSNT},
-    Array, ArrayRef, Int64Array, ListArray, ListBuilder, NullArray, NullBufferBuilder,
-    TimestampNanosecondArray,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{
@@ -34,8 +34,8 @@ use datafusion_common::cast::{
     as_date32_array, as_int64_array, as_interval_mdn_array, as_timestamp_nanosecond_array,
 };
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, not_impl_datafusion_err,
-    utils::take_function_args, Result,
+    Result, exec_datafusion_err, exec_err, internal_err, not_impl_datafusion_err,
+    utils::take_function_args,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -171,7 +171,9 @@ impl ScalarUDFImpl for Range {
                 make_scalar_function(|args| gen_range_timestamp(args, false))(args)
             }
             dt => {
-                exec_err!("unsupported type for RANGE. Expected Int64, Date32 or Timestamp, got: {dt}")
+                exec_err!(
+                    "unsupported type for RANGE. Expected Int64, Date32 or Timestamp, got: {dt}"
+                )
             }
         }
     }

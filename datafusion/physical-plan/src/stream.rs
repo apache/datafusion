@@ -27,7 +27,7 @@ use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 
@@ -526,7 +526,7 @@ impl Stream for ObservedStream {
 mod test {
     use super::*;
     use crate::test::exec::{
-        assert_strong_count_converges_to_zero, BlockingExec, MockExec, PanicExec,
+        BlockingExec, MockExec, PanicExec, assert_strong_count_converges_to_zero,
     };
 
     use arrow::datatypes::{DataType, Field, Schema};

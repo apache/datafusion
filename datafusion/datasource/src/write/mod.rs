@@ -28,9 +28,9 @@ use datafusion_common::error::Result;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use bytes::Bytes;
+use object_store::ObjectStore;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
-use object_store::ObjectStore;
 use tokio::io::AsyncWrite;
 
 pub mod demux;

@@ -18,7 +18,7 @@
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::sorts::sort::sort_batch;
 use test_utils::stagger_batch;

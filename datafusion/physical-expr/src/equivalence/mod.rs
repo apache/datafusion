@@ -31,7 +31,7 @@ pub use class::{AcrossPartitions, ConstExpr, EquivalenceClass, EquivalenceGroup}
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
 pub use properties::{
-    calculate_union, join_equivalence_properties, EquivalenceProperties,
+    EquivalenceProperties, calculate_union, join_equivalence_properties,
 };
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out
@@ -69,12 +69,12 @@ pub fn add_offset_to_expr(
 mod tests {
 
     use super::*;
-    use crate::expressions::col;
     use crate::PhysicalSortExpr;
+    use crate::expressions::col;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{plan_datafusion_err, Result};
+    use datafusion_common::{Result, plan_datafusion_err};
     use datafusion_physical_expr_common::sort_expr::{
         LexOrdering, PhysicalSortRequirement,
     };

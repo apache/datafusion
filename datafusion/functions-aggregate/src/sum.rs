@@ -29,12 +29,12 @@ use arrow::array::{ArrowNumericType, AsArray};
 use arrow::datatypes::ArrowNativeType;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float64Type, Int64Type, UInt64Type,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal128Type,
+    Decimal256Type, Float64Type, Int64Type, UInt64Type,
 };
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{
-    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
+    Result, ScalarValue, exec_err, not_impl_err, utils::take_function_args,
 };
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;

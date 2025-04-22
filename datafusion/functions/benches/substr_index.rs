@@ -21,10 +21,10 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::datatypes::DataType;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use rand::Rng;
 use rand::distributions::{Alphanumeric, Uniform};
 use rand::prelude::Distribution;
-use rand::Rng;
 
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::substr_index;

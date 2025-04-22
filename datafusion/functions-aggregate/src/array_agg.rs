@@ -17,14 +17,14 @@
 
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
-use arrow::array::{new_empty_array, Array, ArrayRef, AsArray, ListArray, StructArray};
+use arrow::array::{Array, ArrayRef, AsArray, ListArray, StructArray, new_empty_array};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Fields};
 
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
-use datafusion_common::{exec_err, ScalarValue};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::utils::{SingleRowListArrayBuilder, get_row_at_idx};
+use datafusion_common::{Result, internal_err};
+use datafusion_common::{ScalarValue, exec_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, Signature, Volatility};
@@ -157,12 +157,16 @@ impl AggregateUDFImpl for ArrayAgg {
             // ARRAY_AGG(DISTINCT col ORDER BY other_col)                   <- Invalid
             // ARRAY_AGG(DISTINCT col ORDER BY concat(col, ''))             <- Invalid
             if acc_args.ordering_req.len() > 1 {
-                return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
+                return exec_err!(
+                    "In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list"
+                );
             }
             let mut sort_option: Option<SortOptions> = None;
             if let Some(order) = acc_args.ordering_req.first() {
                 if !order.expr.eq(&acc_args.exprs[0]) {
-                    return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
+                    return exec_err!(
+                        "In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list"
+                    );
                 }
                 sort_option = Some(order.options)
             }

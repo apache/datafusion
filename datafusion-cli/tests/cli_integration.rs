@@ -19,7 +19,7 @@ use std::process::Command;
 
 use rstest::rstest;
 
-use insta::{glob, Settings};
+use insta::{Settings, glob};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::{env, fs};
 

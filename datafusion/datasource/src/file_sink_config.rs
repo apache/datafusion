@@ -17,10 +17,10 @@
 
 use std::sync::Arc;
 
+use crate::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use crate::sink::DataSink;
-use crate::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
-use crate::ListingTableUrl;
+use crate::write::demux::{DemuxedStreamReceiver, start_demuxer_task};
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::Result;

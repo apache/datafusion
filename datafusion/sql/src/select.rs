@@ -22,15 +22,15 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
-    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
-    CheckColumnsSatisfyExprsPurpose,
+    CheckColumnsSatisfyExprsPurpose, check_columns_satisfy_exprs, extract_aliases,
+    rebase_expr, resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
+    rewrite_recursive_unnests_bottom_up,
 };
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
+use datafusion_common::{Result, not_impl_err, plan_err};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
@@ -46,8 +46,9 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    visit_expressions_mut, Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr,
-    OrderBy, SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderBy,
+    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
+    visit_expressions_mut,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -212,8 +213,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             )?
         } else {
             match having_expr_opt {
-                Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
-                None => (base_plan.clone(), select_exprs.clone(), having_expr_opt)
+                Some(having_expr) => {
+                    return plan_err!(
+                        "HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"
+                    );
+                }
+                None => (base_plan.clone(), select_exprs.clone(), having_expr_opt),
             }
         };
 
@@ -256,7 +261,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     || !group_by_exprs.is_empty()
                     || !window_func_exprs.is_empty()
                 {
-                    return not_impl_err!("DISTINCT ON expressions with GROUP BY, aggregation or window functions are not supported ");
+                    return not_impl_err!(
+                        "DISTINCT ON expressions with GROUP BY, aggregation or window functions are not supported "
+                    );
                 }
 
                 let on_expr = on_expr
@@ -655,7 +662,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     SelectItemQualifiedWildcardKind::Expr(_) => {
                         return plan_err!(
                             "Qualified wildcard with expression not supported"
-                        )
+                        );
                     }
                 };
                 let qualifier = self.object_name_to_table_reference(object_name)?;

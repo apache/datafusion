@@ -20,8 +20,8 @@ mod joins; // Submodule containing join_equivalence_properties
 mod union; // Submodule containing calculate_union
 
 use dependency::{
-    construct_prefix_orderings, generate_dependency_orderings, referred_dependencies,
-    Dependencies, DependencyMap,
+    Dependencies, DependencyMap, construct_prefix_orderings,
+    generate_dependency_orderings, referred_dependencies,
 };
 pub use joins::*;
 pub use union::*;
@@ -31,20 +31,20 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::{fmt, mem};
 
-use crate::equivalence::class::{const_exprs_contains, AcrossPartitions};
+use crate::equivalence::class::{AcrossPartitions, const_exprs_contains};
 use crate::equivalence::{
     EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
+use crate::expressions::{CastExpr, Column, Literal, with_new_schema};
 use crate::{
-    physical_exprs_contains, ConstExpr, LexOrdering, LexRequirement, PhysicalExpr,
-    PhysicalSortExpr, PhysicalSortRequirement,
+    ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
+    PhysicalSortRequirement, physical_exprs_contains,
 };
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_err, Constraint, Constraints, HashMap, Result};
+use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
@@ -998,13 +998,16 @@ impl EquivalenceProperties {
                 .into_iter()
                 .filter_map(|relevant_deps| {
                     match get_expr_properties(source, &relevant_deps, &self.schema)
-                            .map(|prop| prop.sort_properties)
-                    { Ok(SortProperties::Ordered(options)) => {
-                        Some((options, relevant_deps))
-                    } _ => {
-                        // Do not consider unordered cases
-                        None
-                    }}
+                        .map(|prop| prop.sort_properties)
+                    {
+                        Ok(SortProperties::Ordered(options)) => {
+                            Some((options, relevant_deps))
+                        }
+                        _ => {
+                            // Do not consider unordered cases
+                            None
+                        }
+                    }
                 })
                 .flat_map(|(options, relevant_deps)| {
                     let sort_expr = PhysicalSortExpr {
@@ -1583,35 +1586,43 @@ fn get_expr_properties(
     dependencies: &Dependencies,
     schema: &SchemaRef,
 ) -> Result<ExprProperties> {
-    match dependencies.iter().find(|&order| expr.eq(&order.expr)) { Some(column_order) => {
-        // If exact match is found, return its ordering.
-        Ok(ExprProperties {
-            sort_properties: SortProperties::Ordered(column_order.options),
-            range: Interval::make_unbounded(&expr.data_type(schema)?)?,
-            preserves_lex_ordering: false,
-        })
-    } _ => if expr.as_any().downcast_ref::<Column>().is_some() {
-        Ok(ExprProperties {
-            sort_properties: SortProperties::Unordered,
-            range: Interval::make_unbounded(&expr.data_type(schema)?)?,
-            preserves_lex_ordering: false,
-        })
-    } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
-        Ok(ExprProperties {
-            sort_properties: SortProperties::Singleton,
-            range: Interval::try_new(literal.value().clone(), literal.value().clone())?,
-            preserves_lex_ordering: true,
-        })
-    } else {
-        // Find orderings of its children
-        let child_states = expr
-            .children()
-            .iter()
-            .map(|child| get_expr_properties(child, dependencies, schema))
-            .collect::<Result<Vec<_>>>()?;
-        // Calculate expression ordering using ordering of its children.
-        expr.get_properties(&child_states)
-    }}
+    match dependencies.iter().find(|&order| expr.eq(&order.expr)) {
+        Some(column_order) => {
+            // If exact match is found, return its ordering.
+            Ok(ExprProperties {
+                sort_properties: SortProperties::Ordered(column_order.options),
+                range: Interval::make_unbounded(&expr.data_type(schema)?)?,
+                preserves_lex_ordering: false,
+            })
+        }
+        _ => {
+            if expr.as_any().downcast_ref::<Column>().is_some() {
+                Ok(ExprProperties {
+                    sort_properties: SortProperties::Unordered,
+                    range: Interval::make_unbounded(&expr.data_type(schema)?)?,
+                    preserves_lex_ordering: false,
+                })
+            } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+                Ok(ExprProperties {
+                    sort_properties: SortProperties::Singleton,
+                    range: Interval::try_new(
+                        literal.value().clone(),
+                        literal.value().clone(),
+                    )?,
+                    preserves_lex_ordering: true,
+                })
+            } else {
+                // Find orderings of its children
+                let child_states = expr
+                    .children()
+                    .iter()
+                    .map(|child| get_expr_properties(child, dependencies, schema))
+                    .collect::<Result<Vec<_>>>()?;
+                // Calculate expression ordering using ordering of its children.
+                expr.get_properties(&child_states)
+            }
+        }
+    }
 }
 
 /// Wrapper struct for `Arc<dyn PhysicalExpr>` to use them as keys in a hash map.
@@ -1636,7 +1647,7 @@ impl Hash for ExprWrapper {
 mod tests {
 
     use super::*;
-    use crate::expressions::{col, BinaryExpr};
+    use crate::expressions::{BinaryExpr, col};
 
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_expr::Operator;

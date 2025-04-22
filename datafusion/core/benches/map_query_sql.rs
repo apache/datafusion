@@ -18,10 +18,10 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use parking_lot::Mutex;
-use rand::prelude::ThreadRng;
 use rand::Rng;
+use rand::prelude::ThreadRng;
 use tokio::runtime::Runtime;
 
 use datafusion::prelude::SessionContext;

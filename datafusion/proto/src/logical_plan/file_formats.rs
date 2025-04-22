@@ -23,22 +23,23 @@ use datafusion::{
         TableParquetOptions,
     },
     datasource::file_format::{
-        arrow::ArrowFormatFactory, csv::CsvFormatFactory, json::JsonFormatFactory,
-        parquet::ParquetFormatFactory, FileFormatFactory,
+        FileFormatFactory, arrow::ArrowFormatFactory, csv::CsvFormatFactory,
+        json::JsonFormatFactory, parquet::ParquetFormatFactory,
     },
     prelude::SessionContext,
 };
 use datafusion_common::{
-    exec_err, not_impl_err, parsers::CompressionTypeVariant, DataFusionError,
-    TableReference,
+    DataFusionError, TableReference, exec_err, not_impl_err,
+    parsers::CompressionTypeVariant,
 };
 use prost::Message;
 
 use crate::protobuf::{
-    parquet_column_options, parquet_options, CsvOptions as CsvOptionsProto,
-    JsonOptions as JsonOptionsProto, ParquetColumnOptions as ParquetColumnOptionsProto,
-    ParquetColumnSpecificOptions, ParquetOptions as ParquetOptionsProto,
-    TableParquetOptions as TableParquetOptionsProto,
+    CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto,
+    ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
+    ParquetOptions as ParquetOptionsProto,
+    TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
+    parquet_options,
 };
 
 use super::LogicalExtensionCodec;
