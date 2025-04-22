@@ -253,24 +253,12 @@ impl RuntimeEnvBuilder {
             cache_manager,
             object_store_registry,
         } = self;
-
-        // If `memory_pool` is not set, it represents spilling is disabled.
-        // Because `UnboundedMemoryPool` will be used in this case, and
-        // it will never limit memory usage.
-        // And we disable the `disk_manager`(use `DiskManagerConfig::Disabled`)
-        // to tell we have disabled spilling.
-        let (memory_pool, disk_manager_config) = if let Some(pool) = memory_pool {
-            (pool, disk_manager)
-        } else {
-            (
-                Arc::new(UnboundedMemoryPool::default()) as _,
-                DiskManagerConfig::Disabled,
-            )
-        };
+        let memory_pool =
+            memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
 
         Ok(RuntimeEnv {
             memory_pool,
-            disk_manager: DiskManager::try_new(disk_manager_config)?,
+            disk_manager: DiskManager::try_new(disk_manager)?,
             cache_manager: CacheManager::try_new(&cache_manager)?,
             object_store_registry,
         })
