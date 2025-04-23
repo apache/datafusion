@@ -93,7 +93,7 @@ pub fn update_order_preservation_ctx_children_data(opc: &mut OrderPreservationCo
 /// inside `sort_input` with their order-preserving variants. This will
 /// generate an alternative plan, which will be accepted or rejected later on
 /// depending on whether it helps us remove a `SortExec`.
-fn plan_with_order_preserving_variants(
+pub fn plan_with_order_preserving_variants(
     mut sort_input: OrderPreservationContext,
     // Flag indicating that it is desirable to replace `RepartitionExec`s with
     // `SortPreservingRepartitionExec`s:
