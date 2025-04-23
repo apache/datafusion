@@ -504,6 +504,13 @@ impl UnhandledPredicateHook for ConstantUnhandledPredicateHook {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ColumnOrdering {
+    Unknown,
+    TypeDefined,
+    IEEE754,
+}
+
 impl PruningPredicate {
     /// Try to create a new instance of [`PruningPredicate`]
     ///
@@ -527,7 +534,11 @@ impl PruningPredicate {
     ///
     /// See the struct level documentation on [`PruningPredicate`] for more
     /// details.
-    pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+    pub fn try_new(
+        expr: Arc<dyn PhysicalExpr>,
+        schema: SchemaRef,
+        column_ordering: Vec<ColumnOrdering>,
+    ) -> Result<Self> {
         // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`
         // which does not handle dynamic exprs  in general
         let expr = snapshot_physical_expr(expr)?;
@@ -2291,7 +2302,12 @@ mod tests {
         ]));
         let expr = col("c1").eq(lit(100)).and(col("c2").eq(lit(200)));
         let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, Arc::clone(&schema)).unwrap();
+        let p = PruningPredicate::try_new(
+            expr,
+            Arc::clone(&schema),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
         // note pruning expression refers to row_count twice
         assert_eq!(
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= 100 AND 100 <= c1_max@1 AND c2_null_count@6 != row_count@3 AND c2_min@4 <= 200 AND 200 <= c2_max@5",
@@ -4857,7 +4873,12 @@ mod tests {
     ) {
         println!("Pruning with expr: {}", expr);
         let expr = logical2physical(&expr, schema);
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
+        let p = PruningPredicate::try_new(
+            expr,
+            Arc::<Schema>::clone(schema),
+            vec![ColumnOrdering::Unknown; schema.fields().len()],
+        )
+        .unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }

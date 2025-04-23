@@ -189,7 +189,12 @@ fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate 
     let df_schema = DFSchema::try_from(schema.as_ref().clone()).unwrap();
     let props = ExecutionProps::new();
     let physical_expr = create_physical_expr(&expr, &df_schema, &props).unwrap();
-    PruningPredicate::try_new(physical_expr, schema.clone()).unwrap()
+    PruningPredicate::try_new(
+        physical_expr,
+        schema.clone(),
+        vec![ColumnOrdering::Unknown; schema.fields().len()],
+    )
+    .unwrap()
 }
 
 fn i32_array<'a>(values: impl Iterator<Item = &'a Option<i32>>) -> ArrayRef {

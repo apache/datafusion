@@ -34,7 +34,7 @@ use arrow::datatypes::{SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, Result};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::pruning::PruningPredicate;
+use datafusion_physical_optimizer::pruning::{ColumnOrdering, PruningPredicate};
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
 
 use futures::{StreamExt, TryStreamExt};
@@ -42,6 +42,7 @@ use log::debug;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::basic::ColumnOrder;
 use parquet::file::metadata::ParquetMetaDataReader;
 
 /// Implements [`FileOpener`] for a parquet file
@@ -176,10 +177,30 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
+            let ordering = reader_metadata
+                .metadata()
+                .file_metadata()
+                .column_orders()
+                .map_or_else(
+                    || vec![ColumnOrdering::Unknown; physical_file_schema.fields().len()],
+                    |column_orders| {
+                        column_orders
+                            .iter()
+                            .map(|order| match order {
+                                ColumnOrder::TYPE_DEFINED_ORDER(_) => {
+                                    ColumnOrdering::TypeDefined
+                                }
+                                ColumnOrder::UNDEFINED => ColumnOrdering::Unknown,
+                            })
+                            .collect::<Vec<_>>()
+                    },
+                );
+
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 &predicate,
                 &physical_file_schema,
+                ordering,
                 &predicate_creation_errors,
             );
 
@@ -361,9 +382,11 @@ fn create_initial_plan(
 pub(crate) fn build_pruning_predicate(
     predicate: Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
+    column_orderings: Vec<ColumnOrdering>,
     predicate_creation_errors: &Count,
 ) -> Option<Arc<PruningPredicate>> {
-    match PruningPredicate::try_new(predicate, Arc::clone(file_schema)) {
+    match PruningPredicate::try_new(predicate, Arc::clone(file_schema), column_orderings)
+    {
         Ok(pruning_predicate) => {
             if !pruning_predicate.always_true() {
                 return Some(Arc::new(pruning_predicate));
@@ -383,16 +406,19 @@ pub(crate) fn build_pruning_predicate(
 pub(crate) fn build_page_pruning_predicate(
     predicate: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
+    column_orderings: Vec<ColumnOrdering>,
 ) -> Arc<PagePruningAccessPlanFilter> {
     Arc::new(PagePruningAccessPlanFilter::new(
         predicate,
         Arc::clone(file_schema),
+        column_orderings,
     ))
 }
 
 fn build_pruning_predicates(
     predicate: &Option<Arc<dyn PhysicalExpr>>,
     file_schema: &SchemaRef,
+    column_orderings: Vec<ColumnOrdering>,
     predicate_creation_errors: &Count,
 ) -> (
     Option<Arc<PruningPredicate>>,
@@ -404,6 +430,7 @@ fn build_pruning_predicates(
     let pruning_predicate = build_pruning_predicate(
         Arc::clone(predicate),
         file_schema,
+        column_orderings,
         predicate_creation_errors,
     );
     let page_pruning_predicate = build_page_pruning_predicate(predicate, file_schema);
