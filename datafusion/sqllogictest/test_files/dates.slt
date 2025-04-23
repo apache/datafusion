@@ -183,7 +183,7 @@ query error input contains invalid characters
 SELECT to_date('2020-09-08 12/00/00+00:00', '%c', '%+')
 
 # to_date with broken formatting
-query error bad or unsupported format string
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
 SELECT to_date('2020-09-08 12/00/00+00:00', '%q')
 
 statement ok

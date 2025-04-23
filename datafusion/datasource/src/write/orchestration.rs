@@ -28,7 +28,7 @@ use datafusion_common::error::Result;
 
 use arrow::array::RecordBatch;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
-use datafusion_common_runtime::SpawnedTask;
+use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_execution::TaskContext;
 
 use bytes::Bytes;
@@ -36,7 +36,6 @@ use futures::join;
 use object_store::ObjectStore;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver};
-use tokio::task::JoinSet;
 
 type WriterType = Box<dyn AsyncWrite + Send + Unpin>;
 type SerializerType = Arc<dyn BatchSerializer>;

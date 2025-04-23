@@ -30,6 +30,7 @@ use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
+use crate::push_down_filter::PushdownFilter;
 use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
@@ -121,6 +122,14 @@ impl PhysicalOptimizer {
             // into an `order by max(x) limit y`. In this case it will copy the limit value down
             // to the aggregation, allowing it to use only y number of accumulators.
             Arc::new(TopKAggregation::new()),
+            // The FilterPushdown rule tries to push down filters as far as it can.
+            // For example, it will push down filtering from a `FilterExec` to
+            // a `DataSourceExec`, or from a `TopK`'s current state to a `DataSourceExec`.
+            Arc::new(PushdownFilter::new()),
+            // The LimitPushdown rule tries to push limits down as far as possible,
+            // replacing operators with fetching variants, or adding limits
+            // past operators that support limit pushdown.
+            Arc::new(LimitPushdown::new()),
             // The ProjectionPushdown rule tries to push projections towards
             // the sources in the execution plan. As a result of this process,
             // a projection can disappear if it reaches the source providers, and
@@ -128,10 +137,6 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
-            // The LimitPushdown rule tries to push limits down as far as possible,
-            // replacing operators with fetching variants, or adding limits
-            // past operators that support limit pushdown.
-            Arc::new(LimitPushdown::new()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query

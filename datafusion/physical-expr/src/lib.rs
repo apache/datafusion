@@ -20,7 +20,8 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
 // Backward compatibility
@@ -36,10 +37,6 @@ mod partitioning;
 mod physical_expr;
 pub mod planner;
 mod scalar_function;
-pub mod udf {
-    #[allow(deprecated)]
-    pub use crate::scalar_function::create_physical_expr;
-}
 pub mod statistics;
 pub mod utils;
 pub mod window;
@@ -57,6 +54,7 @@ pub use equivalence::{
 };
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
+    create_ordering, create_physical_sort_expr, create_physical_sort_exprs,
     physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     PhysicalExprRef,
 };
@@ -70,7 +68,7 @@ pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
 
 pub use datafusion_physical_expr_common::utils::reverse_order_bys;
-pub use utils::split_conjunction;
+pub use utils::{conjunction, conjunction_opt, split_conjunction};
 
 // For backwards compatibility
 pub mod tree_node {

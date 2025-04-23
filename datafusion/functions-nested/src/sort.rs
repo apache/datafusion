@@ -18,15 +18,17 @@
 //! [`ScalarUDFImpl`] definitions for array_sort function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Array, ArrayRef, ListArray, NullBufferBuilder};
+use arrow::array::{new_null_array, Array, ArrayRef, ListArray, NullBufferBuilder};
 use arrow::buffer::OffsetBuffer;
+use arrow::compute::SortColumn;
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List};
 use arrow::datatypes::{DataType, Field};
 use arrow::{compute, compute::SortOptions};
 use datafusion_common::cast::{as_list_array, as_string_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -87,7 +89,30 @@ impl Default for ArraySort {
 impl ArraySort {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: None,
+                    }),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::String,
+                        ],
+                        array_coercion: None,
+                    }),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::String,
+                            ArrayFunctionArgument::String,
+                        ],
+                        array_coercion: None,
+                    }),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec!["list_sort".to_string()],
         }
     }
@@ -115,6 +140,7 @@ impl ScalarUDFImpl for ArraySort {
                 field.data_type().clone(),
                 true,
             )))),
+            DataType::Null => Ok(DataType::Null),
             _ => exec_err!(
                 "Not reachable, data_type should be List, LargeList or FixedSizeList"
             ),
@@ -141,6 +167,10 @@ impl ScalarUDFImpl for ArraySort {
 pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.is_empty() || args.len() > 3 {
         return exec_err!("array_sort expects one to three arguments");
+    }
+
+    if args[1..].iter().any(|array| array.is_null(0)) {
+        return Ok(new_null_array(args[0].data_type(), args[0].len()));
     }
 
     let sort_option = match args.len() {
@@ -178,9 +208,24 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             valid.append_null();
         } else {
             let arr_ref = list_array.value(i);
-            let arr_ref = arr_ref.as_ref();
 
-            let sorted_array = compute::sort(arr_ref, sort_option)?;
+            // arrow sort kernel does not support Structs, so use
+            // lexsort_to_indices instead:
+            // https://github.com/apache/arrow-rs/issues/6911#issuecomment-2562928843
+            let sorted_array = match arr_ref.data_type() {
+                DataType::Struct(_) => {
+                    let sort_columns: Vec<SortColumn> = vec![SortColumn {
+                        values: Arc::clone(&arr_ref),
+                        options: sort_option,
+                    }];
+                    let indices = compute::lexsort_to_indices(&sort_columns, None)?;
+                    compute::take(arr_ref.as_ref(), &indices, None)?
+                }
+                _ => {
+                    let arr_ref = arr_ref.as_ref();
+                    compute::sort(arr_ref, sort_option)?
+                }
+            };
             array_lengths.push(sorted_array.len());
             arrays.push(sorted_array);
             valid.append_non_null();
@@ -196,12 +241,16 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|a| a.as_ref())
         .collect::<Vec<&dyn Array>>();
 
-    let list_arr = ListArray::new(
-        Arc::new(Field::new_list_field(data_type, true)),
-        OffsetBuffer::from_lengths(array_lengths),
-        Arc::new(compute::concat(elements.as_slice())?),
-        buffer,
-    );
+    let list_arr = if elements.is_empty() {
+        ListArray::new_null(Arc::new(Field::new_list_field(data_type, true)), row_count)
+    } else {
+        ListArray::new(
+            Arc::new(Field::new_list_field(data_type, true)),
+            OffsetBuffer::from_lengths(array_lengths),
+            Arc::new(compute::concat(elements.as_slice())?),
+            buffer,
+        )
+    };
     Ok(Arc::new(list_arr))
 }
 

@@ -82,6 +82,8 @@ impl ExprPlanner for AggregateFunctionPlanner {
         // handle count() and count(*) case
         // convert to count(1) as "count()"
         // or         count(1) as "count(*)"
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
         if raw_expr.func.name() == "count"
             && (raw_expr.args.len() == 1
                 && matches!(raw_expr.args[0], Expr::Wildcard { .. })

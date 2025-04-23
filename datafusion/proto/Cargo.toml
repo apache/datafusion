@@ -39,8 +39,9 @@ name = "datafusion_proto"
 
 [features]
 default = ["parquet"]
-json = ["pbjson", "serde", "serde_json"]
+json = ["pbjson", "serde", "serde_json", "datafusion-proto-common/json"]
 parquet = ["datafusion/parquet", "datafusion-common/parquet"]
+avro = ["datafusion/avro", "datafusion-common/avro"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -54,7 +55,6 @@ pbjson = { workspace = true, optional = true }
 prost = { workspace = true }
 serde = { version = "1.0", optional = true }
 serde_json = { workspace = true, optional = true }
-
 [dev-dependencies]
 datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }

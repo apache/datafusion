@@ -105,10 +105,10 @@ impl DisplayAs for TestMemoryExec {
                     .map_or(String::new(), |limit| format!(", fetch={}", limit));
                 if self.show_sizes {
                     write!(
-                        f,
-                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                        partition_sizes.len(),
-                    )
+                                f,
+                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                                partition_sizes.len(),
+                            )
                 } else {
                     write!(
                         f,
@@ -116,6 +116,10 @@ impl DisplayAs for TestMemoryExec {
                         partition_sizes.len(),
                     )
                 }
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

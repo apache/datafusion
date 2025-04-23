@@ -42,10 +42,11 @@ impl AggregateStatistics {
 
 impl PhysicalOptimizerRule for AggregateStatistics {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    #[allow(clippy::only_used_in_recursion)] // See https://github.com/rust-lang/rust-clippy/issues/14566
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
@@ -83,12 +84,12 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 )?))
             } else {
                 plan.map_children(|child| {
-                    self.optimize(child, _config).map(Transformed::yes)
+                    self.optimize(child, config).map(Transformed::yes)
                 })
                 .data()
             }
         } else {
-            plan.map_children(|child| self.optimize(child, _config).map(Transformed::yes))
+            plan.map_children(|child| self.optimize(child, config).map(Transformed::yes))
                 .data()
         }
     }

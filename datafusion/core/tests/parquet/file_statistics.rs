@@ -82,7 +82,8 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(exec1.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
         exec1.statistics().unwrap().total_byte_size,
-        Precision::Exact(671)
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
+        Precision::Exact(671),
     );
     assert_eq!(get_static_cache_size(&state1), 1);
 
@@ -93,7 +94,8 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(exec2.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
         exec2.statistics().unwrap().total_byte_size,
-        Precision::Exact(671)
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
+        Precision::Exact(671),
     );
     assert_eq!(get_static_cache_size(&state2), 1);
 
@@ -104,7 +106,8 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(exec3.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
         exec3.statistics().unwrap().total_byte_size,
-        Precision::Exact(671)
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
+        Precision::Exact(671),
     );
     // List same file no increase
     assert_eq!(get_static_cache_size(&state1), 1);

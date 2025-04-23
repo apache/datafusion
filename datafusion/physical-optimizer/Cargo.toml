@@ -53,3 +53,4 @@ recursive = { workspace = true, optional = true }
 [dev-dependencies]
 datafusion-expr = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+insta = { workspace = true }

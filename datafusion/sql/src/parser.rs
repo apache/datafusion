@@ -16,11 +16,14 @@
 // under the License.
 
 //! [`DFParser`]: DataFusion SQL Parser based on [`sqlparser`]
+//!
+//! This parser implements DataFusion specific statements such as
+//! `CREATE EXTERNAL TABLE`
 
-use std::collections::VecDeque;
-use std::fmt;
-
-use sqlparser::ast::ExprWithAlias;
+use datafusion_common::config::SqlParserOptions;
+use datafusion_common::DataFusionError;
+use datafusion_common::{sql_err, Diagnostic, Span};
+use sqlparser::ast::{ExprWithAlias, OrderByOptions};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
@@ -31,6 +34,8 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer, Word},
 };
+use std::collections::VecDeque;
+use std::fmt;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -39,16 +44,27 @@ macro_rules! parser_err {
     };
 }
 
-fn parse_file_type(s: &str) -> Result<String, ParserError> {
+fn parse_file_type(s: &str) -> Result<String, DataFusionError> {
     Ok(s.to_uppercase())
 }
 
-/// DataFusion specific EXPLAIN (needed so we can EXPLAIN datafusion
-/// specific COPY and other statements)
+/// DataFusion specific `EXPLAIN`
+///
+/// Syntax:
+/// ```sql
+/// EXPLAIN <ANALYZE> <VERBOSE> [FORMAT format] statement
+///```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplainStatement {
+    /// `EXPLAIN ANALYZE ..`
     pub analyze: bool,
+    /// `EXPLAIN .. VERBOSE ..`
     pub verbose: bool,
+    /// `EXPLAIN .. FORMAT `
+    pub format: Option<String>,
+    /// The statement to analyze. Note this is a DataFusion [`Statement`] (not a
+    /// [`sqlparser::ast::Statement`] so that we can use `EXPLAIN`, `COPY`, and other
+    /// DataFusion specific statements
     pub statement: Box<Statement>,
 }
 
@@ -57,6 +73,7 @@ impl fmt::Display for ExplainStatement {
         let Self {
             analyze,
             verbose,
+            format,
             statement,
         } = self;
 
@@ -66,6 +83,9 @@ impl fmt::Display for ExplainStatement {
         }
         if *verbose {
             write!(f, "VERBOSE ")?;
+        }
+        if let Some(format) = format.as_ref() {
+            write!(f, "FORMAT {format} ")?;
         }
 
         write!(f, "{statement}")
@@ -248,11 +268,9 @@ impl fmt::Display for Statement {
     }
 }
 
-fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
+fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), DataFusionError> {
     if field.is_some() {
-        return Err(ParserError::ParserError(format!(
-            "{name} specified more than once",
-        )));
+        parser_err!(format!("{name} specified more than once",))?
     }
     Ok(())
 }
@@ -267,35 +285,117 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
 /// [`Statement`] for a list of this special syntax
 pub struct DFParser<'a> {
     pub parser: Parser<'a>,
+    options: SqlParserOptions,
+}
+
+/// Same as `sqlparser`
+const DEFAULT_RECURSION_LIMIT: usize = 50;
+const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
+
+/// Builder for [`DFParser`]
+///
+/// # Example: Create and Parse SQL statements
+/// ```
+/// # use datafusion_sql::parser::DFParserBuilder;
+/// # use datafusion_common::Result;
+/// # fn test() -> Result<()> {
+/// let mut parser = DFParserBuilder::new("SELECT * FROM foo; SELECT 1 + 2")
+///   .build()?;
+/// // parse the SQL into DFStatements
+/// let statements = parser.parse_statements()?;
+/// assert_eq!(statements.len(), 2);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Example: Create and Parse expression with a different dialect
+/// ```
+/// # use datafusion_sql::parser::DFParserBuilder;
+/// # use datafusion_common::Result;
+/// # use datafusion_sql::sqlparser::dialect::MySqlDialect;
+/// # use datafusion_sql::sqlparser::ast::Expr;
+/// # fn test() -> Result<()> {
+/// let dialect = MySqlDialect{}; // Parse using MySQL dialect
+/// let mut parser = DFParserBuilder::new("1 + 2")
+///   .with_dialect(&dialect)
+///   .build()?;
+/// // parse 1+2 into an sqlparser::ast::Expr
+/// let res = parser.parse_expr()?;
+/// assert!(matches!(res.expr, Expr::BinaryOp {..}));
+/// # Ok(())
+/// # }
+/// ```
+pub struct DFParserBuilder<'a> {
+    /// The SQL string to parse
+    sql: &'a str,
+    /// The Dialect to use (defaults to [`GenericDialect`]
+    dialect: &'a dyn Dialect,
+    /// The recursion limit while parsing
+    recursion_limit: usize,
+}
+
+impl<'a> DFParserBuilder<'a> {
+    /// Create a new parser builder for the specified tokens using the
+    /// [`GenericDialect`].
+    pub fn new(sql: &'a str) -> Self {
+        Self {
+            sql,
+            dialect: &DEFAULT_DIALECT,
+            recursion_limit: DEFAULT_RECURSION_LIMIT,
+        }
+    }
+
+    /// Adjust the parser builder's dialect. Defaults to [`GenericDialect`]
+    pub fn with_dialect(mut self, dialect: &'a dyn Dialect) -> Self {
+        self.dialect = dialect;
+        self
+    }
+
+    /// Adjust the recursion limit of sql parsing.  Defaults to 50
+    pub fn with_recursion_limit(mut self, recursion_limit: usize) -> Self {
+        self.recursion_limit = recursion_limit;
+        self
+    }
+
+    pub fn build(self) -> Result<DFParser<'a>, DataFusionError> {
+        let mut tokenizer = Tokenizer::new(self.dialect, self.sql);
+        // Convert TokenizerError -> ParserError
+        let tokens = tokenizer
+            .tokenize_with_location()
+            .map_err(ParserError::from)?;
+
+        Ok(DFParser {
+            parser: Parser::new(self.dialect)
+                .with_tokens_with_locations(tokens)
+                .with_recursion_limit(self.recursion_limit),
+            options: SqlParserOptions {
+                recursion_limit: self.recursion_limit,
+                ..Default::default()
+            },
+        })
+    }
 }
 
 impl<'a> DFParser<'a> {
-    /// Create a new parser for the specified tokens using the
-    /// [`GenericDialect`].
-    pub fn new(sql: &str) -> Result<Self, ParserError> {
-        let dialect = &GenericDialect {};
-        DFParser::new_with_dialect(sql, dialect)
+    #[deprecated(since = "46.0.0", note = "DFParserBuilder")]
+    pub fn new(sql: &'a str) -> Result<Self, DataFusionError> {
+        DFParserBuilder::new(sql).build()
     }
 
-    /// Create a new parser for the specified tokens with the
-    /// specified dialect.
+    #[deprecated(since = "46.0.0", note = "DFParserBuilder")]
     pub fn new_with_dialect(
-        sql: &str,
+        sql: &'a str,
         dialect: &'a dyn Dialect,
-    ) -> Result<Self, ParserError> {
-        let mut tokenizer = Tokenizer::new(dialect, sql);
-        let tokens = tokenizer.tokenize_with_location()?;
-
-        Ok(DFParser {
-            parser: Parser::new(dialect).with_tokens_with_locations(tokens),
-        })
+    ) -> Result<Self, DataFusionError> {
+        DFParserBuilder::new(sql).with_dialect(dialect).build()
     }
 
     /// Parse a sql string into one or [`Statement`]s using the
     /// [`GenericDialect`].
-    pub fn parse_sql(sql: &str) -> Result<VecDeque<Statement>, ParserError> {
-        let dialect = &GenericDialect {};
-        DFParser::parse_sql_with_dialect(sql, dialect)
+    pub fn parse_sql(sql: &'a str) -> Result<VecDeque<Statement>, DataFusionError> {
+        let mut parser = DFParserBuilder::new(sql).build()?;
+
+        parser.parse_statements()
     }
 
     /// Parse a SQL string and produce one or more [`Statement`]s with
@@ -303,36 +403,42 @@ impl<'a> DFParser<'a> {
     pub fn parse_sql_with_dialect(
         sql: &str,
         dialect: &dyn Dialect,
-    ) -> Result<VecDeque<Statement>, ParserError> {
-        let mut parser = DFParser::new_with_dialect(sql, dialect)?;
-        let mut stmts = VecDeque::new();
-        let mut expecting_statement_delimiter = false;
-        loop {
-            // ignore empty statements (between successive statement delimiters)
-            while parser.parser.consume_token(&Token::SemiColon) {
-                expecting_statement_delimiter = false;
-            }
-
-            if parser.parser.peek_token() == Token::EOF {
-                break;
-            }
-            if expecting_statement_delimiter {
-                return parser.expected("end of statement", parser.parser.peek_token());
-            }
-
-            let statement = parser.parse_statement()?;
-            stmts.push_back(statement);
-            expecting_statement_delimiter = true;
-        }
-        Ok(stmts)
+    ) -> Result<VecDeque<Statement>, DataFusionError> {
+        let mut parser = DFParserBuilder::new(sql).with_dialect(dialect).build()?;
+        parser.parse_statements()
     }
 
     pub fn parse_sql_into_expr_with_dialect(
         sql: &str,
         dialect: &dyn Dialect,
-    ) -> Result<ExprWithAlias, ParserError> {
-        let mut parser = DFParser::new_with_dialect(sql, dialect)?;
+    ) -> Result<ExprWithAlias, DataFusionError> {
+        let mut parser = DFParserBuilder::new(sql).with_dialect(dialect).build()?;
+
         parser.parse_expr()
+    }
+
+    /// Parse a sql string into one or [`Statement`]s
+    pub fn parse_statements(&mut self) -> Result<VecDeque<Statement>, DataFusionError> {
+        let mut stmts = VecDeque::new();
+        let mut expecting_statement_delimiter = false;
+        loop {
+            // ignore empty statements (between successive statement delimiters)
+            while self.parser.consume_token(&Token::SemiColon) {
+                expecting_statement_delimiter = false;
+            }
+
+            if self.parser.peek_token() == Token::EOF {
+                break;
+            }
+            if expecting_statement_delimiter {
+                return self.expected("end of statement", self.parser.peek_token());
+            }
+
+            let statement = self.parse_statement()?;
+            stmts.push_back(statement);
+            expecting_statement_delimiter = true;
+        }
+        Ok(stmts)
     }
 
     /// Report an unexpected token
@@ -340,12 +446,26 @@ impl<'a> DFParser<'a> {
         &self,
         expected: &str,
         found: TokenWithSpan,
-    ) -> Result<T, ParserError> {
-        parser_err!(format!("Expected {expected}, found: {found}"))
+    ) -> Result<T, DataFusionError> {
+        let sql_parser_span = found.span;
+        parser_err!(format!(
+            "Expected: {expected}, found: {found}{}",
+            found.span.start
+        ))
+        .map_err(|e| {
+            let e = DataFusionError::from(e);
+            let span = Span::try_from_sqlparser_span(sql_parser_span);
+            let diagnostic = Diagnostic::new_error(
+                format!("Expected: {expected}, found: {found}{}", found.span.start),
+                span,
+            );
+
+            e.with_diagnostic(diagnostic)
+        })
     }
 
     /// Parse a new expression
-    pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
+    pub fn parse_statement(&mut self) -> Result<Statement, DataFusionError> {
         match self.parser.peek_token().token {
             Token::Word(w) => {
                 match w.keyword {
@@ -357,51 +477,61 @@ impl<'a> DFParser<'a> {
                         if let Token::Word(w) = self.parser.peek_nth_token(1).token {
                             // use native parser for COPY INTO
                             if w.keyword == Keyword::INTO {
-                                return Ok(Statement::Statement(Box::from(
-                                    self.parser.parse_statement()?,
-                                )));
+                                return self.parse_and_handle_statement();
                             }
                         }
                         self.parser.next_token(); // COPY
                         self.parse_copy()
                     }
                     Keyword::EXPLAIN => {
-                        // (TODO parse all supported statements)
                         self.parser.next_token(); // EXPLAIN
                         self.parse_explain()
                     }
                     _ => {
                         // use sqlparser-rs parser
-                        Ok(Statement::Statement(Box::from(
-                            self.parser.parse_statement()?,
-                        )))
+                        self.parse_and_handle_statement()
                     }
                 }
             }
             _ => {
                 // use the native parser
-                Ok(Statement::Statement(Box::from(
-                    self.parser.parse_statement()?,
-                )))
+                self.parse_and_handle_statement()
             }
         }
     }
 
-    pub fn parse_expr(&mut self) -> Result<ExprWithAlias, ParserError> {
+    pub fn parse_expr(&mut self) -> Result<ExprWithAlias, DataFusionError> {
         if let Token::Word(w) = self.parser.peek_token().token {
             match w.keyword {
                 Keyword::CREATE | Keyword::COPY | Keyword::EXPLAIN => {
-                    return parser_err!("Unsupported command in expression");
+                    return parser_err!("Unsupported command in expression")?;
                 }
                 _ => {}
             }
         }
 
-        self.parser.parse_expr_with_alias()
+        Ok(self.parser.parse_expr_with_alias()?)
+    }
+
+    /// Helper method to parse a statement and handle errors consistently, especially for recursion limits
+    fn parse_and_handle_statement(&mut self) -> Result<Statement, DataFusionError> {
+        self.parser
+            .parse_statement()
+            .map(|stmt| Statement::Statement(Box::from(stmt)))
+            .map_err(|e| match e {
+                ParserError::RecursionLimitExceeded => DataFusionError::SQL(
+                    ParserError::RecursionLimitExceeded,
+                    Some(format!(
+                        " (current limit: {})",
+                        self.options.recursion_limit
+                    )),
+                ),
+                other => DataFusionError::SQL(other, None),
+            })
     }
 
     /// Parse a SQL `COPY TO` statement
-    pub fn parse_copy(&mut self) -> Result<Statement, ParserError> {
+    pub fn parse_copy(&mut self) -> Result<Statement, DataFusionError> {
         // parse as a query
         let source = if self.parser.consume_token(&Token::LParen) {
             let query = self.parser.parse_query()?;
@@ -444,7 +574,7 @@ impl<'a> DFParser<'a> {
                     Keyword::WITH => {
                         self.parser.expect_keyword(Keyword::HEADER)?;
                         self.parser.expect_keyword(Keyword::ROW)?;
-                        return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS ('format.has_header' 'true')");
+                        return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS ('format.has_header' 'true')")?;
                     }
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
@@ -464,17 +594,13 @@ impl<'a> DFParser<'a> {
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
-                    return Err(ParserError::ParserError(format!(
-                        "Unexpected token {token}"
-                    )));
+                    return self.expected("end of statement or ;", token)?;
                 }
             }
         }
 
         let Some(target) = builder.target else {
-            return Err(ParserError::ParserError(
-                "Missing TO clause in COPY statement".into(),
-            ));
+            return parser_err!("Missing TO clause in COPY statement")?;
         };
 
         Ok(Statement::CopyTo(CopyToStatement {
@@ -492,7 +618,7 @@ impl<'a> DFParser<'a> {
     /// because it allows keywords as well as other non words
     ///
     /// [`parse_literal_string`]: sqlparser::parser::Parser::parse_literal_string
-    pub fn parse_option_key(&mut self) -> Result<String, ParserError> {
+    pub fn parse_option_key(&mut self) -> Result<String, DataFusionError> {
         let next_token = self.parser.next_token();
         match next_token.token {
             Token::Word(Word { value, .. }) => {
@@ -505,7 +631,7 @@ impl<'a> DFParser<'a> {
                         // Unquoted namespaced keys have to conform to the syntax
                         // "<WORD>[\.<WORD>]*". If we have a key that breaks this
                         // pattern, error out:
-                        return self.parser.expected("key name", next_token);
+                        return self.expected("key name", next_token);
                     }
                 }
                 Ok(parts.join("."))
@@ -513,7 +639,7 @@ impl<'a> DFParser<'a> {
             Token::SingleQuotedString(s) => Ok(s),
             Token::DoubleQuotedString(s) => Ok(s),
             Token::EscapedStringLiteral(s) => Ok(s),
-            _ => self.parser.expected("key name", next_token),
+            _ => self.expected("key name", next_token),
         }
     }
 
@@ -523,7 +649,7 @@ impl<'a> DFParser<'a> {
     /// word or keyword in this location.
     ///
     /// [`parse_value`]: sqlparser::parser::Parser::parse_value
-    pub fn parse_option_value(&mut self) -> Result<Value, ParserError> {
+    pub fn parse_option_value(&mut self) -> Result<Value, DataFusionError> {
         let next_token = self.parser.next_token();
         match next_token.token {
             // e.g. things like "snappy" or "gzip" that may be keywords
@@ -532,25 +658,43 @@ impl<'a> DFParser<'a> {
             Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
             Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
             Token::Number(n, l) => Ok(Value::Number(n, l)),
-            _ => self.parser.expected("string or numeric value", next_token),
+            _ => self.expected("string or numeric value", next_token),
         }
     }
 
     /// Parse a SQL `EXPLAIN`
-    pub fn parse_explain(&mut self) -> Result<Statement, ParserError> {
+    pub fn parse_explain(&mut self) -> Result<Statement, DataFusionError> {
         let analyze = self.parser.parse_keyword(Keyword::ANALYZE);
         let verbose = self.parser.parse_keyword(Keyword::VERBOSE);
+        let format = self.parse_explain_format()?;
+
         let statement = self.parse_statement()?;
 
         Ok(Statement::Explain(ExplainStatement {
             statement: Box::new(statement),
             analyze,
             verbose,
+            format,
         }))
     }
 
+    pub fn parse_explain_format(&mut self) -> Result<Option<String>, DataFusionError> {
+        if !self.parser.parse_keyword(Keyword::FORMAT) {
+            return Ok(None);
+        }
+
+        let next_token = self.parser.next_token();
+        let format = match next_token.token {
+            Token::Word(w) => Ok(w.value),
+            Token::SingleQuotedString(w) => Ok(w),
+            Token::DoubleQuotedString(w) => Ok(w),
+            _ => self.expected("an explain format such as TREE", next_token),
+        }?;
+        Ok(Some(format))
+    }
+
     /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
-    pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
+    pub fn parse_create(&mut self) -> Result<Statement, DataFusionError> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
             self.parse_create_external_table(false)
         } else if self.parser.parse_keyword(Keyword::UNBOUNDED) {
@@ -561,7 +705,7 @@ impl<'a> DFParser<'a> {
         }
     }
 
-    fn parse_partitions(&mut self) -> Result<Vec<String>, ParserError> {
+    fn parse_partitions(&mut self) -> Result<Vec<String>, DataFusionError> {
         let mut partitions: Vec<String> = vec![];
         if !self.parser.consume_token(&Token::LParen)
             || self.parser.consume_token(&Token::RParen)
@@ -591,7 +735,7 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parse the ordering clause of a `CREATE EXTERNAL TABLE` SQL statement
-    pub fn parse_order_by_exprs(&mut self) -> Result<Vec<OrderByExpr>, ParserError> {
+    pub fn parse_order_by_exprs(&mut self) -> Result<Vec<OrderByExpr>, DataFusionError> {
         let mut values = vec![];
         self.parser.expect_token(&Token::LParen)?;
         loop {
@@ -604,7 +748,7 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parse an ORDER BY sub-expression optionally followed by ASC or DESC.
-    pub fn parse_order_by_expr(&mut self) -> Result<OrderByExpr, ParserError> {
+    pub fn parse_order_by_expr(&mut self) -> Result<OrderByExpr, DataFusionError> {
         let expr = self.parser.parse_expr()?;
 
         let asc = if self.parser.parse_keyword(Keyword::ASC) {
@@ -628,8 +772,7 @@ impl<'a> DFParser<'a> {
 
         Ok(OrderByExpr {
             expr,
-            asc,
-            nulls_first,
+            options: OrderByOptions { asc, nulls_first },
             with_fill: None,
         })
     }
@@ -637,7 +780,7 @@ impl<'a> DFParser<'a> {
     // This is a copy of the equivalent implementation in sqlparser.
     fn parse_columns(
         &mut self,
-    ) -> Result<(Vec<ColumnDef>, Vec<TableConstraint>), ParserError> {
+    ) -> Result<(Vec<ColumnDef>, Vec<TableConstraint>), DataFusionError> {
         let mut columns = vec![];
         let mut constraints = vec![];
         if !self.parser.consume_token(&Token::LParen)
@@ -673,14 +816,9 @@ impl<'a> DFParser<'a> {
         Ok((columns, constraints))
     }
 
-    fn parse_column_def(&mut self) -> Result<ColumnDef, ParserError> {
+    fn parse_column_def(&mut self) -> Result<ColumnDef, DataFusionError> {
         let name = self.parser.parse_identifier()?;
         let data_type = self.parser.parse_data_type()?;
-        let collation = if self.parser.parse_keyword(Keyword::COLLATE) {
-            Some(self.parser.parse_object_name(false)?)
-        } else {
-            None
-        };
         let mut options = vec![];
         loop {
             if self.parser.parse_keyword(Keyword::CONSTRAINT) {
@@ -702,7 +840,6 @@ impl<'a> DFParser<'a> {
         Ok(ColumnDef {
             name,
             data_type,
-            collation,
             options,
         })
     }
@@ -710,7 +847,7 @@ impl<'a> DFParser<'a> {
     fn parse_create_external_table(
         &mut self,
         unbounded: bool,
-    ) -> Result<Statement, ParserError> {
+    ) -> Result<Statement, DataFusionError> {
         let temporary = self
             .parser
             .parse_one_of_keywords(&[Keyword::TEMP, Keyword::TEMPORARY])
@@ -758,15 +895,15 @@ impl<'a> DFParser<'a> {
                         } else {
                             self.parser.expect_keyword(Keyword::HEADER)?;
                             self.parser.expect_keyword(Keyword::ROW)?;
-                            return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS (format.has_header true)");
+                            return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS (format.has_header true)")?;
                         }
                     }
                     Keyword::DELIMITER => {
-                        return parser_err!("DELIMITER clause is no longer in use. Please use the OPTIONS clause with 'format.delimiter' set appropriately, e.g., OPTIONS (format.delimiter ',')");
+                        return parser_err!("DELIMITER clause is no longer in use. Please use the OPTIONS clause with 'format.delimiter' set appropriately, e.g., OPTIONS (format.delimiter ',')")?;
                     }
                     Keyword::COMPRESSION => {
                         self.parser.expect_keyword(Keyword::TYPE)?;
-                        return parser_err!("COMPRESSION TYPE clause is no longer in use. Please use the OPTIONS clause with 'format.compression' set appropriately, e.g., OPTIONS (format.compression gzip)");
+                        return parser_err!("COMPRESSION TYPE clause is no longer in use. Please use the OPTIONS clause with 'format.compression' set appropriately, e.g., OPTIONS (format.compression gzip)")?;
                     }
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
@@ -789,7 +926,7 @@ impl<'a> DFParser<'a> {
                             columns.extend(cols);
 
                             if !cons.is_empty() {
-                                return Err(ParserError::ParserError(
+                                return sql_err!(ParserError::ParserError(
                                     "Constraints on Partition Columns are not supported"
                                         .to_string(),
                                 ));
@@ -809,21 +946,19 @@ impl<'a> DFParser<'a> {
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
-                    return Err(ParserError::ParserError(format!(
-                        "Unexpected token {token}"
-                    )));
+                    return self.expected("end of statement or ;", token)?;
                 }
             }
         }
 
         // Validations: location and file_type are required
         if builder.file_type.is_none() {
-            return Err(ParserError::ParserError(
+            return sql_err!(ParserError::ParserError(
                 "Missing STORED AS clause in CREATE EXTERNAL TABLE statement".into(),
             ));
         }
         if builder.location.is_none() {
-            return Err(ParserError::ParserError(
+            return sql_err!(ParserError::ParserError(
                 "Missing LOCATION clause in CREATE EXTERNAL TABLE statement".into(),
             ));
         }
@@ -845,7 +980,7 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parses the set of valid formats
-    fn parse_file_format(&mut self) -> Result<String, ParserError> {
+    fn parse_file_format(&mut self) -> Result<String, DataFusionError> {
         let token = self.parser.next_token();
         match &token.token {
             Token::Word(w) => parse_file_type(&w.value),
@@ -857,7 +992,7 @@ impl<'a> DFParser<'a> {
     ///
     /// This method supports keywords as key names as well as multiple
     /// value types such as Numbers as well as Strings.
-    fn parse_value_options(&mut self) -> Result<Vec<(String, Value)>, ParserError> {
+    fn parse_value_options(&mut self) -> Result<Vec<(String, Value)>, DataFusionError> {
         let mut options = vec![];
         self.parser.expect_token(&Token::LParen)?;
 
@@ -883,12 +1018,13 @@ impl<'a> DFParser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::assert_contains;
     use sqlparser::ast::Expr::Identifier;
     use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident};
     use sqlparser::dialect::SnowflakeDialect;
     use sqlparser::tokenizer::Span;
 
-    fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
+    fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), DataFusionError> {
         let statements = DFParser::parse_sql(sql)?;
         assert_eq!(
             statements.len(),
@@ -925,17 +1061,16 @@ mod tests {
                 span: Span::empty(),
             },
             data_type,
-            collation: None,
             options: vec![],
         }
     }
 
     #[test]
-    fn create_external_table() -> Result<(), ParserError> {
+    fn create_external_table() -> Result<(), DataFusionError> {
         // positive case
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
         let display = None;
-        let name = ObjectName(vec![Ident::from("t")]);
+        let name = ObjectName::from(vec![Ident::from("t")]);
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
@@ -1152,13 +1287,13 @@ mod tests {
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int, c1) LOCATION 'foo.csv'";
         expect_parse_error(
             sql,
-            "sql parser error: Expected: a data type name, found: )",
+            "SQL error: ParserError(\"Expected: a data type name, found: ) at Line: 1, Column: 73\")",
         );
 
         // negative case: mixed column defs and column names in `PARTITIONED BY` clause
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 int) LOCATION 'foo.csv'";
-        expect_parse_error(sql, "sql parser error: Expected ',' or ')' after partition definition, found: int");
+        expect_parse_error(sql, "SQL error: ParserError(\"Expected: ',' or ')' after partition definition, found: int at Line: 1, Column: 70\")");
 
         // positive case: additional options (one entry) can be specified
         let sql =
@@ -1233,8 +1368,7 @@ mod tests {
                         quote_style: None,
                         span: Span::empty(),
                     }),
-                    asc,
-                    nulls_first,
+                    options: OrderByOptions { asc, nulls_first },
                     with_fill: None,
                 }]],
                 if_not_exists: false,
@@ -1265,8 +1399,10 @@ mod tests {
                         quote_style: None,
                         span: Span::empty(),
                     }),
-                    asc: Some(true),
-                    nulls_first: None,
+                    options: OrderByOptions {
+                        asc: Some(true),
+                        nulls_first: None,
+                    },
                     with_fill: None,
                 },
                 OrderByExpr {
@@ -1275,8 +1411,10 @@ mod tests {
                         quote_style: None,
                         span: Span::empty(),
                     }),
-                    asc: Some(false),
-                    nulls_first: Some(true),
+                    options: OrderByOptions {
+                        asc: Some(false),
+                        nulls_first: Some(true),
+                    },
                     with_fill: None,
                 },
             ]],
@@ -1314,8 +1452,10 @@ mod tests {
                         span: Span::empty(),
                     })),
                 },
-                asc: Some(true),
-                nulls_first: None,
+                options: OrderByOptions {
+                    asc: Some(true),
+                    nulls_first: None,
+                },
                 with_fill: None,
             }]],
             if_not_exists: false,
@@ -1361,8 +1501,10 @@ mod tests {
                         span: Span::empty(),
                     })),
                 },
-                asc: Some(true),
-                nulls_first: None,
+                options: OrderByOptions {
+                    asc: Some(true),
+                    nulls_first: None,
+                },
                 with_fill: None,
             }]],
             if_not_exists: true,
@@ -1397,7 +1539,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_to_table_to_table() -> Result<(), ParserError> {
+    fn copy_to_table_to_table() -> Result<(), DataFusionError> {
         // positive case
         let sql = "COPY foo TO bar STORED AS CSV";
         let expected = Statement::CopyTo(CopyToStatement {
@@ -1413,7 +1555,7 @@ mod tests {
     }
 
     #[test]
-    fn skip_copy_into_snowflake() -> Result<(), ParserError> {
+    fn skip_copy_into_snowflake() -> Result<(), DataFusionError> {
         let sql = "COPY INTO foo FROM @~/staged FILE_FORMAT = (FORMAT_NAME = 'mycsv');";
         let dialect = Box::new(SnowflakeDialect);
         let statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
@@ -1430,7 +1572,7 @@ mod tests {
     }
 
     #[test]
-    fn explain_copy_to_table_to_table() -> Result<(), ParserError> {
+    fn explain_copy_to_table_to_table() -> Result<(), DataFusionError> {
         let cases = vec![
             ("EXPLAIN COPY foo TO bar STORED AS PARQUET", false, false),
             (
@@ -1462,6 +1604,7 @@ mod tests {
             let expected = Statement::Explain(ExplainStatement {
                 analyze,
                 verbose,
+                format: None,
                 statement: Box::new(expected_copy),
             });
             assert_eq!(verified_stmt(sql), expected);
@@ -1470,7 +1613,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_to_query_to_table() -> Result<(), ParserError> {
+    fn copy_to_query_to_table() -> Result<(), DataFusionError> {
         let statement = verified_stmt("SELECT 1");
 
         // unwrap the various layers
@@ -1503,7 +1646,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_to_options() -> Result<(), ParserError> {
+    fn copy_to_options() -> Result<(), DataFusionError> {
         let sql = "COPY foo TO bar STORED AS CSV OPTIONS ('row_group_size' '55')";
         let expected = Statement::CopyTo(CopyToStatement {
             source: object_name("foo"),
@@ -1520,7 +1663,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_to_partitioned_by() -> Result<(), ParserError> {
+    fn copy_to_partitioned_by() -> Result<(), DataFusionError> {
         let sql = "COPY foo TO bar STORED AS CSV PARTITIONED BY (a) OPTIONS ('row_group_size' '55')";
         let expected = Statement::CopyTo(CopyToStatement {
             source: object_name("foo"),
@@ -1537,7 +1680,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_to_multi_options() -> Result<(), ParserError> {
+    fn copy_to_multi_options() -> Result<(), DataFusionError> {
         // order of options is preserved
         let sql =
             "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' 55, 'format.compression' snappy, 'execution.keep_partition_by_columns' true)";
@@ -1575,7 +1718,7 @@ mod tests {
     // For error cases, see: `copy.slt`
 
     fn object_name(name: &str) -> CopyToSource {
-        CopyToSource::Relation(ObjectName(vec![Ident::new(name)]))
+        CopyToSource::Relation(ObjectName::from(vec![Ident::new(name)]))
     }
 
     // Based on  sqlparser-rs
@@ -1612,5 +1755,31 @@ mod tests {
     /// string (is not modified after a serialization round-trip).
     fn verified_stmt(sql: &str) -> Statement {
         one_statement_parses_to(sql, sql)
+    }
+
+    #[test]
+    /// Checks the recursion limit works for sql queries
+    /// Recursion can happen easily with binary exprs (i.e, AND or OR)
+    fn test_recursion_limit() {
+        let sql = "SELECT 1 OR 2";
+
+        // Expect parse to succeed
+        DFParserBuilder::new(sql)
+            .build()
+            .unwrap()
+            .parse_statements()
+            .unwrap();
+
+        let err = DFParserBuilder::new(sql)
+            .with_recursion_limit(1)
+            .build()
+            .unwrap()
+            .parse_statements()
+            .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "SQL error: RecursionLimitExceeded (current limit: 1)"
+        );
     }
 }

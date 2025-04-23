@@ -1,0 +1,137 @@
+{
+  "extensionUris": [
+    {
+      "uri": "https://github.com/substrait-io/substrait/blob/main/extensions/functions_aggregate_generic.yaml"
+    }
+  ],
+  "extensions": [
+    {
+      "extensionFunction": {
+        "functionAnchor": 185,
+        "name": "count:any"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "project": {
+            "common": {
+              "emit": {
+                "outputMapping": [
+                  3
+                ]
+              }
+            },
+            "input": {
+              "read": {
+                "common": {
+                  "direct": {
+                  }
+                },
+                "baseSchema": {
+                  "names": [
+                    "D",
+                    "PART",
+                    "ORD"
+                  ],
+                  "struct": {
+                    "types": [
+                      {
+                        "i32": {
+                          "typeVariationReference": 0,
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      },
+                      {
+                        "i32": {
+                          "typeVariationReference": 0,
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      },
+                      {
+                        "i32": {
+                          "typeVariationReference": 0,
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      }
+                    ],
+                    "typeVariationReference": 0,
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "namedTable": {
+                  "names": [
+                    "DATA"
+                  ]
+                }
+              }
+            },
+            "expressions": [
+              {
+                "windowFunction": {
+                  "functionReference": 185,
+                  "partitions": [
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1
+                          }
+                        },
+                        "rootReference": {
+                        }
+                      }
+                    }
+                  ],
+                  "sorts": [
+                    {
+                      "expr": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 2
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      },
+                      "direction": "SORT_DIRECTION_ASC_NULLS_LAST"
+                    }
+                  ],
+                  "upperBound": {
+                    "unbounded": {
+                    }
+                  },
+                  "lowerBound": {
+                    "preceding": {
+                      "offset": "1"
+                    }
+                  },
+                  "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT",
+                  "outputType": {
+                    "i32": {
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  },
+                  "args": [],
+                  "arguments": [],
+                  "invocation": "AGGREGATION_INVOCATION_ALL",
+                  "options": [],
+                  "boundsType": "BOUNDS_TYPE_ROWS"
+                }
+              }
+            ]
+          }
+        },
+        "names": [
+          "LEAD_EXPR"
+        ]
+      }
+    }
+  ],
+  "expectedTypeUrls": []
+}

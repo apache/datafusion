@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::datasource::physical_plan::plan_to_json;
 use datafusion_common::TableReference;
+use datafusion_datasource_json::source::plan_to_json;
 use std::sync::Arc;
 
 use super::super::options::{NdJsonReadOptions, ReadOptions};

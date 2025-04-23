@@ -94,6 +94,10 @@ impl DisplayAs for EmptyExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "EmptyExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
