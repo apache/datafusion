@@ -514,9 +514,34 @@ pub(crate) fn slice_and_maybe_filter(
 // Useful tools for group index
 // ===============================================
 
-/// Blocked style group index used in blocked mode group values and accumulators
-///   - High 32 bits represent `block_id`
-///   - Low 32 bits represent `block_offset`
+/// Operations about group index parsing
+///
+/// There are mainly 2 `group index` needing parsing: `flat` and `blocked`.
+///
+/// # Flat group index
+/// `flat group index` format is like:
+///
+/// ```text
+///   | block_offset(64bit) |
+/// ```
+///
+/// It is used in `flat GroupValues/GroupAccumulator`, only a single block
+/// exists, so its `block_id` is always 0, and use all 64 bits to store the
+/// `block offset`.
+///
+/// # Blocked group index
+/// `blocked group index` format is like:
+///
+/// ```text
+///   | block_id(32bit) | block_offset(32bit)
+/// ```
+///
+/// It is used in `blocked GroupValues/GroupAccumulator`, multiple blocks
+/// exist, and we use high 32 bits to store `block_id`, and low 32 bit to
+/// store `block_offset`.
+///
+/// The `get_block_offset` method requires to return `block_offset` as u64,
+/// that is for compatible for `flat group index`'s parsing.
 ///
 pub trait GroupIndexOperations: Debug {
     fn pack_index(block_id: u32, block_offset: u64) -> u64;
