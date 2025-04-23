@@ -858,7 +858,7 @@ SELECT greatest(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
 123456789
 
 
-query error 'greatest' does not support zero argument
+query error Function 'greatest' user-defined coercion failed with "Error during planning: greatest was called without any arguments. It requires at least 1."
 SELECT greatest()
 
 query I
@@ -1056,7 +1056,7 @@ SELECT least(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
 -1
 
 
-query error 'least' does not support zero arguments
+query error Function 'least' user-defined coercion failed with "Error during planning: least was called without any arguments. It requires at least 1."
 SELECT least()
 
 query I

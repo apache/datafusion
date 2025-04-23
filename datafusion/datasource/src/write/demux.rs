@@ -28,8 +28,8 @@ use datafusion_common::error::Result;
 use datafusion_physical_plan::SendableRecordBatchStream;
 
 use arrow::array::{
-    builder::UInt64Builder, cast::AsArray, downcast_dictionary_array, RecordBatch,
-    StringArray, StructArray,
+    builder::UInt64Builder, cast::AsArray, downcast_dictionary_array, ArrayAccessor,
+    RecordBatch, StringArray, StructArray,
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::{
@@ -482,10 +482,8 @@ fn compute_partition_keys_by_row<'a>(
                             .ok_or(exec_datafusion_err!("it is not yet supported to write to hive partitions with datatype {}",
                             dtype))?;
 
-                        for val in array.values() {
-                            partition_values.push(
-                                Cow::from(val.ok_or(exec_datafusion_err!("Cannot partition by null value for column {}", col))?),
-                            );
+                        for i in 0..rb.num_rows() {
+                            partition_values.push(Cow::from(array.value(i)));
                         }
                     },
                     _ => unreachable!(),

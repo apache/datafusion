@@ -43,6 +43,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -52,6 +53,9 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use crate::filter_pushdown::{
+    filter_pushdown_transparent, FilterDescription, FilterPushdownResult,
+};
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::trace;
@@ -508,11 +512,18 @@ impl DisplayAs for RepartitionExec {
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
+
+                let input_partition_count =
+                    self.input.output_partitioning().partition_count();
+                let output_partition_count = self.partitioning().partition_count();
+                let input_to_output_partition_str =
+                    format!("{} -> {}", input_partition_count, output_partition_count);
                 writeln!(
                     f,
-                    "output_partition_count={}",
-                    self.input.output_partitioning().partition_count()
+                    "partition_count(in->out)={}",
+                    input_to_output_partition_str
                 )?;
+
                 if self.preserve_order {
                     writeln!(f, "preserve_order={}", self.preserve_order)?;
                 }
@@ -722,6 +733,17 @@ impl ExecutionPlan for RepartitionExec {
             new_projection,
             new_partitioning,
         )?)))
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        fd: FilterDescription,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(filter_pushdown_transparent::<Arc<dyn ExecutionPlan>>(
+            Arc::new(self.clone()),
+            fd,
+        ))
     }
 }
 

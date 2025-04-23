@@ -33,10 +33,10 @@ use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use datafusion_catalog::information_schema::{
     InformationSchemaProvider, INFORMATION_SCHEMA,
 };
-use datafusion_catalog::MemoryCatalogProviderList;
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_catalog::{Session, TableFunction, TableFunctionImpl};
+use datafusion_catalog::MemoryCatalogProviderList;
+use datafusion_catalog::{TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -68,6 +68,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_session::Session;
 use datafusion_sql::parser::{DFParserBuilder, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
 
@@ -1347,28 +1348,30 @@ impl SessionStateBuilder {
         } = self;
 
         let config = config.unwrap_or_default();
-        let runtime_env = runtime_env.unwrap_or(Arc::new(RuntimeEnv::default()));
+        let runtime_env = runtime_env.unwrap_or_else(|| Arc::new(RuntimeEnv::default()));
 
         let mut state = SessionState {
-            session_id: session_id.unwrap_or(Uuid::new_v4().to_string()),
+            session_id: session_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
             analyzer: analyzer.unwrap_or_default(),
             expr_planners: expr_planners.unwrap_or_default(),
             type_planner,
             optimizer: optimizer.unwrap_or_default(),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
-            query_planner: query_planner.unwrap_or(Arc::new(DefaultQueryPlanner {})),
-            catalog_list: catalog_list
-                .unwrap_or(Arc::new(MemoryCatalogProviderList::new())
-                    as Arc<dyn CatalogProviderList>),
+            query_planner: query_planner
+                .unwrap_or_else(|| Arc::new(DefaultQueryPlanner {})),
+            catalog_list: catalog_list.unwrap_or_else(|| {
+                Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>
+            }),
             table_functions: table_functions.unwrap_or_default(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: serializer_registry
-                .unwrap_or(Arc::new(EmptySerializerRegistry)),
+                .unwrap_or_else(|| Arc::new(EmptySerializerRegistry)),
             file_formats: HashMap::new(),
-            table_options: table_options
-                .unwrap_or(TableOptions::default_from_session_config(config.options())),
+            table_options: table_options.unwrap_or_else(|| {
+                TableOptions::default_from_session_config(config.options())
+            }),
             config,
             execution_props: execution_props.unwrap_or_default(),
             table_factories: table_factories.unwrap_or_default(),
