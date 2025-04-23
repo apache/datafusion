@@ -32,14 +32,12 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::{fmt, mem};
 
-use crate::equivalence::class::{const_exprs_contains, AcrossPartitions};
-use crate::equivalence::{
-    EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
-};
+use crate::equivalence::class::AcrossPartitions;
+use crate::equivalence::{EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping};
 use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
 use crate::{
-    physical_exprs_contains, ConstExpr, LexOrdering, LexRequirement, PhysicalExpr,
-    PhysicalSortExpr, PhysicalSortRequirement,
+    ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -139,12 +137,6 @@ pub struct EquivalenceProperties {
     eq_group: EquivalenceGroup,
     /// Equivalent sort expressions
     oeq_class: OrderingEquivalenceClass,
-    /// Expressions whose values are constant. These expressions are in
-    /// normalized form (w.r.t. the equivalence group).
-    ///
-    /// TODO: We do not need to track constants separately, they can be tracked
-    ///       inside `eq_group` as `Literal` expressions.
-    constants: Vec<ConstExpr>,
     /// Table constraints
     constraints: Constraints,
     /// Schema associated with this object.
@@ -157,7 +149,6 @@ impl EquivalenceProperties {
         Self {
             eq_group: EquivalenceGroup::default(),
             oeq_class: OrderingEquivalenceClass::default(),
-            constants: vec![],
             constraints: Constraints::default(),
             schema,
         }
@@ -178,7 +169,6 @@ impl EquivalenceProperties {
         Self {
             eq_group: EquivalenceGroup::default(),
             oeq_class: OrderingEquivalenceClass::new(orderings),
-            constants: vec![],
             constraints: Constraints::default(),
             schema,
         }
@@ -205,8 +195,17 @@ impl EquivalenceProperties {
     }
 
     /// Returns a reference to the constants within.
-    pub fn constants(&self) -> &[ConstExpr] {
-        &self.constants
+    pub fn constants(&self) -> Vec<ConstExpr> {
+        self.eq_group
+            .iter()
+            .filter_map(|c| {
+                c.canonical_expr().cloned().and_then(|expr| {
+                    c.constant
+                        .as_ref()
+                        .map(|across| ConstExpr::new(expr, across.clone()))
+                })
+            })
+            .collect()
     }
 
     /// Returns a reference to the constraints within.
@@ -216,9 +215,14 @@ impl EquivalenceProperties {
 
     /// Returns the output ordering of the properties.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        // Prune out constant expressions:
         let mut sort_exprs = self.oeq_class().output_ordering()?.take();
-        sort_exprs.retain(|item| !const_exprs_contains(&self.constants, &item.expr));
+        // Prune out constant expressions:
+        sort_exprs.retain(|sort_expr| {
+            let Some(cls) = self.eq_group.get_equivalence_class(&sort_expr.expr) else {
+                return true;
+            };
+            cls.constant.is_none()
+        });
         LexOrdering::new(sort_exprs)
     }
 
@@ -239,7 +243,6 @@ impl EquivalenceProperties {
     pub fn extend(mut self, other: Self) -> Self {
         self.eq_group.extend(other.eq_group);
         self.oeq_class.extend(other.oeq_class);
-        self.add_constants(other.constants);
         self
     }
 
@@ -250,10 +253,9 @@ impl EquivalenceProperties {
     }
 
     /// Removes constant expressions that may change across partitions.
-    /// This method should be used when data from different partitions are merged.
+    /// This method should be used when merging data from different partitions.
     pub fn clear_per_partition_constants(&mut self) {
-        self.constants
-            .retain(|item| matches!(item.across_partitions, AcrossPartitions::Uniform(_)))
+        self.eq_group.clear_per_partition_constants();
     }
 
     /// Extends this `EquivalenceProperties` by adding the orderings inside the
@@ -289,50 +291,27 @@ impl EquivalenceProperties {
     /// equivalence class to the equivalence group.
     pub fn add_equal_conditions(
         &mut self,
-        left: &Arc<dyn PhysicalExpr>,
-        right: &Arc<dyn PhysicalExpr>,
+        left: Arc<dyn PhysicalExpr>,
+        right: Arc<dyn PhysicalExpr>,
     ) -> Result<()> {
-        // Discover new constants in light of new the equality:
-        if self.is_expr_constant(left) {
-            // Left expression is constant, add right as constant
-            if !const_exprs_contains(&self.constants, right) {
-                let across_parts = self.get_expr_constant_value(left);
-                let const_expr = ConstExpr::new(Arc::clone(right), across_parts);
-                self.constants.push(const_expr);
-            }
-        } else if self.is_expr_constant(right) {
-            // Right expression is constant, add left as constant
-            if !const_exprs_contains(&self.constants, left) {
-                let across_parts = self.get_expr_constant_value(right);
-                let const_expr = ConstExpr::new(Arc::clone(left), across_parts);
-                self.constants.push(const_expr);
-            }
-        }
-
-        // Add equal expressions to the state
-        self.eq_group.add_equal_conditions(left, right);
-
-        // Discover any new orderings
-        self.discover_new_orderings(left)?;
-        Ok(())
+        // Add equal expressions to the state:
+        self.eq_group.add_equal_conditions(Arc::clone(&left), right);
+        // Discover any new orderings:
+        self.discover_new_orderings(left)
     }
 
     /// Track/register physical expressions with constant values.
     pub fn add_constants(&mut self, constants: impl IntoIterator<Item = ConstExpr>) {
-        let normalized_constants = constants
-            .into_iter()
-            .filter_map(|mut c| {
-                c.expr = self.eq_group.normalize_expr(c.expr);
-                (!const_exprs_contains(&self.constants, &c.expr)).then_some(c)
-            })
-            .collect::<Vec<_>>();
-
-        // Add all new normalized constants
-        self.constants.extend(normalized_constants);
-
+        let c = constants.into_iter().collect::<Vec<_>>();
+        let constants = c.into_iter();
+        // Add the new constant to the equivalence group:
+        for constant in constants {
+            self.eq_group.add_constant(constant);
+        }
         // Discover any new orderings based on the constants
         for ordering in self.normalized_oeq_class().iter() {
-            self.discover_new_orderings(&ordering[0].expr).unwrap();
+            self.discover_new_orderings(Arc::clone(&ordering[0].expr))
+                .unwrap();
         }
     }
 
@@ -342,8 +321,8 @@ impl EquivalenceProperties {
     // When constants or equivalence classes are changed, there may be new orderings
     // that can be discovered with the new equivalence properties.
     // For a discussion, see: https://github.com/apache/datafusion/issues/9812
-    fn discover_new_orderings(&mut self, expr: &Arc<dyn PhysicalExpr>) -> Result<()> {
-        let normalized_expr = self.eq_group().normalize_expr(Arc::clone(expr));
+    fn discover_new_orderings(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
+        let normalized_expr = self.eq_group().normalize_expr(expr);
         let eq_class = self
             .eq_group
             .iter()
@@ -413,7 +392,7 @@ impl EquivalenceProperties {
         // Filter out constant expressions as they don't affect ordering
         let filtered_exprs = ordering
             .into_iter()
-            .filter(|expr| !self.is_expr_constant(&expr.expr))
+            .filter(|expr| self.is_expr_constant(&expr.expr).is_none())
             .collect::<Vec<_>>();
 
         if let Some(filtered_exprs) = LexOrdering::new(filtered_exprs) {
@@ -468,7 +447,7 @@ impl EquivalenceProperties {
         let sort_exprs = sort_exprs
             .into_iter()
             .map(|sort_expr| self.eq_group.normalize_sort_expr(sort_expr))
-            .filter(|order| !self.is_normalized_expr_constant(&order.expr, false))
+            .filter(|order| self.is_expr_constant(&order.expr).is_none())
             .collect::<Vec<_>>();
         LexOrdering::new(sort_exprs).map(|o| o.collapse())
     }
@@ -494,8 +473,8 @@ impl EquivalenceProperties {
         // Prune redundant sections in the requirement:
         let reqs = sort_reqs
             .into_iter()
-            .map(|req| self.eq_group.normalize_sort_requirement(req.clone()))
-            .filter(|order| !self.is_normalized_expr_constant(&order.expr, false));
+            .map(|req| self.eq_group.normalize_sort_requirement(req))
+            .filter(|order| self.is_expr_constant(&order.expr).is_none());
         LexRequirement::new(reqs).map(|r| r.collapse())
     }
 
@@ -1041,56 +1020,6 @@ impl EquivalenceProperties {
             .collect()
     }
 
-    /// Projects constants based on the provided `ProjectionMapping`.
-    ///
-    /// This function takes a `ProjectionMapping` and identifies/projects
-    /// constants based on the existing constants and the mapping. It ensures
-    /// that constants are appropriately propagated through the projection.
-    ///
-    /// # Parameters
-    ///
-    /// - `mapping`: A reference to a `ProjectionMapping` representing the
-    ///   mapping of source expressions to target expressions in the projection.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Vec<Arc<dyn PhysicalExpr>>` containing the projected constants.
-    fn projected_constants(&self, mapping: &ProjectionMapping) -> Vec<ConstExpr> {
-        // First, project existing constants. For example, assume that `a + b`
-        // is known to be constant. If the projection were `a as a_new`, `b as b_new`,
-        // then we would project constant `a + b` as `a_new + b_new`.
-        let mut projected_constants = self
-            .constants
-            .iter()
-            .filter_map(|const_expr| {
-                self.eq_group.project_expr(mapping, &const_expr.expr).map(
-                    |projected_expr| {
-                        ConstExpr::new(
-                            projected_expr,
-                            const_expr.across_partitions.clone(),
-                        )
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-
-        // Add projection expressions that are known to be constant:
-        for (source, target) in mapping.iter() {
-            if self.is_expr_constant(source)
-                && !const_exprs_contains(&projected_constants, target)
-            {
-                let uniform = if self.is_expr_constant_across_partitions(source) {
-                    self.get_expr_constant_value(source)
-                } else {
-                    AcrossPartitions::Heterogeneous
-                };
-                let const_expr = ConstExpr::new(Arc::clone(target), uniform);
-                projected_constants.push(const_expr);
-            }
-        }
-        projected_constants
-    }
-
     /// Projects constraints according to the given projection mapping.
     ///
     /// This function takes a projection mapping and extracts the column indices of the target columns.
@@ -1121,13 +1050,11 @@ impl EquivalenceProperties {
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
         let eq_group = self.eq_group.project(mapping);
         let oeq_class = OrderingEquivalenceClass::new(self.projected_orderings(mapping));
-        let constants = self.projected_constants(mapping);
         let constraints = self.projected_constraints(mapping).unwrap_or_default();
         Self {
             schema: output_schema,
             eq_group,
             oeq_class,
-            constants,
             constraints,
         }
     }
@@ -1214,86 +1141,15 @@ impl EquivalenceProperties {
     ///
     /// # Returns
     ///
-    /// Returns `true` if the expression is constant according to equivalence
-    /// group, `false` otherwise.
-    pub fn is_expr_constant(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
-        self.is_normalized_expr_constant(&normalized_expr, false)
-    }
-
-    /// Helper of the [`Self::is_expr_constant`] function, assumes that the
-    /// given expression is normalized.
-    fn is_normalized_expr_constant(
-        &self,
-        normalized_expr: &Arc<dyn PhysicalExpr>,
-        across_partitions: bool,
-    ) -> bool {
-        let normalized_constants = self
-            .constants
-            .iter()
-            .filter(|const_expr| {
-                !across_partitions
-                    || matches!(
-                        const_expr.across_partitions,
-                        AcrossPartitions::Uniform { .. }
-                    )
-            })
-            .map(|const_expr| self.eq_group.normalize_expr(Arc::clone(&const_expr.expr)))
-            .collect::<Vec<_>>();
-        is_constant_recurse(&normalized_constants, normalized_expr)
-    }
-
-    /// This function determines whether the provided expression is constant
-    /// across partitions based on the known constants. For more details, see
-    /// [`Self::is_expr_constant`].
-    ///
-    /// # Parameters
-    ///
-    /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the
-    ///   expression to be checked.
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if the expression is constant across all partitions according
-    /// to equivalence group, `false` otherwise.
-    pub fn is_expr_constant_across_partitions(
+    /// Returns a `Some` value if the expression is constant according to
+    /// equivalence group, and `None` otherwise. The `Some` variant contains
+    /// an `AcrossPartitions` value indicating whether the expression is
+    /// constant across partitions, and its actual value (if available).
+    pub fn is_expr_constant(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
-    ) -> bool {
-        let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
-        self.is_normalized_expr_constant(&normalized_expr, true)
-    }
-
-    /// Retrieves the constant value of a given physical expression, if it exists.
-    ///
-    /// Normalizes the input expression and checks if it matches any known constants
-    /// in the current context. Returns whether the expression has a uniform value,
-    /// varies across partitions, or is not constant.
-    ///
-    /// # Parameters
-    /// - `expr`: A reference to the physical expression to evaluate.
-    ///
-    /// # Returns
-    /// - `AcrossPartitions::Uniform(value)`: If the expression has the same value across partitions.
-    /// - `AcrossPartitions::Heterogeneous`: If the expression varies across partitions.
-    /// - `None`: If the expression is not recognized as constant.
-    pub fn get_expr_constant_value(
-        &self,
-        expr: &Arc<dyn PhysicalExpr>,
-    ) -> AcrossPartitions {
-        let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
-
-        if let Some(lit) = normalized_expr.as_any().downcast_ref::<Literal>() {
-            return AcrossPartitions::Uniform(Some(lit.value().clone()));
-        }
-
-        for const_expr in self.constants.iter() {
-            if normalized_expr.eq(&const_expr.expr) {
-                return const_expr.across_partitions.clone();
-            }
-        }
-
-        AcrossPartitions::Heterogeneous
+    ) -> Option<AcrossPartitions> {
+        self.eq_group.is_expr_constant(expr)
     }
 
     /// Retrieves the properties for a given physical expression.
@@ -1322,7 +1178,7 @@ impl EquivalenceProperties {
     /// Transforms this `EquivalenceProperties` into a new `EquivalenceProperties`
     /// by mapping columns in the original schema to columns in the new schema
     /// by index.
-    pub fn with_new_schema(self, schema: SchemaRef) -> Result<Self> {
+    pub fn with_new_schema(mut self, schema: SchemaRef) -> Result<Self> {
         // The new schema and the original schema is aligned when they have the
         // same number of columns, and fields at the same index have the same
         // type in both schemas.
@@ -1337,51 +1193,48 @@ impl EquivalenceProperties {
             // Rewriting equivalence properties in terms of new schema is not
             // safe when schemas are not aligned:
             return plan_err!(
-                "Cannot rewrite old_schema:{:?} with new schema: {:?}",
+                "Schemas have to be aligned to rewrite equivalences:\n Old schema: {:?}\n New schema: {:?}",
                 self.schema,
                 schema
             );
         }
-        // Rewrite constants according to new schema:
-        let new_constants = self
-            .constants
-            .into_iter()
-            .map(|mut const_expr| {
-                const_expr.expr = with_new_schema(const_expr.expr, &schema)?;
-                Ok(const_expr)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        // Rewrite orderings according to new schema:
-        let mut new_orderings = vec![];
-        for ordering in self.oeq_class {
-            let new_ordering = ordering
-                .into_iter()
-                .map(|mut sort_expr| {
-                    sort_expr.expr = with_new_schema(sort_expr.expr, &schema)?;
-                    Ok(sort_expr)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            new_orderings.push(new_ordering);
-        }
 
         // Rewrite equivalence classes according to the new schema:
         let mut eq_classes = vec![];
-        for eq_class in self.eq_group {
-            let new_eq_exprs = eq_class
+        for mut eq_class in self.eq_group {
+            eq_class.exprs = eq_class
+                .exprs
                 .into_iter()
                 .map(|expr| with_new_schema(expr, &schema))
-                .collect::<Result<Vec<_>>>()?;
-            eq_classes.push(EquivalenceClass::new(new_eq_exprs));
+                .collect::<Result<_>>()?;
+            // TODO: Also change the data type of the constant value if it exists.
+            eq_classes.push(eq_class);
         }
 
-        // Construct the resulting equivalence properties:
-        let mut result = EquivalenceProperties::new(schema);
-        result.constants = new_constants;
-        result.add_new_orderings(new_orderings);
-        result.add_equivalence_group(EquivalenceGroup::new(eq_classes));
+        // Rewrite orderings according to new schema:
+        let new_orderings = self
+            .oeq_class
+            .into_iter()
+            .map(|ordering| {
+                ordering
+                    .into_iter()
+                    .map(|mut sort_expr| {
+                        sort_expr.expr = with_new_schema(sort_expr.expr, &schema)?;
+                        Ok(sort_expr)
+                    })
+                    .collect::<Result<Vec<_>>>()
+                    // The following `unwrap` is safe because the vector will always
+                    // be non-empty.
+                    .map(|v| LexOrdering::new(v).unwrap())
+            })
+            .collect::<Result<_>>()?;
 
-        Ok(result)
+        // Update the schema, the equivalence group and the ordering equivalence
+        // class:
+        self.schema = schema;
+        self.eq_group = EquivalenceGroup::new(eq_classes);
+        self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
+        Ok(self)
     }
 }
 
@@ -1393,10 +1246,7 @@ impl EquivalenceProperties {
 /// ```
 impl Display for EquivalenceProperties {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.eq_group.is_empty()
-            && self.oeq_class.is_empty()
-            && self.constants.is_empty()
-        {
+        if self.eq_group.is_empty() && self.oeq_class.is_empty() {
             return write!(f, "No properties");
         }
         if !self.oeq_class.is_empty() {
@@ -1404,9 +1254,6 @@ impl Display for EquivalenceProperties {
         }
         if !self.eq_group.is_empty() {
             write!(f, ", eq: {}", self.eq_group)?;
-        }
-        if !self.constants.is_empty() {
-            write!(f, ", const: [{}]", ConstExpr::format_list(&self.constants))?;
         }
         Ok(())
     }
@@ -1454,7 +1301,7 @@ fn update_properties(
         .eq_group
         .normalize_expr(Arc::clone(&node.expr));
     let oeq_class = eq_properties.normalized_oeq_class();
-    if eq_properties.is_normalized_expr_constant(&normalized_expr, false)
+    if eq_properties.is_expr_constant(&normalized_expr).is_some()
         || oeq_class.is_expr_partial_const(&normalized_expr)
     {
         node.data.sort_properties = SortProperties::Singleton;
@@ -1462,31 +1309,6 @@ fn update_properties(
         node.data.sort_properties = SortProperties::Ordered(options);
     }
     Ok(Transformed::yes(node))
-}
-
-/// This function determines whether the provided expression is constant
-/// based on the known constants.
-///
-/// # Parameters
-///
-/// - `constants`: A `&[Arc<dyn PhysicalExpr>]` containing expressions known to
-///   be a constant.
-/// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the expression
-///   to check.
-///
-/// # Returns
-///
-/// Returns `true` if the expression is constant according to equivalence
-/// group, `false` otherwise.
-fn is_constant_recurse(
-    constants: &[Arc<dyn PhysicalExpr>],
-    expr: &Arc<dyn PhysicalExpr>,
-) -> bool {
-    if physical_exprs_contains(constants, expr) || expr.as_any().is::<Literal>() {
-        return true;
-    }
-    let children = expr.children();
-    !children.is_empty() && children.iter().all(|c| is_constant_recurse(constants, c))
 }
 
 /// This function examines whether a referring expression directly refers to a
@@ -1579,42 +1401,5 @@ impl Eq for ExprWrapper {}
 impl Hash for ExprWrapper {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.hash(state);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::expressions::{col, BinaryExpr};
-
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-    use datafusion_expr::Operator;
-
-    #[test]
-    fn test_expr_consists_of_constants() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Int32, true),
-            Field::new("c", DataType::Int32, true),
-            Field::new("d", DataType::Int32, true),
-            Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
-        ]));
-        let col_a = col("a", &schema)?;
-        let col_b = col("b", &schema)?;
-        let col_d = col("d", &schema)?;
-        let b_plus_d = Arc::new(BinaryExpr::new(
-            Arc::clone(&col_b),
-            Operator::Plus,
-            Arc::clone(&col_d),
-        )) as _;
-
-        let constants = vec![Arc::clone(&col_a), Arc::clone(&col_b)];
-        let expr = Arc::clone(&b_plus_d);
-        assert!(!is_constant_recurse(&constants, &expr));
-
-        let constants = vec![Arc::clone(&col_a), Arc::clone(&col_b), Arc::clone(&col_d)];
-        let expr = Arc::clone(&b_plus_d);
-        assert!(is_constant_recurse(&constants, &expr));
-        Ok(())
     }
 }

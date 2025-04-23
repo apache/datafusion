@@ -170,15 +170,15 @@ mod tests {
     /// Column [a=c] (e.g they are aliases).
     pub fn create_test_params() -> Result<(SchemaRef, EquivalenceProperties)> {
         let test_schema = create_test_schema()?;
-        let col_a = &col("a", &test_schema)?;
-        let col_b = &col("b", &test_schema)?;
-        let col_c = &col("c", &test_schema)?;
-        let col_d = &col("d", &test_schema)?;
-        let col_e = &col("e", &test_schema)?;
-        let col_f = &col("f", &test_schema)?;
-        let col_g = &col("g", &test_schema)?;
+        let col_a = col("a", &test_schema)?;
+        let col_b = col("b", &test_schema)?;
+        let col_c = col("c", &test_schema)?;
+        let col_d = col("d", &test_schema)?;
+        let col_e = col("e", &test_schema)?;
+        let col_f = col("f", &test_schema)?;
+        let col_g = col("g", &test_schema)?;
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
-        eq_properties.add_equal_conditions(col_a, col_c)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_a), Arc::clone(&col_c))?;
 
         let option_asc = SortOptions {
             descending: false,
@@ -227,49 +227,49 @@ mod tests {
         ]));
 
         let mut eq_properties = EquivalenceProperties::new(schema);
-        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
-        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
-        let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
-        let col_x_expr = Arc::new(Column::new("x", 3)) as Arc<dyn PhysicalExpr>;
-        let col_y_expr = Arc::new(Column::new("y", 4)) as Arc<dyn PhysicalExpr>;
+        let col_a = Arc::new(Column::new("a", 0)) as _;
+        let col_b = Arc::new(Column::new("b", 1)) as _;
+        let col_c = Arc::new(Column::new("c", 2)) as _;
+        let col_x = Arc::new(Column::new("x", 3)) as _;
+        let col_y = Arc::new(Column::new("y", 4)) as _;
 
         // a and b are aliases
-        eq_properties.add_equal_conditions(&col_a_expr, &col_b_expr)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_a), Arc::clone(&col_b))?;
         assert_eq!(eq_properties.eq_group().len(), 1);
 
         // This new entry is redundant, size shouldn't increase
-        eq_properties.add_equal_conditions(&col_b_expr, &col_a_expr)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_b), Arc::clone(&col_a))?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 2);
-        assert!(eq_groups.contains(&col_a_expr));
-        assert!(eq_groups.contains(&col_b_expr));
+        assert!(eq_groups.contains(&col_a));
+        assert!(eq_groups.contains(&col_b));
 
         // b and c are aliases. Existing equivalence class should expand,
         // however there shouldn't be any new equivalence class
-        eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_b), Arc::clone(&col_c))?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 3);
-        assert!(eq_groups.contains(&col_a_expr));
-        assert!(eq_groups.contains(&col_b_expr));
-        assert!(eq_groups.contains(&col_c_expr));
+        assert!(eq_groups.contains(&col_a));
+        assert!(eq_groups.contains(&col_b));
+        assert!(eq_groups.contains(&col_c));
 
         // This is a new set of equality. Hence equivalent class count should be 2.
-        eq_properties.add_equal_conditions(&col_x_expr, &col_y_expr)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_x), Arc::clone(&col_y))?;
         assert_eq!(eq_properties.eq_group().len(), 2);
 
         // This equality bridges distinct equality sets.
         // Hence equivalent class count should decrease from 2 to 1.
-        eq_properties.add_equal_conditions(&col_x_expr, &col_a_expr)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_x), Arc::clone(&col_a))?;
         assert_eq!(eq_properties.eq_group().len(), 1);
         let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 5);
-        assert!(eq_groups.contains(&col_a_expr));
-        assert!(eq_groups.contains(&col_b_expr));
-        assert!(eq_groups.contains(&col_c_expr));
-        assert!(eq_groups.contains(&col_x_expr));
-        assert!(eq_groups.contains(&col_y_expr));
+        assert!(eq_groups.contains(&col_a));
+        assert!(eq_groups.contains(&col_b));
+        assert!(eq_groups.contains(&col_c));
+        assert!(eq_groups.contains(&col_x));
+        assert!(eq_groups.contains(&col_y));
 
         Ok(())
     }

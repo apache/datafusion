@@ -79,7 +79,7 @@ mod sp_repartition_fuzz_tests {
 
         let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
         // Define a and f are aliases
-        eq_properties.add_equal_conditions(col_a, col_f)?;
+        eq_properties.add_equal_conditions(Arc::clone(col_a), Arc::clone(col_f))?;
         // Column e has constant value.
         eq_properties.add_constants([ConstExpr::from(Arc::clone(col_e))]);
 

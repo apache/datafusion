@@ -15,18 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_err, Result};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::iter::Peekable;
+use std::slice::Iter;
 use std::sync::Arc;
 
-use crate::equivalence::class::AcrossPartitions;
-use crate::ConstExpr;
-
 use super::EquivalenceProperties;
-use crate::PhysicalSortExpr;
+use crate::equivalence::class::AcrossPartitions;
+use crate::{ConstExpr, PhysicalSortExpr};
+
 use arrow::datatypes::SchemaRef;
-use std::slice::Iter;
+use datafusion_common::{internal_err, Result};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
 /// of  `lhs` and `rhs` according to the schema of `lhs`.
@@ -48,12 +47,13 @@ fn calculate_union_binary(
 
     // First, calculate valid constants for the union. An expression is constant
     // at the output of the union if it is constant in both sides with matching values.
+    let rhs_constants = rhs.constants();
     let constants = lhs
         .constants()
-        .iter()
+        .into_iter()
         .filter_map(|lhs_const| {
             // Find matching constant expression in RHS
-            rhs.constants()
+            rhs_constants
                 .iter()
                 .find(|rhs_const| rhs_const.expr.eq(&lhs_const.expr))
                 .map(|rhs_const| {
@@ -147,10 +147,16 @@ impl UnionEquivalentOrderingBuilder {
         properties: &EquivalenceProperties,
     ) {
         let constants = source.constants();
+        let properties_constants = properties.constants();
         for mut ordering in source.normalized_oeq_class() {
             // Progressively shorten the ordering to search for a satisfied prefix:
             loop {
-                ordering = match self.try_add_ordering(ordering, constants, properties) {
+                ordering = match self.try_add_ordering(
+                    ordering,
+                    &constants,
+                    properties,
+                    &properties_constants,
+                ) {
                     AddedOrdering::Yes => break,
                     AddedOrdering::No(ordering) => {
                         let mut sort_exprs = ordering.take();
@@ -179,13 +185,19 @@ impl UnionEquivalentOrderingBuilder {
         ordering: LexOrdering,
         constants: &[ConstExpr],
         properties: &EquivalenceProperties,
+        properties_constants: &[ConstExpr],
     ) -> AddedOrdering {
         if properties.ordering_satisfy(ordering.clone()) {
             // If the ordering satisfies the target properties, no need to
             // augment it with constants.
             self.orderings.push(ordering);
             AddedOrdering::Yes
-        } else if self.try_find_augmented_ordering(&ordering, constants, properties) {
+        } else if self.try_find_augmented_ordering(
+            &ordering,
+            constants,
+            properties,
+            properties_constants,
+        ) {
             // Augmented with constants to match the properties.
             AddedOrdering::Yes
         } else {
@@ -200,6 +212,7 @@ impl UnionEquivalentOrderingBuilder {
         ordering: &LexOrdering,
         constants: &[ConstExpr],
         properties: &EquivalenceProperties,
+        properties_constants: &[ConstExpr],
     ) -> bool {
         let mut result = false;
         // Can only augment if there are constants.
@@ -211,7 +224,7 @@ impl UnionEquivalentOrderingBuilder {
                     ordering,
                     constants,
                     existing_ordering,
-                    &properties.constants,
+                    properties_constants,
                 ) {
                     self.orderings.push(augmented_ordering);
                     result = true;
@@ -302,14 +315,24 @@ fn advance_if_matches_constant(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::equivalence::class::const_exprs_contains;
     use crate::equivalence::tests::{create_test_schema, parse_sort_expr};
     use crate::expressions::col;
+    use crate::PhysicalExpr;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
 
     use itertools::Itertools;
+
+    /// Checks whether `expr` is among in the `const_exprs`.
+    fn const_exprs_contains(
+        const_exprs: &[ConstExpr],
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        const_exprs
+            .iter()
+            .any(|const_expr| const_expr.expr.eq(expr))
+    }
 
     #[test]
     fn test_union_equivalence_properties_multi_children_1() {
@@ -788,9 +811,9 @@ mod tests {
             // Check whether constants are same
             let lhs_constants = lhs.constants();
             let rhs_constants = rhs.constants();
-            for rhs_constant in rhs_constants {
+            for rhs_constant in &rhs_constants {
                 assert!(
-                    const_exprs_contains(lhs_constants, &rhs_constant.expr),
+                    const_exprs_contains(&lhs_constants, &rhs_constant.expr),
                     "{err_msg}\nlhs: {lhs}\nrhs: {rhs}"
                 );
             }

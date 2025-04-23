@@ -60,8 +60,9 @@ impl OrderingEquivalenceClass {
         result
     }
 
-    /// Converts this OrderingEquivalenceClass to a vector of orderings.
-    pub fn into_inner(self) -> Vec<LexOrdering> {
+    /// Takes ownership of the vector of orderings comprising this equivalence
+    /// class.
+    pub fn take(self) -> Vec<LexOrdering> {
         self.orderings
     }
 
@@ -647,14 +648,10 @@ mod tests {
             let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
             let orderings = convert_to_orderings(&orderings);
             eq_properties.add_new_orderings(orderings);
-            let eq_group = eq_group
+            let classes = eq_group
                 .into_iter()
-                .map(|eq_class| {
-                    let eq_classes = eq_class.into_iter().cloned().collect::<Vec<_>>();
-                    EquivalenceClass::new(eq_classes)
-                })
-                .collect::<Vec<_>>();
-            let eq_group = EquivalenceGroup::new(eq_group);
+                .map(|eq_class| EquivalenceClass::new(eq_class.into_iter().cloned()));
+            let eq_group = EquivalenceGroup::new(classes);
             eq_properties.add_equivalence_group(eq_group);
 
             let constants = constants.into_iter().map(|expr| {
@@ -689,7 +686,7 @@ mod tests {
         };
         // a=c (e.g they are aliases).
         let mut eq_properties = EquivalenceProperties::new(test_schema);
-        eq_properties.add_equal_conditions(col_a, col_c)?;
+        eq_properties.add_equal_conditions(Arc::clone(col_a), Arc::clone(col_c))?;
 
         let orderings = vec![
             vec![(col_a, options)],

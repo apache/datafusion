@@ -227,20 +227,18 @@ impl FilterExec {
             if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>() {
                 if binary.op() == &Operator::Eq {
                     // Filter evaluates to single value for all partitions
-                    if input_eqs.is_expr_constant(binary.left()) {
-                        let (expr, across_parts) = (
-                            binary.right(),
-                            input_eqs.get_expr_constant_value(binary.right()),
-                        );
+                    if input_eqs.is_expr_constant(binary.left()).is_some() {
+                        let across = input_eqs
+                            .is_expr_constant(binary.right())
+                            .unwrap_or_default();
                         res_constants
-                            .push(ConstExpr::new(Arc::clone(expr), across_parts));
-                    } else if input_eqs.is_expr_constant(binary.right()) {
-                        let (expr, across_parts) = (
-                            binary.left(),
-                            input_eqs.get_expr_constant_value(binary.left()),
-                        );
+                            .push(ConstExpr::new(Arc::clone(binary.right()), across));
+                    } else if input_eqs.is_expr_constant(binary.right()).is_some() {
+                        let across = input_eqs
+                            .is_expr_constant(binary.left())
+                            .unwrap_or_default();
                         res_constants
-                            .push(ConstExpr::new(Arc::clone(expr), across_parts));
+                            .push(ConstExpr::new(Arc::clone(binary.left()), across));
                     }
                 }
             }
@@ -260,7 +258,7 @@ impl FilterExec {
         let mut eq_properties = input.equivalence_properties().clone();
         let (equal_pairs, _) = collect_columns_from_predicate(predicate);
         for (lhs, rhs) in equal_pairs {
-            eq_properties.add_equal_conditions(lhs, rhs)?
+            eq_properties.add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
         }
         // Add the columns that have only one viable value (singleton) after
         // filtering to constants.

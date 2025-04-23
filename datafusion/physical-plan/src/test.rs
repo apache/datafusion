@@ -335,7 +335,7 @@ impl TestMemoryExec {
             sort_information = base_eqp
                 .project(&projection_mapping, Arc::clone(&self.projected_schema))
                 .into_oeq_class()
-                .into_inner();
+                .take();
         }
 
         self.sort_information = sort_information;

@@ -41,12 +41,10 @@ pub fn join_equivalence_properties(
     ));
 
     let EquivalenceProperties {
-        constants: left_constants,
         oeq_class: left_oeq_class,
         ..
     } = left;
     let EquivalenceProperties {
-        constants: right_constants,
         oeq_class: mut right_oeq_class,
         ..
     } = right;
@@ -101,15 +99,6 @@ pub fn join_equivalence_properties(
         [false, false] => {}
         [true, true] => unreachable!("Cannot maintain ordering of both sides"),
         _ => unreachable!("Join operators can not have more than two children"),
-    }
-    match join_type {
-        JoinType::LeftAnti | JoinType::LeftSemi => {
-            result.add_constants(left_constants);
-        }
-        JoinType::RightAnti | JoinType::RightSemi => {
-            result.add_constants(right_constants);
-        }
-        _ => {}
     }
     result
 }
@@ -265,17 +254,17 @@ mod tests {
 
         // Join Schema
         let schema = Schema::new(fields);
-        let col_a = &col("a", &schema)?;
-        let col_d = &col("d", &schema)?;
-        let col_x = &col("x", &schema)?;
-        let col_y = &col("y", &schema)?;
-        let col_z = &col("z", &schema)?;
-        let col_w = &col("w", &schema)?;
+        let col_a = col("a", &schema)?;
+        let col_d = col("d", &schema)?;
+        let col_x = col("x", &schema)?;
+        let col_y = col("y", &schema)?;
+        let col_z = col("z", &schema)?;
+        let col_w = col("w", &schema)?;
 
         let mut join_eq_properties = EquivalenceProperties::new(Arc::new(schema));
         // a=x and d=w
-        join_eq_properties.add_equal_conditions(col_a, col_x)?;
-        join_eq_properties.add_equal_conditions(col_d, col_w)?;
+        join_eq_properties.add_equal_conditions(col_a, Arc::clone(&col_x))?;
+        join_eq_properties.add_equal_conditions(col_d, Arc::clone(&col_w))?;
 
         updated_right_ordering_equivalence_class(
             &mut right_oeq_class,

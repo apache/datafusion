@@ -537,8 +537,6 @@ mod tests {
 
     #[test]
     fn test_normalize_ordering_equivalence_classes() -> Result<()> {
-        let sort_options = SortOptions::default();
-
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
@@ -549,28 +547,16 @@ mod tests {
         let col_c_expr = col("c", &schema)?;
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
 
-        eq_properties.add_equal_conditions(&col_a_expr, &col_c_expr)?;
+        eq_properties.add_equal_conditions(col_a_expr, Arc::clone(&col_c_expr))?;
         eq_properties.add_new_orderings([
-            vec![PhysicalSortExpr {
-                expr: Arc::clone(&col_b_expr),
-                options: sort_options,
-            }],
-            vec![PhysicalSortExpr {
-                expr: Arc::clone(&col_c_expr),
-                options: sort_options,
-            }],
+            vec![PhysicalSortExpr::new_default(Arc::clone(&col_b_expr))],
+            vec![PhysicalSortExpr::new_default(Arc::clone(&col_c_expr))],
         ]);
 
         let mut expected_eqs = EquivalenceProperties::new(Arc::new(schema));
         expected_eqs.add_new_orderings([
-            vec![PhysicalSortExpr {
-                expr: Arc::clone(&col_b_expr),
-                options: sort_options,
-            }],
-            vec![PhysicalSortExpr {
-                expr: Arc::clone(&col_c_expr),
-                options: sort_options,
-            }],
+            vec![PhysicalSortExpr::new_default(Arc::clone(&col_b_expr))],
+            vec![PhysicalSortExpr::new_default(Arc::clone(&col_c_expr))],
         ]);
 
         let oeq_class = eq_properties.oeq_class().clone();
@@ -711,7 +697,7 @@ mod tests {
             nulls_first: false,
         };
         // b=a (e.g they are aliases)
-        eq_properties.add_equal_conditions(col_b, col_a)?;
+        eq_properties.add_equal_conditions(Arc::clone(col_b), Arc::clone(col_a))?;
         // [b ASC], [d ASC]
         eq_properties.add_new_orderings([
             vec![PhysicalSortExpr {
@@ -1097,7 +1083,7 @@ mod tests {
                 // Equal conditions before constants
                 {
                     let mut properties = base_properties.clone();
-                    for [left, right] in &case.equal_conditions {
+                    for [left, right] in case.equal_conditions.clone() {
                         properties.add_equal_conditions(left, right)?
                     }
                     properties.add_constants(
@@ -1111,7 +1097,7 @@ mod tests {
                     properties.add_constants(
                         case.constants.iter().cloned().map(ConstExpr::from),
                     );
-                    for [left, right] in &case.equal_conditions {
+                    for [left, right] in case.equal_conditions {
                         properties.add_equal_conditions(left, right)?
                     }
                     properties
@@ -1164,15 +1150,14 @@ mod tests {
         ]);
 
         // Add equality condition c = concat(a, b)
-        eq_properties.add_equal_conditions(&col_c, &a_concat_b)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_c), a_concat_b)?;
 
         let orderings = eq_properties.oeq_class();
 
-        let expected_ordering1 =
-            [PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc()].into();
+        let expected_ordering1 = [PhysicalSortExpr::new_default(col_c).asc()].into();
         let expected_ordering2 = [
-            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
-            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
+            PhysicalSortExpr::new_default(col_a).asc(),
+            PhysicalSortExpr::new_default(col_b).asc(),
         ]
         .into();
 
@@ -1215,7 +1200,7 @@ mod tests {
         eq_properties.add_new_ordering(initial_ordering.clone());
 
         // Add equality condition c = a * b
-        eq_properties.add_equal_conditions(&col_c, &a_times_b)?;
+        eq_properties.add_equal_conditions(col_c, a_times_b)?;
 
         let orderings = eq_properties.oeq_class();
 
@@ -1255,7 +1240,7 @@ mod tests {
         ]);
 
         // Add equality condition c = concat(a, b)
-        eq_properties.add_equal_conditions(&col_c, &a_concat_b)?;
+        eq_properties.add_equal_conditions(col_c, Arc::clone(&a_concat_b))?;
 
         let orderings = eq_properties.oeq_class();
 
@@ -1398,7 +1383,7 @@ mod tests {
         let col_c = col("c", &schema)?;
 
         // Make a and b equivalent
-        eq_properties.add_equal_conditions(&col_a, &col_b)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_a), Arc::clone(&col_b))?;
 
         let asc = SortOptions::default();
 
@@ -1495,7 +1480,7 @@ mod tests {
         eq_properties.add_constants([ConstExpr::from(Arc::clone(&col_c))]);
 
         // Equality: b = d
-        eq_properties.add_equal_conditions(&col_b, &col_d)?;
+        eq_properties.add_equal_conditions(Arc::clone(&col_b), Arc::clone(&col_d))?;
 
         // Orderings: [d ASC, a ASC], [e ASC]
         eq_properties.add_new_orderings([
