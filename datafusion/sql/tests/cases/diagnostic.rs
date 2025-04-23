@@ -19,6 +19,7 @@ use datafusion_functions::string;
 use insta::assert_snapshot;
 use std::{collections::HashMap, sync::Arc};
 
+use crate::{MockContextProvider, MockSessionState};
 use datafusion_common::{Diagnostic, Location, Result, Span};
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_sql::{
@@ -26,9 +27,6 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 use regex::Regex;
-use sqlparser::{dialect::GenericDialect, parser::Parser};
-
-use crate::{MockContextProvider, MockSessionState};
 
 fn do_query(sql: &'static str) -> Diagnostic {
     let statement = DFParserBuilder::new(sql)

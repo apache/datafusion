@@ -170,6 +170,11 @@ impl ExprSchemable for Expr {
                             "{} {}",
                             match err {
                                 DataFusionError::Plan(msg) => msg,
+                                DataFusionError::Diagnostic(_, boxed_err) =>
+                                    match *boxed_err {
+                                        DataFusionError::Plan(msg) => msg,
+                                        _ => boxed_err.to_string(),
+                                    },
                                 err => err.to_string(),
                             },
                             utils::generate_signature_error_msg(
@@ -179,7 +184,15 @@ impl ExprSchemable for Expr {
                             )
                         );
 
-                        if let Some(diagnostic) = diagnostic {
+                        if let Some(mut diagnostic) = diagnostic {
+                            diagnostic.add_help(
+                                utils::generate_signature_error_msg(
+                                    func.name(),
+                                    func.signature().clone(),
+                                    &data_types,
+                                ),
+                                None,
+                            );
                             err.with_diagnostic(diagnostic)
                         } else {
                             err
@@ -435,7 +448,9 @@ impl ExprSchemable for Expr {
                 // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
                 let new_data_types = data_types_with_scalar_udf(&arg_types, func)
                     .map_err(|err| {
-                        plan_datafusion_err!(
+                        let diagnostic = err.diagnostic().cloned();
+
+                        let err = plan_datafusion_err!(
                             "{} {}",
                             match err {
                                 DataFusionError::Plan(msg) => msg,
@@ -451,7 +466,21 @@ impl ExprSchemable for Expr {
                                 func.signature().clone(),
                                 &arg_types,
                             )
-                        )
+                        );
+
+                        if let Some(mut diagnostic) = diagnostic {
+                            diagnostic.add_help(
+                                utils::generate_signature_error_msg(
+                                    func.name(),
+                                    func.signature().clone(),
+                                    &arg_types,
+                                ),
+                                None,
+                            );
+                            err.with_diagnostic(diagnostic)
+                        } else {
+                            err
+                        }
                     })?;
 
                 let arguments = args

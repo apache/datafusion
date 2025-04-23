@@ -248,66 +248,38 @@ pub fn check_function_length_with_diag(
     if current_types.is_empty() {
         if signature.supports_zero_argument() {
             return Ok(());
-        } else if signature.used_to_support_zero_arguments() {
-            // Special error to help during upgrade
-            let base_error = plan_datafusion_err!(
-                "'{}' does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
-                function_name
-            );
-            let mut diagnostic = Diagnostic::new_error(
-                format!("Zero arguments not supported for {} function", function_name),
-                function_call_site,
-            );
-            diagnostic.add_help(
-                "Use TypeSignature::Nullary for functions that take no arguments",
-                None,
-            );
-            return Err(base_error.with_diagnostic(diagnostic));
-        } else {
-            let base_error = plan_datafusion_err!(
-                "'{}' does not support zero arguments",
-                function_name
-            );
-            let mut diagnostic = Diagnostic::new_error(
-                format!("Zero arguments not supported for {} function", function_name),
-                function_call_site,
-            );
-            diagnostic.add_note(
-                format!("Function {} requires at least one argument", function_name),
-                None,
-            );
-            return Err(base_error.with_diagnostic(diagnostic));
         }
+        
+        let (error_message, note) = if signature.used_to_support_zero_arguments() {
+            (
+                format!("Zero arguments not supported for {} function. Use TypeSignature::Nullary for zero arguments", function_name),
+                "Use TypeSignature::Nullary for functions that take no arguments".to_string()
+            )
+        } else {
+            (
+                format!("Zero arguments not supported for {} function", function_name),
+                format!("Function {} requires at least one argument", function_name)
+            )
+        };
+
+        let mut diagnostic = Diagnostic::new_error(error_message.clone(), function_call_site);
+        diagnostic.add_note(note, None);
+
+        return Err(plan_datafusion_err!("{}", error_message).with_diagnostic(diagnostic));
     }
 
     // Helper closure to create and return an error with diagnostic information
     let create_error = |expected: &str, got: usize| {
-        let base_error = plan_datafusion_err!(
+        let error_message = format!(
             "Function '{}' {}, got {}",
             function_name,
             expected,
-            got
+            got,
         );
 
-        let mut diagnostic = Diagnostic::new_error(
-            format!(
-                "Wrong number of arguments for {} function call",
-                function_name
-            ),
-            function_call_site,
-        );
-        diagnostic.add_note(
-            format!(
-                "Function {} {}, but {} {} provided",
-                function_name,
-                expected,
-                got,
-                if got == 1 { "was" } else { "were" }
-            ),
-            None,
-        );
+        let diagnostic = Diagnostic::new_error(error_message.clone(), function_call_site);
 
-        Err(base_error.with_diagnostic(diagnostic))
+        Err(plan_datafusion_err!("{}", error_message).with_diagnostic(diagnostic))
     };
 
     match signature {
@@ -315,91 +287,61 @@ pub fn check_function_length_with_diag(
         TypeSignature::Numeric(num) |
         TypeSignature::String(num) |
         TypeSignature::Comparable(num) |
-        TypeSignature::Any(num) => {
-            if current_types.len() != *num {
-                return create_error(&format!("expects {} arguments", num), current_types.len());
-            }
+        TypeSignature::Any(num) if current_types.len() != *num => {
+            return create_error(&format!("expects {} arguments", num), current_types.len());
         },
-        TypeSignature::Exact(types) => {
-            if current_types.len() != types.len() {
-                return create_error(&format!("expects {} arguments", types.len()), current_types.len());
-            }
+        // Length-based signature types
+        TypeSignature::Exact(types) if current_types.len() != types.len() => {
+            return create_error(&format!("expects {} arguments", types.len()), current_types.len());
         },
-        TypeSignature::Coercible(types) => {
-            if current_types.len() != types.len() {
-                return create_error(&format!("expects {} arguments", types.len()), current_types.len());
-            }
+        TypeSignature::Coercible(types) if current_types.len() != types.len() => {
+            return create_error(&format!("expects {} arguments", types.len()), current_types.len());
         },
-        TypeSignature::Nullary => {
-            if !current_types.is_empty() {
-                return create_error("expects zero arguments", current_types.len());
-            }
+        
+        // Zero argument signature type
+        TypeSignature::Nullary if !current_types.is_empty() => {
+            return create_error("expects zero arguments", current_types.len());
         },
-        TypeSignature::ArraySignature(array_signature) => {
-            match array_signature {
-                ArrayFunctionSignature::Array { arguments, .. } => {
-                    if current_types.len() != arguments.len() {
-                        return create_error(&format!("expects {} arguments", arguments.len()), current_types.len());
-                    }
-                },
-                ArrayFunctionSignature::RecursiveArray => {
-                    if current_types.len() != 1 {
-                        return create_error("expects exactly one array argument", current_types.len());
-                    }
-                },
-                ArrayFunctionSignature::MapArray => {
-                    if current_types.len() != 1 {
-                        return create_error("expects exactly one map argument", current_types.len());
-                    }
-                },
-            }
+        
+        // Array signature types
+        TypeSignature::ArraySignature(array_signature) => match array_signature {
+            ArrayFunctionSignature::Array { arguments, .. } if current_types.len() != arguments.len() => {
+                return create_error(&format!("expects {} arguments", arguments.len()), current_types.len());
+            },
+            ArrayFunctionSignature::RecursiveArray | ArrayFunctionSignature::MapArray if current_types.len() != 1 => {
+                return create_error("expects exactly one array argument", current_types.len());
+            },
+            _ => {}
         },
+        
+        // Multiple signature type
         TypeSignature::OneOf(signatures) => {
-            // For OneOf, we'll consider it valid if it matches ANY of the signatures
-            // We'll collect all errors to provide better diagnostics if nothing matches
-            let mut all_errors = Vec::new();
-            
+            // Try to match any signature
             for sig in signatures {
-                match check_function_length_with_diag(function_name, sig, current_types, function_call_site) {
-                    Ok(()) => return Ok(()), // If any signature matches, return immediately
-                    Err(e) => all_errors.push(e),
+                if check_function_length_with_diag(function_name, sig, current_types, function_call_site).is_ok() {
+                    return Ok(());
                 }
             }
             
-            // none of the signatures matched
-            if !all_errors.is_empty() {
-                
-                let base_error = plan_datafusion_err!(
-                    "Function '{}' has no matching signature for {} arguments.",
-                    function_name,
-                    current_types.len()
-                );
-                
-                let mut diagnostic = Diagnostic::new_error(
-                    format!(
-                        "No matching signature for {} function with {} arguments",
-                        function_name,
-                        current_types.len()
-                    ),
-                    function_call_site,
-                );
-                
-                diagnostic.add_note(
-                    format!("The function {} has multiple possible signatures", function_name),
-                    None,
-                );
-                
-                return Err(base_error.with_diagnostic(diagnostic));
-            }
+            // Create error for no matching signature
+            let error_message = format!(
+                "Function '{}' has no matching signature for {} arguments",
+                function_name, current_types.len()
+            );
+            
+            let mut diagnostic = Diagnostic::new_error(error_message.clone(), function_call_site);
+            diagnostic.add_note(
+                format!("The function {} has multiple possible signatures", function_name),
+                None,
+            );
+            
+            return Err(plan_datafusion_err!("{}", error_message).with_diagnostic(diagnostic));
         },
-        // Signatures that accept variable numbers of arguments or are handled specially
-        TypeSignature::Variadic(_) | TypeSignature::VariadicAny | TypeSignature::UserDefined => {
-            // These cases are implicitly valid for any non-zero number of arguments:
-            // - Variadic: accepts one or more arguments of specified types
-            // - VariadicAny: accepts one or more arguments of any type
-            // - UserDefined: custom validation handled by the UDF itself
-        }
         
+        // All other cases:
+        // Variadic signatures: they are specifically designed for variable argument counts, so length checking isn't necessary.
+        // User-Defined signature:  argument validation responsibility is delegated to the user-defined function implementation itself
+        _ => {}
     }
 
     Ok(())
