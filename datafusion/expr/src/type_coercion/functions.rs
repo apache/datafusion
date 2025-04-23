@@ -774,30 +774,10 @@ fn get_valid_types(
                 }
             }
         },
-        TypeSignature::Nullary => {
-            // if !current_types.is_empty() {
-            //     return plan_err!(
-            //         "The function '{function_name}' expected zero argument but received {}",
-            //         current_types.len()
-            //     );
-            // }
-            vec![vec![]]
-        }
-        TypeSignature::Any(number) => {
-            // if current_types.is_empty() {
-            //     return plan_err!(
-            //         "The function '{function_name}' expected at least one argument but received 0"
-            //     );
-            // }
+        TypeSignature::Nullary => vec![vec![]],
 
-            // if current_types.len() != *number {
-            //     return plan_err!(
-            //         "The function '{function_name}' expected {number} arguments but received {}",
-            //         current_types.len()
-            //     );
-            // }
-            vec![(0..*number).map(|i| current_types[i].clone()).collect()]
-        }
+        TypeSignature::Any(number) => vec![(0..*number).map(|i| current_types[i].clone()).collect()],
+        
         TypeSignature::OneOf(types) => types
             .iter()
             .filter_map(|t| get_valid_types(function_name, t, current_types).ok())
