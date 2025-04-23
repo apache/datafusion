@@ -1774,7 +1774,6 @@ dependencies = [
  "datafusion-physical-expr-common",
  "datafusion-physical-optimizer",
  "datafusion-physical-plan",
- "datafusion-spark",
  "datafusion-sql",
  "doc-comment",
  "env_logger",
@@ -2442,27 +2441,6 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "datafusion-spark"
-version = "46.0.0"
-dependencies = [
- "arrow",
- "datafusion-catalog",
- "datafusion-common",
- "datafusion-doc",
- "datafusion-execution",
- "datafusion-expr",
- "datafusion-functions",
- "datafusion-functions-aggregate",
- "datafusion-functions-aggregate-common",
- "datafusion-functions-nested",
- "datafusion-functions-table",
- "datafusion-functions-window",
- "datafusion-functions-window-common",
- "datafusion-macros",
- "log",
 ]
 
 [[package]]
