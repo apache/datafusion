@@ -293,6 +293,7 @@ impl Unparser<'_> {
                     distinct,
                     args,
                     filter,
+                    order_by,
                     ..
                 } = &agg.params;
 
@@ -300,6 +301,16 @@ impl Unparser<'_> {
                 let filter = match filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
+                };
+                let within_group = if agg.func.is_ordered_set_aggregate() {
+                    order_by
+                        .as_ref()
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .map(|sort_expr| self.sort_to_sql(sort_expr))
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    Vec::new()
                 };
                 Ok(ast::Expr::Function(Function {
                     name: ObjectName::from(vec![Ident {
@@ -316,7 +327,7 @@ impl Unparser<'_> {
                     filter,
                     null_treatment: None,
                     over: None,
-                    within_group: vec![],
+                    within_group,
                     parameters: ast::FunctionArguments::None,
                     uses_odbc_syntax: false,
                 }))
