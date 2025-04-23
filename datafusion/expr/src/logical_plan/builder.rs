@@ -24,7 +24,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, Sort as SortExpr};
+use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -36,9 +36,11 @@ use crate::logical_plan::{
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
+use crate::select_expr::SelectExpr;
 use crate::utils::{
-    can_hash, columnize_expr, compare_sort_expr, expr_to_columns,
-    find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
+    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
+    group_window_expr_by_sort_keys,
 };
 use crate::{
     and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
@@ -46,7 +48,7 @@ use crate::{
 };
 
 use super::dml::InsertOp;
-use super::plan::ColumnUnnestList;
+use super::plan::{ColumnUnnestList, ExplainFormat};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -465,9 +467,7 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
-        TableScan::try_new(table_name, table_source, projection, filters, None)
-            .map(LogicalPlan::TableScan)
-            .map(Self::new)
+        Self::scan_with_filters_inner(table_name, table_source, projection, filters, None)
     }
 
     /// Convert a table provider into a builder with a TableScan with filter and fetch
@@ -478,15 +478,43 @@ impl LogicalPlanBuilder {
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        TableScan::try_new(table_name, table_source, projection, filters, fetch)
-            .map(LogicalPlan::TableScan)
-            .map(Self::new)
+        Self::scan_with_filters_inner(
+            table_name,
+            table_source,
+            projection,
+            filters,
+            fetch,
+        )
+    }
+
+    fn scan_with_filters_inner(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<Expr>,
+        fetch: Option<usize>,
+    ) -> Result<Self> {
+        let table_scan =
+            TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
+
+        // Inline TableScan
+        if table_scan.filters.is_empty() {
+            if let Some(p) = table_scan.source.get_logical_plan() {
+                let sub_plan = p.into_owned();
+                // Ensures that the reference to the inlined table remains the
+                // same, meaning we don't have to change any of the parent nodes
+                // that reference this table.
+                return Self::new(sub_plan).alias(table_scan.table_name);
+            }
+        }
+
+        Ok(Self::new(LogicalPlan::TableScan(table_scan)))
     }
 
     /// Wrap a plan in a window
     pub fn window_plan(
         input: LogicalPlan,
-        window_exprs: Vec<Expr>,
+        window_exprs: impl IntoIterator<Item = Expr>,
     ) -> Result<LogicalPlan> {
         let mut plan = input;
         let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
@@ -520,10 +548,11 @@ impl LogicalPlanBuilder {
         }
         Ok(plan)
     }
+
     /// Apply a projection without alias.
     pub fn project(
         self,
-        expr: impl IntoIterator<Item = impl Into<Expr>>,
+        expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
     ) -> Result<Self> {
         project(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
     }
@@ -532,7 +561,7 @@ impl LogicalPlanBuilder {
     /// (true to validate, false to not validate)
     pub fn project_with_validation(
         self,
-        expr: Vec<(impl Into<Expr>, bool)>,
+        expr: Vec<(impl Into<SelectExpr>, bool)>,
     ) -> Result<Self> {
         project_with_validation(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
     }
@@ -776,6 +805,7 @@ impl LogicalPlanBuilder {
             &missing_cols,
             is_distinct,
         )?;
+
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
             input: Arc::new(plan),
@@ -1044,13 +1074,18 @@ impl LogicalPlanBuilder {
         let left_keys = left_keys.into_iter().collect::<Result<Vec<Column>>>()?;
         let right_keys = right_keys.into_iter().collect::<Result<Vec<Column>>>()?;
 
-        let on = left_keys
+        let on: Vec<_> = left_keys
             .into_iter()
             .zip(right_keys)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+
+        // Inner type without join condition is cross join
+        if join_type != JoinType::Inner && on.is_empty() && filter.is_none() {
+            return plan_err!("join condition should not be empty");
+        }
 
         Ok(Self::new(LogicalPlan::Join(Join {
             left: self.plan,
@@ -1082,8 +1117,6 @@ impl LogicalPlanBuilder {
             .collect::<Result<_>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys).collect();
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
         let mut join_on: Vec<(Expr, Expr)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
@@ -1116,33 +1149,33 @@ impl LogicalPlanBuilder {
                 DataFusionError::Internal("filters should not be None here".to_string())
             })?)
         } else {
-            Ok(Self::new(LogicalPlan::Join(Join {
-                left: self.plan,
-                right: Arc::new(right),
-                on: join_on,
-                filter: filters,
+            let join = Join::try_new(
+                self.plan,
+                Arc::new(right),
+                join_on,
+                filters,
                 join_type,
-                join_constraint: JoinConstraint::Using,
-                schema: DFSchemaRef::new(join_schema),
-                null_equals_null: false,
-            })))
+                JoinConstraint::Using,
+                false,
+            )?;
+
+            Ok(Self::new(LogicalPlan::Join(join)))
         }
     }
 
     /// Apply a cross join
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &JoinType::Inner)?;
-        Ok(Self::new(LogicalPlan::Join(Join {
-            left: self.plan,
-            right: Arc::new(right),
-            on: vec![],
-            filter: None,
-            join_type: JoinType::Inner,
-            join_constraint: JoinConstraint::On,
-            null_equals_null: false,
-            schema: DFSchemaRef::new(join_schema),
-        })))
+        let join = Join::try_new(
+            self.plan,
+            Arc::new(right),
+            vec![],
+            None,
+            JoinType::Inner,
+            JoinConstraint::On,
+            false,
+        )?;
+
+        Ok(Self::new(LogicalPlan::Join(join)))
     }
 
     /// Repartition
@@ -1211,6 +1244,7 @@ impl LogicalPlanBuilder {
             Ok(Self::new(LogicalPlan::Explain(Explain {
                 verbose,
                 plan: self.plan,
+                explain_format: ExplainFormat::Indent,
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded: false,
@@ -1302,7 +1336,7 @@ impl LogicalPlanBuilder {
     /// to columns from the existing input. `r`, the second element of the tuple,
     /// must only refer to columns from the right input.
     ///
-    /// `filter` contains any other other filter expression to apply during the
+    /// `filter` contains any other filter expression to apply during the
     /// join. Note that `equi_exprs` predicates are evaluated more efficiently
     /// than the filter expressions, so they are preferred.
     pub fn join_with_expr_keys(
@@ -1352,19 +1386,17 @@ impl LogicalPlanBuilder {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
-
-        Ok(Self::new(LogicalPlan::Join(Join {
-            left: self.plan,
-            right: Arc::new(right),
-            on: join_key_pairs,
+        let join = Join::try_new(
+            self.plan,
+            Arc::new(right),
+            join_key_pairs,
             filter,
             join_type,
-            join_constraint: JoinConstraint::On,
-            schema: DFSchemaRef::new(join_schema),
-            null_equals_null: false,
-        })))
+            JoinConstraint::On,
+            false,
+        )?;
+
+        Ok(Self::new(LogicalPlan::Join(join)))
     }
 
     /// Unnest the given column.
@@ -1432,19 +1464,37 @@ impl ValuesFields {
     }
 }
 
+// `name_map` tracks a mapping between a field name and the number of appearances of that field.
+//
+// Some field names might already come to this function with the count (number of times it appeared)
+// as a sufix e.g. id:1, so there's still a chance of name collisions, for example,
+// if these three fields passed to this function: "col:1", "col" and "col", the function
+// would rename them to -> col:1, col, col:1 causing a posteriror error when building the DFSchema.
+// that's why we need the `seen` set, so the fields are always unique.
+//
 pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
     let mut name_map = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
     fields
         .into_iter()
         .map(|field| {
-            let counter = name_map.entry(field.name().to_string()).or_insert(0);
-            *counter += 1;
-            if *counter > 1 {
-                let new_name = format!("{}:{}", field.name(), *counter - 1);
-                Field::new(new_name, field.data_type().clone(), field.is_nullable())
-            } else {
-                field.as_ref().clone()
+            let base_name = field.name();
+            let count = name_map.entry(base_name.clone()).or_insert(0);
+            let mut new_name = base_name.clone();
+
+            // Loop until we find a name that hasn't been used
+            while seen.contains(&new_name) {
+                *count += 1;
+                new_name = format!("{}:{}", base_name, count);
             }
+
+            seen.insert(new_name.clone());
+
+            let mut modified_field =
+                Field::new(&new_name, field.data_type().clone(), field.is_nullable());
+            modified_field.set_metadata(field.metadata().clone());
+            modified_field
         })
         .collect()
 }
@@ -1655,7 +1705,7 @@ pub fn union_by_name(
 /// * An invalid expression is used (e.g. a `sort` expression)
 pub fn project(
     plan: LogicalPlan,
-    expr: impl IntoIterator<Item = impl Into<Expr>>,
+    expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
 ) -> Result<LogicalPlan> {
     project_with_validation(plan, expr.into_iter().map(|e| (e, true)))
 }
@@ -1669,15 +1719,54 @@ pub fn project(
 /// * An invalid expression is used (e.g. a `sort` expression)
 fn project_with_validation(
     plan: LogicalPlan,
-    expr: impl IntoIterator<Item = (impl Into<Expr>, bool)>,
+    expr: impl IntoIterator<Item = (impl Into<SelectExpr>, bool)>,
 ) -> Result<LogicalPlan> {
     let mut projected_expr = vec![];
     for (e, validate) in expr {
         let e = e.into();
         match e {
-            #[expect(deprecated)]
-            Expr::Wildcard { .. } => projected_expr.push(e),
-            _ => {
+            SelectExpr::Wildcard(opt) => {
+                let expanded = expand_wildcard(plan.schema(), &plan, Some(&opt))?;
+
+                // If there is a REPLACE statement, replace that column with the given
+                // replace expression. Column name remains the same.
+                let expanded = if let Some(replace) = opt.replace {
+                    replace_columns(expanded, &replace)?
+                } else {
+                    expanded
+                };
+
+                for e in expanded {
+                    if validate {
+                        projected_expr
+                            .push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                    } else {
+                        projected_expr.push(e)
+                    }
+                }
+            }
+            SelectExpr::QualifiedWildcard(table_ref, opt) => {
+                let expanded =
+                    expand_qualified_wildcard(&table_ref, plan.schema(), Some(&opt))?;
+
+                // If there is a REPLACE statement, replace that column with the given
+                // replace expression. Column name remains the same.
+                let expanded = if let Some(replace) = opt.replace {
+                    replace_columns(expanded, &replace)?
+                } else {
+                    expanded
+                };
+
+                for e in expanded {
+                    if validate {
+                        projected_expr
+                            .push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                    } else {
+                        projected_expr.push(e)
+                    }
+                }
+            }
+            SelectExpr::Expression(e) => {
                 if validate {
                     projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
                 } else {
@@ -1689,6 +1778,29 @@ fn project_with_validation(
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+}
+
+/// If there is a REPLACE statement in the projected expression in the form of
+/// "REPLACE (some_column_within_an_expr AS some_column)", this function replaces
+/// that column with the given replace expression. Column name remains the same.
+/// Multiple REPLACEs are also possible with comma separations.
+fn replace_columns(
+    mut exprs: Vec<Expr>,
+    replace: &PlannedReplaceSelectItem,
+) -> Result<Vec<Expr>> {
+    for expr in exprs.iter_mut() {
+        if let Expr::Column(Column { name, .. }) = expr {
+            if let Some((_, new_expr)) = replace
+                .items()
+                .iter()
+                .zip(replace.expressions().iter())
+                .find(|(item, _)| item.column_name.value == *name)
+            {
+                *expr = new_expr.clone().alias(name.clone())
+            }
+        }
+    }
+    Ok(exprs)
 }
 
 /// Create a SubqueryAlias to wrap a LogicalPlan.
@@ -1809,7 +1921,7 @@ pub fn wrap_projection_for_join_if_necessary(
         projection.extend(join_key_items);
 
         LogicalPlanBuilder::from(input)
-            .project(projection)?
+            .project(projection.into_iter().map(SelectExpr::from))?
             .build()?
     } else {
         input
@@ -2076,7 +2188,7 @@ pub fn unnest_with_options(
 
                     // new columns dependent on the same original index
                     dependency_indices
-                        .extend(std::iter::repeat(index).take(transformed_columns.len()));
+                        .extend(std::iter::repeat_n(index, transformed_columns.len()));
                     Ok(transformed_columns
                         .iter()
                         .map(|(col, field)| (col.relation.to_owned(), field.to_owned()))
@@ -2632,10 +2744,13 @@ mod tests {
         let t1_field_1 = Field::new("a", DataType::Int32, false);
         let t2_field_1 = Field::new("a", DataType::Int32, false);
         let t2_field_3 = Field::new("a", DataType::Int32, false);
+        let t2_field_4 = Field::new("a:1", DataType::Int32, false);
         let t1_field_2 = Field::new("b", DataType::Int32, false);
         let t2_field_2 = Field::new("b", DataType::Int32, false);
 
-        let field_vec = vec![t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3];
+        let field_vec = vec![
+            t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3, t2_field_4,
+        ];
         let remove_redundant = change_redundant_column(&Fields::from(field_vec));
 
         assert_eq!(
@@ -2646,6 +2761,7 @@ mod tests {
                 Field::new("b", DataType::Int32, false),
                 Field::new("b:1", DataType::Int32, false),
                 Field::new("a:2", DataType::Int32, false),
+                Field::new("a:1:1", DataType::Int32, false),
             ]
         );
         Ok(())

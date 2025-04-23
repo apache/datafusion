@@ -19,22 +19,15 @@
 //!
 //! [`ListingTable`]: crate::datasource::listing::ListingTable
 
-pub mod cte_worktable;
-pub mod default_table_source;
 pub mod dynamic_file;
 pub mod empty;
 pub mod file_format;
 pub mod listing;
 pub mod listing_table_factory;
-pub mod memory;
+mod memory_test;
 pub mod physical_plan;
 pub mod provider;
-mod statistics;
-pub mod stream;
-pub mod view;
-
-pub use datafusion_datasource::schema_adapter;
-pub use datafusion_datasource::source;
+mod view_test;
 
 // backwards compatibility
 pub use self::default_table_source::{
@@ -44,95 +37,16 @@ pub use self::memory::MemTable;
 pub use self::view::ViewTable;
 pub use crate::catalog::TableProvider;
 pub use crate::logical_expr::TableType;
+pub use datafusion_catalog::cte_worktable;
+pub use datafusion_catalog::default_table_source;
+pub use datafusion_catalog::memory;
+pub use datafusion_catalog::stream;
+pub use datafusion_catalog::view;
+pub use datafusion_datasource::schema_adapter;
+pub use datafusion_datasource::sink;
+pub use datafusion_datasource::source;
 pub use datafusion_execution::object_store;
-pub use statistics::get_statistics_with_limit;
-
-use arrow::compute::SortOptions;
-use arrow::datatypes::Schema;
-use datafusion_common::{plan_err, Result};
-use datafusion_expr::{Expr, SortExpr};
-use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
-
-/// Converts logical sort expressions to physical sort expressions
-///
-/// This function transforms a collection of logical sort expressions into their physical
-/// representation that can be used during query execution.
-///
-/// # Arguments
-///
-/// * `schema` - The schema containing column definitions
-/// * `sort_order` - A collection of logical sort expressions grouped into lexicographic orderings
-///
-/// # Returns
-///
-/// A vector of lexicographic orderings for physical execution, or an error if the transformation fails
-///
-/// # Examples
-///
-/// ```
-/// // Create orderings from columns "id" and "name"
-/// # use arrow::datatypes::{Schema, Field, DataType};
-/// # use datafusion::datasource::create_ordering;
-/// # use datafusion_common::Column;
-/// # use datafusion_expr::{Expr, SortExpr};
-/// #
-/// // Create a schema with two fields
-/// let schema = Schema::new(vec![
-///     Field::new("id", DataType::Int32, false),
-///     Field::new("name", DataType::Utf8, false),
-/// ]);
-///
-/// let sort_exprs = vec![
-///     vec![
-///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "id")), asc: true, nulls_first: false }
-///     ],
-///     vec![
-///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "name")), asc: false, nulls_first: true }
-///     ]
-/// ];
-/// let result = create_ordering(&schema, &sort_exprs).unwrap();
-/// ```
-pub fn create_ordering(
-    schema: &Schema,
-    sort_order: &[Vec<SortExpr>],
-) -> Result<Vec<LexOrdering>> {
-    let mut all_sort_orders = vec![];
-
-    for (group_idx, exprs) in sort_order.iter().enumerate() {
-        // Construct PhysicalSortExpr objects from Expr objects:
-        let mut sort_exprs = LexOrdering::default();
-        for (expr_idx, sort) in exprs.iter().enumerate() {
-            match &sort.expr {
-                Expr::Column(col) => match expressions::col(&col.name, schema) {
-                    Ok(expr) => {
-                        sort_exprs.push(PhysicalSortExpr {
-                            expr,
-                            options: SortOptions {
-                                descending: !sort.asc,
-                                nulls_first: sort.nulls_first,
-                            },
-                        });
-                    }
-                    // Cannot find expression in the projected_schema, stop iterating
-                    // since rest of the orderings are violated
-                    Err(_) => break,
-                },
-                expr => {
-                    return plan_err!(
-                        "Expected single column reference in sort_order[{}][{}], got {}",
-                        group_idx,
-                        expr_idx,
-                        expr
-                    );
-                }
-            }
-        }
-        if !sort_exprs.is_empty() {
-            all_sort_orders.push(sort_exprs);
-        }
-    }
-    Ok(all_sort_orders)
-}
+pub use datafusion_physical_expr::create_ordering;
 
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
@@ -145,8 +59,8 @@ mod tests {
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::assert_batches_sorted_eq;
-    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
@@ -157,6 +71,7 @@ mod tests {
 
     use ::object_store::path::Path;
     use ::object_store::ObjectMeta;
+    use datafusion_datasource::source::DataSourceExec;
     use datafusion_physical_plan::collect;
     use tempfile::TempDir;
 
@@ -191,7 +106,7 @@ mod tests {
         let meta = ObjectMeta {
             location,
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-            size: metadata.len() as usize,
+            size: metadata.len(),
             e_tag: None,
             version: None,
         };
@@ -213,25 +128,27 @@ mod tests {
             ParquetSource::default()
                 .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
         );
-        let base_conf =
-            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
-                .with_file(partitioned_file);
+        let base_conf = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            schema,
+            source,
+        )
+        .with_file(partitioned_file)
+        .build();
 
-        let parquet_exec = base_conf.build();
+        let parquet_exec = DataSourceExec::from_data_source(base_conf);
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let read = collect(parquet_exec, task_ctx).await.unwrap();
 
-        let expected = [
-            "+----+--------------+",
-            "| id | extra_column |",
-            "+----+--------------+",
-            "| 1  | foo          |",
-            "+----+--------------+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &read);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
+        +----+--------------+
+        | id | extra_column |
+        +----+--------------+
+        | 1  | foo          |
+        +----+--------------+
+        "###);
     }
 
     #[test]
@@ -346,13 +263,6 @@ mod tests {
             new_columns.push(extra_column);
 
             Ok(RecordBatch::try_new(schema, new_columns).unwrap())
-        }
-
-        fn map_partial_batch(
-            &self,
-            batch: RecordBatch,
-        ) -> datafusion_common::Result<RecordBatch> {
-            self.map_batch(batch)
         }
     }
 }

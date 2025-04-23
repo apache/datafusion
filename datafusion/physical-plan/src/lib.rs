@@ -20,7 +20,8 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
@@ -49,6 +50,7 @@ pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
+pub use spill::spill_manager::SpillManager;
 
 mod ordering;
 mod render_tree;
@@ -65,7 +67,7 @@ pub mod empty;
 pub mod execution_plan;
 pub mod explain;
 pub mod filter;
-pub mod insert;
+pub mod filter_pushdown;
 pub mod joins;
 pub mod limit;
 pub mod memory;

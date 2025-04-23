@@ -20,7 +20,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileMeta, FileOpenFuture, FileOpener};
 use crate::error::Result;
 
@@ -42,6 +41,7 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 
+use datafusion_datasource::file_groups::FileGroup;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
@@ -124,7 +124,7 @@ impl ArrowExec {
         )
     }
 
-    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+    fn with_file_groups(mut self, file_groups: Vec<FileGroup>) -> Self {
         self.base_config.file_groups = file_groups.clone();
         let mut file_source = self.file_scan_config();
         file_source = file_source.with_file_groups(file_groups);
@@ -273,6 +273,7 @@ impl FileOpener for ArrowOpener {
                 None => {
                     let r = object_store.get(file_meta.location()).await?;
                     match r.payload {
+                        #[cfg(not(target_arch = "wasm32"))]
                         GetResultPayload::File(file, _) => {
                             let arrow_reader = arrow::ipc::reader::FileReader::try_new(
                                 file, projection,
@@ -305,7 +306,7 @@ impl FileOpener for ArrowOpener {
                     )?;
                     // read footer according to footer_len
                     let get_option = GetOptions {
-                        range: Some(GetRange::Suffix(10 + footer_len)),
+                        range: Some(GetRange::Suffix(10 + (footer_len as u64))),
                         ..Default::default()
                     };
                     let get_result = object_store
@@ -332,9 +333,9 @@ impl FileOpener for ArrowOpener {
                         .iter()
                         .flatten()
                         .map(|block| {
-                            let block_len = block.bodyLength() as usize
-                                + block.metaDataLength() as usize;
-                            let block_offset = block.offset() as usize;
+                            let block_len =
+                                block.bodyLength() as u64 + block.metaDataLength() as u64;
+                            let block_offset = block.offset() as u64;
                             block_offset..block_offset + block_len
                         })
                         .collect_vec();
@@ -354,9 +355,9 @@ impl FileOpener for ArrowOpener {
                         .iter()
                         .flatten()
                         .filter(|block| {
-                            let block_offset = block.offset() as usize;
-                            block_offset >= range.start as usize
-                                && block_offset < range.end as usize
+                            let block_offset = block.offset() as u64;
+                            block_offset >= range.start as u64
+                                && block_offset < range.end as u64
                         })
                         .copied()
                         .collect_vec();
@@ -364,9 +365,9 @@ impl FileOpener for ArrowOpener {
                     let recordbatch_ranges = recordbatches
                         .iter()
                         .map(|block| {
-                            let block_len = block.bodyLength() as usize
-                                + block.metaDataLength() as usize;
-                            let block_offset = block.offset() as usize;
+                            let block_len =
+                                block.bodyLength() as u64 + block.metaDataLength() as u64;
+                            let block_offset = block.offset() as u64;
                             block_offset..block_offset + block_len
                         })
                         .collect_vec();

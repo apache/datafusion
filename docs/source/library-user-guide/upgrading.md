@@ -19,6 +19,122 @@
 
 # Upgrade Guides
 
+## DataFusion `47.0.0`
+
+This section calls out some of the major changes in the `47.0.0` release of DataFusion.
+
+Here are some example upgrade PRs that demonstrate changes required when upgrading from DataFusion 46.0.0:
+
+- [delta-rs Upgrade to `47.0.0`](https://github.com/delta-io/delta-rs/pull/3378)
+- [DataFusion Comet Upgrade to `47.0.0`](https://github.com/apache/datafusion-comet/pull/1563)
+- [Sail Upgrade to `47.0.0`](https://github.com/lakehq/sail/pull/434)
+
+### Upgrades to `arrow-rs` and `arrow-parquet` 55.0.0 and `object_store` 0.12.0
+
+Several APIs are changed in the underlying arrow and parquet libraries to use a
+`u64` instead of `usize` to better support WASM (See [#7371] and [#6961])
+
+Additionally `ObjectStore::list` and `ObjectStore::list_with_offset` have been changed to return `static` lifetimes (See [#6619])
+
+[#6619]: https://github.com/apache/arrow-rs/pull/6619
+[#7371]: https://github.com/apache/arrow-rs/pull/7371
+[#7328]: https://github.com/apache/arrow-rs/pull/6961
+
+This requires converting from `usize` to `u64` occasionally as well as changes to `ObjectStore` implementations such as
+
+```rust
+# /* comment to avoid running
+impl Objectstore {
+    ...
+    // The range is now a u64 instead of usize
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> ObjectStoreResult<Bytes> {
+        self.inner.get_range(location, range).await
+    }
+    ...
+    // the lifetime is now 'static instead of `_ (meaning the captured closure can't contain references)
+    // (this also applies to list_with_offset)
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+}
+# */
+```
+
+The `ParquetObjectReader` has been updated to no longer require the object size
+(it can be fetched using a single suffix request). See [#7334] for details
+
+[#7334]: https://github.com/apache/arrow-rs/pull/7334
+
+Pattern in DataFusion `46.0.0`:
+
+```rust
+# /* comment to avoid running
+let meta: ObjectMeta = ...;
+let reader = ParquetObjectReader::new(store, meta);
+# */
+```
+
+Pattern in DataFusion `47.0.0`:
+
+```rust
+# /* comment to avoid running
+let meta: ObjectMeta = ...;
+let reader = ParquetObjectReader::new(store, location)
+  .with_file_size(meta.size);
+# */
+```
+
+### `DisplayFormatType::TreeRender`
+
+DataFusion now supports [`tree` style explain plans]. Implementations of
+`Executionplan` must also provide a description in the
+`DisplayFormatType::TreeRender` format. This can be the same as the existing
+`DisplayFormatType::Default`.
+
+[`tree` style explain plans]: https://datafusion.apache.org/user-guide/sql/explain.html#tree-format-default
+
+### Removed Deprecated APIs
+
+Several APIs have been removed in this release. These were either deprecated
+previously or were hard to use correctly such as the multiple different
+`ScalarUDFImpl::invoke*` APIs. See [#15130], [#15123], and [#15027] for more
+details.
+
+[#15130]: https://github.com/apache/datafusion/pull/15130
+[#15123]: https://github.com/apache/datafusion/pull/15123
+[#15027]: https://github.com/apache/datafusion/pull/15027
+
+## `FileScanConfig` --> `FileScanConfigBuilder`
+
+Previously, `FileScanConfig::build()` directly created ExecutionPlans. In
+DataFusion 47.0.0 this has been changed to use `FileScanConfigBuilder`. See
+[#15352] for details.
+
+[#15352]: https://github.com/apache/datafusion/pull/15352
+
+Pattern in DataFusion `46.0.0`:
+
+```rust
+# /* comment to avoid running
+let plan = FileScanConfig::new(url, schema, Arc::new(file_source))
+  .with_statistics(stats)
+  ...
+  .build()
+# */
+```
+
+Pattern in DataFusion `47.0.0`:
+
+```rust
+# /* comment to avoid running
+let config = FileScanConfigBuilder::new(url, schema, Arc::new(file_source))
+  .with_statistics(stats)
+  ...
+  .build();
+let scan = DataSourceExec::from_data_source(config);
+# */
+```
+
 ## DataFusion `46.0.0`
 
 ### Use `invoke_with_args` instead of `invoke()` and `invoke_batch()`
@@ -39,7 +155,7 @@ below. See [PR 14876] for an example.
 Given existing code like this:
 
 ```rust
-# /*
+# /* comment to avoid running
 impl ScalarUDFImpl for SparkConcat {
 ...
     fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
@@ -59,7 +175,7 @@ impl ScalarUDFImpl for SparkConcat {
 To
 
 ```rust
-# /* comment out so they don't run
+# /* comment to avoid running
 impl ScalarUDFImpl for SparkConcat {
     ...
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -211,5 +327,100 @@ To include special characters (such as newlines via `\n`) you can use an `E` lit
 1 row(s) fetched.
 Elapsed 0.005 seconds.
 ```
+
+### Changes to array scalar function signatures
+
+DataFusion 46 has changed the way scalar array function signatures are
+declared. Previously, functions needed to select from a list of predefined
+signatures within the `ArrayFunctionSignature` enum. Now the signatures
+can be defined via a `Vec` of psuedo-types, which each correspond to a
+single argument. Those psuedo-types are the variants of the
+`ArrayFunctionArgument` enum and are as follows:
+
+- `Array`: An argument of type List/LargeList/FixedSizeList. All Array
+  arguments must be coercible to the same type.
+- `Element`: An argument that is coercible to the inner type of the `Array`
+  arguments.
+- `Index`: An `Int64` argument.
+
+Each of the old variants can be converted to the new format as follows:
+
+`TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndElement)`:
+
+```rust
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
+
+TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+    arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Element],
+    array_coercion: Some(ListCoercion::FixedSizedListToList),
+});
+```
+
+`TypeSignature::ArraySignature(ArrayFunctionSignature::ElementAndArray)`:
+
+```rust
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
+
+TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+    arguments: vec![ArrayFunctionArgument::Element, ArrayFunctionArgument::Array],
+    array_coercion: Some(ListCoercion::FixedSizedListToList),
+});
+```
+
+`TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndIndex)`:
+
+```rust
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
+
+TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+    arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Index],
+    array_coercion: None,
+});
+```
+
+`TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndElementAndOptionalIndex)`:
+
+```rust
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
+
+TypeSignature::OneOf(vec![
+    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+        arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Element],
+        array_coercion: None,
+    }),
+    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+        arguments: vec![
+            ArrayFunctionArgument::Array,
+            ArrayFunctionArgument::Element,
+            ArrayFunctionArgument::Index,
+        ],
+        array_coercion: None,
+    }),
+]);
+```
+
+`TypeSignature::ArraySignature(ArrayFunctionSignature::Array)`:
+
+```rust
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
+
+TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+    arguments: vec![ArrayFunctionArgument::Array],
+    array_coercion: None,
+});
+```
+
+Alternatively, you can switch to using one of the following functions which
+take care of constructing the `TypeSignature` for you:
+
+- `Signature::array_and_element`
+- `Signature::array_and_element_and_optional_index`
+- `Signature::array_and_index`
+- `Signature::array`
 
 [ticket]: https://github.com/apache/datafusion/issues/13286

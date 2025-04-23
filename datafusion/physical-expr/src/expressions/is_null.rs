@@ -103,6 +103,11 @@ impl PhysicalExpr for IsNullExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(IsNullExpr::new(Arc::clone(&children[0]))))
     }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.arg.fmt_sql(f)?;
+        write!(f, " IS NULL")
+    }
 }
 
 /// Create an IS NULL expression
@@ -120,6 +125,7 @@ mod tests {
     use arrow::buffer::ScalarBuffer;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_boolean_array;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
     fn is_null_op() -> Result<()> {
@@ -208,5 +214,19 @@ mod tests {
 
         let expected = &BooleanArray::from(vec![false, true, false, true, false, true]);
         assert_eq!(expected, &result);
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+
+        // expression: "a is null"
+        let expr = is_null(col("a", &schema)?).unwrap();
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "a@0 IS NULL");
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "a IS NULL");
+
+        Ok(())
     }
 }

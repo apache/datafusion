@@ -155,27 +155,25 @@ const QUERY2: &str = "SELECT 42, arrow_typeof(42)";
 // Run the query using the specified execution context and compare it
 // to the known result
 async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result<()> {
-    let expected = vec![
-        "+-------------+---------+",
-        "| customer_id | revenue |",
-        "+-------------+---------+",
-        "| paul        | 300     |",
-        "| jorge       | 200     |",
-        "| andy        | 150     |",
-        "+-------------+---------+",
-    ];
-
     let s = exec_sql(&ctx, QUERY).await?;
-    let actual = s.lines().collect::<Vec<_>>();
+    let actual = s.lines().collect::<Vec<_>>().join("\n");
 
-    assert_eq!(
-        expected,
-        actual,
-        "output mismatch for {}. Expectedn\n{}Actual:\n{}",
-        description,
-        expected.join("\n"),
-        s
-    );
+    insta::allow_duplicates! {
+        insta::with_settings!({
+            description => description,
+        }, {
+            insta::assert_snapshot!(actual, @r###"
+            +-------------+---------+
+            | customer_id | revenue |
+            +-------------+---------+
+            | paul        | 300     |
+            | jorge       | 200     |
+            | andy        | 150     |
+            +-------------+---------+
+        "###);
+        });
+    }
+
     Ok(())
 }
 
@@ -185,25 +183,21 @@ async fn run_and_compare_query_with_analyzer_rule(
     ctx: SessionContext,
     description: &str,
 ) -> Result<()> {
-    let expected = vec![
-        "+------------+--------------------------+",
-        "| UInt64(42) | arrow_typeof(UInt64(42)) |",
-        "+------------+--------------------------+",
-        "| 42         | UInt64                   |",
-        "+------------+--------------------------+",
-    ];
-
     let s = exec_sql(&ctx, QUERY2).await?;
-    let actual = s.lines().collect::<Vec<_>>();
+    let actual = s.lines().collect::<Vec<_>>().join("\n");
 
-    assert_eq!(
-        expected,
-        actual,
-        "output mismatch for {}. Expectedn\n{}Actual:\n{}",
-        description,
-        expected.join("\n"),
-        s
-    );
+    insta::with_settings!({
+        description => description,
+    }, {
+        insta::assert_snapshot!(actual, @r###"
+        +------------+--------------------------+
+        | UInt64(42) | arrow_typeof(UInt64(42)) |
+        +------------+--------------------------+
+        | 42         | UInt64                   |
+        +------------+--------------------------+
+        "###);
+    });
+
     Ok(())
 }
 
@@ -213,27 +207,23 @@ async fn run_and_compare_query_with_auto_schemas(
     ctx: SessionContext,
     description: &str,
 ) -> Result<()> {
-    let expected = vec![
-        "+----------+----------+",
-        "| column_1 | column_2 |",
-        "+----------+----------+",
-        "| andrew   | 100      |",
-        "| jorge    | 200      |",
-        "| andy     | 150      |",
-        "+----------+----------+",
-    ];
-
     let s = exec_sql(&ctx, QUERY1).await?;
-    let actual = s.lines().collect::<Vec<_>>();
+    let actual = s.lines().collect::<Vec<_>>().join("\n");
 
-    assert_eq!(
-        expected,
-        actual,
-        "output mismatch for {}. Expectedn\n{}Actual:\n{}",
-        description,
-        expected.join("\n"),
-        s
-    );
+    insta::with_settings!({
+            description => description,
+        }, {
+            insta::assert_snapshot!(actual, @r###"
+            +----------+----------+
+            | column_1 | column_2 |
+            +----------+----------+
+            | andrew   | 100      |
+            | jorge    | 200      |
+            | andy     | 150      |
+            +----------+----------+
+        "###);
+    });
+
     Ok(())
 }
 

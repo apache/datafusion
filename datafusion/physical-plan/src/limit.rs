@@ -268,8 +268,7 @@ impl DisplayAs for LocalLimitExec {
                 write!(f, "LocalLimitExec: fetch={}", self.fetch)
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                write!(f, "limit={}", self.fetch)
             }
         }
     }

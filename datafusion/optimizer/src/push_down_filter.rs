@@ -799,6 +799,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     child_filter.input,
                 )?);
+                #[allow(clippy::used_underscore_binding)]
                 self.rewrite(new_filter, _config)
             }
             LogicalPlan::Repartition(repartition) => {

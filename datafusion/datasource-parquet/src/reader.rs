@@ -18,18 +18,18 @@
 //! [`ParquetFileReaderFactory`] and [`DefaultParquetFileReaderFactory`] for
 //! low level control of parquet file readers
 
+use crate::ParquetFileMetrics;
 use bytes::Bytes;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::future::BoxFuture;
 use object_store::ObjectStore;
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::file::metadata::ParquetMetaData;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
-
-use crate::ParquetFileMetrics;
 
 /// Interface for reading parquet files.
 ///
@@ -96,28 +96,30 @@ pub(crate) struct ParquetFileReader {
 impl AsyncFileReader for ParquetFileReader {
     fn get_bytes(
         &mut self,
-        range: Range<usize>,
+        range: Range<u64>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        self.file_metrics.bytes_scanned.add(range.end - range.start);
+        let bytes_scanned = range.end - range.start;
+        self.file_metrics.bytes_scanned.add(bytes_scanned as usize);
         self.inner.get_bytes(range)
     }
 
     fn get_byte_ranges(
         &mut self,
-        ranges: Vec<Range<usize>>,
+        ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>>
     where
         Self: Send,
     {
-        let total = ranges.iter().map(|r| r.end - r.start).sum();
-        self.file_metrics.bytes_scanned.add(total);
+        let total: u64 = ranges.iter().map(|r| r.end - r.start).sum();
+        self.file_metrics.bytes_scanned.add(total as usize);
         self.inner.get_byte_ranges(ranges)
     }
 
-    fn get_metadata(
-        &mut self,
-    ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        self.inner.get_metadata()
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        self.inner.get_metadata(options)
     }
 }
 
@@ -135,7 +137,8 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
             metrics,
         );
         let store = Arc::clone(&self.store);
-        let mut inner = ParquetObjectReader::new(store, file_meta.object_meta);
+        let mut inner = ParquetObjectReader::new(store, file_meta.object_meta.location)
+            .with_file_size(file_meta.object_meta.size);
 
         if let Some(hint) = metadata_size_hint {
             inner = inner.with_footer_size_hint(hint)

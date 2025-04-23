@@ -15,9 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_catalog::Session;
+use std::sync::Arc;
+
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_session::Session;
+
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
@@ -26,7 +29,6 @@ use log::debug;
 use object_store::path::Path;
 use object_store::path::DELIMITER;
 use object_store::{ObjectMeta, ObjectStore};
-use std::sync::Arc;
 use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
@@ -136,7 +138,12 @@ impl ListingTableUrl {
     }
 
     /// Creates a new [`ListingTableUrl`] from a url and optional glob expression
-    fn try_new(url: Url, glob: Option<Pattern>) -> Result<Self> {
+    ///
+    /// [`Self::parse`] supports glob expression only for file system paths.
+    /// However, some applications may want to support glob expression for URLs with a scheme.
+    /// The application can split the URL into a base URL and a glob expression and use this method
+    /// to create a [`ListingTableUrl`].
+    pub fn try_new(url: Url, glob: Option<Pattern>) -> Result<Self> {
         let prefix = Path::from_url_path(url.path())?;
         Ok(Self { url, prefix, glob })
     }
@@ -202,10 +209,10 @@ impl ListingTableUrl {
     /// assert_eq!(url.file_extension(), None);
     /// ```
     pub fn file_extension(&self) -> Option<&str> {
-        if let Some(segments) = self.url.path_segments() {
-            if let Some(last_segment) = segments.last() {
+        if let Some(mut segments) = self.url.path_segments() {
+            if let Some(last_segment) = segments.next_back() {
                 if last_segment.contains(".") && !last_segment.ends_with(".") {
-                    return last_segment.split('.').last();
+                    return last_segment.split('.').next_back();
                 }
             }
         }

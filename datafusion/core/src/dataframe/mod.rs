@@ -54,6 +54,7 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
     DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
 };
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     case,
     dml::InsertOp,
@@ -342,13 +343,28 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn select(self, expr_list: Vec<Expr>) -> Result<DataFrame> {
-        let window_func_exprs = find_window_exprs(&expr_list);
+    pub fn select(
+        self,
+        expr_list: impl IntoIterator<Item = impl Into<SelectExpr>>,
+    ) -> Result<DataFrame> {
+        let expr_list: Vec<SelectExpr> =
+            expr_list.into_iter().map(|e| e.into()).collect::<Vec<_>>();
+
+        let expressions = expr_list
+            .iter()
+            .filter_map(|e| match e {
+                SelectExpr::Expression(expr) => Some(expr.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let window_func_exprs = find_window_exprs(&expressions);
         let plan = if window_func_exprs.is_empty() {
             self.plan
         } else {
             LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
         };
+
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
 
         Ok(DataFrame {
@@ -669,6 +685,46 @@ impl DataFrame {
         })
     }
 
+    /// Calculate the union of two [`DataFrame`]s using column names, preserving duplicate rows.
+    ///
+    /// The two [`DataFrame`]s are combined using column names rather than position,
+    /// filling missing columns with null.
+    ///
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = df.clone().select_columns(&["b", "c", "a"])?.with_column("d", lit("77"))?;
+    /// let df = df.union_by_name(d2)?;
+    /// let expected = vec![
+    ///     "+---+---+---+----+",
+    ///     "| a | b | c | d  |",
+    ///     "+---+---+---+----+",
+    ///     "| 1 | 2 | 3 |    |",
+    ///     "| 1 | 2 | 3 | 77 |",
+    ///     "+---+---+---+----+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn union_by_name(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .union_by_name(dataframe.plan)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
     /// Calculate the distinct union of two [`DataFrame`]s.
     ///
     /// The two [`DataFrame`]s must have exactly the same schema. Any duplicate
@@ -700,6 +756,45 @@ impl DataFrame {
     pub fn union_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .union_distinct(dataframe.plan)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
+    /// Calculate the union of two [`DataFrame`]s using column names with all duplicated rows removed.
+    ///
+    /// The two [`DataFrame`]s are combined using column names rather than position,
+    /// filling missing columns with null.
+    ///
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = df.clone().select_columns(&["b", "c", "a"])?;
+    /// let df = df.union_by_name_distinct(d2)?;
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn union_by_name_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .union_by_name_distinct(dataframe.plan)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
