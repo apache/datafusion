@@ -3494,16 +3494,12 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
     // Create a base plan
     let parquet_exec = parquet_exec();
 
-    let sort_expr = PhysicalSortExpr {
-        expr: Arc::new(Column::new("id", 0)),
-        options: SortOptions::default(),
-    };
-
-    let ordering = LexOrdering::new(vec![sort_expr]);
+    let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("id", 0)));
 
     // Create a SortPreservingMergeExec with fetch=5
     let spm_exec = Arc::new(
-        SortPreservingMergeExec::new(ordering, parquet_exec.clone()).with_fetch(Some(5)),
+        SortPreservingMergeExec::new([sort_expr].into(), parquet_exec.clone())
+            .with_fetch(Some(5)),
     );
 
     // Create distribution context
