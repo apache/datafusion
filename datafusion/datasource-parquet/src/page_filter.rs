@@ -132,7 +132,7 @@ impl PagePruningAccessPlanFilter {
                 let pp = match PruningPredicate::try_new(
                     Arc::clone(predicate),
                     Arc::clone(&schema),
-                    column_orderings,
+                    column_orderings.clone(),
                 ) {
                     Ok(pp) => pp,
                     Err(e) => {

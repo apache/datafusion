@@ -430,10 +430,10 @@ fn build_pruning_predicates(
     let pruning_predicate = build_pruning_predicate(
         Arc::clone(predicate),
         file_schema,
-        column_orderings,
+        column_orderings.clone(),
         predicate_creation_errors,
     );
-    let page_pruning_predicate = build_page_pruning_predicate(predicate, file_schema);
+    let page_pruning_predicate = build_page_pruning_predicate(predicate, file_schema, column_orderings);
     (pruning_predicate, Some(page_pruning_predicate))
 }
 

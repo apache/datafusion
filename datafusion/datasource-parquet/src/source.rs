@@ -39,6 +39,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::pruning::ColumnOrdering;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion_physical_plan::DisplayFormatType;
@@ -318,10 +319,17 @@ impl ParquetSource {
         conf = conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
 
-        conf.page_pruning_predicate =
-            Some(build_page_pruning_predicate(&predicate, &file_schema));
-        conf.pruning_predicate =
-            build_pruning_predicate(predicate, &file_schema, &predicate_creation_errors);
+        conf.page_pruning_predicate = Some(build_page_pruning_predicate(
+            &predicate,
+            &file_schema,
+            vec![ColumnOrdering::Unknown; file_schema.fields().len()],
+        ));
+        conf.pruning_predicate = build_pruning_predicate(
+            predicate,
+            &file_schema,
+            vec![ColumnOrdering::Unknown; file_schema.fields().len()],
+            &predicate_creation_errors,
+        );
 
         conf
     }
