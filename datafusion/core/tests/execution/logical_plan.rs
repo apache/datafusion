@@ -31,6 +31,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_plan::collect;
+use insta::assert_snapshot;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -121,9 +122,14 @@ fn inline_scan_projection_test() -> Result<()> {
     let source = provider_as_source(Arc::new(provider));
 
     let plan = LogicalPlanBuilder::scan(name, source, Some(projection))?.build()?;
-    assert_eq!(
+
+    assert_snapshot!(
         format!("{plan}"),
-        format!("TableScan: {name} projection=[{column}]")
+        @r"
+    SubqueryAlias: ?table?
+      Projection: a
+        EmptyRelation
+    "
     );
 
     Ok(())
