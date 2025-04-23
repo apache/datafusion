@@ -157,6 +157,7 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 /// Memory limit of `MemoryPool`
 pub enum MemoryLimit {
     Infinite,
+    /// Bounded memory limit in bytes.
     Finite(usize),
     Unknown,
 }
