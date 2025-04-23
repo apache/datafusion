@@ -491,6 +491,24 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(None)
     }
 
+    /// Collect filters that this node can push down to its children.
+    /// Filters that are being pushed down from parents are passed in,
+    /// and the node may generate additional filters to push down.
+    /// For example, given the plan FilterExec -> HashJoinExec -> DataSourceExec,
+    /// what will happen is that we recurse down the plan calling `ExecutionPlan::gather_filters_for_pushdown`:
+    /// 1. `FilterExec::gather_filters_for_pushdown` is called with no parent
+    ///    filters so it only returns that `FilterExec` wants to push down its own predicate.
+    /// 2. `HashJoinExec::gather_filters_for_pushdown` is called with the filter from
+    ///     `FilterExec`, which it only allows to push down to one side of the join (unless it's on the join key)
+    ///     but it also adds its own filters (e.g. pushing down a bloom filter of the hash table to the scan side of the join).
+    /// 3. `DataSourceExec::gather_filters_for_pushdown` is called with both filters from `HashJoinExec`
+    ///    and `FilterExec`, however `DataSourceExec::gather_filters_for_pushdown` doesn't actually do anything
+    ///    since it has no children and no additional filters to push down.
+    ///    It's only once [`ExecutionPlan::handle_child_pushdown_result`] is called on `DataSourceExec` as we recurse
+    ///    up the plan that `DataSourceExec` can actually bind the filters.
+    /// 
+    /// The default implementation bars all parent filters from being pushed down and adds no new filters.
+    /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
     fn gather_filters_for_pushdown(
         &self,
         parent_filters: &[Arc<dyn PhysicalExpr>],
@@ -502,6 +520,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         ))
     }
 
+    /// Handle the result of a child pushdown.
+    /// This is called as we recurse back up the plan tree after recursing down and calling [`ExecutionPlan::gather_filters_for_pushdown`].
+    /// Once we know what the result of pushing down filters into children is we ask the current node what it wants to do with that result.
+    /// For a `DataSourceExec` that may be absorbing the filters to apply them during the scan phase
+    /// (also known as late materialization).
+    /// A `FilterExec` may absorb any filters its children could not absorb, or if there are no filters left it
+    /// may remove itself from the plan altogether.
+    /// A `HashJoinExec` may ignore the pushdown result since it needs to apply the filters as part of the join anyhow.
+    /// 
+    /// The default implementation is a no-op that passes the result of pushdown from the children to its parent.
     fn handle_child_pushdown_result(
         &self,
         child_pushdown_result: ChildPushdownResult,

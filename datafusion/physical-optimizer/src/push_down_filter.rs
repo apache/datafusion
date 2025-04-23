@@ -31,11 +31,12 @@ use itertools::izip;
 ///
 /// # Default Implementation
 ///
-/// The default implementation in [`ExecutionPlan::try_pushdown_filters`] is a no-op
-/// that assumes that:
+/// The default implementation in [`ExecutionPlan::gather_filters_for_pushdown`]
+/// and [`ExecutionPlan::handle_child_pushdown_result`] assumes that:
 ///
-/// * Parent filters can't be passed onto children.
-/// * This node has no filters to contribute.
+/// * Parent filters can't be passed onto children (determined by [`ExecutionPlan::gather_filters_for_pushdown`])
+/// * This node has no filters to contribute (determined by [`ExecutionPlan::gather_filters_for_pushdown`]).
+/// * Any filters that could not be pushed down to the children are marked as unsupported (determined by [`ExecutionPlan::handle_child_pushdown_result`]).
 ///
 /// # Example: Push filter into a `DataSourceExec`
 ///
@@ -238,7 +239,7 @@ use itertools::izip;
 /// The point here is that:
 /// 1. We cannot push down `sum > 10` through the [`AggregateExec`] node into the `DataSourceExec` node.
 ///    Any filters above the [`AggregateExec`] node are not pushed down.
-///    This is determined by calling [`ExecutionPlan::try_pushdown_filters`] on the [`AggregateExec`] node.
+///    This is determined by calling [`ExecutionPlan::gather_filters_for_pushdown`] on the [`AggregateExec`] node.
 /// 2. We need to keep recursing into the tree so that we can discover the other [`FilterExec`] node and push
 ///    down the `id=1` filter.
 ///
