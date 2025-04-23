@@ -2218,7 +2218,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 <section id="approx-median">
 <h3><code class="docutils literal notranslate"><span class="pre">approx_median</span></code><a class="headerlink" href="#approx-median" title="Link to this heading">¶</a></h3>
-<p>Returns the approximate median (50th percentile) of input values. It is an alias of <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont(x,</span> <span class="pre">0.5)</span></code>.</p>
+<p>Returns the approximate median (50th percentile) of input values. It is an alias of <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont(0.5)</span> <span class="pre">WITHIN</span> <span class="pre">GROUP</span> <span class="pre">(ORDER</span> <span class="pre">BY</span> <span class="pre">x)</span></code>.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_median</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -2243,7 +2243,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 <section id="approx-percentile-cont">
 <h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code><a class="headerlink" href="#approx-percentile-cont" title="Link to this heading">¶</a></h3>
 <p>Returns the approximate percentile of input values using the t-digest algorithm.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">percentile</span><span class="p">,</span><span class="w"> </span><span class="n">centroids</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont</span><span class="p">(</span><span class="n">percentile</span><span class="p">,</span><span class="w"> </span><span class="n">centroids</span><span class="p">)</span><span class="w"> </span><span class="n">WITHIN</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id59">
@@ -2256,12 +2256,12 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 <section id="id60">
 <h4>Example<a class="headerlink" href="#id60" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">approx_percentile_cont</span><span class="p">(</span><span class="k">column_name</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">75</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">approx_percentile_cont</span><span class="p">(</span><span class="k">column_name</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">75</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">)</span><span class="w">  </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">65</span><span class="p">.</span><span class="mi">0</span><span class="w">                                            </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">approx_percentile_cont</span><span class="p">(</span><span class="mi">0</span><span class="p">.</span><span class="mi">75</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">)</span><span class="w"> </span><span class="n">WITHIN</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">column_name</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">approx_percentile_cont</span><span class="p">(</span><span class="mi">0</span><span class="p">.</span><span class="mi">75</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">)</span><span class="w"> </span><span class="n">WITHIN</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">column_name</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">65</span><span class="p">.</span><span class="mi">0</span><span class="w">                                                                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -2269,7 +2269,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 <section id="approx-percentile-cont-with-weight">
 <h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code><a class="headerlink" href="#approx-percentile-cont-with-weight" title="Link to this heading">¶</a></h3>
 <p>Returns the weighted approximate percentile of input values using the t-digest algorithm.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont_with_weight</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">weight</span><span class="p">,</span><span class="w"> </span><span class="n">percentile</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont_with_weight</span><span class="p">(</span><span class="n">weight</span><span class="p">,</span><span class="w"> </span><span class="n">percentile</span><span class="p">)</span><span class="w"> </span><span class="n">WITHIN</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id61">
@@ -2282,12 +2282,12 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 <section id="id62">
 <h4>Example<a class="headerlink" href="#id62" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">approx_percentile_cont_with_weight</span><span class="p">(</span><span class="k">column_name</span><span class="p">,</span><span class="w"> </span><span class="n">weight_column</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">90</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">approx_percentile_cont_with_weight</span><span class="p">(</span><span class="k">column_name</span><span class="p">,</span><span class="w"> </span><span class="n">weight_column</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">90</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">78</span><span class="p">.</span><span class="mi">5</span><span class="w">                                                                 </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">approx_percentile_cont_with_weight</span><span class="p">(</span><span class="n">weight_column</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">90</span><span class="p">)</span><span class="w"> </span><span class="n">WITHIN</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">column_name</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">approx_percentile_cont_with_weight</span><span class="p">(</span><span class="n">weight_column</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">90</span><span class="p">)</span><span class="w"> </span><span class="n">WITHIN</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">column_name</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">78</span><span class="p">.</span><span class="mi">5</span><span class="w">                                                                                        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
