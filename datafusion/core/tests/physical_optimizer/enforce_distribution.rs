@@ -51,6 +51,7 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
@@ -3484,6 +3485,50 @@ fn optimize_away_unnecessary_repartition2() -> Result<()> {
     let test_config = TestConfig::default();
     test_config.run(expected, physical_plan.clone(), &DISTRIB_DISTRIB_SORT)?;
     test_config.run(expected, physical_plan, &SORT_DISTRIB_DISTRIB)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
+    // Create a base plan
+    let parquet_exec = parquet_exec();
+
+    let sort_expr = PhysicalSortExpr {
+        expr: Arc::new(Column::new("id", 0)),
+        options: SortOptions::default(),
+    };
+
+    let ordering = LexOrdering::new(vec![sort_expr]);
+
+    // Create a SortPreservingMergeExec with fetch=5
+    let spm_exec = Arc::new(
+        SortPreservingMergeExec::new(ordering, parquet_exec.clone()).with_fetch(Some(5)),
+    );
+
+    // Create distribution context
+    let dist_context = DistributionContext::new(
+        spm_exec,
+        true,
+        vec![DistributionContext::new(parquet_exec, false, vec![])],
+    );
+
+    // Apply the function
+    let result = replace_order_preserving_variants(dist_context)?;
+
+    // Verify the plan was transformed to CoalescePartitionsExec
+    result
+        .plan
+        .as_any()
+        .downcast_ref::<CoalescePartitionsExec>()
+        .expect("Expected CoalescePartitionsExec");
+
+    // Verify fetch was preserved
+    assert_eq!(
+        result.plan.fetch(),
+        Some(5),
+        "Fetch value was not preserved after transformation"
+    );
 
     Ok(())
 }

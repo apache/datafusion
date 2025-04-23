@@ -796,7 +796,7 @@ impl ListingTable {
     /// If `None`, creates a new [`DefaultFileStatisticsCache`] scoped to this query.
     pub fn with_cache(mut self, cache: Option<FileStatisticsCache>) -> Self {
         self.collected_statistics =
-            cache.unwrap_or(Arc::new(DefaultFileStatisticsCache::default()));
+            cache.unwrap_or_else(|| Arc::new(DefaultFileStatisticsCache::default()));
         self
     }
 
