@@ -21,13 +21,13 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, Field, TimeUnit},
 };
-use datafusion_common::{Diagnostic, Span};
 use datafusion_common::types::LogicalType;
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, ListCoercion};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, plan_err, plan_datafusion_err,types::NativeType,
-    utils::list_ndims, Result,
+    exec_err, internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
+    types::NativeType, utils::list_ndims, Result,
 };
+use datafusion_common::{Diagnostic, Span};
 use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
@@ -50,12 +50,7 @@ pub fn data_types_with_scalar_udf(
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
-    check_function_length_with_diag(
-        func.name(),
-        type_signature,
-        current_types,
-        None,
-    )?;
+    check_function_length_with_diag(func.name(), type_signature, current_types, None)?;
 
     let valid_types =
         get_valid_types_with_scalar_udf(type_signature, current_types, func)?;
@@ -84,12 +79,7 @@ pub fn data_types_with_aggregate_udf(
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
-    check_function_length_with_diag(
-        func.name(),
-        type_signature,
-        current_types,
-        None,
-    )?;
+    check_function_length_with_diag(func.name(), type_signature, current_types, None)?;
 
     let valid_types =
         get_valid_types_with_aggregate_udf(type_signature, current_types, func)?;
@@ -117,12 +107,7 @@ pub fn data_types_with_window_udf(
     let signature = func.signature();
     let type_signature = &signature.type_signature;
 
-    check_function_length_with_diag(
-        func.name(),
-        type_signature,
-        current_types,
-        None,
-    )?;
+    check_function_length_with_diag(func.name(), type_signature, current_types, None)?;
 
     let valid_types =
         get_valid_types_with_window_udf(type_signature, current_types, func)?;
@@ -244,12 +229,12 @@ pub fn check_function_length_with_diag(
     current_types: &[DataType],
     function_call_site: Option<Span>,
 ) -> Result<()> {
-     // Special handling for zero arguments
+    // Special handling for zero arguments
     if current_types.is_empty() {
         if signature.supports_zero_argument() {
             return Ok(());
         }
-        
+
         let (error_message, note) = if signature.used_to_support_zero_arguments() {
             (
                 format!("Zero arguments not supported for {} function. Use TypeSignature::Nullary for zero arguments", function_name),
@@ -257,12 +242,16 @@ pub fn check_function_length_with_diag(
             )
         } else {
             (
-                format!("Zero arguments not supported for {} function", function_name),
-                format!("Function {} requires at least one argument", function_name)
+                format!(
+                    "Zero arguments not supported for {} function",
+                    function_name
+                ),
+                format!("Function {} requires at least one argument", function_name),
             )
         };
 
-        let mut diagnostic = Diagnostic::new_error(error_message.clone(), function_call_site);
+        let mut diagnostic =
+            Diagnostic::new_error(error_message.clone(), function_call_site);
         diagnostic.add_note(note, None);
 
         return Err(plan_datafusion_err!("{}", error_message).with_diagnostic(diagnostic));
@@ -270,12 +259,8 @@ pub fn check_function_length_with_diag(
 
     // Helper closure to create and return an error with diagnostic information
     let create_error = |expected: &str, got: usize| {
-        let error_message = format!(
-            "Function '{}' {}, got {}",
-            function_name,
-            expected,
-            got,
-        );
+        let error_message =
+            format!("Function '{}' {}, got {}", function_name, expected, got,);
 
         let diagnostic = Diagnostic::new_error(error_message.clone(), function_call_site);
 
@@ -283,61 +268,96 @@ pub fn check_function_length_with_diag(
     };
 
     match signature {
-        TypeSignature::Uniform(num, _) | 
-        TypeSignature::Numeric(num) |
-        TypeSignature::String(num) |
-        TypeSignature::Comparable(num) |
-        TypeSignature::Any(num) if current_types.len() != *num => {
-            return create_error(&format!("expects {} arguments", num), current_types.len());
-        },
+        TypeSignature::Uniform(num, _)
+        | TypeSignature::Numeric(num)
+        | TypeSignature::String(num)
+        | TypeSignature::Comparable(num)
+        | TypeSignature::Any(num)
+            if current_types.len() != *num =>
+        {
+            return create_error(
+                &format!("expects {} arguments", num),
+                current_types.len(),
+            );
+        }
         // Length-based signature types
         TypeSignature::Exact(types) if current_types.len() != types.len() => {
-            return create_error(&format!("expects {} arguments", types.len()), current_types.len());
-        },
+            return create_error(
+                &format!("expects {} arguments", types.len()),
+                current_types.len(),
+            );
+        }
         TypeSignature::Coercible(types) if current_types.len() != types.len() => {
-            return create_error(&format!("expects {} arguments", types.len()), current_types.len());
-        },
-        
+            return create_error(
+                &format!("expects {} arguments", types.len()),
+                current_types.len(),
+            );
+        }
+
         // Zero argument signature type
         TypeSignature::Nullary if !current_types.is_empty() => {
             return create_error("expects zero arguments", current_types.len());
-        },
-        
+        }
+
         // Array signature types
         TypeSignature::ArraySignature(array_signature) => match array_signature {
-            ArrayFunctionSignature::Array { arguments, .. } if current_types.len() != arguments.len() => {
-                return create_error(&format!("expects {} arguments", arguments.len()), current_types.len());
-            },
-            ArrayFunctionSignature::RecursiveArray | ArrayFunctionSignature::MapArray if current_types.len() != 1 => {
-                return create_error("expects exactly one array argument", current_types.len());
-            },
+            ArrayFunctionSignature::Array { arguments, .. }
+                if current_types.len() != arguments.len() =>
+            {
+                return create_error(
+                    &format!("expects {} arguments", arguments.len()),
+                    current_types.len(),
+                );
+            }
+            ArrayFunctionSignature::RecursiveArray | ArrayFunctionSignature::MapArray
+                if current_types.len() != 1 =>
+            {
+                return create_error(
+                    "expects exactly one array argument",
+                    current_types.len(),
+                );
+            }
             _ => {}
         },
-        
+
         // Multiple signature type
         TypeSignature::OneOf(signatures) => {
             // Try to match any signature
             for sig in signatures {
-                if check_function_length_with_diag(function_name, sig, current_types, function_call_site).is_ok() {
+                if check_function_length_with_diag(
+                    function_name,
+                    sig,
+                    current_types,
+                    function_call_site,
+                )
+                .is_ok()
+                {
                     return Ok(());
                 }
             }
-            
+
             // Create error for no matching signature
             let error_message = format!(
                 "Function '{}' has no matching signature for {} arguments",
-                function_name, current_types.len()
+                function_name,
+                current_types.len()
             );
-            
-            let mut diagnostic = Diagnostic::new_error(error_message.clone(), function_call_site);
+
+            let mut diagnostic =
+                Diagnostic::new_error(error_message.clone(), function_call_site);
             diagnostic.add_note(
-                format!("The function {} has multiple possible signatures", function_name),
+                format!(
+                    "The function {} has multiple possible signatures",
+                    function_name
+                ),
                 None,
             );
-            
-            return Err(plan_datafusion_err!("{}", error_message).with_diagnostic(diagnostic));
-        },
-        
+
+            return Err(
+                plan_datafusion_err!("{}", error_message).with_diagnostic(diagnostic)
+            );
+        }
+
         // All other cases:
         // Variadic signatures: they are specifically designed for variable argument counts, so length checking isn't necessary.
         // User-Defined signature:  argument validation responsibility is delegated to the user-defined function implementation itself
@@ -365,7 +385,6 @@ fn get_valid_types_with_scalar_udf(
             let mut res = vec![];
             let mut errors = vec![];
             for sig in signatures {
-                
                 match get_valid_types_with_scalar_udf(sig, current_types, func) {
                     Ok(valid_types) => {
                         res.extend(valid_types);
@@ -696,7 +715,6 @@ fn get_valid_types(
             }
         }
         TypeSignature::Coercible(param_types) => {
-            
             let mut new_types = Vec::with_capacity(current_types.len());
             for (current_type, param) in current_types.iter().zip(param_types.iter()) {
                 let current_native_type: NativeType = current_type.into();
@@ -777,7 +795,6 @@ fn get_valid_types(
         TypeSignature::Nullary => vec![vec![]],
 
         TypeSignature::Any(number) => vec![(0..*number).map(|i| current_types[i].clone()).collect()],
-        
         TypeSignature::OneOf(types) => types
             .iter()
             .filter_map(|t| get_valid_types(function_name, t, current_types).ok())
