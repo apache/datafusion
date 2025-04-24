@@ -209,7 +209,7 @@ strip = false
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"
 used_underscore_binding = "warn"
-or_fun_call = "warn" 
+or_fun_call = "warn"
 unnecessary_lazy_evaluations = "warn"
 
 [workspace.lints.rust]

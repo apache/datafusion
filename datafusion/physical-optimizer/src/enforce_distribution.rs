@@ -42,7 +42,6 @@ use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
 };
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -953,8 +952,8 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
                 input
                     .plan
                     .output_ordering()
-                    .unwrap_or(&LexOrdering::default())
-                    .clone(),
+                    .cloned()
+                    .unwrap_or_default(),
                 Arc::clone(&input.plan),
             )) as _
         } else {
