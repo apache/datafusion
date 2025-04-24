@@ -272,52 +272,57 @@ pub fn check_function_length_with_diag(
         | TypeSignature::Numeric(num)
         | TypeSignature::String(num)
         | TypeSignature::Comparable(num)
-        | TypeSignature::Any(num)
-            if current_types.len() != *num =>
-        {
-            return create_error(
-                &format!("expects {} arguments", num),
-                current_types.len(),
-            );
+        | TypeSignature::Any(num) => {
+            if current_types.len() != *num {
+                return create_error(
+                    &format!("expects {} arguments", num),
+                    current_types.len(),
+                );
+            }
         }
         // Length-based signature types
-        TypeSignature::Exact(types) if current_types.len() != types.len() => {
-            return create_error(
-                &format!("expects {} arguments", types.len()),
-                current_types.len(),
-            );
+        TypeSignature::Exact(types) => {
+            if current_types.len() != types.len() {
+                return create_error(
+                    &format!("expects {} arguments", types.len()),
+                    current_types.len(),
+                );
+            }
         }
-        TypeSignature::Coercible(types) if current_types.len() != types.len() => {
-            return create_error(
-                &format!("expects {} arguments", types.len()),
-                current_types.len(),
-            );
+        TypeSignature::Coercible(types) => {
+            if current_types.len() != types.len() {
+                return create_error(
+                    &format!("expects {} arguments", types.len()),
+                    current_types.len(),
+                );
+            }
         }
 
         // Zero argument signature type
-        TypeSignature::Nullary if !current_types.is_empty() => {
-            return create_error("expects zero arguments", current_types.len());
+        TypeSignature::Nullary => {
+            if !current_types.is_empty() {
+                return create_error("expects zero arguments", current_types.len());
+            }
         }
 
         // Array signature types
         TypeSignature::ArraySignature(array_signature) => match array_signature {
-            ArrayFunctionSignature::Array { arguments, .. }
-                if current_types.len() != arguments.len() =>
-            {
-                return create_error(
-                    &format!("expects {} arguments", arguments.len()),
-                    current_types.len(),
-                );
+            ArrayFunctionSignature::Array { arguments, .. } => {
+                if current_types.len() != arguments.len() {
+                    return create_error(
+                        &format!("expects {} arguments", arguments.len()),
+                        current_types.len(),
+                    );
+                }
             }
-            ArrayFunctionSignature::RecursiveArray | ArrayFunctionSignature::MapArray
-                if current_types.len() != 1 =>
-            {
-                return create_error(
-                    "expects exactly one array argument",
-                    current_types.len(),
-                );
+            ArrayFunctionSignature::RecursiveArray | ArrayFunctionSignature::MapArray => {
+                if current_types.len() != 1 {
+                    return create_error(
+                        "expects exactly one array argument",
+                        current_types.len(),
+                    );
+                }
             }
-            _ => {}
         },
 
         // Multiple signature type
@@ -340,7 +345,7 @@ pub fn check_function_length_with_diag(
                 }
             }
 
-            if all_results.is_empty() {
+            if !all_results.is_empty() {
                 // Create error for no matching signature
                 let error_message = format!(
                     "Function '{}' has no matching signature for {} arguments",
