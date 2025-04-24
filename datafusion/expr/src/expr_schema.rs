@@ -578,18 +578,39 @@ impl Expr {
             WindowFunctionDefinition::AggregateUDF(udaf) => {
                 let new_types = data_types_with_aggregate_udf(&data_types, udaf)
                     .map_err(|err| {
-                        plan_datafusion_err!(
+                        let diagnostic = err.diagnostic().cloned();
+
+                        let err = plan_datafusion_err!(
                             "{} {}",
                             match err {
                                 DataFusionError::Plan(msg) => msg,
+                                DataFusionError::Diagnostic(_, boxed_err) =>
+                                    match *boxed_err {
+                                        DataFusionError::Plan(msg) => msg,
+                                        _ => boxed_err.to_string(),
+                                    },
                                 err => err.to_string(),
                             },
                             utils::generate_signature_error_msg(
                                 fun.name(),
-                                fun.signature(),
-                                &data_types
+                                fun.signature().clone(),
+                                &data_types,
                             )
-                        )
+                        );
+
+                        if let Some(mut diagnostic) = diagnostic {
+                            diagnostic.add_help(
+                                utils::generate_signature_error_msg(
+                                    fun.name(),
+                                    fun.signature().clone(),
+                                    &data_types,
+                                ),
+                                None,
+                            );
+                            err.with_diagnostic(diagnostic)
+                        } else {
+                            err
+                        }
                     })?;
 
                 let return_type = udaf.return_type(&new_types)?;
@@ -600,18 +621,39 @@ impl Expr {
             WindowFunctionDefinition::WindowUDF(udwf) => {
                 let new_types =
                     data_types_with_window_udf(&data_types, udwf).map_err(|err| {
-                        plan_datafusion_err!(
+                        let diagnostic = err.diagnostic().cloned();
+
+                        let err = plan_datafusion_err!(
                             "{} {}",
                             match err {
                                 DataFusionError::Plan(msg) => msg,
+                                DataFusionError::Diagnostic(_, boxed_err) =>
+                                    match *boxed_err {
+                                        DataFusionError::Plan(msg) => msg,
+                                        _ => boxed_err.to_string(),
+                                    },
                                 err => err.to_string(),
                             },
                             utils::generate_signature_error_msg(
                                 fun.name(),
-                                fun.signature(),
-                                &data_types
+                                fun.signature().clone(),
+                                &data_types,
                             )
-                        )
+                        );
+
+                        if let Some(mut diagnostic) = diagnostic {
+                            diagnostic.add_help(
+                                utils::generate_signature_error_msg(
+                                    fun.name(),
+                                    fun.signature().clone(),
+                                    &data_types,
+                                ),
+                                None,
+                            );
+                            err.with_diagnostic(diagnostic)
+                        } else {
+                            err
+                        }
                     })?;
                 let (_, function_name) = self.qualified_name();
                 let field_args = WindowUDFFieldArgs::new(&new_types, &function_name);
