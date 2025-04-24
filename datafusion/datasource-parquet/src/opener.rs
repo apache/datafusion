@@ -42,7 +42,7 @@ use log::debug;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::basic::ColumnOrder;
+use parquet::basic::{ColumnOrder, SortOrder};
 use parquet::file::metadata::ParquetMetaDataReader;
 
 /// Implements [`FileOpener`] for a parquet file
@@ -187,9 +187,17 @@ impl FileOpener for ParquetOpener {
                         column_orders
                             .iter()
                             .map(|order| match order {
-                                ColumnOrder::TYPE_DEFINED_ORDER(_) => {
-                                    ColumnOrdering::TypeDefined
+                                ColumnOrder::TYPE_DEFINED_ORDER(sort_order) => {
+                                    match sort_order {
+                                        SortOrder::SIGNED => ColumnOrdering::Signed,
+                                        SortOrder::UNSIGNED => ColumnOrdering::Unsigned,
+                                        _ => ColumnOrdering::Undefined,
+                                    }
                                 }
+                                /* TODO(ets): for future
+                                ColumnOrder::IEEE_754_TOTAL_ORDER => {
+                                    ColumnOrdering::TotalOrder
+                                }*/
                                 ColumnOrder::UNDEFINED => ColumnOrdering::Unknown,
                             })
                             .collect::<Vec<_>>()
@@ -433,7 +441,8 @@ fn build_pruning_predicates(
         column_orderings.clone(),
         predicate_creation_errors,
     );
-    let page_pruning_predicate = build_page_pruning_predicate(predicate, file_schema, column_orderings);
+    let page_pruning_predicate =
+        build_page_pruning_predicate(predicate, file_schema, column_orderings);
     (pruning_predicate, Some(page_pruning_predicate))
 }
 

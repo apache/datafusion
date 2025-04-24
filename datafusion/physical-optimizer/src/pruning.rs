@@ -504,11 +504,18 @@ impl UnhandledPredicateHook for ConstantUnhandledPredicateHook {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ColumnOrdering {
+    /// No column ordering was specified
     Unknown,
-    TypeDefined,
-    IEEE754,
+    /// Column ordering uses signed comparison
+    Signed,
+    /// Column ordering uses unsigned comparison
+    Unsigned,
+    /// Column ordering uses IEEE 754 total ordering (depends on PARQUET-2249)
+    TotalOrder,
+    /// Column ordering is undefined for the type
+    Undefined,
 }
 
 impl PruningPredicate {
@@ -537,7 +544,7 @@ impl PruningPredicate {
     pub fn try_new(
         expr: Arc<dyn PhysicalExpr>,
         schema: SchemaRef,
-        column_ordering: Vec<ColumnOrdering>,
+        column_orderings: Vec<ColumnOrdering>,
     ) -> Result<Self> {
         // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`
         // which does not handle dynamic exprs  in general
@@ -550,6 +557,7 @@ impl PruningPredicate {
             &expr,
             schema.as_ref(),
             &mut required_columns,
+            &column_orderings,
             &unhandled_hook,
         );
 
@@ -1424,12 +1432,14 @@ impl PredicateRewriter {
         &self,
         expr: &Arc<dyn PhysicalExpr>,
         schema: &Schema,
+        column_orderings: &Vec<ColumnOrdering>,
     ) -> Arc<dyn PhysicalExpr> {
         let mut required_columns = RequiredColumns::new();
         build_predicate_expression(
             expr,
             schema,
             &mut required_columns,
+            column_orderings,
             &self.unhandled_hook,
         )
     }
@@ -1448,6 +1458,7 @@ fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
     required_columns: &mut RequiredColumns,
+    column_orderings: &Vec<ColumnOrdering>,
     unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
 ) -> Arc<dyn PhysicalExpr> {
     // predicate expression can only be a binary expression
@@ -1508,6 +1519,7 @@ fn build_predicate_expression(
                 &change_expr,
                 schema,
                 required_columns,
+                column_orderings,
                 unhandled_hook,
             );
         } else {
@@ -1543,10 +1555,20 @@ fn build_predicate_expression(
     };
 
     if op == Operator::And || op == Operator::Or {
-        let left_expr =
-            build_predicate_expression(&left, schema, required_columns, unhandled_hook);
-        let right_expr =
-            build_predicate_expression(&right, schema, required_columns, unhandled_hook);
+        let left_expr = build_predicate_expression(
+            &left,
+            schema,
+            required_columns,
+            column_orderings,
+            unhandled_hook,
+        );
+        let right_expr = build_predicate_expression(
+            &right,
+            schema,
+            required_columns,
+            column_orderings,
+            unhandled_hook,
+        );
         // simplify boolean expression if applicable
         let expr = match (&left_expr, op, &right_expr) {
             (left, Operator::And, _) if is_always_true(left) => right_expr,
@@ -1559,6 +1581,34 @@ fn build_predicate_expression(
             _ => Arc::new(phys_expr::BinaryExpr::new(left_expr, op, right_expr)),
         };
         return expr;
+    }
+
+    // TODO(ets): if the sort order is undefined, then we shouldn't be doing any pruning.
+    //            check for types that have unspecified sort order even if type defined.
+
+    // TODO(ets): this is rather parquet specific...still wonder if this should be done
+    //            at the datasource level
+
+    // check for floats. by now both sides should be coerced to same type
+    if left.data_type(schema).is_ok_and(|t| t.is_floating()) {
+        let colidx = column_index_for_expr(&left).or(column_index_for_expr(&right));
+        if let Some(colidx) = colidx {
+            let col_order = column_orderings[colidx];
+            match op {
+                // TODO(ets): which other operations to disallow. maybe
+                Operator::Gt
+                | Operator::GtEq
+                | Operator::Lt
+                | Operator::LtEq
+                | Operator::NotEq => {
+                    if col_order != ColumnOrdering::TotalOrder {
+                        dbg!(format!("Cannot prune floating point column because NaN may be present"));
+                        return unhandled_hook.handle(expr);
+                    }
+                }
+                _ => (),
+            }
+        }
     }
 
     let expr_builder =
@@ -1575,6 +1625,17 @@ fn build_predicate_expression(
 
     build_statistics_expr(&mut expr_builder)
         .unwrap_or_else(|_| unhandled_hook.handle(expr))
+}
+
+fn column_index_for_expr(expr: &Arc<dyn PhysicalExpr>) -> Option<usize> {
+    // TODO(ets): what other types of expressions to check for here?
+    if let Some(col) = expr.as_any().downcast_ref::<phys_expr::Column>() {
+        Some(col.index())
+    } else if let Some(cast) = expr.as_any().downcast_ref::<phys_expr::CastExpr>() {
+        column_index_for_expr(cast.expr())
+    } else {
+        None
+    }
 }
 
 fn build_statistics_expr(
@@ -4646,12 +4707,18 @@ mod tests {
             Field::new("b", DataType::Int32, true),
         ]);
 
+        let column_orderings = vec![ColumnOrdering::Unknown; schema.fields().len()];
+
         let rewriter = PredicateRewriter::new()
             .with_unhandled_hook(Arc::new(CustomUnhandledHook {}));
 
         let transform_expr = |expr| {
             let expr = logical2physical(&expr, &schema_with_b);
-            rewriter.rewrite_predicate_to_statistics_predicate(&expr, &schema)
+            rewriter.rewrite_predicate_to_statistics_predicate(
+                &expr,
+                &schema,
+                &column_orderings,
+            )
         };
 
         // transform an arbitrary valid expression that we know is handled
@@ -4660,6 +4727,7 @@ mod tests {
             .rewrite_predicate_to_statistics_predicate(
                 &logical2physical(&known_expression, &schema),
                 &schema,
+                &column_orderings,
             );
 
         // an expression referencing an unknown column (that is not in the schema) gets passed to the hook
@@ -5189,7 +5257,14 @@ mod tests {
         required_columns: &mut RequiredColumns,
     ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
+        let column_orderings = vec![ColumnOrdering::Unknown; schema.fields().len()];
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
-        build_predicate_expression(&expr, schema, required_columns, &unhandled_hook)
+        build_predicate_expression(
+            &expr,
+            schema,
+            required_columns,
+            &column_orderings,
+            &unhandled_hook,
+        )
     }
 }
