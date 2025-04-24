@@ -27,7 +27,7 @@ use crate::utils::{
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
@@ -142,11 +142,9 @@ pub fn plan_with_order_preserving_variants(
             if let Some(coalesce_fetch) = sort_input.plan.fetch() {
                 if let Some(sort_fetch) = fetch {
                     if coalesce_fetch < sort_fetch {
-                        return Err(
-                            DataFusionError::Internal(
-                                format!("CoalescePartitionsExec fetch [{:?}] should be greater than or equal to SortExec fetch [{:?}]", coalesce_fetch, sort_fetch),
-                            ),
-                        );
+                        return internal_err!(
+                                "CoalescePartitionsExec fetch [{:?}] should be greater than or equal to SortExec fetch [{:?}]", coalesce_fetch, sort_fetch
+                            );
                     }
                 } else {
                     // If the sort node does not have a fetch, we need to keep the coalesce node's fetch.
