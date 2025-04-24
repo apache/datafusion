@@ -202,6 +202,7 @@ impl GroupValues for GroupValuesRows {
             EmitTo::All => {
                 let output = self.row_converter.convert_rows(&group_values)?;
                 group_values.clear();
+                self.map.clear();
                 output
             }
             EmitTo::First(n) => {
