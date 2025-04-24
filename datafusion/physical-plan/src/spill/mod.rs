@@ -17,6 +17,7 @@
 
 //! Defines the spilling functions
 
+pub(crate) mod get_size;
 pub(crate) mod in_progress_spill_file;
 pub(crate) mod spill_manager;
 
