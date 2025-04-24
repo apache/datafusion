@@ -375,7 +375,7 @@ datafusion.execution.split_file_groups_by_statistics false Attempt to eliminate 
 datafusion.execution.target_partitions 7 Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system
 datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false Should DataFusion use row number estimates at the input to decide whether increasing parallelism is beneficial or not. By default, only exact row numbers (not estimates) are used for this decision. Setting this flag to `true` will likely produce better plans. if the source of statistics is accurate. We plan to make this the default in the future.
-datafusion.explain.format indent Display format of explain. Default is "indent". When set to "tree", it will print the plan in a tree-rendered format. No need to normalize because ExplainFormat is case-insensitive
+datafusion.explain.format indent Display format of explain. Default is "indent". When set to "tree", it will print the plan in a tree-rendered format.
 datafusion.explain.logical_plan_only false When set to true, the explain statement will only print logical plans
 datafusion.explain.physical_plan_only false When set to true, the explain statement will only print physical plans
 datafusion.explain.show_schema false When set to true, the explain statement will print schema information
@@ -386,7 +386,7 @@ datafusion.format.datetime_format NULL Format for DateTime arrays
 datafusion.format.duration_format pretty Duration format. Can be either Pretty or ISO8601
 datafusion.format.null (empty) Format string for nulls
 datafusion.format.safe true If set to `true` any formatting errors will be written to the output instead of being converted into a [`std::fmt::Error`]
-datafusion.format.time_format NULL Time format for time arrcays
+datafusion.format.time_format NULL Time format for time arrays
 datafusion.format.timestamp_format NULL Timestamp format for timestamp arrays
 datafusion.format.timestamp_tz_format NULL Timestamp format for timestamp with timezone arrays
 datafusion.format.types_info false Show types in visual representation batches

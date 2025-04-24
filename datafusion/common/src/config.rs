@@ -734,7 +734,6 @@ config_namespace! {
 
         /// Display format of explain. Default is "indent".
         /// When set to "tree", it will print the plan in a tree-rendered format.
-        /// No need to normalize because ExplainFormat is case-insensitive
         pub format: String, default = "indent".to_string()
     }
 }
@@ -769,7 +768,7 @@ config_namespace! {
         pub timestamp_format: Option<String>, default = None
         /// Timestamp format for timestamp with timezone arrays
         pub timestamp_tz_format: Option<String>, default = None
-        /// Time format for time arrcays
+        /// Time format for time arrays
         pub time_format: Option<String>, default = None
         /// Duration format. Can be either Pretty or ISO8601
         pub duration_format: String, default = "pretty".into()
