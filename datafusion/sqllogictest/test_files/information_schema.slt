@@ -272,6 +272,15 @@ datafusion.explain.physical_plan_only false
 datafusion.explain.show_schema false
 datafusion.explain.show_sizes true
 datafusion.explain.show_statistics false
+datafusion.format.date_format NULL
+datafusion.format.datetime_format NULL
+datafusion.format.duration_format pretty
+datafusion.format.null (empty)
+datafusion.format.safe true
+datafusion.format.time_format NULL
+datafusion.format.timestamp_format NULL
+datafusion.format.timestamp_tz_format NULL
+datafusion.format.types_info false
 datafusion.optimizer.allow_symmetric_joins_without_pruning true
 datafusion.optimizer.default_filter_selectivity 20
 datafusion.optimizer.enable_distinct_aggregation_soft_limit true
@@ -366,12 +375,21 @@ datafusion.execution.split_file_groups_by_statistics false Attempt to eliminate 
 datafusion.execution.target_partitions 7 Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system
 datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false Should DataFusion use row number estimates at the input to decide whether increasing parallelism is beneficial or not. By default, only exact row numbers (not estimates) are used for this decision. Setting this flag to `true` will likely produce better plans. if the source of statistics is accurate. We plan to make this the default in the future.
-datafusion.explain.format indent Display format of explain. Default is "indent". When set to "tree", it will print the plan in a tree-rendered format.
+datafusion.explain.format indent Display format of explain. Default is "indent". When set to "tree", it will print the plan in a tree-rendered format. No need to normalize because ExplainFormat is case-insensitive
 datafusion.explain.logical_plan_only false When set to true, the explain statement will only print logical plans
 datafusion.explain.physical_plan_only false When set to true, the explain statement will only print physical plans
 datafusion.explain.show_schema false When set to true, the explain statement will print schema information
 datafusion.explain.show_sizes true When set to true, the explain statement will print the partition sizes
 datafusion.explain.show_statistics false When set to true, the explain statement will print operator statistics for physical plans
+datafusion.format.date_format NULL Date format for date arrays
+datafusion.format.datetime_format NULL Format for DateTime arrays
+datafusion.format.duration_format pretty Duration format. Can be either Pretty or ISO8601
+datafusion.format.null (empty) Format string for nulls
+datafusion.format.safe true If set to `true` any formatting errors will be written to the output instead of being converted into a [`std::fmt::Error`]
+datafusion.format.time_format NULL Time format for time arrcays
+datafusion.format.timestamp_format NULL Timestamp format for timestamp arrays
+datafusion.format.timestamp_tz_format NULL Timestamp format for timestamp with timezone arrays
+datafusion.format.types_info false Show types in visual representation batches
 datafusion.optimizer.allow_symmetric_joins_without_pruning true Should DataFusion allow symmetric hash joins for unbounded data sources even when its inputs do not have any ordering or filtering If the flag is not enabled, the SymmetricHashJoin operator will be unable to prune its internal buffers, resulting in certain join types - such as Full, Left, LeftAnti, LeftSemi, Right, RightAnti, and RightSemi - being produced only at the end of the execution. This is not typical in stream processing. Additionally, without proper design for long runner execution, all types of joins may encounter out-of-memory errors.
 datafusion.optimizer.default_filter_selectivity 20 The default filter selectivity used by Filter Statistics when an exact selectivity cannot be determined. Valid values are between 0 (no selectivity) and 100 (all rows are selected).
 datafusion.optimizer.enable_distinct_aggregation_soft_limit true When set to true, the optimizer will push a limit operation into grouped aggregations which have no aggregate expressions, as a soft limit, emitting groups once the limit is reached, before all rows in the group are read.
