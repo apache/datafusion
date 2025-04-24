@@ -141,6 +141,25 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 
     /// Return the total amount of memory reserved
     fn reserved(&self) -> usize;
+
+    /// Return the memory limit of the pool
+    ///
+    /// The default implementation of `MemoryPool::memory_limit`
+    /// will return `MemoryLimit::Unknown`.
+    /// If you are using your custom memory pool, but have the requirement to
+    /// know the memory usage limit of the pool, please implement this method
+    /// to return it(`Memory::Finite(limit)`).
+    fn memory_limit(&self) -> MemoryLimit {
+        MemoryLimit::Unknown
+    }
+}
+
+/// Memory limit of `MemoryPool`
+pub enum MemoryLimit {
+    Infinite,
+    /// Bounded memory limit in bytes.
+    Finite(usize),
+    Unknown,
 }
 
 /// A memory consumer is a named allocation traced by a particular
