@@ -148,6 +148,25 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
     .data()
 }
 
+pub fn replace_col_with_expr(
+    expr: Expr,
+    replace_map: &HashMap<Column, &Expr>,
+) -> Result<Expr> {
+    expr.transform(|expr| {
+        Ok({
+            if let Expr::Column(c) = &expr {
+                match replace_map.get(c) {
+                    Some(new_expr) => Transformed::yes((**new_expr).to_owned()),
+                    None => Transformed::no(expr),
+                }
+            } else {
+                Transformed::no(expr)
+            }
+        })
+    })
+    .data()
+}
+
 /// Recursively 'unnormalize' (remove all qualifiers) from an
 /// expression tree.
 ///

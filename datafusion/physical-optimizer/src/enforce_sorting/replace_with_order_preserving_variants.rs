@@ -197,7 +197,9 @@ fn plan_with_order_breaking_variants(
         // Replace `SortPreservingMergeExec` with a `CoalescePartitionsExec`
         // SPM may have `fetch`, so pass it to the `CoalescePartitionsExec`
         let child = Arc::clone(&sort_input.children[0].plan);
-        let coalesce = CoalescePartitionsExec::new(child).with_fetch(plan.fetch()).unwrap();
+        let coalesce = CoalescePartitionsExec::new(child)
+            .with_fetch(plan.fetch())
+            .unwrap();
         sort_input.plan = coalesce;
     } else {
         return sort_input.update_plan_from_children();
