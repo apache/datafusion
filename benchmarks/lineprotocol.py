@@ -1,23 +1,20 @@
 #!/usr/bin/env python
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+"""
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
 
+http://www.apache.org/licenses/LICENSE-2.0
 
-""" 
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.  See the License for the
+
 Converts a given json to LineProtocol format that can be 
 visualised by grafana/other systems that support LineProtocol. 
 
@@ -27,10 +24,7 @@ benchmark,name=sort,version=28.0.0,datafusion_version=28.0.0,num_cpus=8 query="s
 benchmark,name=sort,version=28.0.0,datafusion_version=28.0.0,num_cpus=8 query="sort utf8",iteration=1,row_count=10838832,elapsed_ms=68694468 1691105678000000000
 benchmark,name=sort,version=28.0.0,datafusion_version=28.0.0,num_cpus=8 query="sort utf8",iteration=2,row_count=10838832,elapsed_ms=63392883 1691105678000000000
 benchmark,name=sort,version=28.0.0,datafusion_version=28.0.0,num_cpus=8 query="sort utf8",iteration=3,row_count=10838832,elapsed_ms=66388367 1691105678000000000
-"""
 
-# sort.json
-"""
 {
   "queries": [
     {
@@ -180,7 +174,7 @@ def main() -> None:
     )
     options = parser.parse_args()
 
-    lineformat(options.baseline_path)
+    lineformat(options.path)
 
 
 
