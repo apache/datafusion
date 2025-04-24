@@ -41,7 +41,7 @@ use datafusion_physical_plan::{
 };
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
-use datafusion_common::Result;
+use datafusion_common::{assert_contains, Result};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{self, col, Column};
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -1274,19 +1274,39 @@ fn test_plan_with_order_preserving_variants_preserves_fetch() -> Result<()> {
         .with_fetch(Some(10))
         .unwrap();
 
+    // Test sort's fetch is greater than coalesce fetch, return error because it's not reasonable
+    let requirements = OrderPreservationContext::new(
+        coalesced.clone(),
+        false,
+        vec![OrderPreservationContext::new(
+            parquet_exec.clone(),
+            false,
+            vec![],
+        )],
+    );
+    let res = plan_with_order_preserving_variants(requirements, false, true, Some(15));
+    assert_contains!(res.unwrap_err().to_string(), "CoalescePartitionsExec fetch [10] should be greater than or equal to SortExec fetch [15]");
+
+    // Test sort is without fetch, expected to get the fetch value from the coalesced
+    let requirements = OrderPreservationContext::new(
+        coalesced.clone(),
+        false,
+        vec![OrderPreservationContext::new(
+            parquet_exec.clone(),
+            false,
+            vec![],
+        )],
+    );
+    let res = plan_with_order_preserving_variants(requirements, false, true, None)?;
+    assert_eq!(res.plan.fetch(), Some(10),);
+
+    // Test sort's fetch is less than coalesces fetch, expected to get the fetch value from the sort
     let requirements = OrderPreservationContext::new(
         coalesced,
         false,
         vec![OrderPreservationContext::new(parquet_exec, false, vec![])],
     );
-
-    let res = plan_with_order_preserving_variants(requirements, false, true, Some(15))?;
-
-    // Verify fetch was preserved
-    assert_eq!(
-        res.plan.fetch(),
-        Some(10),
-        "Fetch value was not preserved after transformation"
-    );
+    let res = plan_with_order_preserving_variants(requirements, false, true, Some(5))?;
+    assert_eq!(res.plan.fetch(), Some(5),);
     Ok(())
 }
