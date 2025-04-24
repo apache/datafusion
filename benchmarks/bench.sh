@@ -412,7 +412,10 @@ run_tpch() {
     echo "Running tpch benchmark..."
     # Optional query filter to run specific query
     QUERY=$([ -n "$ARG3" ] && echo "--query $ARG3" || echo "")
+    # debug the target command
+    set -x
     $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" $QUERY
+    set +x
 }
 
 # Runs the tpch in memory
@@ -427,9 +430,13 @@ run_tpch_mem() {
     RESULTS_FILE="${RESULTS_DIR}/tpch_mem_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
+    # Optional query filter to run specific query
     QUERY=$([ -n "$ARG3" ] && echo "--query $ARG3" || echo "")
+    # debug the target command
+    set -x
     # -m means in memory
     $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" $QUERY
+    set +x
 }
 
 # Runs the cancellation benchmark

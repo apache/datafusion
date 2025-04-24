@@ -56,7 +56,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
-flate2 = { version = "1.0.24", optional = true }
+flate2 = { version = "1.1.1", optional = true }
 futures = { workspace = true }
 glob = "0.3.0"
 itertools = { workspace = true }
@@ -72,6 +72,7 @@ xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
+criterion = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
@@ -80,3 +81,7 @@ workspace = true
 [lib]
 name = "datafusion_datasource"
 path = "src/mod.rs"
+
+[[bench]]
+name = "split_groups_by_statistics"
+harness = false

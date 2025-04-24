@@ -284,7 +284,7 @@ impl<T: ByteArrayType> CursorArray for GenericByteArray<T> {
 impl CursorArray for StringViewArray {
     type Values = StringViewArray;
     fn values(&self) -> Self {
-        self.clone()
+        self.gc()
     }
 }
 

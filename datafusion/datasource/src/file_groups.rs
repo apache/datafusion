@@ -25,6 +25,7 @@ use std::collections::BinaryHeap;
 use std::iter::repeat_with;
 use std::mem;
 use std::ops::{Index, IndexMut};
+use std::sync::Arc;
 
 /// Repartition input files into `target_partitions` partitions, if total file size exceed
 /// `repartition_file_min_size`
@@ -223,10 +224,11 @@ impl FileGroupPartitioner {
             return None;
         }
 
-        let target_partition_size = (total_size as usize).div_ceil(target_partitions);
+        let target_partition_size =
+            (total_size as u64).div_ceil(target_partitions as u64);
 
         let current_partition_index: usize = 0;
-        let current_partition_size: usize = 0;
+        let current_partition_size: u64 = 0;
 
         // Partition byte range evenly for all `PartitionedFile`s
         let repartitioned_files = flattened_files
@@ -368,7 +370,7 @@ pub struct FileGroup {
     /// The files in this group
     files: Vec<PartitionedFile>,
     /// Optional statistics for the data across all files in the group
-    statistics: Option<Statistics>,
+    statistics: Option<Arc<Statistics>>,
 }
 
 impl FileGroup {
@@ -386,7 +388,7 @@ impl FileGroup {
     }
 
     /// Set the statistics for this group
-    pub fn with_statistics(mut self, statistics: Statistics) -> Self {
+    pub fn with_statistics(mut self, statistics: Arc<Statistics>) -> Self {
         self.statistics = Some(statistics);
         self
     }
@@ -416,6 +418,11 @@ impl FileGroup {
     /// Adds a file to the group
     pub fn push(&mut self, file: PartitionedFile) {
         self.files.push(file);
+    }
+
+    /// Get the statistics for this group
+    pub fn statistics(&self) -> Option<&Statistics> {
+        self.statistics.as_deref()
     }
 
     /// Partition the list of files into `n` groups
@@ -491,15 +498,15 @@ struct ToRepartition {
     /// the index from which the original file will be taken
     source_index: usize,
     /// the size of the original file
-    file_size: usize,
+    file_size: u64,
     /// indexes of which group(s) will this be distributed to (including `source_index`)
     new_groups: Vec<usize>,
 }
 
 impl ToRepartition {
-    // how big will each file range be when this file is read in its new groups?
-    fn range_size(&self) -> usize {
-        self.file_size / self.new_groups.len()
+    /// How big will each file range be when this file is read in its new groups?
+    fn range_size(&self) -> u64 {
+        self.file_size / (self.new_groups.len() as u64)
     }
 }
 

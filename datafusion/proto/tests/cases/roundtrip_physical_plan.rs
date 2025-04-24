@@ -504,7 +504,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
         vec![col("b", &schema)?, lit(0.5)],
     )
     .schema(Arc::clone(&schema))
-    .alias("APPROX_PERCENTILE_CONT(b, 0.5)")
+    .alias("APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY b)")
     .build()
     .map(Arc::new)?];
 
@@ -1675,4 +1675,48 @@ async fn roundtrip_empty_projection() -> Result<()> {
     let ctx = all_types_context().await?;
     let sql = "select 1 from alltypes_plain";
     roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_physical_plan_node() {
+    use datafusion::prelude::*;
+    use datafusion_proto::physical_plan::{
+        AsExecutionPlan, DefaultPhysicalExtensionCodec,
+    };
+    use datafusion_proto::protobuf::PhysicalPlanNode;
+
+    let ctx = SessionContext::new();
+
+    ctx.register_parquet(
+        "pt",
+        &format!(
+            "{}/alltypes_plain.snappy.parquet",
+            datafusion_common::test_util::parquet_test_data()
+        ),
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let plan = ctx
+        .sql("select id, string_col, timestamp_col from pt where id > 4 order by string_col")
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+
+    let node: PhysicalPlanNode =
+        PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
+            .unwrap();
+
+    let plan = node
+        .try_into_physical_plan(
+            &ctx,
+            &ctx.runtime_env(),
+            &DefaultPhysicalExtensionCodec {},
+        )
+        .unwrap();
+
+    let _ = plan.execute(0, ctx.task_ctx()).unwrap();
 }

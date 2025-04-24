@@ -1652,7 +1652,7 @@ async fn test_remove_unnecessary_sort7() -> Result<()> {
     ) as Arc<dyn ExecutionPlan>;
 
     let expected_input = [
-        "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
+        "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC], preserve_partitioning=[false], sort_prefix=[non_nullable_col@1 ASC]",
         "  SortExec: expr=[non_nullable_col@1 ASC, nullable_col@0 ASC], preserve_partitioning=[false]",
         "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
@@ -3438,5 +3438,40 @@ fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
     ];
     assert_optimized!(expected_input, expected_optimized, output_sort, true);
 
+    Ok(())
+}
+
+#[test]
+fn test_parallelize_sort_preserves_fetch() -> Result<()> {
+    // Create a schema
+    let schema = create_test_schema3()?;
+    let parquet_exec = parquet_exec(&schema);
+    let coalesced = Arc::new(CoalescePartitionsExec::new(parquet_exec.clone()));
+    let top_coalesced = CoalescePartitionsExec::new(coalesced.clone())
+        .with_fetch(Some(10))
+        .unwrap();
+
+    let requirements = PlanWithCorrespondingCoalescePartitions::new(
+        top_coalesced.clone(),
+        true,
+        vec![PlanWithCorrespondingCoalescePartitions::new(
+            coalesced,
+            true,
+            vec![PlanWithCorrespondingCoalescePartitions::new(
+                parquet_exec,
+                false,
+                vec![],
+            )],
+        )],
+    );
+
+    let res = parallelize_sorts(requirements)?;
+
+    // Verify fetch was preserved
+    assert_eq!(
+        res.data.plan.fetch(),
+        Some(10),
+        "Fetch value was not preserved after transformation"
+    );
     Ok(())
 }
