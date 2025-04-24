@@ -51,19 +51,16 @@ impl OrderingEquivalenceClass {
         self.orderings.clear();
     }
 
-    /// Creates new ordering equivalence class from the given orderings
-    ///
-    /// Any redundant entries are removed
-    pub fn new(orderings: Vec<LexOrdering>) -> Self {
-        let mut result = Self { orderings };
+    /// Creates a new ordering equivalence class from the given orderings
+    /// and removes any redundant entries (if given).
+    pub fn new(
+        orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
+    ) -> Self {
+        let mut result = Self {
+            orderings: orderings.into_iter().filter_map(LexOrdering::new).collect(),
+        };
         result.remove_redundant_entries();
         result
-    }
-
-    /// Takes ownership of the vector of orderings comprising this equivalence
-    /// class.
-    pub fn take(self) -> Vec<LexOrdering> {
-        self.orderings
     }
 
     /// Checks whether `ordering` is a member of this equivalence class.
@@ -325,6 +322,12 @@ impl Display for OrderingEquivalenceClass {
         }
         write!(f, "]")?;
         Ok(())
+    }
+}
+
+impl From<OrderingEquivalenceClass> for Vec<LexOrdering> {
+    fn from(oeq_class: OrderingEquivalenceClass) -> Self {
+        oeq_class.orderings
     }
 }
 

@@ -39,7 +39,7 @@ pub fn add_sort_above<T: Clone + Default>(
     sort_requirements: LexRequirement,
     fetch: Option<usize>,
 ) -> PlanContext<T> {
-    let mut sort_reqs = sort_requirements.take();
+    let mut sort_reqs: Vec<_> = sort_requirements.into();
     sort_reqs.retain(|sort_expr| {
         node.plan
             .equivalence_properties()

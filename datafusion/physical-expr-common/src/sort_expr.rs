@@ -354,12 +354,6 @@ impl LexOrdering {
         self.inner.capacity()
     }
 
-    /// Takes ownership of the underlying vector of sort expressions and
-    /// returns it.
-    pub fn take(self) -> Vec<PhysicalSortExpr> {
-        self.inner
-    }
-
     /// Constructs a duplicate-free `LexOrdering` by filtering out duplicate
     /// entries that have same physical expression inside.
     ///
@@ -460,6 +454,12 @@ impl<'a> IntoIterator for &'a LexOrdering {
     }
 }
 
+impl From<LexOrdering> for Vec<PhysicalSortExpr> {
+    fn from(ordering: LexOrdering) -> Self {
+        ordering.inner
+    }
+}
+
 ///`LexRequirement` is an struct containing a `Vec<PhysicalSortRequirement>`, which
 /// represents a lexicographical ordering requirement.
 #[derive(Debug, Clone, PartialEq)]
@@ -489,12 +489,6 @@ impl LexRequirement {
     /// without reallocating.
     pub fn capacity(&self) -> usize {
         self.inner.capacity()
-    }
-
-    /// Takes ownership of the underlying vector of sort requirements and
-    /// returns it.
-    pub fn take(self) -> Vec<PhysicalSortRequirement> {
-        self.inner
     }
 
     /// Constructs a duplicate-free `LexRequirement` by filtering out duplicate
@@ -554,6 +548,12 @@ impl<'a> IntoIterator for &'a LexRequirement {
 
     fn into_iter(self) -> Self::IntoIter {
         self.inner.iter()
+    }
+}
+
+impl From<LexRequirement> for Vec<PhysicalSortRequirement> {
+    fn from(requirement: LexRequirement) -> Self {
+        requirement.inner
     }
 }
 

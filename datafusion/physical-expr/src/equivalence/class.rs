@@ -42,6 +42,21 @@ pub enum AcrossPartitions {
     Uniform(Option<ScalarValue>),
 }
 
+impl Display for AcrossPartitions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AcrossPartitions::Heterogeneous => write!(f, "(heterogeneous)"),
+            AcrossPartitions::Uniform(value) => {
+                if let Some(val) = value {
+                    write!(f, "(uniform: {})", val)
+                } else {
+                    write!(f, "(uniform: unknown)")
+                }
+            }
+        }
+    }
+}
+
 /// A structure representing a expression known to be constant in a physical
 /// execution plan.
 ///
@@ -124,19 +139,7 @@ impl PartialEq for ConstExpr {
 impl Display for ConstExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.expr)?;
-        match &self.across_partitions {
-            AcrossPartitions::Heterogeneous => {
-                write!(f, "(heterogeneous)")?;
-            }
-            AcrossPartitions::Uniform(value) => {
-                if let Some(val) = value {
-                    write!(f, "(uniform: {})", val)?;
-                } else {
-                    write!(f, "(uniform: unknown)")?;
-                }
-            }
-        }
-        Ok(())
+        write!(f, "{}", self.across_partitions)
     }
 }
 
@@ -217,9 +220,8 @@ impl EquivalenceClass {
                     self.constant = other.constant;
                 }
             }
-            (Some(_), None) => {}
             (None, Some(_)) => self.constant = other.constant,
-            (None, None) => {}
+            (_, None) => {}
         }
     }
 
@@ -279,8 +281,12 @@ impl IntoIterator for EquivalenceClass {
 
 impl Display for EquivalenceClass {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        // TODO: Annotate constants.
-        write!(f, "[{}]", format_physical_expr_list(&self.exprs))
+        write!(f, "{{")?;
+        write!(f, "members: {}", format_physical_expr_list(&self.exprs))?;
+        if let Some(across) = &self.constant {
+            write!(f, ", constant: {}", across)?;
+        }
+        write!(f, "}}")
     }
 }
 

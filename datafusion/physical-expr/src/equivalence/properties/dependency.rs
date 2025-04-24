@@ -1437,21 +1437,12 @@ mod tests {
 
         // Initial ordering: [a ASC, b DESC]
         eq_properties.add_new_ordering([
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_a),
-                options: asc,
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_b),
-                options: desc,
-            },
+            PhysicalSortExpr::new(Arc::clone(&col_a), asc),
+            PhysicalSortExpr::new(Arc::clone(&col_b), desc),
         ]);
 
         // New ordering: [a DESC]
-        let new_order = vec![PhysicalSortExpr {
-            expr: Arc::clone(&col_a),
-            options: desc,
-        }];
+        let new_order = vec![PhysicalSortExpr::new(Arc::clone(&col_a), desc)];
 
         let result = eq_properties.with_reorder(new_order.clone());
 

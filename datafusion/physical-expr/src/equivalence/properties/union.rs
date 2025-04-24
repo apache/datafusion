@@ -159,7 +159,7 @@ impl UnionEquivalentOrderingBuilder {
                 ) {
                     AddedOrdering::Yes => break,
                     AddedOrdering::No(ordering) => {
-                        let mut sort_exprs = ordering.take();
+                        let mut sort_exprs: Vec<_> = ordering.into();
                         sort_exprs.pop();
                         if let Some(ordering) = LexOrdering::new(sort_exprs) {
                             ordering

@@ -19,10 +19,6 @@ mod dependency; // Submodule containing DependencyMap and Dependencies
 mod joins; // Submodule containing join_equivalence_properties
 mod union; // Submodule containing calculate_union
 
-use dependency::{
-    construct_prefix_orderings, generate_dependency_orderings, referred_dependencies,
-    Dependencies, DependencyMap,
-};
 pub use joins::*;
 pub use union::*;
 
@@ -32,6 +28,10 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::{fmt, mem};
 
+use self::dependency::{
+    construct_prefix_orderings, generate_dependency_orderings, referred_dependencies,
+    Dependencies, DependencyMap,
+};
 use crate::equivalence::class::AcrossPartitions;
 use crate::equivalence::{EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping};
 use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
@@ -129,15 +129,15 @@ use itertools::Itertools;
 ///   PhysicalSortExpr::new_default(col_c).desc(),
 /// ]);
 ///
-/// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC, c@2 DESC]], const: [b@1(heterogeneous)]")
+/// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC, c@2 DESC]], eq: [{members: [b@1], constant: (heterogeneous)}]");
 /// ```
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties {
-    /// Distinct equivalence classes (exprs known to have the same expressions)
+    /// Distinct equivalence classes (i.e. expressions with the same value).
     eq_group: EquivalenceGroup,
-    /// Equivalent sort expressions
+    /// Equivalent sort expressions (i.e. those define the same ordering).
     oeq_class: OrderingEquivalenceClass,
-    /// Table constraints
+    /// Table constraints that factor in equivalence calculations.
     constraints: Constraints,
     /// Schema associated with this object.
     schema: SchemaRef,
@@ -165,7 +165,6 @@ impl EquivalenceProperties {
         schema: SchemaRef,
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) -> Self {
-        let orderings = orderings.into_iter().filter_map(LexOrdering::new).collect();
         Self {
             eq_group: EquivalenceGroup::default(),
             oeq_class: OrderingEquivalenceClass::new(orderings),
@@ -215,7 +214,7 @@ impl EquivalenceProperties {
 
     /// Returns the output ordering of the properties.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let mut sort_exprs = self.oeq_class().output_ordering()?.take();
+        let mut sort_exprs: Vec<_> = self.oeq_class().output_ordering()?.into();
         // Prune out constant expressions:
         sort_exprs.retain(|sort_expr| {
             let Some(cls) = self.eq_group.get_equivalence_class(&sort_expr.expr) else {
@@ -234,8 +233,7 @@ impl EquivalenceProperties {
             self.oeq_class
                 .iter()
                 .cloned()
-                .filter_map(|ordering| self.normalize_sort_exprs(ordering))
-                .collect(),
+                .filter_map(|ordering| self.normalize_sort_exprs(ordering)),
         )
     }
 
@@ -616,7 +614,7 @@ impl EquivalenceProperties {
         };
         let prefix_len = self.common_sort_prefix_length(normalized_ordering.clone());
         let flag = prefix_len == normalized_ordering.len();
-        let mut sort_exprs = normalized_ordering.take();
+        let mut sort_exprs: Vec<_> = normalized_ordering.into();
         if !flag {
             sort_exprs.truncate(prefix_len);
         }
@@ -747,19 +745,21 @@ impl EquivalenceProperties {
                 .all(|(reference, given)| given.compatible(&reference))
     }
 
-    /// we substitute the ordering according to input expression type, this is a simplified version
-    /// In this case, we just substitute when the expression satisfy the following condition:
-    /// I. just have one column and is a CAST expression
-    /// TODO: Add one-to-ones analysis for monotonic ScalarFunctions.
-    /// TODO: we could precompute all the scenario that is computable, for example: atan(x + 1000) should also be substituted if
-    ///  x is DESC or ASC
-    /// After substitution, we may generate more than 1 `LexOrdering`. As an example,
-    /// `[a ASC, b ASC]` will turn into `[a ASC, b ASC], [CAST(a) ASC, b ASC]` when projection expressions `a, b, CAST(a)` is applied.
+    /// Substitute the ordering according to input expression type. We substitute
+    /// when the expression satisfies the following conditions:
+    ///
+    /// 1. Has one column and is a `CAST` expression.
+    ///
+    /// After substitution, we may generate more than one `LexOrdering`. For
+    /// example, `[a ASC, b ASC]` will turn into `[CAST(a) ASC, b ASC]` and
+    /// `[a ASC, b ASC]` when applying projection expressions `a, b, CAST(a)`.
     pub fn substitute_ordering_component(
         &self,
         mapping: &ProjectionMapping,
         sort_expr: LexOrdering,
     ) -> Result<Vec<LexOrdering>> {
+        // TODO: Handle all scenarios that allow precomputation; e.g. when `x`
+        //       is sorted, `atan(x + 1000)` should also be substituted.
         let new_orderings = sort_expr
             .into_iter()
             .map(|sort_expr| {
@@ -815,8 +815,7 @@ impl EquivalenceProperties {
             .map(|order| self.substitute_ordering_component(mapping, order))
             .collect::<Result<Vec<_>>>()?
             .into_iter()
-            .flatten()
-            .collect();
+            .flatten();
         self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
         Ok(())
     }
@@ -1227,7 +1226,7 @@ impl EquivalenceProperties {
                     // be non-empty.
                     .map(|v| LexOrdering::new(v).unwrap())
             })
-            .collect::<Result<_>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         // Update the schema, the equivalence group and the ordering equivalence
         // class:

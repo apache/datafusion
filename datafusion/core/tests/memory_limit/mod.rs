@@ -875,14 +875,8 @@ impl Scenario {
                     nulls_first: false,
                 };
                 let sort_information = vec![[
-                    PhysicalSortExpr {
-                        expr: col("a", &schema).unwrap(),
-                        options,
-                    },
-                    PhysicalSortExpr {
-                        expr: col("b", &schema).unwrap(),
-                        options,
-                    },
+                    PhysicalSortExpr::new(col("a", &schema).unwrap(), options),
+                    PhysicalSortExpr::new(col("b", &schema).unwrap(), options),
                 ]
                 .into()];
 
