@@ -322,40 +322,39 @@ pub fn check_function_length_with_diag(
 
         // Multiple signature type
         TypeSignature::OneOf(signatures) => {
-            // Try to match any signature
+            // For OneOf, we need to check if ANY of the signatures match
+            // If none match, we'll return an error with all collected diagnostics
+            let mut all_results = Vec::new();
+
+            // Try each signature
             for sig in signatures {
-                if check_function_length_with_diag(
+                let result = check_function_length_with_diag(
                     function_name,
                     sig,
                     current_types,
                     function_call_site,
-                )
-                .is_ok()
-                {
-                    return Ok(());
+                );
+                match result {
+                    Ok(()) => return Ok(()), // If any signature matches, return success immediately
+                    Err(err) => all_results.push(err),
                 }
             }
 
-            // Create error for no matching signature
-            let error_message = format!(
-                "Function '{}' has no matching signature for {} arguments",
-                function_name,
-                current_types.len()
-            );
+            if all_results.is_empty() {
+                // Create error for no matching signature
+                let error_message = format!(
+                    "Function '{}' has no matching signature for {} arguments",
+                    function_name,
+                    current_types.len()
+                );
 
-            let mut diagnostic =
-                Diagnostic::new_error(error_message.clone(), function_call_site);
-            diagnostic.add_note(
-                format!(
-                    "The function {} has multiple possible signatures",
-                    function_name
-                ),
-                None,
-            );
+                let diagnostic =
+                    Diagnostic::new_error(error_message.clone(), function_call_site);
 
-            return Err(
-                plan_datafusion_err!("{}", error_message).with_diagnostic(diagnostic)
-            );
+                return Err(
+                    plan_datafusion_err!("{}", error_message).with_diagnostic(diagnostic)
+                );
+            }
         }
 
         // All other cases:
