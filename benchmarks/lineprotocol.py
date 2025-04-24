@@ -25,6 +25,7 @@ benchmark,name=sort,version=28.0.0,datafusion_version=28.0.0,num_cpus=8 query="s
 benchmark,name=sort,version=28.0.0,datafusion_version=28.0.0,num_cpus=8 query="sort utf8",iteration=2,row_count=10838832,elapsed_ms=63392883 1691105678000000000
 benchmark,name=sort,version=28.0.0,datafusion_version=28.0.0,num_cpus=8 query="sort utf8",iteration=3,row_count=10838832,elapsed_ms=66388367 1691105678000000000
 
+sort.json
 {
   "queries": [
     {
