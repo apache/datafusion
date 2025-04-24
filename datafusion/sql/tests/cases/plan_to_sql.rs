@@ -2427,46 +2427,85 @@ fn test_unparse_left_semi_join_with_table_scan_projection() -> Result<()> {
 }
 
 #[test]
-fn test_like_filters() {
-    sql_round_trip(
+fn test_like_filter() {
+    let statement = generate_round_trip_statement(
         GenericDialect {},
-        r#"SELECT * FROM person WHERE first_name LIKE '%John%'"#,
-        r#"SELECT * FROM person WHERE person.first_name LIKE '%John%'"#,
+        r#"SELECT first_name FROM person WHERE first_name LIKE '%John%'"#,
     );
-
-    sql_round_trip(
-        GenericDialect {},
-        r#"SELECT * FROM person WHERE first_name ILIKE '%john%'"#,
-        r#"SELECT * FROM person WHERE person.first_name ILIKE '%john%'"#,
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name LIKE '%John%'"
     );
+}
 
-    sql_round_trip(
+#[test]
+fn test_ilike_filter() {
+    let statement = generate_round_trip_statement(
         GenericDialect {},
-        r#"SELECT * FROM person WHERE first_name NOT LIKE 'A%'"#,
-        r#"SELECT * FROM person WHERE person.first_name NOT LIKE 'A%'"#,
+        r#"SELECT first_name FROM person WHERE first_name ILIKE '%john%'"#,
     );
-
-    sql_round_trip(
-        GenericDialect {},
-        r#"SELECT * FROM person WHERE first_name NOT ILIKE 'a%'"#,
-        r#"SELECT * FROM person WHERE person.first_name NOT ILIKE 'a%'"#,
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name ILIKE '%john%'"
     );
+}
 
-    sql_round_trip(
+#[test]
+fn test_not_like_filter() {
+    let statement = generate_round_trip_statement(
         GenericDialect {},
-        r#"SELECT * FROM person WHERE first_name LIKE 'A!_%' ESCAPE '!'"#,
-        r#"SELECT * FROM person WHERE person.first_name LIKE 'A!_%' ESCAPE '!'"#,
+        r#"SELECT first_name FROM person WHERE first_name NOT LIKE 'A%'"#,
     );
-
-    sql_round_trip(
-        GenericDialect {},
-        r#"SELECT * FROM person WHERE first_name NOT LIKE 'A!_%' ESCAPE '!'"#,
-        r#"SELECT * FROM person WHERE person.first_name NOT LIKE 'A!_%' ESCAPE '!'"#,
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT LIKE 'A%'"
     );
+}
 
-    sql_round_trip(
+#[test]
+fn test_not_ilike_filter() {
+    let statement = generate_round_trip_statement(
         GenericDialect {},
-        r#"SELECT * FROM person WHERE first_name NOT ILIKE 'A!_%' ESCAPE '!'"#,
-        r#"SELECT * FROM person WHERE person.first_name NOT ILIKE 'A!_%' ESCAPE '!'"#,
+        r#"SELECT first_name FROM person WHERE first_name NOT ILIKE 'a%'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT ILIKE 'a%'"
+    );
+}
+
+#[test]
+fn test_like_filter_with_escape() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name LIKE 'A!_%' ESCAPE '!'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name LIKE 'A!_%' ESCAPE '!'"
+    );
+}
+
+#[test]
+fn test_not_like_filter_with_escape() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name NOT LIKE 'A!_%' ESCAPE '!'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT LIKE 'A!_%' ESCAPE '!'"
+    );
+}
+
+#[test]
+fn test_not_ilike_filter_with_escape() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT first_name FROM person WHERE first_name NOT ILIKE 'A!_%' ESCAPE '!'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @"SELECT person.first_name FROM person WHERE person.first_name NOT ILIKE 'A!_%' ESCAPE '!'"
     );
 }
