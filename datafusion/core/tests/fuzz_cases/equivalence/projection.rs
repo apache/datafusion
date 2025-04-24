@@ -145,8 +145,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             for proj_exprs in proj_exprs.iter().combinations(n_req) {
                 let proj_exprs = proj_exprs
                     .into_iter()
-                    .map(|(expr, name)| (Arc::clone(expr), name.to_string()))
-                    .collect::<Vec<_>>();
+                    .map(|(expr, name)| (Arc::clone(expr), name.to_string()));
                 let (projected_batch, projected_eq) = apply_projection(
                     proj_exprs.clone(),
                     &table_data_with_properties,
@@ -154,7 +153,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                 )?;
 
                 let projection_mapping =
-                    ProjectionMapping::try_new(&proj_exprs, &test_schema)?;
+                    ProjectionMapping::try_new(proj_exprs, &test_schema)?;
 
                 let projected_exprs = projection_mapping
                     .iter()

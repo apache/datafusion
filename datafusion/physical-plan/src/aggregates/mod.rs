@@ -522,7 +522,7 @@ impl AggregateExec {
 
         // construct a map from the input expression to the output expression of the Aggregation group by
         let group_expr_mapping =
-            ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
+            ProjectionMapping::try_new(group_by.expr.clone(), &input.schema())?;
 
         let cache = Self::compute_properties(
             &input,

@@ -98,7 +98,7 @@ impl ProjectionExec {
         ));
 
         // Construct a map from the input expressions to the output expression of the Projection
-        let projection_mapping = ProjectionMapping::try_new(&expr, &input_schema)?;
+        let projection_mapping = ProjectionMapping::try_new(expr.clone(), &input_schema)?;
         let cache =
             Self::compute_properties(&input, &projection_mapping, Arc::clone(&schema))?;
         Ok(Self {

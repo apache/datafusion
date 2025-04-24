@@ -318,20 +318,17 @@ impl TestMemoryExec {
 
         // If there is a projection on the source, we also need to project orderings
         if let Some(projection) = &self.projection {
+            let base_schema = self.original_schema();
+            let proj_exprs = projection.iter().map(|idx| {
+                let name = base_schema.field(*idx).name();
+                (Arc::new(Column::new(name, *idx)) as _, name.to_string())
+            });
+            let projection_mapping =
+                ProjectionMapping::try_new(proj_exprs, &base_schema)?;
             let base_eqp = EquivalenceProperties::new_with_orderings(
-                self.original_schema(),
+                Arc::clone(&base_schema),
                 sort_information,
             );
-            let proj_exprs = projection
-                .iter()
-                .map(|idx| {
-                    let base_schema = self.original_schema();
-                    let name = base_schema.field(*idx).name();
-                    (Arc::new(Column::new(name, *idx)) as _, name.to_string())
-                })
-                .collect::<Vec<_>>();
-            let projection_mapping =
-                ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
             sort_information = base_eqp
                 .project(&projection_mapping, Arc::clone(&self.projected_schema))
                 .into_oeq_class()

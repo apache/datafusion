@@ -133,12 +133,12 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
 
 // Apply projection to the input_data, return projected equivalence properties and record batch
 pub fn apply_projection(
-    proj_exprs: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    proj_exprs: impl IntoIterator<Item = (Arc<dyn PhysicalExpr>, String)>,
     input_data: &RecordBatch,
     input_eq_properties: &EquivalenceProperties,
 ) -> Result<(RecordBatch, EquivalenceProperties)> {
     let input_schema = input_data.schema();
-    let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
+    let projection_mapping = ProjectionMapping::try_new(proj_exprs, &input_schema)?;
 
     let output_schema = output_schema(&projection_mapping, &input_schema)?;
     let num_rows = input_data.num_rows();

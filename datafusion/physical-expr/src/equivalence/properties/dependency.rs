@@ -459,7 +459,7 @@ mod tests {
             (Arc::clone(&col_a), "a3".to_string()),
             (Arc::clone(&col_a), "a4".to_string()),
         ];
-        let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
+        let projection_mapping = ProjectionMapping::try_new(proj_exprs, &input_schema)?;
 
         let out_schema = output_schema(&projection_mapping, &input_schema)?;
         // a as a1, a as a2, a as a3, a as a3
@@ -469,7 +469,7 @@ mod tests {
             (Arc::clone(&col_a), "a3".to_string()),
             (Arc::clone(&col_a), "a4".to_string()),
         ];
-        let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
+        let projection_mapping = ProjectionMapping::try_new(proj_exprs, &input_schema)?;
 
         // a as a1, a as a2, a as a3, a as a3
         let col_a1 = &col("a1", &out_schema)?;
@@ -524,7 +524,7 @@ mod tests {
             (col("c", &input_schema)?, "c".to_string()),
             (col("d", &input_schema)?, "d".to_string()),
         ];
-        let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
+        let projection_mapping = ProjectionMapping::try_new(proj_exprs, &input_schema)?;
         let out_properties = input_properties.project(&projection_mapping, input_schema);
 
         assert_eq!(
