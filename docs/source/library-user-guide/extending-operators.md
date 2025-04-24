@@ -29,8 +29,10 @@ CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT)
  SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
 ```
  And a naive plan would be:
+ ```sql
+ explain SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
  ```
-> explain SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
+ ```text
  +--------------+----------------------------------------+
  | plan_type    | plan                                   |
  +--------------+----------------------------------------+
