@@ -512,10 +512,10 @@ pub enum ColumnOrdering {
     Signed,
     /// Column ordering uses unsigned comparison
     Unsigned,
-    /// Column ordering uses IEEE 754 total ordering (depends on PARQUET-2249)
-    TotalOrder,
     /// Column ordering is undefined for the type
     Undefined,
+    /// Column ordering uses IEEE 754 total ordering (depends on PARQUET-2249)
+    TotalOrder,
 }
 
 impl PruningPredicate {
@@ -1584,18 +1584,26 @@ fn build_predicate_expression(
     }
 
     // TODO(ets): if the sort order is undefined, then we shouldn't be doing any pruning.
-    //            check for types that have unspecified sort order even if type defined.
-
+    //            check for types that have unspecified sort order even if type defined 
+    //            (examples are INT96 or MAP)
+    //
     // TODO(ets): this is rather parquet specific...still wonder if this should be done
     //            at the datasource level
 
-    // check for floats. by now both sides should be coerced to same type
+    // Special handlng for floats. Because parquet statistics do not allow NaN, but datafusion
+    // uses total order (so NaN is > anything), predicates of the type `col > 2.0` may prune
+    // improperly. If the max for `col` is 1.0, say, this page might be pruned. But if it contains
+    // NaN, that row should be returned, but won't. So for now disallow pruning of floating type
+    // columns where the predicate is a comparison. Once Parquet supports total order then
+    // these predicates can be allowed.
+
+    // left and right should have the same type by now, so only check left
     if left.data_type(schema).is_ok_and(|t| t.is_floating()) {
         let colidx = column_index_for_expr(&left).or(column_index_for_expr(&right));
         if let Some(colidx) = colidx {
             let col_order = column_orderings[colidx];
             match op {
-                // TODO(ets): which other operations to disallow. maybe
+                // TODO(ets): which other operations to disallow?
                 Operator::Gt
                 | Operator::GtEq
                 | Operator::Lt
