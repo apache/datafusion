@@ -1583,34 +1583,41 @@ fn build_predicate_expression(
         return expr;
     }
 
-    // TODO(ets): if the sort order is undefined, then we shouldn't be doing any pruning.
-    //            check for types that have unspecified sort order even if type defined 
-    //            (examples are INT96 or MAP)
-    //
+    // Special handlng for floats. Because current Parquet statistics do not allow NaN, and
+    // Datafusion uses total order (i.e. -NaN < -x < -0.0 < 0.0 < x < NaN), pruning predicates
+    // for floating point columns may be overly aggressive. For example, say the max for a column
+    // that also contains NaN is 1.0, and a predicate like `x > 2.0` is provided. This will
+    // be turned into a stats predicate like `max(x) > 2.0`, which will evaluate false in this
+    // case, so the page/column chunk will be (improperly) pruned. PARQUET-2249 attempts to
+    // solve this by adding a new ColumnOrder (IEEE_754_TOTAL_ORDER) for floating point columns.
+    // This will allow for NaN to appear in the statistics so pruning will be correct.
+
     // TODO(ets): this is rather parquet specific...still wonder if this should be done
     //            at the datasource level
+    let colidx = column_index_for_expr(&left).or(column_index_for_expr(&right));
+    if let Some(colidx) = colidx {
+        let col_order = column_orderings[colidx];
 
-    // Special handlng for floats. Because parquet statistics do not allow NaN, but datafusion
-    // uses total order (so NaN is > anything), predicates of the type `col > 2.0` may prune
-    // improperly. If the max for `col` is 1.0, say, this page might be pruned. But if it contains
-    // NaN, that row should be returned, but won't. So for now disallow pruning of floating type
-    // columns where the predicate is a comparison. Once Parquet supports total order then
-    // these predicates can be allowed.
+        // If the ColumnOrder is undefined (as opposed to unknown), we shouldn't be pruning
+        // since min/max are invalid.
+        if col_order == ColumnOrdering::Undefined {
+            dbg!("Cannot prune because column order is undefined");
+            return unhandled_hook.handle(expr);
+        }
 
-    // left and right should have the same type by now, so only check left
-    if left.data_type(schema).is_ok_and(|t| t.is_floating()) {
-        let colidx = column_index_for_expr(&left).or(column_index_for_expr(&right));
-        if let Some(colidx) = colidx {
-            let col_order = column_orderings[colidx];
+        // left and right should have the same type by now, so only check left
+        if left.data_type(schema).is_ok_and(|t| t.is_floating()) {
+            // By the time we've reached this code, we've narrowed down the possible expressions
+            // to binary expressions. Of those allowed by `build_statistics_expr`, we only need
+            // to worry about greater/less than expressions and not equal.
             match op {
-                // TODO(ets): which other operations to disallow?
                 Operator::Gt
                 | Operator::GtEq
                 | Operator::Lt
                 | Operator::LtEq
                 | Operator::NotEq => {
                     if col_order != ColumnOrdering::TotalOrder {
-                        dbg!(format!("Cannot prune floating point column because NaN may be present"));
+                        dbg!("Cannot prune floating point column because NaN may be present");
                         return unhandled_hook.handle(expr);
                     }
                 }
@@ -1635,11 +1642,13 @@ fn build_predicate_expression(
         .unwrap_or_else(|_| unhandled_hook.handle(expr))
 }
 
+// Find column index for the given expression. Expects either column or cast-like expressions.
 fn column_index_for_expr(expr: &Arc<dyn PhysicalExpr>) -> Option<usize> {
-    // TODO(ets): what other types of expressions to check for here?
     if let Some(col) = expr.as_any().downcast_ref::<phys_expr::Column>() {
         Some(col.index())
     } else if let Some(cast) = expr.as_any().downcast_ref::<phys_expr::CastExpr>() {
+        column_index_for_expr(cast.expr())
+    } else if let Some(cast) = expr.as_any().downcast_ref::<phys_expr::TryCastExpr>() {
         column_index_for_expr(cast.expr())
     } else {
         None
