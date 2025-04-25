@@ -761,16 +761,16 @@ config_namespace! {
         /// Format string for nulls
         pub null: String, default = "".into()
         /// Date format for date arrays
-        pub date_format: Option<String>, default = None
+        pub date_format: Option<String>, default = Some("%Y-%m-%d".to_string())
         /// Format for DateTime arrays
-        pub datetime_format: Option<String>, default = None
+        pub datetime_format: Option<String>, default = Some("%Y-%m-%dT%H:%M:%S%.f".to_string())
         /// Timestamp format for timestamp arrays
-        pub timestamp_format: Option<String>, default = None
-        /// Timestamp format for timestamp with timezone arrays
+        pub timestamp_format: Option<String>, default = Some("%Y-%m-%dT%H:%M:%S%.f".to_string())
+        /// Timestamp format for timestamp with timezone arrays. When `None`, ISO 8601 format is used.
         pub timestamp_tz_format: Option<String>, default = None
         /// Time format for time arrays
-        pub time_format: Option<String>, default = None
-        /// Duration format. Can be either Pretty or ISO8601
+        pub time_format: Option<String>, default = Some("%H:%M:%S%.f".to_string())
+        /// Duration format. Can be either `"pretty"` or `"ISO8601"`
         pub duration_format: String, default = "pretty".into()
         /// Show types in visual representation batches
         pub types_info: bool, default = false

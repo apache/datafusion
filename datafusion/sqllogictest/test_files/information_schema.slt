@@ -272,13 +272,13 @@ datafusion.explain.physical_plan_only false
 datafusion.explain.show_schema false
 datafusion.explain.show_sizes true
 datafusion.explain.show_statistics false
-datafusion.format.date_format NULL
-datafusion.format.datetime_format NULL
+datafusion.format.date_format %Y-%m-%d
+datafusion.format.datetime_format %Y-%m-%dT%H:%M:%S%.f
 datafusion.format.duration_format pretty
 datafusion.format.null (empty)
 datafusion.format.safe true
-datafusion.format.time_format NULL
-datafusion.format.timestamp_format NULL
+datafusion.format.time_format %H:%M:%S%.f
+datafusion.format.timestamp_format %Y-%m-%dT%H:%M:%S%.f
 datafusion.format.timestamp_tz_format NULL
 datafusion.format.types_info false
 datafusion.optimizer.allow_symmetric_joins_without_pruning true
@@ -381,14 +381,14 @@ datafusion.explain.physical_plan_only false When set to true, the explain statem
 datafusion.explain.show_schema false When set to true, the explain statement will print schema information
 datafusion.explain.show_sizes true When set to true, the explain statement will print the partition sizes
 datafusion.explain.show_statistics false When set to true, the explain statement will print operator statistics for physical plans
-datafusion.format.date_format NULL Date format for date arrays
-datafusion.format.datetime_format NULL Format for DateTime arrays
-datafusion.format.duration_format pretty Duration format. Can be either Pretty or ISO8601
+datafusion.format.date_format %Y-%m-%d Date format for date arrays
+datafusion.format.datetime_format %Y-%m-%dT%H:%M:%S%.f Format for DateTime arrays
+datafusion.format.duration_format pretty Duration format. Can be either `"pretty"` or `"ISO8601"`
 datafusion.format.null (empty) Format string for nulls
 datafusion.format.safe true If set to `true` any formatting errors will be written to the output instead of being converted into a [`std::fmt::Error`]
-datafusion.format.time_format NULL Time format for time arrays
-datafusion.format.timestamp_format NULL Timestamp format for timestamp arrays
-datafusion.format.timestamp_tz_format NULL Timestamp format for timestamp with timezone arrays
+datafusion.format.time_format %H:%M:%S%.f Time format for time arrays
+datafusion.format.timestamp_format %Y-%m-%dT%H:%M:%S%.f Timestamp format for timestamp arrays
+datafusion.format.timestamp_tz_format NULL Timestamp format for timestamp with timezone arrays. When `None`, ISO 8601 format is used.
 datafusion.format.types_info false Show types in visual representation batches
 datafusion.optimizer.allow_symmetric_joins_without_pruning true Should DataFusion allow symmetric hash joins for unbounded data sources even when its inputs do not have any ordering or filtering If the flag is not enabled, the SymmetricHashJoin operator will be unable to prune its internal buffers, resulting in certain join types - such as Full, Left, LeftAnti, LeftSemi, Right, RightAnti, and RightSemi - being produced only at the end of the execution. This is not typical in stream processing. Additionally, without proper design for long runner execution, all types of joins may encounter out-of-memory errors.
 datafusion.optimizer.default_filter_selectivity 20 The default filter selectivity used by Filter Statistics when an exact selectivity cannot be determined. Valid values are between 0 (no selectivity) and 100 (all rows are selected).
