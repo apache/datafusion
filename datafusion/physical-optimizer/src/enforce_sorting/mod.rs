@@ -410,9 +410,10 @@ pub fn parallelize_sorts(
         Ok(Transformed::yes(
             PlanWithCorrespondingCoalescePartitions::new(
                 // Safe to unwrap, because `CoalescePartitionsExec` has a fetch
-                CoalescePartitionsExec::new(Arc::clone(&requirements.plan))
-                    .with_fetch(fetch)
-                    .unwrap(),
+                Arc::new(
+                    CoalescePartitionsExec::new(Arc::clone(&requirements.plan))
+                        .with_fetch(fetch),
+                ),
                 false,
                 vec![requirements],
             ),
