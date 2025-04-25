@@ -245,7 +245,7 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // Push any remaining filters into our data source
         let res = self.data_source.try_pushdown_filters(
-            &child_pushdown_result.parent_filters.unpack(),
+            &child_pushdown_result.parent_filters.into_inner_filters(),
             config,
         )?;
         match res.new_node {

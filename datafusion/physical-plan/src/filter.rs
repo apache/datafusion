@@ -504,7 +504,7 @@ impl ExecutionPlan for FilterExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // We absorb any parent filters that were not handled by our children
         let mut unhandled_filters =
-            child_pushdown_result.parent_filters.keep_unsupported();
+            child_pushdown_result.parent_filters.collect_unsupported();
         // Was our own predicate handled by our children?
         assert_eq!(
             child_pushdown_result.self_filters.len(),
@@ -516,9 +516,10 @@ impl ExecutionPlan for FilterExec {
             .into_iter()
             .next()
             .expect("FilterExec should only have one child")
-            .into_iter()
+            .iter()
             .next()
-            .expect("FilterExec produces only one filter for each child");
+            .expect("FilterExec produces only one filter for each child")
+            .clone();
         if let FilterPushdown::Unsupported(expr) = child_filter {
             unhandled_filters.push(expr);
         }

@@ -397,7 +397,7 @@ fn push_down_filters(
     ) {
         let mut parent_filter_indices = vec![];
         let num_self_filters = filters_for_child.len();
-        for (idx, filter) in parent_filters.into_iter().enumerate() {
+        for (idx, filter) in parent_filters.into_inner().into_iter().enumerate() {
             // Check if we can push this filter down to our children
             match filter {
                 FilterPushdown::Supported(f) => {

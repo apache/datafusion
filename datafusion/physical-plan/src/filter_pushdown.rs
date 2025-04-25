@@ -19,42 +19,51 @@ use std::sync::Arc;
 
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
+/// The result of or a plan for pushing down a filter into a child node.
+/// This contains references to filters so that nodes can mutate a filter
+/// before pushing it down to a child node (e.g. to adjust a projection)
+/// or can directly take ownership of `Unsupported` filters that their children
+/// could not handle.
 #[derive(Debug, Clone)]
 pub enum FilterPushdown {
     Supported(Arc<dyn PhysicalExpr>),
     Unsupported(Arc<dyn PhysicalExpr>),
 }
 
+/// A thin wrapper around [`FilterPushdown`]s that allows for easy collection of
+/// supported and unsupported filters.
 #[derive(Debug, Clone)]
-pub struct FilterPushdowns {
-    pub pushdowns: Vec<FilterPushdown>,
-}
+pub struct FilterPushdowns(Vec<FilterPushdown>);
 
 impl FilterPushdowns {
+    /// Create a new FilterPushdowns with the given filters and their pushdown status.
     pub fn new(pushdowns: Vec<FilterPushdown>) -> Self {
-        Self { pushdowns }
+        Self(pushdowns)
     }
 
+    /// Create a new FilterPushdowns with all filters as supported.
     pub fn all_supported(filters: &[Arc<dyn PhysicalExpr>]) -> Self {
         let pushdowns = filters
             .iter()
             .map(|f| FilterPushdown::Supported(Arc::clone(f)))
             .collect();
-        Self { pushdowns }
+        Self::new(pushdowns)
     }
 
+    /// Create a new FilterPushdowns with all filters as unsupported.
     pub fn all_unsupported(filters: &[Arc<dyn PhysicalExpr>]) -> Self {
         let pushdowns = filters
             .iter()
             .map(|f| FilterPushdown::Unsupported(Arc::clone(f)))
             .collect();
-        Self { pushdowns }
+        Self::new(pushdowns)
     }
 
-    /// Transform all filters to supported
+    /// Transform all filters to supported, returning a new FilterPushdowns.
+    /// This does not modify the original FilterPushdowns.
     pub fn as_supported(&self) -> Self {
         let pushdowns = self
-            .pushdowns
+            .0
             .iter()
             .map(|f| match f {
                 FilterPushdown::Supported(expr) => {
@@ -65,21 +74,13 @@ impl FilterPushdowns {
                 }
             })
             .collect();
-        Self { pushdowns }
+        Self::new(pushdowns)
     }
 
-    pub fn keep_supported(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.pushdowns
-            .iter()
-            .filter_map(|f| match f {
-                FilterPushdown::Supported(expr) => Some(Arc::clone(expr)),
-                FilterPushdown::Unsupported(_) => None,
-            })
-            .collect()
-    }
-
-    pub fn keep_unsupported(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.pushdowns
+    /// Collect unsupported filters into a Vec, without removing them from the original
+    /// FilterPushdowns.
+    pub fn collect_unsupported(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.0
             .iter()
             .filter_map(|f| match f {
                 FilterPushdown::Unsupported(expr) => Some(Arc::clone(expr)),
@@ -88,8 +89,10 @@ impl FilterPushdowns {
             .collect()
     }
 
-    pub fn unpack(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.pushdowns
+    /// Collect all filters as PhysicalExprs into a Vec, without removing them from the original
+    /// FilterPushdowns.
+    pub fn into_inner_filters(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.0
             .iter()
             .map(|f| match f {
                 FilterPushdown::Supported(expr) => Arc::clone(expr),
@@ -98,53 +101,61 @@ impl FilterPushdowns {
             .collect()
     }
 
+    /// Return the inner `Vec<FilterPushdown>` without modifying the original FilterPushdowns.
     pub fn into_inner(&self) -> Vec<FilterPushdown> {
-        self.pushdowns.clone()
+        self.0.clone()
     }
 
-    pub fn supported(
-        filters: &[Arc<dyn PhysicalExpr>],
-        mut f: impl FnMut(Arc<dyn PhysicalExpr>) -> bool,
-    ) -> Self {
-        let pushdowns = filters
-            .iter()
-            .filter(|filt| f(Arc::clone(filt)))
-            .map(|f| FilterPushdown::Supported(Arc::clone(f)))
-            .collect();
-        Self { pushdowns }
-    }
-
+    /// Return an iterator over the inner `Vec<FilterPushdown>`.
     pub fn iter(&self) -> impl Iterator<Item = &FilterPushdown> {
-        self.pushdowns.iter()
+        self.0.iter()
     }
 
+    /// Return the number of filters in the inner `Vec<FilterPushdown>`.
     pub fn len(&self) -> usize {
-        self.pushdowns.len()
+        self.0.len()
     }
 
+    /// Check if the inner `Vec<FilterPushdown>` is empty.
     pub fn is_empty(&self) -> bool {
-        self.pushdowns.is_empty()
+        self.0.is_empty()
     }
 }
 
-impl IntoIterator for FilterPushdowns {
-    type Item = FilterPushdown;
-    type IntoIter = std::vec::IntoIter<FilterPushdown>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.pushdowns.into_iter()
-    }
-}
-
+/// The result of pushing down filters into a child node.
+/// This is the result provided to nodes in [`ExecutionPlan::handle_child_pushdown_result`].
+/// Nodes process this result and convert it into a [`FilterPushdownPropagation`]
+/// that is returned to their parent.
+///
+/// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
 #[derive(Debug, Clone)]
 pub struct ChildPushdownResult {
     /// The combined result of pushing down each parent filter into each child.
+    /// For example, given the fitlers `[a, b]` and children `[1, 2, 3]` the matrix of responses:
+    ///
+    // | filter | child 1     | child 2   | child 3   | result      |
+    // |--------|-------------|-----------|-----------|-------------|
+    // | a      | Supported   | Supported | Supported | Supported   |
+    // | b      | Unsupported | Supported | Supported | Unsupported |
+    ///
+    /// That is: if any child marks a filter as unsupported or if the filter was not pushed
+    /// down into any child then the result is unsupported.
+    /// If at least one children and all children that received the filter mark it as supported
+    /// then the result is supported.
     pub parent_filters: FilterPushdowns,
     /// The result of pushing down each filter this node provided into each of it's children.
+    /// This is not combined with the parent filters so that nodes can treat each child independently.
     pub self_filters: Vec<FilterPushdowns>,
 }
 
 /// The result of pushing down filters into a node that it returns to its parent.
+/// This is what nodes return from [`ExecutionPlan::handle_child_pushdown_result`] to communicate
+/// to the optimizer:
+///
+/// 1. What to do with any parent filters that were not completely handled by the children.
+/// 2. If the node needs to be replaced in the execution plan with a new node or not.
+///
+/// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
 #[derive(Debug, Clone)]
 pub struct FilterPushdownPropagation<T> {
     pub parent_filter_result: FilterPushdowns,
@@ -162,6 +173,8 @@ impl<T> FilterPushdownPropagation<T> {
         }
     }
 
+    /// Create a new [`FilterPushdownPropagation`] that tells the parent node
+    /// that none of the parent filters were not pushed down.
     pub fn unsupported(parent_filters: &[Arc<dyn PhysicalExpr>]) -> Self {
         let unsupported = FilterPushdowns::all_unsupported(parent_filters);
         Self {
