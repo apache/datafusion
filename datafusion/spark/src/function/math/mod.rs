@@ -21,14 +21,14 @@ use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-make_udf_function!(expm1::SparkExpm1, spark_expm1);
+make_udf_function!(expm1::SparkExpm1, expm1);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
-    export_functions!((spark_expm1, "Returns exp(expr) - 1 as a Float64.", arg1));
+    export_functions!((expm1, "Returns exp(expr) - 1 as a Float64.", arg1));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![spark_expm1()]
+    vec![expm1()]
 }

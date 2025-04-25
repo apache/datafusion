@@ -21,18 +21,18 @@ use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-make_udf_function!(ascii::SparkAscii, spark_ascii);
+make_udf_function!(ascii::SparkAscii, ascii);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
     export_functions!((
-        spark_ascii,
+        ascii,
         "Returns the ASCII code point of the first character of string.",
         arg1
     ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![spark_ascii()]
+    vec![ascii()]
 }

@@ -78,7 +78,7 @@ impl ScalarUDFImpl for SparkExpm1 {
     }
 
     fn name(&self) -> &str {
-        "spark_expm1"
+        "expm1"
     }
 
     fn signature(&self) -> &Signature {

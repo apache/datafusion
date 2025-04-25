@@ -16,17 +16,17 @@
 # under the License.
 
 query R
-SELECT spark_expm1(0::INT);
+SELECT expm1(0::INT);
 ----
 0
 
 query R
-SELECT spark_expm1(1::INT);
+SELECT expm1(1::INT);
 ----
 1.718281828459
 
 query R
-SELECT spark_expm1(a) FROM (VALUES (0::INT), (1::INT)) AS t(a);
+SELECT expm1(a) FROM (VALUES (0::INT), (1::INT)) AS t(a);
 ----
 0
 1.718281828459

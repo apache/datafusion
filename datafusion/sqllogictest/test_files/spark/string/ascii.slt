@@ -16,27 +16,27 @@
 # under the License.
 
 query I
-SELECT spark_ascii('234');
+SELECT ascii('234');
 ----
 50
 
 query I
-SELECT spark_ascii('');
+SELECT ascii('');
 ----
 0
 
 query I
-SELECT spark_ascii('222');
+SELECT ascii('222');
 ----
 50
 
 query I
-SELECT spark_ascii(2::INT);
+SELECT ascii(2::INT);
 ----
 50
 
 query I
-SELECT spark_ascii(a) FROM (VALUES ('Spark'), ('PySpark'), ('Pandas API')) AS t(a);
+SELECT ascii(a) FROM (VALUES ('Spark'), ('PySpark'), ('Pandas API')) AS t(a);
 ----
 83
 80

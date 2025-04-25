@@ -85,7 +85,7 @@ impl ScalarUDFImpl for SparkAscii {
     }
 
     fn name(&self) -> &str {
-        "spark_ascii"
+        "ascii"
     }
 
     fn signature(&self) -> &Signature {

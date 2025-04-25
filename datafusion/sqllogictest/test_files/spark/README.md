@@ -47,11 +47,11 @@ of `NAME`).
 ### Scalar Example:
 
 ```sql
-SELECT spark_expm1(0::INT);
+SELECT expm1(0::INT);
 ```
 
 ### Array Example:
 
 ```sql
-SELECT spark_expm1(a) FROM (VALUES (0::INT), (1::INT)) AS t(a);
+SELECT expm1(a) FROM (VALUES (0::INT), (1::INT)) AS t(a);
 ```

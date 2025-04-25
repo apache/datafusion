@@ -122,6 +122,13 @@ impl TestContext {
                 info!("Using default SessionContext");
             }
         };
+
+        if relative_path.starts_with("spark/") {
+            info!("Registering Spark functions");
+            datafusion_spark::register_all(&mut test_ctx.session_ctx().state())
+                .expect("Can not register Spark functions");
+        }
+
         Some(test_ctx)
     }
 
@@ -223,12 +230,12 @@ pub async fn register_temp_table(ctx: &SessionContext) {
             self
         }
 
-        fn table_type(&self) -> TableType {
-            self.0
-        }
-
         fn schema(&self) -> SchemaRef {
             unimplemented!()
+        }
+
+        fn table_type(&self) -> TableType {
+            self.0
         }
 
         async fn scan(
