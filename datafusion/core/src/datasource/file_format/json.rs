@@ -149,7 +149,7 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let filename = "tests/data/2.json";
         let format = JsonFormat::default();
-        scan_format(state, &format, ".", filename, projection, limit).await
+        scan_format(state, &format, None, ".", filename, projection, limit).await
     }
 
     #[tokio::test]

@@ -1513,7 +1513,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location: object_store::path::Path::parse(file_name).expect("creating path"),
             last_modified: chrono::DateTime::from(std::time::SystemTime::now()),
-            size: data.len(),
+            size: data.len() as u64,
             e_tag: None,
             version: None,
         };
@@ -1526,8 +1526,11 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
+        let inner = ParquetObjectReader::new(Arc::new(in_memory), object_meta.location)
+            .with_file_size(object_meta.size);
+
         let reader = ParquetFileReader {
-            inner: ParquetObjectReader::new(Arc::new(in_memory), object_meta),
+            inner,
             file_metrics: file_metrics.clone(),
         };
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();

@@ -193,9 +193,11 @@ impl SessionConfig {
     ///
     /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
-        // partition count must be greater than zero
-        assert!(n > 0);
-        self.options.execution.target_partitions = n;
+        self.options.execution.target_partitions = if n == 0 {
+            datafusion_common::config::ExecutionOptions::default().target_partitions
+        } else {
+            n
+        };
         self
     }
 

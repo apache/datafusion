@@ -52,6 +52,7 @@ use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 create_func!(FirstValue, first_value_udaf);
+create_func!(LastValue, last_value_udaf);
 
 /// Returns the first value in a group of values.
 pub fn first_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
@@ -64,6 +65,20 @@ pub fn first_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
             .unwrap()
     } else {
         first_value_udaf().call(vec![expression])
+    }
+}
+
+/// Returns the last value in a group of values.
+pub fn last_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
+    if let Some(order_by) = order_by {
+        last_value_udaf()
+            .call(vec![expression])
+            .order_by(order_by)
+            .build()
+            // guaranteed to be `Expr::AggregateFunction`
+            .unwrap()
+    } else {
+        last_value_udaf().call(vec![expression])
     }
 }
 
@@ -938,13 +953,6 @@ impl Accumulator for FirstValueAccumulator {
             - size_of_val(&self.orderings)
     }
 }
-
-make_udaf_expr_and_func!(
-    LastValue,
-    last_value,
-    "Returns the last value in a group of values.",
-    last_value_udaf
-);
 
 #[user_doc(
     doc_section(label = "General Functions"),

@@ -36,6 +36,7 @@ pub mod optimizer;
 pub mod output_requirements;
 pub mod projection_pushdown;
 pub mod pruning;
+pub mod push_down_filter;
 pub mod sanity_checker;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;

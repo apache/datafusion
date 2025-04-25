@@ -31,8 +31,7 @@ use datafusion_common::{
 use datafusion_expr::expr::Alias;
 use datafusion_expr::Unnest;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, projection_schema, Aggregate, Distinct, Expr, Projection,
-    TableScan, Window,
+    logical_plan::LogicalPlan, Aggregate, Distinct, Expr, Projection, TableScan, Window,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -455,6 +454,17 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
 
+    // A fast path: if the previous projection is same as the current projection
+    // we can directly remove the current projection and return child projection.
+    if prev_projection.expr == expr {
+        return Projection::try_new_with_schema(
+            expr,
+            Arc::clone(&prev_projection.input),
+            schema,
+        )
+        .map(Transformed::yes);
+    }
+
     // Count usages (referrals) of each projection expression in its input fields:
     let mut column_referral_map = HashMap::<&Column, usize>::new();
     expr.iter()
@@ -774,9 +784,24 @@ fn rewrite_projection_given_requirements(
 /// Projection is unnecessary, when
 /// - input schema of the projection, output schema of the projection are same, and
 /// - all projection expressions are either Column or Literal
-fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result<bool> {
-    let proj_schema = projection_schema(input, proj_exprs)?;
-    Ok(&proj_schema == input.schema() && proj_exprs.iter().all(is_expr_trivial))
+pub fn is_projection_unnecessary(
+    input: &LogicalPlan,
+    proj_exprs: &[Expr],
+) -> Result<bool> {
+    // First check if the number of expressions is equal to the number of fields in the input schema.
+    if proj_exprs.len() != input.schema().fields().len() {
+        return Ok(false);
+    }
+    Ok(input.schema().iter().zip(proj_exprs.iter()).all(
+        |((field_relation, field_name), expr)| {
+            // Check if the expression is a column and if it matches the field name
+            if let Expr::Column(col) = expr {
+                col.relation.as_ref() == field_relation && col.name.eq(field_name.name())
+            } else {
+                false
+            }
+        },
+    ))
 }
 
 #[cfg(test)]

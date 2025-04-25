@@ -95,6 +95,7 @@ Here are some active projects using DataFusion:
  <!-- "Active" means github repositories that had at least one commit in the last 6 months -->
 
 - [Arroyo](https://github.com/ArroyoSystems/arroyo) Distributed stream processing engine in Rust
+- [ArkFlow](https://github.com/arkflow-rs/arkflow) High-performance Rust stream processing engine
 - [Ballista](https://github.com/apache/datafusion-ballista) Distributed SQL Query Engine
 - [Blaze](https://github.com/kwai/blaze) The Blaze accelerator for Apache Spark leverages native vectorized execution to accelerate query processing
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
@@ -104,6 +105,7 @@ Here are some active projects using DataFusion:
 - [datafusion-dft](https://github.com/datafusion-contrib/datafusion-dft) Batteries included CLI, TUI, and server implementations for DataFusion.
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
+- [Feldera](https://github.com/feldera/feldera) Fast query engine for incremental computation
 - [Funnel](https://funnel.io/) Data Platform powering Marketing Intelligence applications.
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
 - [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database

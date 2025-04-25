@@ -355,6 +355,7 @@ impl FileOpener for JsonOpener {
             let result = store.get_opts(file_meta.location(), options).await?;
 
             match result.payload {
+                #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
                     let bytes = match file_meta.range {
                         None => file_compression_type.convert_read(file)?,

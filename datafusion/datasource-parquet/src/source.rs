@@ -32,9 +32,9 @@ use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::Statistics;
+use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -438,6 +438,24 @@ impl ParquetSource {
     }
 }
 
+/// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
+pub(crate) fn parse_coerce_int96_string(
+    str_setting: &str,
+) -> datafusion_common::Result<TimeUnit> {
+    let str_setting_lower: &str = &str_setting.to_lowercase();
+
+    match str_setting_lower {
+        "ns" => Ok(TimeUnit::Nanosecond),
+        "us" => Ok(TimeUnit::Microsecond),
+        "ms" => Ok(TimeUnit::Millisecond),
+        "s" => Ok(TimeUnit::Second),
+        _ => Err(DataFusionError::Configuration(format!(
+            "Unknown or unsupported parquet coerce_int96: \
+        {str_setting}. Valid values are: ns, us, ms, and s."
+        ))),
+    }
+}
+
 impl FileSource for ParquetSource {
     fn create_file_opener(
         &self,
@@ -458,6 +476,13 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
+        let coerce_int96 = self
+            .table_parquet_options
+            .global
+            .coerce_int96
+            .as_ref()
+            .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
+
         Arc::new(ParquetOpener {
             partition_index: partition,
             projection: Arc::from(projection),
@@ -476,6 +501,7 @@ impl FileSource for ParquetSource {
             enable_bloom_filter: self.bloom_filter_on_read(),
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
             schema_adapter_factory,
+            coerce_int96,
         })
     }
 

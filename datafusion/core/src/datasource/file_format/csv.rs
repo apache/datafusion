@@ -72,7 +72,7 @@ mod tests {
     #[derive(Debug)]
     struct VariableStream {
         bytes_to_repeat: Bytes,
-        max_iterations: usize,
+        max_iterations: u64,
         iterations_detected: Arc<Mutex<usize>>,
     }
 
@@ -103,14 +103,15 @@ mod tests {
 
         async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
             let bytes = self.bytes_to_repeat.clone();
-            let range = 0..bytes.len() * self.max_iterations;
+            let len = bytes.len() as u64;
+            let range = 0..len * self.max_iterations;
             let arc = self.iterations_detected.clone();
             let stream = futures::stream::repeat_with(move || {
                 let arc_inner = arc.clone();
                 *arc_inner.lock().unwrap() += 1;
                 Ok(bytes.clone())
             })
-            .take(self.max_iterations)
+            .take(self.max_iterations as usize)
             .boxed();
 
             Ok(GetResult {
@@ -138,7 +139,7 @@ mod tests {
         async fn get_ranges(
             &self,
             _location: &Path,
-            _ranges: &[Range<usize>],
+            _ranges: &[Range<u64>],
         ) -> object_store::Result<Vec<Bytes>> {
             unimplemented!()
         }
@@ -154,7 +155,7 @@ mod tests {
         fn list(
             &self,
             _prefix: Option<&Path>,
-        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             unimplemented!()
         }
 
@@ -179,7 +180,7 @@ mod tests {
     }
 
     impl VariableStream {
-        pub fn new(bytes_to_repeat: Bytes, max_iterations: usize) -> Self {
+        pub fn new(bytes_to_repeat: Bytes, max_iterations: u64) -> Self {
             Self {
                 bytes_to_repeat,
                 max_iterations,
@@ -249,6 +250,7 @@ mod tests {
         let exec = scan_format(
             &state,
             &format,
+            None,
             root,
             "aggregate_test_100_with_nulls.csv",
             projection,
@@ -299,6 +301,7 @@ mod tests {
         let exec = scan_format(
             &state,
             &format,
+            None,
             root,
             "aggregate_test_100_with_nulls.csv",
             projection,
@@ -371,7 +374,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };
@@ -429,7 +432,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };
@@ -581,7 +584,7 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let root = format!("{}/csv", arrow_test_data());
         let format = CsvFormat::default().with_has_header(has_header);
-        scan_format(state, &format, &root, file_name, projection, limit).await
+        scan_format(state, &format, None, &root, file_name, projection, limit).await
     }
 
     #[tokio::test]

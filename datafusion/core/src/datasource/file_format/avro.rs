@@ -382,6 +382,15 @@ mod tests {
         let testdata = test_util::arrow_test_data();
         let store_root = format!("{testdata}/avro");
         let format = AvroFormat {};
-        scan_format(state, &format, &store_root, file_name, projection, limit).await
+        scan_format(
+            state,
+            &format,
+            None,
+            &store_root,
+            file_name,
+            projection,
+            limit,
+        )
+        .await
     }
 }

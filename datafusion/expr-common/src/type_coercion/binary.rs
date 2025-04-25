@@ -1297,6 +1297,10 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
             Some(LargeBinary)
         }
         (Binary, Utf8) | (Utf8, Binary) => Some(Binary),
+
+        // Cast FixedSizeBinary to Binary
+        (FixedSizeBinary(_), Binary) | (Binary, FixedSizeBinary(_)) => Some(Binary),
+
         _ => None,
     }
 }
