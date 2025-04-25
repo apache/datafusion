@@ -1590,6 +1590,21 @@ pub fn from_cast(
     schema: &DFSchemaRef,
 ) -> Result<Expression> {
     let Cast { expr, data_type } = cast;
+    // since substrait Null must be typed, so if we see a cast(null, dt), we make it a typed null
+    if let Expr::Literal(lit) = expr.as_ref() {
+        if lit.is_null() {
+            let lit = Literal {
+                nullable: true,
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                literal_type: Some(LiteralType::Null(to_substrait_type(
+                    &data_type, true,
+                )?)),
+            };
+            return Ok(Expression {
+                rex_type: Some(RexType::Literal(lit)),
+            });
+        }
+    }
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
