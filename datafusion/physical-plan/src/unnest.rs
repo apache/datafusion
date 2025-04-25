@@ -29,15 +29,14 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray,
-    PrimitiveArray,
+    new_null_array, Array, ArrayRef, AsArray, FixedSizeListArray, Int64Array,
+    LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{cast, is_not_null, kernels, sum};
 use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{new_null_array, Int64Array, Scalar, StructArray};
 use arrow_ord::cmp::lt;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, HashMap, HashSet, Result, UnnestOptions,
@@ -137,6 +136,9 @@ impl DisplayAs for UnnestExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "UnnestExec")
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "")
             }
         }
     }
@@ -951,10 +953,13 @@ fn repeat_arrs_from_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{
+        GenericListArray, NullBufferBuilder, OffsetSizeTrait, StringArray,
+    };
+    use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{Field, Int32Type};
-    use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};
-    use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
-    use datafusion_common::assert_batches_eq;
+    use datafusion_common::test_util::batches_to_string;
+    use insta::assert_snapshot;
 
     // Create a GenericListArray with the following list values:
     //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
@@ -964,43 +969,43 @@ mod tests {
     {
         let mut values = vec![];
         let mut offsets: Vec<OffsetSize> = vec![OffsetSize::zero()];
-        let mut valid = BooleanBufferBuilder::new(6);
+        let mut valid = NullBufferBuilder::new(6);
 
         // [A, B, C]
         values.extend_from_slice(&[Some("A"), Some("B"), Some("C")]);
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(true);
+        valid.append_non_null();
 
         // []
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(true);
+        valid.append_non_null();
 
         // NULL with non-zero value length
         // Issue https://github.com/apache/datafusion/issues/9932
         values.push(Some("?"));
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(false);
+        valid.append_null();
 
         // [D]
         values.push(Some("D"));
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(true);
+        valid.append_non_null();
 
         // Another NULL with zero value length
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(false);
+        valid.append_null();
 
         // [NULL, F]
         values.extend_from_slice(&[None, Some("F")]);
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(true);
+        valid.append_non_null();
 
         let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
         GenericListArray::<OffsetSize>::new(
             field,
             OffsetBuffer::new(offsets.into()),
             Arc::new(StringArray::from(values)),
-            Some(NullBuffer::new(valid.finish())),
+            valid.finish(),
         )
     }
 
@@ -1055,10 +1060,10 @@ mod tests {
 
         let list_arr1_ref = Arc::new(list_arr1) as ArrayRef;
         let offsets = OffsetBuffer::from_lengths([3, 3, 0]);
-        let mut nulls = BooleanBufferBuilder::new(3);
-        nulls.append(true);
-        nulls.append(true);
-        nulls.append(false);
+        let mut nulls = NullBufferBuilder::new(3);
+        nulls.append_non_null();
+        nulls.append_non_null();
+        nulls.append_null();
         // list<list<int32>>
         let col1_field = Field::new_list_field(
             DataType::List(Arc::new(Field::new_list_field(
@@ -1074,7 +1079,7 @@ mod tests {
             )),
             offsets,
             list_arr1_ref,
-            Some(NullBuffer::new(nulls.finish())),
+            nulls.finish(),
         );
 
         let list_arr2 = StringArray::from(vec![
@@ -1086,8 +1091,8 @@ mod tests {
         ]);
 
         let offsets = OffsetBuffer::from_lengths([2, 2, 1]);
-        let mut nulls = BooleanBufferBuilder::new(3);
-        nulls.append_n(3, true);
+        let mut nulls = NullBufferBuilder::new(3);
+        nulls.append_n_non_nulls(3);
         let col2_field = Field::new(
             "col2",
             DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
@@ -1097,7 +1102,7 @@ mod tests {
             Arc::new(Field::new_list_field(DataType::Utf8, true)),
             OffsetBuffer::new(offsets.into()),
             Arc::new(list_arr2),
-            Some(NullBuffer::new(nulls.finish())),
+            nulls.finish(),
         );
         // convert col1 and col2 to a record batch
         let schema = Arc::new(Schema::new(vec![col1_field, col2_field]));
@@ -1141,33 +1146,33 @@ mod tests {
         )?
         .unwrap();
 
-        let expected = &[
-"+---------------------------------+---------------------------------+---------------------------------+",
-"| col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |",
-"+---------------------------------+---------------------------------+---------------------------------+",
-"| [1, 2, 3]                       | 1                               | a                               |",
-"|                                 | 2                               | b                               |",
-"| [4, 5]                          | 3                               |                                 |",
-"| [1, 2, 3]                       |                                 | a                               |",
-"|                                 |                                 | b                               |",
-"| [4, 5]                          |                                 |                                 |",
-"| [1, 2, 3]                       | 4                               | a                               |",
-"|                                 | 5                               | b                               |",
-"| [4, 5]                          |                                 |                                 |",
-"| [7, 8, 9, 10]                   | 7                               | c                               |",
-"|                                 | 8                               | d                               |",
-"| [11, 12, 13]                    | 9                               |                                 |",
-"|                                 | 10                              |                                 |",
-"| [7, 8, 9, 10]                   |                                 | c                               |",
-"|                                 |                                 | d                               |",
-"| [11, 12, 13]                    |                                 |                                 |",
-"| [7, 8, 9, 10]                   | 11                              | c                               |",
-"|                                 | 12                              | d                               |",
-"| [11, 12, 13]                    | 13                              |                                 |",
-"|                                 |                                 | e                               |",
-"+---------------------------------+---------------------------------+---------------------------------+",
-        ];
-        assert_batches_eq!(expected, &[ret]);
+        assert_snapshot!(batches_to_string(&[ret]),
+        @r###"
++---------------------------------+---------------------------------+---------------------------------+
+| col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
++---------------------------------+---------------------------------+---------------------------------+
+| [1, 2, 3]                       | 1                               | a                               |
+|                                 | 2                               | b                               |
+| [4, 5]                          | 3                               |                                 |
+| [1, 2, 3]                       |                                 | a                               |
+|                                 |                                 | b                               |
+| [4, 5]                          |                                 |                                 |
+| [1, 2, 3]                       | 4                               | a                               |
+|                                 | 5                               | b                               |
+| [4, 5]                          |                                 |                                 |
+| [7, 8, 9, 10]                   | 7                               | c                               |
+|                                 | 8                               | d                               |
+| [11, 12, 13]                    | 9                               |                                 |
+|                                 | 10                              |                                 |
+| [7, 8, 9, 10]                   |                                 | c                               |
+|                                 |                                 | d                               |
+| [11, 12, 13]                    |                                 |                                 |
+| [7, 8, 9, 10]                   | 11                              | c                               |
+|                                 | 12                              | d                               |
+| [11, 12, 13]                    | 13                              |                                 |
+|                                 |                                 | e                               |
++---------------------------------+---------------------------------+---------------------------------+
+        "###);
         Ok(())
     }
 

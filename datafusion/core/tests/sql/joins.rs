@@ -67,11 +67,11 @@ async fn join_change_in_planner() -> Result<()> {
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a1@0 ASC NULLS LAST",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
+            // "     DataSourceExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], file_type=csv, has_header=false",
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a1@0 ASC NULLS LAST",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
+            // "     DataSourceExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], file_type=csv, has_header=false"
         ]
     };
     let mut actual: Vec<&str> = formatted.trim().lines().collect();
@@ -135,11 +135,11 @@ async fn join_no_order_on_filter() -> Result<()> {
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
+            // "     DataSourceExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], file_type=csv, has_header=false",
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
+            // "     DataSourceExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], file_type=csv, has_header=false"
         ]
     };
     let mut actual: Vec<&str> = formatted.trim().lines().collect();
@@ -185,11 +185,11 @@ async fn join_change_in_planner_without_sort() -> Result<()> {
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
+            // "     DataSourceExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], file_type=csv, has_header=false",
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
+            // "     DataSourceExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], file_type=csv, has_header=false"
         ]
     };
     let mut actual: Vec<&str> = formatted.trim().lines().collect();

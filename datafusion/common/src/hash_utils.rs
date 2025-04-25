@@ -21,12 +21,11 @@
 use std::sync::Arc;
 
 use ahash::RandomState;
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use arrow_buffer::IntervalDayTime;
-use arrow_buffer::IntervalMonthDayNano;
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
@@ -700,7 +699,7 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_struct_arrays() {
-        use arrow_buffer::Buffer;
+        use arrow::buffer::Buffer;
 
         let boolarr = Arc::new(BooleanArray::from(vec![
             false, false, true, true, true, true,

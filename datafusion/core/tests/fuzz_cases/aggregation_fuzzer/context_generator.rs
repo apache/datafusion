@@ -43,7 +43,7 @@ use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
 ///   - `skip_partial parameters`
 ///   - hint `sorted` or not
 ///   - `spilling` or not (TODO, I think a special `MemoryPool` may be needed
-///      to support this)
+///     to support this)
 ///
 pub struct SessionContextGenerator {
     /// Current testing dataset
@@ -253,8 +253,8 @@ impl SkipPartialParams {
 
 #[cfg(test)]
 mod test {
-    use arrow_array::{RecordBatch, StringArray, UInt32Array};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow::array::{RecordBatch, StringArray, UInt32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
 
     use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
 

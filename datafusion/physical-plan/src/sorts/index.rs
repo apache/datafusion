@@ -50,6 +50,7 @@
 ///   RecordBatches
 /// ```
 #[derive(Debug, Clone)]
+#[deprecated(since = "46.0.0", note = "unused and will be removed in the future")]
 pub struct RowIndex {
     /// The index of the stream (uniquely identifies the stream)
     pub stream_idx: usize,

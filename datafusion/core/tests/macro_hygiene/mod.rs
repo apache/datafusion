@@ -49,3 +49,19 @@ mod record_batch {
         record_batch!(("column_name", Int32, vec![1, 2, 3])).unwrap();
     }
 }
+
+mod config_namespace {
+    // NO other imports!
+    use datafusion_common::config_namespace;
+
+    #[test]
+    fn test_macro() {
+        config_namespace! {
+            /// A config section
+            pub struct Foo {
+                /// Some doc comments
+                pub bar: bool, default = true
+            }
+        }
+    }
+}

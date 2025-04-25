@@ -23,10 +23,9 @@ use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 use arrow::{
-    datatypes::{DataType, Schema},
+    datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use arrow_schema::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::ColumnarValue;
@@ -137,6 +136,10 @@ impl PhysicalExpr for Column {
         _children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
     }
 }
 

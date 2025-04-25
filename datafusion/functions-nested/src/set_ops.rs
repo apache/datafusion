@@ -22,11 +22,11 @@ use crate::utils::make_scalar_function;
 use arrow::array::{new_empty_array, Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
+use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
-use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -90,9 +90,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArrayUnion {
+pub struct ArrayUnion {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayUnion {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayUnion {
@@ -125,12 +131,11 @@ impl ScalarUDFImpl for ArrayUnion {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_union_inner)(args)
+        make_scalar_function(array_union_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -205,12 +210,11 @@ impl ScalarUDFImpl for ArrayIntersect {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_intersect_inner)(args)
+        make_scalar_function(array_intersect_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -282,12 +286,11 @@ impl ScalarUDFImpl for ArrayDistinct {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_distinct_inner)(args)
+        make_scalar_function(array_distinct_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -302,23 +305,21 @@ impl ScalarUDFImpl for ArrayDistinct {
 /// array_distinct SQL function
 /// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
 fn array_distinct_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_distinct needs one argument");
-    }
+    let [input_array] = take_function_args("array_distinct", args)?;
 
     // handle null
-    if args[0].data_type() == &Null {
-        return Ok(Arc::clone(&args[0]));
+    if input_array.data_type() == &Null {
+        return Ok(Arc::clone(input_array));
     }
 
     // handle for list & largelist
-    match args[0].data_type() {
+    match input_array.data_type() {
         List(field) => {
-            let array = as_list_array(&args[0])?;
+            let array = as_list_array(&input_array)?;
             general_array_distinct(array, field)
         }
         LargeList(field) => {
-            let array = as_large_list_array(&args[0])?;
+            let array = as_large_list_array(&input_array)?;
             general_array_distinct(array, field)
         }
         array_type => exec_err!("array_distinct does not support type '{array_type:?}'"),
@@ -482,24 +483,13 @@ fn general_set_op(
 
 /// Array_union SQL function
 fn array_union_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_union needs two arguments");
-    }
-    let array1 = &args[0];
-    let array2 = &args[1];
-
+    let [array1, array2] = take_function_args("array_union", args)?;
     general_set_op(array1, array2, SetOp::Union)
 }
 
 /// array_intersect SQL function
 fn array_intersect_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_intersect needs two arguments");
-    }
-
-    let array1 = &args[0];
-    let array2 = &args[1];
-
+    let [array1, array2] = take_function_args("array_intersect", args)?;
     general_set_op(array1, array2, SetOp::Intersect)
 }
 
@@ -507,7 +497,7 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     array: &GenericListArray<OffsetSize>,
     field: &FieldRef,
 ) -> Result<ArrayRef> {
-    if array.len() == 0 {
+    if array.is_empty() {
         return Ok(Arc::new(array.clone()) as ArrayRef);
     }
     let dt = array.value_type();
@@ -535,6 +525,9 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
             }
         };
         new_arrays.push(array);
+    }
+    if new_arrays.is_empty() {
+        return Ok(Arc::new(array.clone()) as ArrayRef);
     }
     let offsets = OffsetBuffer::new(offsets.into());
     let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();

@@ -95,8 +95,7 @@ additional configuration options.
 # `CREATE EXTERNAL TABLE`
 
 It is also possible to create a table backed by files or remote locations via
-`CREATE EXTERNAL TABLE` as shown below. Note that wildcards (e.g. `*`) are also
-supported
+`CREATE EXTERNAL TABLE` as shown below. Note that DataFusion does not support wildcards (e.g. `*`) in file paths; instead, specify the directory path directly to read all compatible files in that directory.
 
 For example, to create a table `hits` backed by a local parquet file, use:
 
@@ -126,6 +125,32 @@ select count(*) from hits;
 1 row in set. Query took 0.344 seconds.
 ```
 
+**Why Wildcards Are Not Supported**
+
+Although wildcards (e.g., _.parquet or \*\*/_.parquet) may work for local filesystems in some cases, they are not officially supported by DataFusion. This is because wildcards are not universally applicable across all storage backends (e.g., S3, GCS). Instead, DataFusion expects the user to specify the directory path, and it will automatically read all compatible files within that directory.
+
+For example, the following usage is not supported:
+
+```sql
+CREATE EXTERNAL TABLE test (
+    message TEXT,
+    day DATE
+)
+STORED AS PARQUET
+LOCATION 'gs://bucket/*.parquet';
+```
+
+Instead, you should use:
+
+```sql
+CREATE EXTERNAL TABLE test (
+    message TEXT,
+    day DATE
+)
+STORED AS PARQUET
+LOCATION 'gs://bucket/my_table';
+```
+
 # Formats
 
 ## Parquet
@@ -147,14 +172,6 @@ parquet files and have compatible schemas
 CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/';
-```
-
-Register a single folder parquet datasource by specifying a wildcard for files to read
-
-```sql
-CREATE EXTERNAL TABLE taxi
-STORED AS PARQUET
-LOCATION '/mnt/nyctaxi/*.parquet';
 ```
 
 ## CSV
@@ -243,18 +260,16 @@ $ datafusion-cli
 
 Supported configuration options are:
 
-| Environment Variable                     | Configuration Option    | Description                                               |
-| ---------------------------------------- | ----------------------- | --------------------------------------------------------- |
-| `AWS_ACCESS_KEY_ID`                      | `aws.access_key_id`     |                                                           |
-| `AWS_SECRET_ACCESS_KEY`                  | `aws.secret_access_key` |                                                           |
-| `AWS_DEFAULT_REGION`                     | `aws.region`            |                                                           |
-| `AWS_ENDPOINT`                           | `aws.endpoint`          |                                                           |
-| `AWS_SESSION_TOKEN`                      | `aws.token`             |                                                           |
-| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` |                         | See [IAM Roles]                                           |
-| `AWS_ALLOW_HTTP`                         |                         | set to "true" to permit HTTP connections without TLS      |
-| `AWS_PROFILE`                            |                         | Support for using a [named profile] to supply credentials |
+| Environment Variable                     | Configuration Option    | Description                                          |
+| ---------------------------------------- | ----------------------- | ---------------------------------------------------- |
+| `AWS_ACCESS_KEY_ID`                      | `aws.access_key_id`     |                                                      |
+| `AWS_SECRET_ACCESS_KEY`                  | `aws.secret_access_key` |                                                      |
+| `AWS_DEFAULT_REGION`                     | `aws.region`            |                                                      |
+| `AWS_ENDPOINT`                           | `aws.endpoint`          |                                                      |
+| `AWS_SESSION_TOKEN`                      | `aws.token`             |                                                      |
+| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` |                         | See [IAM Roles]                                      |
+| `AWS_ALLOW_HTTP`                         |                         | set to "true" to permit HTTP connections without TLS |
 
-[named profile]: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
 [iam roles]: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html
 
 ## OSS

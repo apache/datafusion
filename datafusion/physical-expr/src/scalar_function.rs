@@ -34,16 +34,18 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::expressions::Literal;
 use crate::PhysicalExpr;
 
+use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
-use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
-use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF};
+use datafusion_expr::{
+    expr_vec_fmt, ColumnarValue, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
+};
 
 /// Physical expression of a scalar function
 #[derive(Eq, PartialEq, Hash)]
@@ -81,6 +83,49 @@ impl ScalarFunctionExpr {
             return_type,
             nullable: true,
         }
+    }
+
+    /// Create a new Scalar function
+    pub fn try_new(
+        fun: Arc<ScalarUDF>,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        schema: &Schema,
+    ) -> Result<Self> {
+        let name = fun.name().to_string();
+        let arg_types = args
+            .iter()
+            .map(|e| e.data_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        // verify that input data types is consistent with function's `TypeSignature`
+        data_types_with_scalar_udf(&arg_types, &fun)?;
+
+        let nullables = args
+            .iter()
+            .map(|e| e.nullable(schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let arguments = args
+            .iter()
+            .map(|e| {
+                e.as_any()
+                    .downcast_ref::<Literal>()
+                    .map(|literal| literal.value())
+            })
+            .collect::<Vec<_>>();
+        let ret_args = ReturnTypeArgs {
+            arg_types: &arg_types,
+            scalar_arguments: &arguments,
+            nullables: &nullables,
+        };
+        let (return_type, nullable) = fun.return_type_from_args(ret_args)?.into_parts();
+        Ok(Self {
+            fun,
+            name,
+            args,
+            return_type,
+            nullable,
+        })
     }
 
     /// Get the scalar function implementation
@@ -215,35 +260,15 @@ impl PhysicalExpr for ScalarFunctionExpr {
             preserves_lex_ordering,
         })
     }
-}
 
-/// Create a physical expression for the UDF.
-pub fn create_physical_expr(
-    fun: &ScalarUDF,
-    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    input_schema: &Schema,
-    args: &[Expr],
-    input_dfschema: &DFSchema,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let input_expr_types = input_phy_exprs
-        .iter()
-        .map(|e| e.data_type(input_schema))
-        .collect::<Result<Vec<_>>>()?;
-
-    // verify that input data types is consistent with function's `TypeSignature`
-    data_types_with_scalar_udf(&input_expr_types, fun)?;
-
-    // Since we have arg_types, we don't need args and schema.
-    let return_type =
-        fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
-
-    Ok(Arc::new(
-        ScalarFunctionExpr::new(
-            fun.name(),
-            Arc::new(fun.clone()),
-            input_phy_exprs.to_vec(),
-            return_type,
-        )
-        .with_nullable(fun.is_nullable(args, input_dfschema)),
-    ))
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}(", self.name)?;
+        for (i, expr) in self.args.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            expr.fmt_sql(f)?;
+        }
+        write!(f, ")")
+    }
 }

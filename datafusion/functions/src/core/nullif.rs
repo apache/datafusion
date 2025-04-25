@@ -16,17 +16,43 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
-use datafusion_common::ScalarValue;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
+use datafusion_common::{utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
+#[user_doc(
+    doc_section(label = "Conditional Functions"),
+    description = "Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
+This can be used to perform the inverse operation of [`coalesce`](#coalesce).",
+    syntax_example = "nullif(expression1, expression2)",
+    sql_example = r#"```sql
+> select nullif('datafusion', 'data');
++-----------------------------------------+
+| nullif(Utf8("datafusion"),Utf8("data")) |
++-----------------------------------------+
+| datafusion                              |
++-----------------------------------------+
+> select nullif('datafusion', 'datafusion');
++-----------------------------------------------+
+| nullif(Utf8("datafusion"),Utf8("datafusion")) |
++-----------------------------------------------+
+|                                               |
++-----------------------------------------------+
+```"#,
+    argument(
+        name = "expression1",
+        description = "Expression to compare and return if equal to expression2. Can be a constant, column, or function, and any combination of operators."
+    ),
+    argument(
+        name = "expression2",
+        description = "Expression to compare to expression1. Can be a constant, column, or function, and any combination of operators."
+    )
+)]
 #[derive(Debug)]
 pub struct NullIfFunc {
     signature: Signature,
@@ -75,53 +101,13 @@ impl ScalarUDFImpl for NullIfFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        nullif_func(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        nullif_func(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_nullif_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_nullif_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_CONDITIONAL,
-            "Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
-This can be used to perform the inverse operation of [`coalesce`](#coalesce).",
-            "nullif(expression1, expression2)")
-            .with_sql_example(r#"```sql
-> select nullif('datafusion', 'data');
-+-----------------------------------------+
-| nullif(Utf8("datafusion"),Utf8("data")) |
-+-----------------------------------------+
-| datafusion                              |
-+-----------------------------------------+
-> select nullif('datafusion', 'datafusion');
-+-----------------------------------------------+
-| nullif(Utf8("datafusion"),Utf8("datafusion")) |
-+-----------------------------------------------+
-|                                               |
-+-----------------------------------------------+
-```
-"#)
-            .with_argument(
-                "expression1",
-                "Expression to compare and return if equal to expression2. Can be a constant, column, or function, and any combination of operators."
-            )
-            .with_argument(
-                "expression2",
-                "Expression to compare to expression1. Can be a constant, column, or function, and any combination of operators."
-            )
-            .build()
-    })
 }
 
 /// Implements NULLIF(expr1, expr2)
@@ -129,14 +115,7 @@ This can be used to perform the inverse operation of [`coalesce`](#coalesce).",
 ///       1 - if the left is equal to this expr2, then the result is NULL, otherwise left value is passed.
 ///
 fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return exec_err!(
-            "{:?} args were supplied but NULLIF takes exactly two args",
-            args.len()
-        );
-    }
-
-    let (lhs, rhs) = (&args[0], &args[1]);
+    let [lhs, rhs] = take_function_args("nullif", args)?;
 
     match (lhs, rhs) {
         (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {

@@ -29,17 +29,16 @@ use crate::aggregates::group_values::multi_group_by::{
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
+use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::compute::cast;
 use arrow::datatypes::{
-    BinaryViewType, Date32Type, Date64Type, Decimal128Type, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, StringViewType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Float32Type,
+    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, Schema, SchemaRef,
+    StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
 };
-use arrow::record_batch::RecordBatch;
-use arrow_array::{Array, ArrayRef};
-use arrow_schema::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
@@ -1236,9 +1235,9 @@ fn supported_type(data_type: &DataType) -> bool {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
+    use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
-    use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
-    use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::utils::proxy::HashTableAllocExt;
     use datafusion_expr::EmitTo;
 

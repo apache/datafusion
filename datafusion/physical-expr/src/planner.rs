@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::scalar_function;
+use crate::ScalarFunctionExpr;
 use crate::{
     expressions::{self, binary, like, similar_to, Column, Literal},
     PhysicalExpr,
@@ -102,7 +102,7 @@ use datafusion_expr::{
 ///
 /// * `e` - The logical expression
 /// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
-///                      to qualified or unqualified fields by name.
+///   to qualified or unqualified fields by name.
 pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
@@ -302,13 +302,11 @@ pub fn create_physical_expr(
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
-            scalar_function::create_physical_expr(
-                Arc::clone(func).as_ref(),
-                &physical_args,
+            Ok(Arc::new(ScalarFunctionExpr::try_new(
+                Arc::clone(func),
+                physical_args,
                 input_schema,
-                args,
-                input_dfschema,
-            )
+            )?))
         }
         Expr::Between(Between {
             expr,
@@ -394,8 +392,8 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field};
+    use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field};
 
     use datafusion_expr::{col, lit};
 

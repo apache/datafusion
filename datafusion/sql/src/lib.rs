@@ -15,7 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+// Make sure fast / cheap clones on Arc are explicit:
+// https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
 //! This crate provides:
@@ -41,6 +47,7 @@ pub mod parser;
 pub mod planner;
 mod query;
 mod relation;
+pub mod resolve;
 mod select;
 mod set_expr;
 mod stack;
@@ -49,6 +56,9 @@ mod statement;
 pub mod unparser;
 pub mod utils;
 mod values;
-
+#[deprecated(
+    since = "46.0.0",
+    note = "use datafusion_common::{ResolvedTableReference, TableReference}"
+)]
 pub use datafusion_common::{ResolvedTableReference, TableReference};
 pub use sqlparser;

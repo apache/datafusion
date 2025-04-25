@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
+use super::{add_offset_to_expr, ProjectionMapping};
 use crate::{
     expressions::Column, LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef,
     PhysicalSortExpr, PhysicalSortRequirement,
 };
-use std::fmt::Display;
-use std::sync::Arc;
-
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use std::fmt::Display;
+use std::sync::Arc;
+use std::vec::IntoIter;
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -323,11 +323,10 @@ impl Display for EquivalenceClass {
     }
 }
 
-/// An `EquivalenceGroup` is a collection of `EquivalenceClass`es where each
-/// class represents a distinct equivalence class in a relation.
+/// A collection of distinct `EquivalenceClass`es
 #[derive(Debug, Clone)]
 pub struct EquivalenceGroup {
-    pub classes: Vec<EquivalenceClass>,
+    classes: Vec<EquivalenceClass>,
 }
 
 impl EquivalenceGroup {
@@ -457,17 +456,19 @@ impl EquivalenceGroup {
     /// The expression is replaced with the first expression in the equivalence
     /// class it matches with (if any).
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
-        Arc::clone(&expr)
-            .transform(|expr| {
-                for cls in self.iter() {
-                    if cls.contains(&expr) {
-                        return Ok(Transformed::yes(cls.canonical_expr().unwrap()));
-                    }
+        expr.transform(|expr| {
+            for cls in self.iter() {
+                if cls.contains(&expr) {
+                    // The unwrap below is safe because the guard above ensures
+                    // that the class is not empty.
+                    return Ok(Transformed::yes(cls.canonical_expr().unwrap()));
                 }
-                Ok(Transformed::no(expr))
-            })
-            .data()
-            .unwrap_or(expr)
+            }
+            Ok(Transformed::no(expr))
+        })
+        .data()
+        .unwrap()
+        // The unwrap above is safe because the closure always returns `Ok`.
     }
 
     /// Normalizes the given sort expression according to this group.
@@ -527,12 +528,13 @@ impl EquivalenceGroup {
         &self,
         sort_reqs: &LexRequirement,
     ) -> LexRequirement {
-        collapse_lex_req(LexRequirement::new(
+        LexRequirement::new(
             sort_reqs
                 .iter()
                 .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
                 .collect(),
-        ))
+        )
+        .collapse()
     }
 
     /// Projects `expr` according to the given projection mapping.
@@ -584,15 +586,22 @@ impl EquivalenceGroup {
                 .collect::<Vec<_>>();
             (new_class.len() > 1).then_some(EquivalenceClass::new(new_class))
         });
-        // the key is the source expression and the value is the EquivalenceClass that contains the target expression of the source expression.
-        let mut new_classes: IndexMap<Arc<dyn PhysicalExpr>, EquivalenceClass> =
-            IndexMap::new();
-        mapping.iter().for_each(|(source, target)| {
+
+        // The key is the source expression, and the value is the equivalence
+        // class that contains the corresponding target expression.
+        let mut new_classes: IndexMap<_, _> = IndexMap::new();
+        for (source, target) in mapping.iter() {
+            // We need to find equivalent projected expressions. For example,
+            // consider a table with columns `[a, b, c]` with `a` == `b`, and
+            // projection `[a + c, b + c]`. To conclude that `a + c == b + c`,
+            // we first normalize all source expressions in the mapping, then
+            // merge all equivalent expressions into the classes.
+            let normalized_expr = self.normalize_expr(Arc::clone(source));
             new_classes
-                .entry(Arc::clone(source))
+                .entry(normalized_expr)
                 .or_insert_with(EquivalenceClass::new_empty)
                 .push(Arc::clone(target));
-        });
+        }
         // Only add equivalence classes with at least two members as singleton
         // equivalence classes are meaningless.
         let new_classes = new_classes
@@ -636,7 +645,7 @@ impl EquivalenceGroup {
                 // are equal in the resulting table.
                 if join_type == &JoinType::Inner {
                     for (lhs, rhs) in on.iter() {
-                        let new_lhs = Arc::clone(lhs) as _;
+                        let new_lhs = Arc::clone(lhs);
                         // Rewrite rhs to point to the right side of the join:
                         let new_rhs = Arc::clone(rhs)
                             .transform(|expr| {
@@ -717,6 +726,20 @@ impl EquivalenceGroup {
             .zip(right_children)
             .all(|(left_child, right_child)| self.exprs_equal(left_child, right_child))
     }
+
+    /// Return the inner classes of this equivalence group.
+    pub fn into_inner(self) -> Vec<EquivalenceClass> {
+        self.classes
+    }
+}
+
+impl IntoIterator for EquivalenceGroup {
+    type Item = EquivalenceClass;
+    type IntoIter = IntoIter<EquivalenceClass>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.classes.into_iter()
+    }
 }
 
 impl Display for EquivalenceGroup {
@@ -735,10 +758,10 @@ impl Display for EquivalenceGroup {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::{lit, BinaryExpr, Literal};
+    use crate::expressions::{binary, col, lit, BinaryExpr, Literal};
+    use arrow::datatypes::{DataType, Field, Schema};
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Operator;
@@ -1021,6 +1044,59 @@ mod tests {
                 description, left, right, expected, actual
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_classes() -> Result<()> {
+        // - columns: [a, b, c].
+        // - "a" and "b" in the same equivalence class.
+        // - then after a+c, b+c projection col(0) and col(1) must be
+        // in the same class too.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let mut group = EquivalenceGroup::empty();
+        group.add_equal_conditions(&col("a", &schema)?, &col("b", &schema)?);
+
+        let projected_schema = Arc::new(Schema::new(vec![
+            Field::new("a+c", DataType::Int32, false),
+            Field::new("b+c", DataType::Int32, false),
+        ]));
+
+        let mapping = ProjectionMapping {
+            map: vec![
+                (
+                    binary(
+                        col("a", &schema)?,
+                        Operator::Plus,
+                        col("c", &schema)?,
+                        &schema,
+                    )?,
+                    col("a+c", &projected_schema)?,
+                ),
+                (
+                    binary(
+                        col("b", &schema)?,
+                        Operator::Plus,
+                        col("c", &schema)?,
+                        &schema,
+                    )?,
+                    col("b+c", &projected_schema)?,
+                ),
+            ],
+        };
+
+        let projected = group.project(&mapping);
+
+        assert!(!projected.is_empty());
+        let first_normalized = projected.normalize_expr(col("a+c", &projected_schema)?);
+        let second_normalized = projected.normalize_expr(col("b+c", &projected_schema)?);
+
+        assert!(first_normalized.eq(&second_normalized));
 
         Ok(())
     }

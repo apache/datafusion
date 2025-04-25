@@ -740,3 +740,10 @@ query R
 SELECT CAST('0' AS decimal(38,0));
 ----
 0
+
+query RR
+SELECT
+    cast(cast('0' as decimal(3,0)) as decimal(2,0)),
+    cast(cast('5.20' as decimal(4,2)) as decimal(3,2))
+----
+0 5.2

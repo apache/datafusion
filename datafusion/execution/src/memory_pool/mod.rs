@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`MemoryPool`] for memory management during query execution, [`proxy]` for
+//! [`MemoryPool`] for memory management during query execution, [`proxy`] for
 //! help with allocation accounting.
 
 use datafusion_common::{internal_err, Result};
-use std::{cmp::Ordering, sync::Arc};
+use std::hash::{Hash, Hasher};
+use std::{cmp::Ordering, sync::atomic, sync::Arc};
 
 mod pool;
 pub mod proxy {
@@ -54,8 +55,11 @@ pub use pool::*;
 /// As explained above, DataFusion's design ONLY limits operators that require
 /// "large" amounts of memory (proportional to number of input rows), such as
 /// `GroupByHashExec`. It does NOT track and limit memory used internally by
-/// other operators such as `ParquetExec` or the `RecordBatch`es that flow
-/// between operators.
+/// other operators such as `DataSourceExec` or the `RecordBatch`es that flow
+/// between operators. Furthermore, operators should not reserve memory for the
+/// batches they produce. Instead, if a parent operator needs to hold batches
+/// from its children in memory for an extended period, it is the parent
+/// operator's responsibility to reserve the necessary memory for those batches.
 ///
 /// In order to avoid allocating memory until the OS or the container system
 /// kills the process, DataFusion `ExecutionPlan`s (operators) that consume
@@ -108,6 +112,9 @@ pub use pool::*;
 ///
 /// * [`FairSpillPool`]: Limits memory usage to a fixed size, allocating memory
 ///   to all spilling operators fairly
+///
+/// * [`TrackConsumersPool`]: Wraps another [`MemoryPool`] and tracks consumers,
+///   providing better error messages on the largest memory users.
 pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// Registers a new [`MemoryConsumer`]
     ///
@@ -134,28 +141,99 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 
     /// Return the total amount of memory reserved
     fn reserved(&self) -> usize;
+
+    /// Return the memory limit of the pool
+    ///
+    /// The default implementation of `MemoryPool::memory_limit`
+    /// will return `MemoryLimit::Unknown`.
+    /// If you are using your custom memory pool, but have the requirement to
+    /// know the memory usage limit of the pool, please implement this method
+    /// to return it(`Memory::Finite(limit)`).
+    fn memory_limit(&self) -> MemoryLimit {
+        MemoryLimit::Unknown
+    }
+}
+
+/// Memory limit of `MemoryPool`
+pub enum MemoryLimit {
+    Infinite,
+    /// Bounded memory limit in bytes.
+    Finite(usize),
+    Unknown,
 }
 
 /// A memory consumer is a named allocation traced by a particular
 /// [`MemoryReservation`] in a [`MemoryPool`]. All allocations are registered to
 /// a particular `MemoryConsumer`;
 ///
-/// For help with allocation accounting, see the [proxy] module.
+/// Each `MemoryConsumer` is identifiable by a process-unique id, and is therefor not cloneable,
+/// If you want a clone of a `MemoryConsumer`, you should look into [`MemoryConsumer::clone_with_new_id`],
+/// but note that this `MemoryConsumer` may be treated as a separate entity based on the used pool,
+/// and is only guaranteed to share the name and inner properties.
 ///
-/// [proxy]: crate::memory_pool::proxy
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+/// For help with allocation accounting, see the [`proxy`] module.
+///
+/// [proxy]: datafusion_common::utils::proxy
+#[derive(Debug)]
 pub struct MemoryConsumer {
     name: String,
     can_spill: bool,
+    id: usize,
+}
+
+impl PartialEq for MemoryConsumer {
+    fn eq(&self, other: &Self) -> bool {
+        let is_same_id = self.id == other.id;
+
+        #[cfg(debug_assertions)]
+        if is_same_id {
+            assert_eq!(self.name, other.name);
+            assert_eq!(self.can_spill, other.can_spill);
+        }
+
+        is_same_id
+    }
+}
+
+impl Eq for MemoryConsumer {}
+
+impl Hash for MemoryConsumer {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.name.hash(state);
+        self.can_spill.hash(state);
+    }
 }
 
 impl MemoryConsumer {
+    fn new_unique_id() -> usize {
+        static ID: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
+        ID.fetch_add(1, atomic::Ordering::Relaxed)
+    }
+
     /// Create a new empty [`MemoryConsumer`] that can be grown using [`MemoryReservation`]
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             can_spill: false,
+            id: Self::new_unique_id(),
         }
+    }
+
+    /// Returns a clone of this [`MemoryConsumer`] with a new unique id,
+    /// which can be registered with a [`MemoryPool`],
+    /// This new consumer is separate from the original.
+    pub fn clone_with_new_id(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            can_spill: self.can_spill,
+            id: Self::new_unique_id(),
+        }
+    }
+
+    /// Return the unique id of this [`MemoryConsumer`]
+    pub fn id(&self) -> usize {
+        self.id
     }
 
     /// Set whether this allocation can be spilled to disk
@@ -343,7 +421,7 @@ pub mod units {
     pub const KB: u64 = 1 << 10;
 }
 
-/// Present size in human readable form
+/// Present size in human-readable form
 pub fn human_readable_size(size: usize) -> String {
     use units::*;
 
@@ -367,6 +445,15 @@ pub fn human_readable_size(size: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_id_uniqueness() {
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..100 {
+            let consumer = MemoryConsumer::new("test");
+            assert!(ids.insert(consumer.id())); // Ensures unique insertion
+        }
+    }
 
     #[test]
     fn test_memory_pool_underflow() {

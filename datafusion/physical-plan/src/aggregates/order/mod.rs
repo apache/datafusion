@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::ArrayRef;
-use arrow_schema::Schema;
+use arrow::array::ArrayRef;
+use arrow::datatypes::Schema;
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;

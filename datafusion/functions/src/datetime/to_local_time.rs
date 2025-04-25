@@ -27,10 +27,12 @@ use arrow::datatypes::{
     ArrowTimestampType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-
 use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
+
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, plan_err, utils::take_function_args, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -113,14 +115,8 @@ impl ToLocalTimeFunc {
     }
 
     fn to_local_time(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.len() != 1 {
-            return exec_err!(
-                "to_local_time function requires 1 argument, got {}",
-                args.len()
-            );
-        }
+        let [time_value] = take_function_args(self.name(), args)?;
 
-        let time_value = &args[0];
         let arg_type = time_value.data_type();
         match arg_type {
             Timestamp(_, None) => {
@@ -360,34 +356,23 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 1 {
-            return exec_err!(
-                "to_local_time function requires 1 argument, got {:?}",
-                arg_types.len()
-            );
-        }
+        let [time_value] = take_function_args(self.name(), arg_types)?;
 
-        match &arg_types[0] {
+        match time_value {
             Timestamp(timeunit, _) => Ok(Timestamp(*timeunit, None)),
             _ => exec_err!(
-                "The to_local_time function can only accept timestamp as the arg, got {:?}", arg_types[0]
+                "The to_local_time function can only accept timestamp as the arg, got {:?}", time_value
             )
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        if args.len() != 1 {
-            return exec_err!(
-                "to_local_time function requires 1 argument, got {:?}",
-                args.len()
-            );
-        }
+        let [time_value] = take_function_args(self.name(), args.args)?;
 
-        self.to_local_time(args)
+        self.to_local_time(&[time_value.clone()])
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -617,10 +602,12 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>();
             let batch_size = input.len();
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let result = ToLocalTimeFunc::new()
-                .invoke_batch(&[ColumnarValue::Array(Arc::new(input))], batch_size)
-                .unwrap();
+            let args = ScalarFunctionArgs {
+                args: vec![ColumnarValue::Array(Arc::new(input))],
+                number_rows: batch_size,
+                return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            };
+            let result = ToLocalTimeFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(
                     result.data_type(),

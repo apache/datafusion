@@ -194,6 +194,14 @@ impl PhysicalExpr for CastExpr {
             Ok(ExprProperties::new_unknown().with_range(unbounded))
         }
     }
+
+    fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CAST(")?;
+        self.expr.fmt_sql(f)?;
+        write!(f, " AS {:?}", self.cast_type)?;
+
+        write!(f, ")")
+    }
 }
 
 /// Return a PhysicalExpression representing `expr` casted to
@@ -242,6 +250,8 @@ mod tests {
         },
         datatypes::*,
     };
+    use datafusion_common::assert_contains;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -395,6 +405,45 @@ mod tests {
             [Some(123), Some(222), Some(0), Some(400), Some(500), None],
             None
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_decimal_to_decimal_overflow() -> Result<()> {
+        let array = vec![Some(123456789)];
+
+        let decimal_array = array
+            .clone()
+            .into_iter()
+            .collect::<Decimal128Array>()
+            .with_precision_and_scale(10, 3)?;
+
+        let schema = Schema::new(vec![Field::new("a", Decimal128(10, 3), false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(decimal_array)],
+        )?;
+        let expression =
+            cast_with_options(col("a", &schema)?, &schema, Decimal128(6, 2), None)?;
+        let e = expression.evaluate(&batch).unwrap_err(); // panics on OK
+        assert_contains!(
+            e.to_string(),
+            "Arrow error: Invalid argument error: 12345679 is too large to store in a Decimal128 of precision 6. Max is 999999"
+        );
+
+        let expression_safe = cast_with_options(
+            col("a", &schema)?,
+            &schema,
+            Decimal128(6, 2),
+            Some(DEFAULT_SAFE_CAST_OPTIONS),
+        )?;
+        let result_safe = expression_safe
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("failed to convert to array");
+
+        assert!(result_safe.is_null(0));
 
         Ok(())
     }
@@ -724,6 +773,28 @@ mod tests {
         let expression =
             cast_with_options(col("a", &schema)?, &schema, Decimal128(38, 38), None)?;
         expression.evaluate(&batch)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", Int32, true)]);
+
+        // Test numeric casting
+        let expr = cast(col("a", &schema)?, &schema, Int64)?;
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "CAST(a@0 AS Int64)");
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "CAST(a AS Int64)");
+
+        // Test string casting
+        let schema = Schema::new(vec![Field::new("b", Utf8, true)]);
+        let expr = cast(col("b", &schema)?, &schema, Int32)?;
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "CAST(b@0 AS Int32)");
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "CAST(b AS Int32)");
+
         Ok(())
     }
 }

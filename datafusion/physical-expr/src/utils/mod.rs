@@ -47,6 +47,31 @@ pub fn split_conjunction(
     split_impl(Operator::And, predicate, vec![])
 }
 
+/// Create a conjunction of the given predicates.
+/// If the input is empty, return a literal true.
+/// If the input contains a single predicate, return the predicate.
+/// Otherwise, return a conjunction of the predicates (e.g. `a AND b AND c`).
+pub fn conjunction(
+    predicates: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+) -> Arc<dyn PhysicalExpr> {
+    conjunction_opt(predicates).unwrap_or_else(|| crate::expressions::lit(true))
+}
+
+/// Create a conjunction of the given predicates.
+/// If the input is empty or the return None.
+/// If the input contains a single predicate, return Some(predicate).
+/// Otherwise, return a Some(..) of a conjunction of the predicates (e.g. `Some(a AND b AND c)`).
+pub fn conjunction_opt(
+    predicates: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    predicates
+        .into_iter()
+        .fold(None, |acc, predicate| match acc {
+            None => Some(predicate),
+            Some(acc) => Some(Arc::new(BinaryExpr::new(acc, Operator::And, predicate))),
+        })
+}
+
 /// Assume the predicate is in the form of DNF, split the predicate to a Vec of PhysicalExprs.
 ///
 /// For example, split "a1 = a2 OR b1 <= b2 OR c1 != c2" into ["a1 = a2", "b1 <= b2", "c1 != c2"]
@@ -258,11 +283,13 @@ pub(crate) mod tests {
     use super::*;
     use crate::expressions::{binary, cast, col, in_list, lit, Literal};
 
-    use arrow_array::{ArrayRef, Float32Array, Float64Array};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow::array::{ArrayRef, Float32Array, Float64Array};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{exec_err, DataFusionError, ScalarValue};
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+    use datafusion_expr::{
+        ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    };
 
     use petgraph::visit::Bfs;
 
@@ -309,12 +336,8 @@ pub(crate) mod tests {
             Ok(input[0].sort_properties)
         }
 
-        fn invoke_batch(
-            &self,
-            args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
-            let args = ColumnarValue::values_to_arrays(args)?;
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            let args = ColumnarValue::values_to_arrays(&args.args)?;
 
             let arr: ArrayRef = match args[0].data_type() {
                 DataType::Float64 => Arc::new({

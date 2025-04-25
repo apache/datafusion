@@ -17,15 +17,13 @@
 
 //! [`GroupValues`] trait for storing and interning group keys
 
-use arrow::record_batch::RecordBatch;
-use arrow_array::types::{
+use arrow::array::types::{
     Date32Type, Date64Type, Decimal128Type, Time32MillisecondType, Time32SecondType,
     Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use arrow_array::{downcast_primitive, ArrayRef};
-use arrow_schema::TimeUnit;
-use arrow_schema::{DataType, SchemaRef};
+use arrow::array::{downcast_primitive, ArrayRef, RecordBatch};
+use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::Result;
 
 use datafusion_expr::EmitTo;

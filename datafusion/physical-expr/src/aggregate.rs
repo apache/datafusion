@@ -35,23 +35,25 @@ pub mod utils {
     };
 }
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::ScalarValue;
-use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_expr::AggregateUDF;
-use datafusion_expr::ReversedUDAF;
-use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
-use datafusion_functions_aggregate_common::accumulator::AccumulatorArgs;
-use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
-use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_expr_common::utils::reverse_order_bys;
-
-use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use std::fmt::Debug;
 use std::sync::Arc;
+
+use crate::expressions::Column;
+
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
+use datafusion_expr_common::accumulator::Accumulator;
+use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
+use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
+use datafusion_functions_aggregate_common::accumulator::{
+    AccumulatorArgs, StateFieldsArgs,
+};
+use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::utils::reverse_order_bys;
 
 /// Builder for physical [`AggregateFunctionExpr`]
 ///
@@ -63,6 +65,8 @@ pub struct AggregateExprBuilder {
     /// Physical expressions of the aggregate function
     args: Vec<Arc<dyn PhysicalExpr>>,
     alias: Option<String>,
+    /// A human readable name
+    human_display: String,
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
     /// The physical order by expressions
@@ -81,6 +85,7 @@ impl AggregateExprBuilder {
             fun,
             args,
             alias: None,
+            human_display: String::default(),
             schema: Arc::new(Schema::empty()),
             ordering_req: LexOrdering::default(),
             ignore_nulls: false,
@@ -89,11 +94,103 @@ impl AggregateExprBuilder {
         }
     }
 
+    /// Constructs an `AggregateFunctionExpr` from the builder
+    ///
+    /// Note that an [`Self::alias`] must be provided before calling this method.
+    ///
+    /// # Example: Create an [`AggregateUDF`]
+    ///
+    /// In the following example, [`AggregateFunctionExpr`] will be built using [`AggregateExprBuilder`]
+    /// which provides a build function. Full example could be accessed from the source file.
+    ///
+    /// ```
+    /// # use std::any::Any;
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::DataType;
+    /// # use datafusion_common::{Result, ScalarValue};
+    /// # use datafusion_expr::{col, ColumnarValue, Documentation, Signature, Volatility, Expr};
+    /// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::{AccumulatorArgs, StateFieldsArgs}};
+    /// # use arrow::datatypes::Field;
+    /// #
+    /// # #[derive(Debug, Clone)]
+    /// # struct FirstValueUdf {
+    /// #     signature: Signature,
+    /// # }
+    /// #
+    /// # impl FirstValueUdf {
+    /// #     fn new() -> Self {
+    /// #         Self {
+    /// #             signature: Signature::any(1, Volatility::Immutable),
+    /// #         }
+    /// #     }
+    /// # }
+    /// #
+    /// # impl AggregateUDFImpl for FirstValueUdf {
+    /// #     fn as_any(&self) -> &dyn Any {
+    /// #         unimplemented!()
+    /// # }
+    /// #     fn name(&self) -> &str {
+    /// #         unimplemented!()
+    /// }
+    /// #     fn signature(&self) -> &Signature {
+    /// #         unimplemented!()
+    /// # }
+    /// #     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+    /// #         unimplemented!()
+    /// #     }
+    /// #     
+    /// #     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    /// #         unimplemented!()
+    /// #         }
+    /// #     
+    /// #     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    /// #         unimplemented!()
+    /// #     }
+    /// #     
+    /// #     fn documentation(&self) -> Option<&Documentation> {
+    /// #         unimplemented!()
+    /// #     }
+    /// # }
+    /// #
+    /// # let first_value = AggregateUDF::from(FirstValueUdf::new());
+    /// # let expr = first_value.call(vec![col("a")]);
+    /// #
+    /// # use datafusion_physical_expr::expressions::Column;
+    /// # use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    /// # use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    /// # use datafusion_physical_expr::expressions::PhysicalSortExpr;
+    /// # use datafusion_physical_expr::PhysicalSortRequirement;
+    /// #
+    /// fn build_aggregate_expr() -> Result<()> {
+    ///     let args = vec![Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>];
+    ///     let order_by = vec![PhysicalSortExpr {
+    ///         expr: Arc::new(Column::new("x", 1)) as Arc<dyn PhysicalExpr>,
+    ///         options: Default::default(),
+    ///     }];
+    ///
+    ///     let first_value = AggregateUDF::from(FirstValueUdf::new());
+    ///     
+    ///     let aggregate_expr = AggregateExprBuilder::new(
+    ///         Arc::new(first_value),
+    ///         args
+    ///     )
+    ///     .order_by(order_by.into())
+    ///     .alias("first_a_by_x")
+    ///     .ignore_nulls()
+    ///     .build()?;
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// This creates a physical expression equivalent to SQL:
+    /// `first_value(a ORDER BY x) IGNORE NULLS AS first_a_by_x`
     pub fn build(self) -> Result<AggregateFunctionExpr> {
         let Self {
             fun,
             args,
             alias,
+            human_display,
             schema,
             ordering_req,
             ignore_nulls,
@@ -130,7 +227,11 @@ impl AggregateExprBuilder {
         let data_type = fun.return_type(&input_exprs_types)?;
         let is_nullable = fun.is_nullable();
         let name = match alias {
-            None => return internal_err!("alias should be provided"),
+            None => {
+                return internal_err!(
+                    "AggregateExprBuilder::alias must be provided prior to calling build"
+                )
+            }
             Some(alias) => alias,
         };
 
@@ -139,6 +240,7 @@ impl AggregateExprBuilder {
             args,
             data_type,
             name,
+            human_display,
             schema: Arc::unwrap_or_clone(schema),
             ordering_req,
             ignore_nulls,
@@ -152,6 +254,11 @@ impl AggregateExprBuilder {
 
     pub fn alias(mut self, alias: impl Into<String>) -> Self {
         self.alias = Some(alias.into());
+        self
+    }
+
+    pub fn human_display(mut self, name: String) -> Self {
+        self.human_display = name;
         self
     }
 
@@ -197,13 +304,18 @@ impl AggregateExprBuilder {
 }
 
 /// Physical aggregate expression of a UDAF.
+///
+/// Instances are constructed via [`AggregateExprBuilder`].
 #[derive(Debug, Clone)]
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Output / return type of this aggregate
     data_type: DataType,
+    /// Output column name that this expression creates
     name: String,
+    /// Simplified name for `tree` explain.
+    human_display: String,
     schema: Schema,
     // The physical order by expressions
     ordering_req: LexOrdering,
@@ -232,6 +344,11 @@ impl AggregateFunctionExpr {
     /// Human readable name such as `"MIN(c2)"`.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Simplified name for `tree` explain.
+    pub fn human_display(&self) -> &str {
+        &self.human_display
     }
 
     /// Return if the aggregation is distinct
@@ -532,6 +649,28 @@ impl AggregateFunctionExpr {
     /// while `count` returns 0 if input is Null
     pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         self.fun.default_value(data_type)
+    }
+
+    /// Indicates whether the aggregation function is monotonic as a set
+    /// function. See [`SetMonotonicity`] for details.
+    pub fn set_monotonicity(&self) -> SetMonotonicity {
+        let field = self.field();
+        let data_type = field.data_type();
+        self.fun.inner().set_monotonicity(data_type)
+    }
+
+    /// Returns `PhysicalSortExpr` based on the set monotonicity of the function.
+    pub fn get_result_ordering(&self, aggr_func_idx: usize) -> Option<PhysicalSortExpr> {
+        // If the aggregate expressions are set-monotonic, the output data is
+        // naturally ordered with it per group or partition.
+        let monotonicity = self.set_monotonicity();
+        if monotonicity == SetMonotonicity::NotMonotonic {
+            return None;
+        }
+        let expr = Arc::new(Column::new(self.name(), aggr_func_idx));
+        let options =
+            SortOptions::new(monotonicity == SetMonotonicity::Decreasing, false);
+        Some(PhysicalSortExpr { expr, options })
     }
 }
 

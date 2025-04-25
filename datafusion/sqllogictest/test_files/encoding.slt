@@ -23,8 +23,9 @@ CREATE TABLE test(
   hex_field TEXT
 ) as VALUES
   (0, 'abc',  encode('abc', 'base64'), encode('abc', 'hex')),
-  (1, 'qweqwe',    encode('qweqwe', 'base64'), encode('qweqwe', 'hex')),
-  (2, NULL, NULL, NULL)
+  (1, 'qweqwe', encode('qweqwe', 'base64'), encode('qweqwe', 'hex')),
+  (2, NULL, NULL, NULL),
+  (3, X'8f50d3f60eae370ddbf85c86219c55108a350165', encode('8f50d3f60eae370ddbf85c86219c55108a350165', 'base64'), encode('8f50d3f60eae370ddbf85c86219c55108a350165', 'hex'))
 ;
 
 # errors
@@ -43,6 +44,9 @@ select decode(hex_field, 'non_encoding') from test;
 query error
 select to_hex(hex_field) from test;
 
+query error
+select arrow_cast(decode(X'8f50d3f60eae370ddbf85c86219c55108a350165', 'base64'), 'Utf8');
+
 # Arrays tests
 query T
 SELECT encode(bin_field, 'hex') FROM test ORDER BY num;
@@ -50,6 +54,7 @@ SELECT encode(bin_field, 'hex') FROM test ORDER BY num;
 616263
 717765717765
 NULL
+8f50d3f60eae370ddbf85c86219c55108a350165
 
 query T
 SELECT arrow_cast(decode(base64_field, 'base64'), 'Utf8') FROM test ORDER BY num;
@@ -57,6 +62,7 @@ SELECT arrow_cast(decode(base64_field, 'base64'), 'Utf8') FROM test ORDER BY num
 abc
 qweqwe
 NULL
+8f50d3f60eae370ddbf85c86219c55108a350165
 
 query T
 SELECT arrow_cast(decode(hex_field, 'hex'), 'Utf8') FROM test ORDER BY num;
@@ -64,6 +70,7 @@ SELECT arrow_cast(decode(hex_field, 'hex'), 'Utf8') FROM test ORDER BY num;
 abc
 qweqwe
 NULL
+8f50d3f60eae370ddbf85c86219c55108a350165
 
 query T
 select to_hex(num) from test ORDER BY num;
@@ -71,6 +78,17 @@ select to_hex(num) from test ORDER BY num;
 0
 1
 2
+3
+
+query T
+select encode(bin_field, 'base64') FROM test WHERE num = 3;
+----
+j1DT9g6uNw3b+FyGIZxVEIo1AWU
+
+query B
+select decode(encode(bin_field, 'base64'), 'base64') = X'8f50d3f60eae370ddbf85c86219c55108a350165' FROM test WHERE num = 3;
+----
+true
 
 # test for Utf8View support for encode
 statement ok
@@ -102,3 +120,9 @@ Andrew QW5kcmV3 416e64726577 X WA 58
 Xiangpeng WGlhbmdwZW5n 5869616e6770656e67 Xiangpeng WGlhbmdwZW5n 5869616e6770656e67
 Raphael UmFwaGFlbA 5261706861656c R Ug 52
 NULL NULL NULL R Ug 52
+
+# test for hex digest
+query T
+select encode(digest('hello', 'sha256'), 'hex');
+----
+2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824

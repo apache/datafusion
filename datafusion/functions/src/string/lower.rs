@@ -17,15 +17,33 @@
 
 use arrow::datatypes::DataType;
 use std::any::Any;
-use std::sync::OnceLock;
 
 use crate::string::common::to_lower;
 use crate::utils::utf8_to_str_type;
+use datafusion_common::types::logical_string;
 use datafusion_common::Result;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Converts a string to lower-case.",
+    syntax_example = "lower(str)",
+    sql_example = r#"```sql
+> select lower('Ångström');
++-------------------------+
+| lower(Utf8("Ångström")) |
++-------------------------+
+| ångström                |
++-------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    related_udf(name = "initcap"),
+    related_udf(name = "upper")
+)]
 #[derive(Debug)]
 pub struct LowerFunc {
     signature: Signature,
@@ -40,7 +58,12 @@ impl Default for LowerFunc {
 impl LowerFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Native(
+                    logical_string(),
+                ))],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -62,44 +85,15 @@ impl ScalarUDFImpl for LowerFunc {
         utf8_to_str_type(&arg_types[0], "lower")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        to_lower(args, "lower")
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        to_lower(&args.args, "lower")
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_lower_doc())
+        self.doc()
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_lower_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Converts a string to lower-case.",
-            "lower(str)",
-        )
-        .with_sql_example(
-            r#"```sql
-> select lower('Ångström');
-+-------------------------+
-| lower(Utf8("Ångström")) |
-+-------------------------+
-| ångström                |
-+-------------------------+
-```"#,
-        )
-        .with_standard_argument("str", Some("String"))
-        .with_related_udf("initcap")
-        .with_related_udf("upper")
-        .build()
-    })
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,10 +102,14 @@ mod tests {
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = LowerFunc::new();
-        let batch_len = input.len();
-        let args = vec![ColumnarValue::Array(input)];
-        #[allow(deprecated)] // TODO migrate UDF to invoke
-        let result = match func.invoke_batch(&args, batch_len)? {
+
+        let args = ScalarFunctionArgs {
+            number_rows: input.len(),
+            args: vec![ColumnarValue::Array(input)],
+            return_type: &DataType::Utf8,
+        };
+
+        let result = match func.invoke_with_args(args)? {
             ColumnarValue::Array(result) => result,
             _ => unreachable!("lower"),
         };

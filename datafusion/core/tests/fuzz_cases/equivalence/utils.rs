@@ -22,14 +22,16 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
+use arrow::compute::SortOptions;
 use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow_array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_physical_expr::equivalence::{EquivalenceClass, ProjectionMapping};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -179,7 +181,7 @@ fn add_equal_conditions_test() -> Result<()> {
     // This new entry is redundant, size shouldn't increase
     eq_properties.add_equal_conditions(&col_b_expr, &col_a_expr)?;
     assert_eq!(eq_properties.eq_group().len(), 1);
-    let eq_groups = &eq_properties.eq_group().classes[0];
+    let eq_groups = eq_properties.eq_group().iter().next().unwrap();
     assert_eq!(eq_groups.len(), 2);
     assert!(eq_groups.contains(&col_a_expr));
     assert!(eq_groups.contains(&col_b_expr));
@@ -188,7 +190,7 @@ fn add_equal_conditions_test() -> Result<()> {
     // however there shouldn't be any new equivalence class
     eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr)?;
     assert_eq!(eq_properties.eq_group().len(), 1);
-    let eq_groups = &eq_properties.eq_group().classes[0];
+    let eq_groups = eq_properties.eq_group().iter().next().unwrap();
     assert_eq!(eq_groups.len(), 3);
     assert!(eq_groups.contains(&col_a_expr));
     assert!(eq_groups.contains(&col_b_expr));
@@ -202,7 +204,7 @@ fn add_equal_conditions_test() -> Result<()> {
     // Hence equivalent class count should decrease from 2 to 1.
     eq_properties.add_equal_conditions(&col_x_expr, &col_a_expr)?;
     assert_eq!(eq_properties.eq_group().len(), 1);
-    let eq_groups = &eq_properties.eq_group().classes[0];
+    let eq_groups = eq_properties.eq_group().iter().next().unwrap();
     assert_eq!(eq_groups.len(), 5);
     assert!(eq_groups.contains(&col_a_expr));
     assert!(eq_groups.contains(&col_b_expr));
@@ -373,7 +375,7 @@ pub fn generate_table_for_eq_properties(
     };
 
     // Fill constant columns
-    for constant in &eq_properties.constants {
+    for constant in eq_properties.constants() {
         let col = constant.expr().as_any().downcast_ref::<Column>().unwrap();
         let (idx, _field) = schema.column_with_name(col.name()).unwrap();
         let arr =
@@ -382,7 +384,7 @@ pub fn generate_table_for_eq_properties(
     }
 
     // Fill columns based on ordering equivalences
-    for ordering in eq_properties.oeq_class.iter() {
+    for ordering in eq_properties.oeq_class().iter() {
         let (sort_columns, indices): (Vec<_>, Vec<_>) = ordering
             .iter()
             .map(|PhysicalSortExpr { expr, options }| {
@@ -406,7 +408,7 @@ pub fn generate_table_for_eq_properties(
     }
 
     // Fill columns based on equivalence groups
-    for eq_group in eq_properties.eq_group.iter() {
+    for eq_group in eq_properties.eq_group().iter() {
         let representative_array =
             get_representative_arr(eq_group, &schema_vec, Arc::clone(schema))
                 .unwrap_or_else(|| generate_random_array(n_elem, n_distinct));
@@ -444,7 +446,7 @@ pub fn generate_table_for_orderings(
 
     assert!(!orderings.is_empty());
     // Sort the inner vectors by their lengths (longest first)
-    orderings.sort_by_key(|v| std::cmp::Reverse(v.inner.len()));
+    orderings.sort_by_key(|v| std::cmp::Reverse(v.len()));
 
     let arrays = schema
         .fields
@@ -581,12 +583,8 @@ impl ScalarUDFImpl for TestScalarUDF {
         Ok(input[0].sort_properties)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(&args.args)?;
 
         let arr: ArrayRef = match args[0].data_type() {
             DataType::Float64 => Arc::new({

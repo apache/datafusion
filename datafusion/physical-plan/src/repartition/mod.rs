@@ -32,6 +32,7 @@ use super::{
 use crate::execution_plan::CardinalityEffect;
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
+use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
 use crate::repartition::distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
 };
@@ -39,11 +40,12 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
+use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
-use arrow::record_batch::RecordBatch;
-use arrow_array::{PrimitiveArray, RecordBatchOptions};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
+use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -51,7 +53,9 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-use datafusion_common::HashMap;
+use crate::filter_pushdown::{
+    filter_pushdown_transparent, FilterDescription, FilterPushdownResult,
+};
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::trace;
@@ -395,8 +399,7 @@ impl BatchPartitioner {
 ///
 /// The "Exchange Operator" was first described in the 1989 paper
 /// [Encapsulation of parallelism in the Volcano query processing
-/// system
-/// Paper](https://w6113.github.io/files/papers/volcanoparallelism-89.pdf)
+/// system Paper](https://dl.acm.org/doi/pdf/10.1145/93605.98720)
 /// which uses the term "Exchange" for the concept of repartitioning
 /// data across threads.
 #[derive(Debug, Clone)]
@@ -504,6 +507,25 @@ impl DisplayAs for RepartitionExec {
 
                 if let Some(sort_exprs) = self.sort_exprs() {
                     write!(f, ", sort_exprs={}", sort_exprs.clone())?;
+                }
+                Ok(())
+            }
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
+
+                let input_partition_count =
+                    self.input.output_partitioning().partition_count();
+                let output_partition_count = self.partitioning().partition_count();
+                let input_to_output_partition_str =
+                    format!("{} -> {}", input_partition_count, output_partition_count);
+                writeln!(
+                    f,
+                    "partition_count(in->out)={}",
+                    input_to_output_partition_str
+                )?;
+
+                if self.preserve_order {
+                    writeln!(f, "preserve_order={}", self.preserve_order)?;
                 }
                 Ok(())
             }
@@ -671,6 +693,57 @@ impl ExecutionPlan for RepartitionExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection does not narrow the schema, we should not try to push it down.
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        // If pushdown is not beneficial or applicable, break it.
+        if projection.benefits_from_input_partitioning()[0]
+            || !all_columns(projection.expr())
+        {
+            return Ok(None);
+        }
+
+        let new_projection = make_with_child(projection, self.input())?;
+
+        let new_partitioning = match self.partitioning() {
+            Partitioning::Hash(partitions, size) => {
+                let mut new_partitions = vec![];
+                for partition in partitions {
+                    let Some(new_partition) =
+                        update_expr(partition, projection.expr(), false)?
+                    else {
+                        return Ok(None);
+                    };
+                    new_partitions.push(new_partition);
+                }
+                Partitioning::Hash(new_partitions, *size)
+            }
+            others => others.clone(),
+        };
+
+        Ok(Some(Arc::new(RepartitionExec::try_new(
+            new_projection,
+            new_partitioning,
+        )?)))
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        fd: FilterDescription,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(filter_pushdown_transparent::<Arc<dyn ExecutionPlan>>(
+            Arc::new(self.clone()),
+            fd,
+        ))
     }
 }
 
@@ -871,11 +944,12 @@ impl RepartitionExec {
             }
             // Error from running input task
             Ok(Err(e)) => {
+                // send the same Arc'd error to all output partitions
                 let e = Arc::new(e);
 
                 for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
-                    let err = Err(DataFusionError::External(Box::new(Arc::clone(&e))));
+                    let err = Err(DataFusionError::from(&e));
                     tx.send(Some(err)).await.ok();
                 }
             }
@@ -1011,6 +1085,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::test::TestMemoryExec;
     use crate::{
         test::{
             assert_is_pending,
@@ -1019,16 +1094,17 @@ mod tests {
                 ErrorExec, MockExec,
             },
         },
-        {collect, expressions::col, memory::MemoryExec},
+        {collect, expressions::col},
     };
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
-    use datafusion_common::{arrow_datafusion_err, assert_batches_sorted_eq, exec_err};
+    use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_common::{arrow_datafusion_err, exec_err};
+    use datafusion_common_runtime::JoinSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
-    use tokio::task::JoinSet;
+    use insta::assert_snapshot;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
@@ -1124,8 +1200,9 @@ mod tests {
     ) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(TaskContext::default());
         // create physical plan
-        let exec = MemoryExec::try_new(&input_partitions, Arc::clone(schema), None)?;
-        let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
 
         // execute and collect results
         let mut output_partitions = vec![];
@@ -1280,23 +1357,30 @@ mod tests {
 
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
 
-        let expected = vec![
-            "+------------------+",
-            "| my_awesome_field |",
-            "+------------------+",
-            "| foo              |",
-            "| bar              |",
-            "| frob             |",
-            "| baz              |",
-            "+------------------+",
-        ];
-
-        assert_batches_sorted_eq!(&expected, &expected_batches);
+        assert_snapshot!(batches_to_sort_string(&expected_batches), @r"
+        +------------------+
+        | my_awesome_field |
+        +------------------+
+        | bar              |
+        | baz              |
+        | foo              |
+        | frob             |
+        +------------------+
+        ");
 
         let output_stream = exec.execute(0, task_ctx).unwrap();
         let batches = crate::common::collect(output_stream).await.unwrap();
 
-        assert_batches_sorted_eq!(&expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +------------------+
+        | my_awesome_field |
+        +------------------+
+        | bar              |
+        | baz              |
+        | foo              |
+        | frob             |
+        +------------------+
+        ");
     }
 
     #[tokio::test]
@@ -1330,18 +1414,16 @@ mod tests {
         // output stream 1 should *not* error and have one of the input batches
         let batches = crate::common::collect(output_stream1).await.unwrap();
 
-        let expected = vec![
-            "+------------------+",
-            "| my_awesome_field |",
-            "+------------------+",
-            "| baz              |",
-            "| frob             |",
-            "| gaz              |",
-            "| grob             |",
-            "+------------------+",
-        ];
-
-        assert_batches_sorted_eq!(&expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +------------------+
+            | my_awesome_field |
+            +------------------+
+            | baz              |
+            | frob             |
+            | gaz              |
+            | grob             |
+            +------------------+
+            "#);
     }
 
     #[tokio::test]
@@ -1515,8 +1597,9 @@ mod tests {
         let task_ctx = Arc::new(task_ctx);
 
         // create physical plan
-        let exec = MemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
-        let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
 
         // pull partitions
         for i in 0..exec.partitioning().partition_count() {
@@ -1552,14 +1635,15 @@ mod tests {
 
 #[cfg(test)]
 mod test {
-    use arrow_schema::{DataType, Field, Schema, SortOptions};
-
-    use crate::memory::MemoryExec;
-    use crate::union::UnionExec;
-    use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
+    use crate::test::TestMemoryExec;
+    use crate::union::UnionExec;
+
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     /// Asserts that the plan is as expected
     ///
@@ -1599,8 +1683,8 @@ mod test {
         let expected_plan = [
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c0@0 ASC",
             "  UnionExec",
-            "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
-            "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+            "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+            "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
         ];
         assert_plan!(expected_plan, exec);
         Ok(())
@@ -1619,7 +1703,7 @@ mod test {
         // Repartition should not preserve order
         let expected_plan = [
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "  MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+            "  DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
         ];
         assert_plan!(expected_plan, exec);
         Ok(())
@@ -1641,8 +1725,8 @@ mod test {
         let expected_plan = [
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
             "  UnionExec",
-            "    MemoryExec: partitions=1, partition_sizes=[0]",
-            "    MemoryExec: partitions=1, partition_sizes=[0]",
+            "    DataSourceExec: partitions=1, partition_sizes=[0]",
+            "    DataSourceExec: partitions=1, partition_sizes=[0]",
         ];
         assert_plan!(expected_plan, exec);
         Ok(())
@@ -1661,18 +1745,18 @@ mod test {
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-        Arc::new(MemoryExec::try_new(&[vec![]], Arc::clone(schema), None).unwrap())
+        TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
     }
 
     fn sorted_memory_exec(
         schema: &SchemaRef,
         sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
-        Arc::new(
-            MemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
+        Arc::new(TestMemoryExec::update_cache(Arc::new(
+            TestMemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_exprs])
                 .unwrap(),
-        )
+        )))
     }
 }

@@ -362,6 +362,7 @@ impl TableParquetOptionsProto {
         };
 
         let column_specific_options = global_options.column_specific_options;
+        #[allow(deprecated)] // max_statistics_size
         TableParquetOptionsProto {
             global: Some(ParquetOptionsProto {
                 enable_page_index: global_options.global.enable_page_index,
@@ -393,6 +394,9 @@ impl TableParquetOptionsProto {
                 column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
                     parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)
                 }),
+                statistics_truncate_length_opt: global_options.global.statistics_truncate_length.map(|length| {
+                    parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length as u64)
+                }),
                 data_page_row_count_limit: global_options.global.data_page_row_count_limit as u64,
                 encoding_opt: global_options.global.encoding.map(|encoding| {
                     parquet_options::EncodingOpt::Encoding(encoding)
@@ -411,6 +415,9 @@ impl TableParquetOptionsProto {
                 schema_force_view_types: global_options.global.schema_force_view_types,
                 binary_as_string: global_options.global.binary_as_string,
                 skip_arrow_metadata: global_options.global.skip_arrow_metadata,
+                coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
+                    parquet_options::CoerceInt96Opt::CoerceInt96(compression)
+                }),
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -455,6 +462,7 @@ impl TableParquetOptionsProto {
 
 impl From<&ParquetOptionsProto> for ParquetOptions {
     fn from(proto: &ParquetOptionsProto) -> Self {
+        #[allow(deprecated)] // max_statistics_size
         ParquetOptions {
             enable_page_index: proto.enable_page_index,
             pruning: proto.pruning,
@@ -485,6 +493,9 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             column_index_truncate_length: proto.column_index_truncate_length_opt.as_ref().map(|opt| match opt {
                 parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length) => *length as usize,
             }),
+            statistics_truncate_length: proto.statistics_truncate_length_opt.as_ref().map(|opt| match opt {
+                parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length) => *length as usize,
+            }),
             data_page_row_count_limit: proto.data_page_row_count_limit as usize,
             encoding: proto.encoding_opt.as_ref().map(|opt| match opt {
                 parquet_options::EncodingOpt::Encoding(encoding) => encoding.clone(),
@@ -503,12 +514,16 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             schema_force_view_types: proto.schema_force_view_types,
             binary_as_string: proto.binary_as_string,
             skip_arrow_metadata: proto.skip_arrow_metadata,
+            coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
+                parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => coerce_int96.clone(),
+            }),
         }
     }
 }
 
 impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
     fn from(proto: ParquetColumnOptionsProto) -> Self {
+        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             bloom_filter_enabled: proto.bloom_filter_enabled_opt.map(
                 |parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v)| v,

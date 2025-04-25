@@ -417,7 +417,7 @@ mod test {
     use super::*;
     use crate::planner::logical2physical;
 
-    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_expr::expr_fn::*;
     use datafusion_expr::{lit, Expr};
 

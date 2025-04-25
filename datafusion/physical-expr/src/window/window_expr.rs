@@ -552,8 +552,8 @@ mod tests {
 
     use crate::window::window_expr::is_row_ahead;
 
-    use arrow_array::{ArrayRef, Float64Array};
-    use arrow_schema::SortOptions;
+    use arrow::array::{ArrayRef, Float64Array};
+    use arrow::compute::SortOptions;
     use datafusion_common::Result;
 
     #[test]

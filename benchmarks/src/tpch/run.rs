@@ -90,6 +90,11 @@ pub struct RunOpt {
     /// True by default.
     #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
+
+    /// Mark the first column of each table as sorted in ascending order.
+    /// The tables should have been created with the `--sort` option for this to have any effect.
+    #[structopt(short = "t", long = "sorted")]
+    sorted: bool,
 }
 
 const TPCH_QUERY_START_ID: usize = 1;
@@ -118,10 +123,11 @@ impl RunOpt {
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let mut config = self
             .common
-            .config()
+            .config()?
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
-        let ctx = SessionContext::new_with_config(config);
+        let rt_builder = self.common.runtime_env_builder()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
 
         // register tables
         self.register_tables(&ctx).await?;
@@ -274,20 +280,28 @@ impl RunOpt {
                 }
             };
 
+        let table_path = ListingTableUrl::parse(path)?;
         let options = ListingOptions::new(format)
             .with_file_extension(extension)
             .with_target_partitions(target_partitions)
             .with_collect_stat(state.config().collect_statistics());
-
-        let table_path = ListingTableUrl::parse(path)?;
-        let config = ListingTableConfig::new(table_path).with_listing_options(options);
-
-        let config = match table_format {
-            "parquet" => config.infer_schema(&state).await?,
-            "tbl" => config.with_schema(Arc::new(get_tbl_tpch_table_schema(table))),
-            "csv" => config.with_schema(Arc::new(get_tpch_table_schema(table))),
+        let schema = match table_format {
+            "parquet" => options.infer_schema(&state, &table_path).await?,
+            "tbl" => Arc::new(get_tbl_tpch_table_schema(table)),
+            "csv" => Arc::new(get_tpch_table_schema(table)),
             _ => unreachable!(),
         };
+        let options = if self.sorted {
+            let key_column_name = schema.fields()[0].name();
+            options
+                .with_file_sort_order(vec![vec![col(key_column_name).sort(true, false)]])
+        } else {
+            options
+        };
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(options)
+            .with_schema(schema);
 
         Ok(Arc::new(ListingTable::try_new(config)?))
     }
@@ -341,7 +355,10 @@ mod tests {
         let common = CommonOpt {
             iterations: 1,
             partitions: Some(2),
-            batch_size: 8192,
+            batch_size: Some(8192),
+            mem_pool_type: "fair".to_string(),
+            memory_limit: None,
+            sort_spill_reservation_bytes: None,
             debug: false,
         };
         let opt = RunOpt {
@@ -353,6 +370,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            sorted: false,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;
@@ -374,7 +392,10 @@ mod tests {
         let common = CommonOpt {
             iterations: 1,
             partitions: Some(2),
-            batch_size: 8192,
+            batch_size: Some(8192),
+            mem_pool_type: "fair".to_string(),
+            memory_limit: None,
+            sort_spill_reservation_bytes: None,
             debug: false,
         };
         let opt = RunOpt {
@@ -386,6 +407,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            sorted: false,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;

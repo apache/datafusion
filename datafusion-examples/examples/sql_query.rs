@@ -18,12 +18,12 @@
 use datafusion::arrow::array::{UInt64Array, UInt8Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::{assert_batches_eq, exec_datafusion_err};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::MemTable;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::prelude::SessionContext;
-use datafusion_common::{assert_batches_eq, exec_datafusion_err};
+use datafusion::prelude::*;
 use object_store::local::LocalFileSystem;
 use std::path::Path;
 use std::sync::Arc;

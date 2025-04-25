@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow::array::{Array, ArrayRef, RecordBatch};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 use datafusion_physical_expr_common::binary_view_map::ArrowBytesViewMap;

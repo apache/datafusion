@@ -15,41 +15,46 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::sync::Arc;
+pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+use crate::filter_pushdown::{
+    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
+};
+pub use crate::metrics::Metric;
+pub use crate::ordering::InputOrderMode;
+pub use crate::stream::EmptyRecordBatchStream;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
-use futures::stream::{StreamExt, TryStreamExt};
-use tokio::task::JoinSet;
-
-use datafusion_common::config::ConfigOptions;
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
-use datafusion_common::{exec_err, Result};
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
-use datafusion_execution::TaskContext;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, udf, Distribution, Partitioning, PhysicalExpr,
+    expressions, Distribution, Partitioning, PhysicalExpr,
 };
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
-pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-pub use crate::metrics::Metric;
 use crate::metrics::MetricsSet;
-pub use crate::ordering::InputOrderMode;
+use crate::projection::ProjectionExec;
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
-pub use crate::stream::EmptyRecordBatchStream;
 use crate::stream::RecordBatchStreamAdapter;
+
+use arrow::array::{Array, RecordBatch};
+use arrow::datatypes::SchemaRef;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_common_runtime::JoinSet;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
+
+use futures::stream::{StreamExt, TryStreamExt};
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -71,7 +76,7 @@ use crate::stream::RecordBatchStreamAdapter;
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
-    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
     /// Implementation note: this method can just proxy to
     /// [`static_name`](ExecutionPlan::static_name) if no special action is
@@ -80,7 +85,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// range of use cases.
     fn name(&self) -> &str;
 
-    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     /// Like [`name`](ExecutionPlan::name) but can be called without an instance.
     fn static_name() -> &'static str
     where
@@ -109,6 +114,15 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// This information is available via methods on [`ExecutionPlanProperties`]
     /// trait, which is implemented for all `ExecutionPlan`s.
     fn properties(&self) -> &PlanProperties;
+
+    /// Returns an error if this individual node does not conform to its invariants.
+    /// These invariants are typically only checked in debug mode.
+    ///
+    /// A default set of invariants is provided in the default implementation.
+    /// Extension nodes can provide their own invariants.
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
+        Ok(())
+    }
 
     /// Specifies the data distribution requirements for all the
     /// children for this `ExecutionPlan`, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
@@ -249,13 +263,32 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// used.
     /// Thus, [`spawn`] is disallowed, and instead use [`SpawnedTask`].
     ///
+    /// To enable timely cancellation, the [`Stream`] that is returned must not
+    /// block the CPU indefinitely and must yield back to the tokio runtime regularly.
+    /// In a typical [`ExecutionPlan`], this automatically happens unless there are
+    /// special circumstances; e.g. when the computational complexity of processing a
+    /// batch is superlinear. See this [general guideline][async-guideline] for more context
+    /// on this point, which explains why one should avoid spending a long time without
+    /// reaching an `await`/yield point in asynchronous runtimes.
+    /// This can be achieved by manually returning [`Poll::Pending`] and setting up wakers
+    /// appropriately, or the use of [`tokio::task::yield_now()`] when appropriate.
+    /// In special cases that warrant manual yielding, determination for "regularly" may be
+    /// made using a timer (being careful with the overhead-heavy system call needed to
+    /// take the time), or by counting rows or batches.
+    ///
+    /// The [cancellation benchmark] tracks some cases of how quickly queries can
+    /// be cancelled.
+    ///
     /// For more details see [`SpawnedTask`], [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`]
     /// for structures to help ensure all background tasks are cancelled.
     ///
     /// [`spawn`]: tokio::task::spawn
-    /// [`JoinSet`]: tokio::task::JoinSet
+    /// [cancellation benchmark]: https://github.com/apache/datafusion/blob/main/benchmarks/README.md#cancellation
+    /// [`JoinSet`]: datafusion_common_runtime::JoinSet
     /// [`SpawnedTask`]: datafusion_common_runtime::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
+    /// [`Poll::Pending`]: std::task::Poll::Pending
+    /// [async-guideline]: https://ryhl.io/blog/async-what-is-blocking/
     ///
     /// # Implementation Examples
     ///
@@ -271,8 +304,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::array::RecordBatch;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     /// # use datafusion_physical_plan::memory::MemoryStream;
@@ -301,8 +334,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::array::RecordBatch;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     /// # use datafusion_physical_plan::memory::MemoryStream;
@@ -336,8 +369,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::array::RecordBatch;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use futures::TryStreamExt;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -422,6 +455,72 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Unknown
     }
+
+    /// Attempts to push down the given projection into the input of this `ExecutionPlan`.
+    ///
+    /// If the operator supports this optimization, the resulting plan will be:
+    /// `self_new <- projection <- source`, starting from `projection <- self <- source`.
+    /// Otherwise, it returns the current `ExecutionPlan` as-is.
+    ///
+    /// Returns `Ok(Some(...))` if pushdown is applied, `Ok(None)` if it is not supported
+    /// or not possible, or `Err` on failure.
+    fn try_swapping_with_projection(
+        &self,
+        _projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
+
+    /// Attempts to recursively push given filters from the top of the tree into leafs.
+    ///
+    /// This is used for various optimizations, such as:
+    ///
+    /// * Pushing down filters into scans in general to minimize the amount of data that needs to be materialzied.
+    /// * Pushing down dynamic filters from operators like TopK and Joins into scans.
+    ///
+    /// Generally the further down (closer to leaf nodes) that filters can be pushed, the better.
+    ///
+    /// Consider the case of a query such as `SELECT * FROM t WHERE a = 1 AND b = 2`.
+    /// With no filter pushdown the scan needs to read and materialize all the data from `t` and then filter based on `a` and `b`.
+    /// With filter pushdown into the scan it can first read only `a`, then `b` and keep track of
+    /// which rows match the filter.
+    /// Then only for rows that match the filter does it have to materialize the rest of the columns.
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation assumes:
+    /// * Parent filters can't be passed onto children.
+    /// * This node has no filters to contribute.
+    ///
+    /// # Implementation Notes
+    ///
+    /// Most of the actual logic is implemented as a Physical Optimizer rule.
+    /// See [`PushdownFilter`] for more details.
+    ///
+    /// [`PushdownFilter`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/filter_pushdown/struct.PushdownFilter.html
+    fn try_pushdown_filters(
+        &self,
+        fd: FilterDescription,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(filter_pushdown_not_supported(fd))
+    }
+}
+
+/// [`ExecutionPlan`] Invariant Level
+///
+/// What set of assertions ([Invariant]s)  holds for a particular `ExecutionPlan`
+///
+/// [Invariant]: https://en.wikipedia.org/wiki/Invariant_(mathematics)#Invariants_in_computer_science
+#[derive(Clone, Copy)]
+pub enum InvariantLevel {
+    /// Invariants that are always true for the [`ExecutionPlan`] node
+    /// such as the number of expected children.
+    Always,
+    /// Invariants that must hold true for the [`ExecutionPlan`] node
+    /// to be "executable", such as ordering and/or distribution requirements
+    /// being fulfilled.
+    Executable,
 }
 
 /// Extension trait provides an easy API to fetch various properties of
@@ -458,13 +557,15 @@ pub trait ExecutionPlanProperties {
     /// If this ExecutionPlan makes no changes to the schema of the rows flowing
     /// through it or how columns within each row relate to each other, it
     /// should return the equivalence properties of its input. For
-    /// example, since `FilterExec` may remove rows from its input, but does not
+    /// example, since [`FilterExec`] may remove rows from its input, but does not
     /// otherwise modify them, it preserves its input equivalence properties.
     /// However, since `ProjectionExec` may calculate derived expressions, it
     /// needs special handling.
     ///
     /// See also [`ExecutionPlan::maintains_input_order`] and [`Self::output_ordering`]
     /// for related concepts.
+    ///
+    /// [`FilterExec`]: crate::filter::FilterExec
     fn equivalence_properties(&self) -> &EquivalenceProperties;
 }
 
@@ -557,10 +658,10 @@ impl Boundedness {
 ///     |_ on: [col1 ASC]
 ///     FilterExec [EmissionType::Incremental]
 ///       |_ pred: col2 > 100
-///       CsvExec [EmissionType::Incremental]
+///       DataSourceExec [EmissionType::Incremental]
 ///         |_ file: "data.csv"
 /// ```
-/// - CsvExec emits records incrementally as it reads from the file
+/// - DataSourceExec emits records incrementally as it reads from the file
 /// - FilterExec processes and emits filtered records incrementally as they arrive
 /// - SortExec must wait for all input records before it can emit the sorted result,
 ///   since it needs to see all values to determine their final order
@@ -716,6 +817,12 @@ impl PlanProperties {
         self
     }
 
+    /// Overwrite constraints with its new value.
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.eq_properties = self.eq_properties.with_constraints(constraints);
+        self
+    }
+
     pub fn equivalence_properties(&self) -> &EquivalenceProperties {
         &self.eq_properties
     }
@@ -729,7 +836,7 @@ impl PlanProperties {
     }
 
     /// Get schema of the node.
-    fn schema(&self) -> &SchemaRef {
+    pub(crate) fn schema(&self) -> &SchemaRef {
         self.eq_properties.schema()
     }
 }
@@ -1006,8 +1113,8 @@ pub enum CardinalityEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{DictionaryArray, Int32Array, NullArray, RunArray};
-    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use std::any::Any;
     use std::sync::Arc;
 

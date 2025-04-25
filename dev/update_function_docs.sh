@@ -236,7 +236,7 @@ WINDOW w AS (PARTITION BY depname ORDER BY salary DESC);
 
 The syntax for the OVER-clause is
 
-```
+```sql
 function([expr])
   OVER(
     [PARTITION BY expr[, …]]
@@ -247,7 +247,7 @@ function([expr])
 
 where **frame_clause** is one of:
 
-```
+```sql
   { RANGE | ROWS | GROUPS } frame_start
   { RANGE | ROWS | GROUPS } BETWEEN frame_start AND frame_end
 ```

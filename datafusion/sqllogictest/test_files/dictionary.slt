@@ -412,7 +412,7 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: column2@1 = 1
-03)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # try literal = col to verify order doesn't matter
 # filter should not cast column2
@@ -425,7 +425,7 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: column2@1 = 1
-03)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 # Now query using an integer which must be coerced into a dictionary string
@@ -443,10 +443,17 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: column2@1 = 1
-03)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Window Functions
 query I
 select dense_rank() over (order by arrow_cast('abc', 'Dictionary(UInt16, Utf8)'));
 ----
 1
+
+# Test dictionary encoded column to partition column casting
+statement ok
+CREATE TABLE test0 AS VALUES ('foo',1), ('bar',2), ('foo',3);
+
+statement ok
+COPY (SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS column1, column2 FROM test0) TO 'test_files/scratch/copy/part_dict_test' STORED AS PARQUET PARTITIONED BY (column1);

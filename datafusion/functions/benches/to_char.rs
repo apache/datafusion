@@ -20,6 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Date32Array, StringArray};
+use arrow::datatypes::DataType;
 use chrono::prelude::*;
 use chrono::TimeDelta;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -29,7 +30,7 @@ use rand::Rng;
 
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_char;
 
 fn random_date_in_range(
@@ -88,10 +89,13 @@ fn criterion_benchmark(c: &mut Criterion) {
         let patterns = ColumnarValue::Array(Arc::new(patterns(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 to_char()
-                    .invoke_batch(&[data.clone(), patterns.clone()], batch_len)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), patterns.clone()],
+                        number_rows: batch_len,
+                        return_type: &DataType::Utf8,
+                    })
                     .expect("to_char should work on valid values"),
             )
         })
@@ -106,10 +110,13 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".to_string())));
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 to_char()
-                    .invoke_batch(&[data.clone(), patterns.clone()], batch_len)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), patterns.clone()],
+                        number_rows: batch_len,
+                        return_type: &DataType::Utf8,
+                    })
                     .expect("to_char should work on valid values"),
             )
         })
@@ -130,10 +137,13 @@ fn criterion_benchmark(c: &mut Criterion) {
         )));
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 to_char()
-                    .invoke_batch(&[data.clone(), pattern.clone()], 1)
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: vec![data.clone(), pattern.clone()],
+                        number_rows: 1,
+                        return_type: &DataType::Utf8,
+                    })
                     .expect("to_char should work on valid values"),
             )
         })

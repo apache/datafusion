@@ -23,13 +23,13 @@
 
 use std::sync::Arc;
 
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::Result;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::{
     datasource::MemTable,
     execution::context::{SessionConfig, SessionContext},
 };
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_expr::LogicalPlan;
 use test_utils::tpcds::tpcds_schemas;
 
 /// Counts the total number of joins in a plan

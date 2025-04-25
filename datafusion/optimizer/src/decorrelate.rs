@@ -56,9 +56,16 @@ pub struct PullUpCorrelatedExpr {
     /// Indicates if we encounter any correlated expression that can not be pulled up
     /// above a aggregation without changing the meaning of the query.
     can_pull_over_aggregation: bool,
-    /// Do we need to handle [the Count bug] during the pull up process
+    /// Do we need to handle [the count bug] during the pull up process.
     ///
-    /// [the Count bug]: https://github.com/apache/datafusion/pull/10500
+    /// The "count bug" was described in [Optimization of Nested SQL
+    /// Queries Revisited](https://dl.acm.org/doi/pdf/10.1145/38714.38723). This bug is
+    /// not specific to the COUNT function, and it can occur with any aggregate function,
+    /// such as SUM, AVG, etc. The anomaly arises because aggregates fail to distinguish
+    /// between an empty set and null values when optimizing a correlated query as a join.
+    /// Here, we use "the count bug" to refer to all such cases.
+    ///
+    /// [the count bug]: https://github.com/apache/datafusion/issues/10553
     pub need_handle_count_bug: bool,
     /// mapping from the plan to its expressions' evaluation result on empty batch
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
@@ -87,9 +94,9 @@ impl PullUpCorrelatedExpr {
         }
     }
 
-    /// Set if we need to handle [the Count bug] during the pull up process
+    /// Set if we need to handle [the count bug] during the pull up process
     ///
-    /// [the Count bug]: https://github.com/apache/datafusion/pull/10500
+    /// [the count bug]: https://github.com/apache/datafusion/issues/10553
     pub fn with_need_handle_count_bug(mut self, need_handle_count_bug: bool) -> Self {
         self.need_handle_count_bug = need_handle_count_bug;
         self
@@ -111,7 +118,7 @@ impl PullUpCorrelatedExpr {
 /// Used to indicate the unmatched rows from the inner(subquery) table after the left out Join
 /// This is used to handle [the Count bug]
 ///
-/// [the Count bug]: https://github.com/apache/datafusion/pull/10500
+/// [the Count bug]: https://github.com/apache/datafusion/issues/10553
 pub const UN_MATCHED_ROW_INDICATOR: &str = "__always_true";
 
 /// Mapping from expr display name to its evaluation result on empty record
@@ -494,10 +501,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
         let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
-        if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_))) {
-            expr_result_map_for_count_bug
-                .insert(e.schema_name().to_string(), result_expr);
-        }
+        expr_result_map_for_count_bug.insert(e.schema_name().to_string(), result_expr);
     }
     Ok(())
 }
@@ -533,7 +537,11 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
                 Expr::Alias(Alias { name, .. }) => name.to_string(),
-                Expr::Column(Column { relation: _, name }) => name.to_string(),
+                Expr::Column(Column {
+                    relation: _,
+                    name,
+                    spans: _,
+                }) => name.to_string(),
                 _ => expr.schema_name().to_string(),
             };
             expr_result_map_for_count_bug.insert(expr_name, result_expr);

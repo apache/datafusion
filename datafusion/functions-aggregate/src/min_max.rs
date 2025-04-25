@@ -23,8 +23,9 @@ mod min_max_generic;
 
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
+    DurationNanosecondArray, DurationSecondArray, Float16Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
     IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
     LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
@@ -33,11 +34,11 @@ use arrow::array::{
 };
 use arrow::compute;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float16Type, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    DataType, Decimal128Type, Decimal256Type, DurationMicrosecondType,
+    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Float16Type,
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use arrow_schema::IntervalUnit;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     downcast_value, exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
@@ -61,8 +62,8 @@ use crate::min_max::min_max_generic::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature,
-    Volatility,
+    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
+    SetMonotonicity, Signature, Volatility,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
@@ -275,6 +276,7 @@ impl AggregateUDFImpl for Max {
                 | Binary
                 | LargeBinary
                 | BinaryView
+                | Duration(_)
         )
     }
 
@@ -329,6 +331,18 @@ impl AggregateUDFImpl for Max {
             Timestamp(Nanosecond, _) => {
                 primitive_max_accumulator!(data_type, i64, TimestampNanosecondType)
             }
+            Duration(Second) => {
+                primitive_max_accumulator!(data_type, i64, DurationSecondType)
+            }
+            Duration(Millisecond) => {
+                primitive_max_accumulator!(data_type, i64, DurationMillisecondType)
+            }
+            Duration(Microsecond) => {
+                primitive_max_accumulator!(data_type, i64, DurationMicrosecondType)
+            }
+            Duration(Nanosecond) => {
+                primitive_max_accumulator!(data_type, i64, DurationNanosecondType)
+            }
             Decimal128(_, _) => {
                 primitive_max_accumulator!(data_type, i128, Decimal128Type)
             }
@@ -377,6 +391,12 @@ impl AggregateUDFImpl for Max {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn set_monotonicity(&self, _data_type: &DataType) -> SetMonotonicity {
+        // `MAX` is monotonically increasing as it always increases or stays
+        // the same as new values are seen.
+        SetMonotonicity::Increasing
     }
 }
 
@@ -530,6 +550,33 @@ macro_rules! min_max_batch {
                     $OP
                 )
             }
+            DataType::Duration(TimeUnit::Second) => {
+                typed_min_max_batch!($VALUES, DurationSecondArray, DurationSecond, $OP)
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    DurationMillisecondArray,
+                    DurationMillisecond,
+                    $OP
+                )
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    DurationMicrosecondArray,
+                    DurationMicrosecond,
+                    $OP
+                )
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    DurationNanosecondArray,
+                    DurationNanosecond,
+                    $OP
+                )
+            }
             other => {
                 // This should have been handled before
                 return internal_err!(
@@ -585,7 +632,7 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
 }
 
 /// dynamically-typed max(array) -> ScalarValue
-fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
+pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
     Ok(match values.data_type() {
         DataType::Utf8 => {
             typed_min_max_batch_string!(values, StringArray, Utf8, max_string)
@@ -1108,6 +1155,7 @@ impl AggregateUDFImpl for Min {
                 | Binary
                 | LargeBinary
                 | BinaryView
+                | Duration(_)
         )
     }
 
@@ -1162,6 +1210,18 @@ impl AggregateUDFImpl for Min {
             Timestamp(Nanosecond, _) => {
                 primitive_min_accumulator!(data_type, i64, TimestampNanosecondType)
             }
+            Duration(Second) => {
+                primitive_min_accumulator!(data_type, i64, DurationSecondType)
+            }
+            Duration(Millisecond) => {
+                primitive_min_accumulator!(data_type, i64, DurationMillisecondType)
+            }
+            Duration(Microsecond) => {
+                primitive_min_accumulator!(data_type, i64, DurationMicrosecondType)
+            }
+            Duration(Nanosecond) => {
+                primitive_min_accumulator!(data_type, i64, DurationNanosecondType)
+            }
             Decimal128(_, _) => {
                 primitive_min_accumulator!(data_type, i128, Decimal128Type)
             }
@@ -1211,6 +1271,12 @@ impl AggregateUDFImpl for Min {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn set_monotonicity(&self, _data_type: &DataType) -> SetMonotonicity {
+        // `MIN` is monotonically decreasing as it always decreases or stays
+        // the same as new values are seen.
+        SetMonotonicity::Decreasing
     }
 }
 
@@ -1615,7 +1681,7 @@ mod tests {
         assert_eq!(
             min_res,
             ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                -2, 4
+                -2, 4,
             )))
         );
 
@@ -1627,7 +1693,7 @@ mod tests {
         assert_eq!(
             max_res,
             ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                5, 34
+                5, 34,
             )))
         );
 

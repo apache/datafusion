@@ -21,13 +21,12 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
-    OffsetSizeTrait, StringViewArray,
+    OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use unicode_segmentation::UnicodeSegmentation;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 
-use crate::strings::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
@@ -110,11 +109,11 @@ impl ScalarUDFImpl for LPadFunc {
         utf8_to_str_type(&arg_types[0], "lpad")
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = &args.args;
         match args[0].data_type() {
             Utf8 | Utf8View => make_scalar_function(lpad::<i32>, vec![])(args),
             LargeUtf8 => make_scalar_function(lpad::<i64>, vec![])(args),

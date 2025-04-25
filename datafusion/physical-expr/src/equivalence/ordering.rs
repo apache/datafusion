@@ -22,7 +22,9 @@ use std::vec::IntoIter;
 
 use crate::equivalence::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr};
-use arrow_schema::SortOptions;
+
+use arrow::compute::SortOptions;
+use datafusion_common::HashSet;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
@@ -39,7 +41,7 @@ use arrow_schema::SortOptions;
 /// ordering. In this case, we say that these orderings are equivalent.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
 pub struct OrderingEquivalenceClass {
-    pub orderings: Vec<LexOrdering>,
+    orderings: Vec<LexOrdering>,
 }
 
 impl OrderingEquivalenceClass {
@@ -53,11 +55,18 @@ impl OrderingEquivalenceClass {
         self.orderings.clear();
     }
 
-    /// Creates new ordering equivalence class from the given orderings.
+    /// Creates new ordering equivalence class from the given orderings
+    ///
+    /// Any redundant entries are removed
     pub fn new(orderings: Vec<LexOrdering>) -> Self {
         let mut result = Self { orderings };
         result.remove_redundant_entries();
         result
+    }
+
+    /// Converts this OrderingEquivalenceClass to a vector of orderings.
+    pub fn into_inner(self) -> Vec<LexOrdering> {
+        self.orderings
     }
 
     /// Checks whether `ordering` is a member of this equivalence class.
@@ -67,10 +76,12 @@ impl OrderingEquivalenceClass {
 
     /// Adds `ordering` to this equivalence class.
     #[allow(dead_code)]
+    #[deprecated(
+        since = "45.0.0",
+        note = "use OrderingEquivalenceClass::add_new_ordering instead"
+    )]
     fn push(&mut self, ordering: LexOrdering) {
-        self.orderings.push(ordering);
-        // Make sure that there are no redundant orderings:
-        self.remove_redundant_entries();
+        self.add_new_ordering(ordering)
     }
 
     /// Checks whether this ordering equivalence class is empty.
@@ -79,6 +90,9 @@ impl OrderingEquivalenceClass {
     }
 
     /// Returns an iterator over the equivalent orderings in this class.
+    ///
+    /// Note this class also implements [`IntoIterator`] to return an iterator
+    /// over owned [`LexOrdering`]s.
     pub fn iter(&self) -> impl Iterator<Item = &LexOrdering> {
         self.orderings.iter()
     }
@@ -95,7 +109,7 @@ impl OrderingEquivalenceClass {
         self.remove_redundant_entries();
     }
 
-    /// Adds new orderings into this ordering equivalence class.
+    /// Adds new orderings into this ordering equivalence class
     pub fn add_new_orderings(
         &mut self,
         orderings: impl IntoIterator<Item = LexOrdering>,
@@ -110,9 +124,10 @@ impl OrderingEquivalenceClass {
         self.add_new_orderings([ordering]);
     }
 
-    /// Removes redundant orderings from this equivalence class. For instance,
-    /// if we already have the ordering `[a ASC, b ASC, c DESC]`, then there is
-    /// no need to keep ordering `[a ASC, b ASC]` in the state.
+    /// Removes redundant orderings from this equivalence class.
+    ///
+    /// For instance, if we already have the ordering `[a ASC, b ASC, c DESC]`,
+    /// then there is no need to keep ordering `[a ASC, b ASC]` in the state.
     fn remove_redundant_entries(&mut self) {
         let mut work = true;
         while work {
@@ -122,12 +137,12 @@ impl OrderingEquivalenceClass {
                 let mut ordering_idx = idx + 1;
                 let mut removal = self.orderings[idx].is_empty();
                 while ordering_idx < self.orderings.len() {
-                    work |= resolve_overlap(&mut self.orderings, idx, ordering_idx);
+                    work |= self.resolve_overlap(idx, ordering_idx);
                     if self.orderings[idx].is_empty() {
                         removal = true;
                         break;
                     }
-                    work |= resolve_overlap(&mut self.orderings, ordering_idx, idx);
+                    work |= self.resolve_overlap(ordering_idx, idx);
                     if self.orderings[ordering_idx].is_empty() {
                         self.orderings.swap_remove(ordering_idx);
                     } else {
@@ -143,11 +158,36 @@ impl OrderingEquivalenceClass {
         }
     }
 
+    /// Trims `orderings[idx]` if some suffix of it overlaps with a prefix of
+    /// `orderings[pre_idx]`. Returns `true` if there is any overlap, `false` otherwise.
+    ///
+    /// For example, if `orderings[idx]` is `[a ASC, b ASC, c DESC]` and
+    /// `orderings[pre_idx]` is `[b ASC, c DESC]`, then the function will trim
+    /// `orderings[idx]` to `[a ASC]`.
+    fn resolve_overlap(&mut self, idx: usize, pre_idx: usize) -> bool {
+        let length = self.orderings[idx].len();
+        let other_length = self.orderings[pre_idx].len();
+        for overlap in 1..=length.min(other_length) {
+            if self.orderings[idx][length - overlap..]
+                == self.orderings[pre_idx][..overlap]
+            {
+                self.orderings[idx].truncate(length - overlap);
+                return true;
+            }
+        }
+        false
+    }
+
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let output_ordering = self.orderings.iter().flatten().cloned().collect();
-        let output_ordering = collapse_lex_ordering(output_ordering);
+        let output_ordering = self
+            .orderings
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<LexOrdering>()
+            .collapse();
         (!output_ordering.is_empty()).then_some(output_ordering)
     }
 
@@ -169,7 +209,7 @@ impl OrderingEquivalenceClass {
             for idx in 0..n_ordering {
                 // Calculate cross product index
                 let idx = outer_idx * n_ordering + idx;
-                self.orderings[idx].inner.extend(ordering.iter().cloned());
+                self.orderings[idx].extend(ordering.iter().cloned());
             }
         }
         self
@@ -179,9 +219,9 @@ impl OrderingEquivalenceClass {
     /// ordering equivalence class.
     pub fn add_offset(&mut self, offset: usize) {
         for ordering in self.orderings.iter_mut() {
-            for sort_expr in ordering.inner.iter_mut() {
+            ordering.transform(|sort_expr| {
                 sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
-            }
+            })
         }
     }
 
@@ -196,8 +236,85 @@ impl OrderingEquivalenceClass {
         }
         None
     }
+
+    /// Checks whether the given expression is partially constant according to
+    /// this ordering equivalence class.
+    ///
+    /// This function determines whether `expr` appears in at least one combination
+    /// of `descending` and `nulls_first` options that indicate partial constantness
+    /// in a lexicographical ordering. Specifically, an expression is considered
+    /// a partial constant in this context if its `SortOptions` satisfies either
+    /// of the following conditions:
+    /// - It is `descending` with `nulls_first` and _also_ `ascending` with
+    ///   `nulls_last`, OR
+    /// - It is `descending` with `nulls_last` and _also_ `ascending` with
+    ///   `nulls_first`.
+    ///
+    /// The equivalence mechanism primarily uses `ConstExpr`s to represent globally
+    /// constant expressions. However, some expressions may only be partially
+    /// constant within a lexicographical ordering. This function helps identify
+    /// such cases. If an expression is constant within a prefix ordering, it is
+    /// added as a constant during `ordering_satisfy_requirement()` iterations
+    /// after the corresponding prefix requirement is satisfied.
+    ///
+    /// ### Example Scenarios
+    ///
+    /// In these scenarios, we assume that all expressions share the same sort
+    /// properties.
+    ///
+    /// #### Case 1: Sort Requirement `[a, c]`
+    ///
+    /// **Existing Orderings:** `[[a, b, c], [a, d]]`, **Constants:** `[]`
+    /// 1. `ordering_satisfy_single()` returns `true` because the requirement
+    ///    `a` is satisfied by `[a, b, c].first()`.
+    /// 2. `a` is added as a constant for the next iteration.
+    /// 3. The normalized orderings become `[[b, c], [d]]`.
+    /// 4. `ordering_satisfy_single()` returns `false` for `c`, as neither
+    ///    `[b, c]` nor `[d]` satisfies `c`.
+    ///
+    /// #### Case 2: Sort Requirement `[a, d]`
+    ///
+    /// **Existing Orderings:** `[[a, b, c], [a, d]]`, **Constants:** `[]`
+    /// 1. `ordering_satisfy_single()` returns `true` because the requirement
+    ///    `a` is satisfied by `[a, b, c].first()`.
+    /// 2. `a` is added as a constant for the next iteration.
+    /// 3. The normalized orderings become `[[b, c], [d]]`.
+    /// 4. `ordering_satisfy_single()` returns `true` for `d`, as `[d]` satisfies
+    ///    `d`.
+    ///
+    /// ### Future Improvements
+    ///
+    /// This function may become unnecessary if any of the following improvements
+    /// are implemented:
+    /// 1. `SortOptions` supports encoding constantness information.
+    /// 2. `EquivalenceProperties` gains `FunctionalDependency` awareness, eliminating
+    ///    the need for `Constant` and `Constraints`.
+    pub fn is_expr_partial_const(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
+        let mut constantness_defining_pairs = [
+            HashSet::from([(false, false), (true, true)]),
+            HashSet::from([(false, true), (true, false)]),
+        ];
+
+        for ordering in self.iter() {
+            if let Some(leading_ordering) = ordering.first() {
+                if leading_ordering.expr.eq(expr) {
+                    let opt = (
+                        leading_ordering.options.descending,
+                        leading_ordering.options.nulls_first,
+                    );
+                    constantness_defining_pairs[0].remove(&opt);
+                    constantness_defining_pairs[1].remove(&opt);
+                }
+            }
+        }
+
+        constantness_defining_pairs
+            .iter()
+            .any(|pair| pair.is_empty())
+    }
 }
 
+/// Convert the `OrderingEquivalenceClass` into an iterator of LexOrderings
 impl IntoIterator for OrderingEquivalenceClass {
     type Item = LexOrdering;
     type IntoIter = IntoIter<LexOrdering>;
@@ -205,33 +322,6 @@ impl IntoIterator for OrderingEquivalenceClass {
     fn into_iter(self) -> Self::IntoIter {
         self.orderings.into_iter()
     }
-}
-
-/// This function constructs a duplicate-free `LexOrdering` by filtering out
-/// duplicate entries that have same physical expression inside. For example,
-/// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
-pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
-    let mut output = LexOrdering::default();
-    for item in input.iter() {
-        if !output.iter().any(|req| req.expr.eq(&item.expr)) {
-            output.push(item.clone());
-        }
-    }
-    output
-}
-
-/// Trims `orderings[idx]` if some suffix of it overlaps with a prefix of
-/// `orderings[pre_idx]`. Returns `true` if there is any overlap, `false` otherwise.
-fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) -> bool {
-    let length = orderings[idx].len();
-    let other_length = orderings[pre_idx].len();
-    for overlap in 1..=length.min(other_length) {
-        if orderings[idx][length - overlap..] == orderings[pre_idx][..overlap] {
-            orderings[idx].truncate(length - overlap);
-            return true;
-        }
-    }
-    false
 }
 
 impl Display for OrderingEquivalenceClass {
@@ -262,11 +352,14 @@ mod tests {
     };
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::utils::tests::TestScalarUDF;
-    use crate::{AcrossPartitions, ConstExpr, PhysicalExpr, PhysicalSortExpr};
+    use crate::{
+        AcrossPartitions, ConstExpr, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+        ScalarFunctionExpr,
+    };
 
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::SortOptions;
-    use datafusion_common::{DFSchema, Result};
+    use datafusion_common::Result;
     use datafusion_expr::{Operator, ScalarUDF};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -291,15 +384,17 @@ mod tests {
             },
         ]);
         // finer ordering satisfies, crude ordering should return true
-        let mut eq_properties_finer =
-            EquivalenceProperties::new(Arc::clone(&input_schema));
-        eq_properties_finer.oeq_class.push(finer.clone());
+        let eq_properties_finer = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&input_schema),
+            &[finer.clone()],
+        );
         assert!(eq_properties_finer.ordering_satisfy(crude.as_ref()));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
-        let mut eq_properties_crude =
-            EquivalenceProperties::new(Arc::clone(&input_schema));
-        eq_properties_crude.oeq_class.push(crude);
+        let eq_properties_crude = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&input_schema),
+            &[crude.clone()],
+        );
         assert!(!eq_properties_crude.ordering_satisfy(finer.as_ref()));
         Ok(())
     }
@@ -313,28 +408,24 @@ mod tests {
         let col_d = &col("d", &test_schema)?;
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
-        let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
-        let floor_a = &crate::udf::create_physical_expr(
-            &test_fun,
-            &[col("a", &test_schema)?],
+        let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
+
+        let floor_a = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::clone(&test_fun),
+            vec![Arc::clone(col_a)],
             &test_schema,
-            &[],
-            &DFSchema::empty(),
-        )?;
-        let floor_f = &crate::udf::create_physical_expr(
-            &test_fun,
-            &[col("f", &test_schema)?],
+        )?) as PhysicalExprRef;
+        let floor_f = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::clone(&test_fun),
+            vec![Arc::clone(col_f)],
             &test_schema,
-            &[],
-            &DFSchema::empty(),
-        )?;
-        let exp_a = &crate::udf::create_physical_expr(
-            &test_fun,
-            &[col("a", &test_schema)?],
+        )?) as PhysicalExprRef;
+        let exp_a = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::clone(&test_fun),
+            vec![Arc::clone(col_a)],
             &test_schema,
-            &[],
-            &DFSchema::empty(),
-        )?;
+        )?) as PhysicalExprRef;
+
         let a_plus_b = Arc::new(BinaryExpr::new(
             Arc::clone(col_a),
             Operator::Plus,
@@ -378,7 +469,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [floor(a) ASC],
-                vec![(floor_a, options)],
+                vec![(&floor_a, options)],
                 // expected: requirement is satisfied.
                 true,
             ),
@@ -396,7 +487,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [floor(f) ASC], (Please note that a=f)
-                vec![(floor_f, options)],
+                vec![(&floor_f, options)],
                 // expected: requirement is satisfied.
                 true,
             ),
@@ -435,7 +526,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [floor(a) ASC, a+b ASC],
-                vec![(floor_a, options), (&a_plus_b, options)],
+                vec![(&floor_a, options), (&a_plus_b, options)],
                 // expected: requirement is satisfied.
                 false,
             ),
@@ -456,7 +547,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [exp(a) ASC, a+b ASC],
-                vec![(exp_a, options), (&a_plus_b, options)],
+                vec![(&exp_a, options), (&a_plus_b, options)],
                 // expected: requirement is not satisfied.
                 // TODO: If we know that exp function is 1-to-1 function.
                 //  we could have deduced that above requirement is satisfied.
@@ -476,7 +567,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [a ASC, d ASC, floor(a) ASC],
-                vec![(col_a, options), (col_d, options), (floor_a, options)],
+                vec![(col_a, options), (col_d, options), (&floor_a, options)],
                 // expected: requirement is satisfied.
                 true,
             ),
@@ -494,7 +585,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [a ASC, floor(a) ASC, a + b ASC],
-                vec![(col_a, options), (floor_a, options), (&a_plus_b, options)],
+                vec![(col_a, options), (&floor_a, options), (&a_plus_b, options)],
                 // expected: requirement is not satisfied.
                 false,
             ),
@@ -515,7 +606,7 @@ mod tests {
                 vec![
                     (col_a, options),
                     (col_c, options),
-                    (floor_a, options),
+                    (&floor_a, options),
                     (&a_plus_b, options),
                 ],
                 // expected: requirement is not satisfied.
@@ -542,7 +633,7 @@ mod tests {
                     (col_a, options),
                     (col_b, options),
                     (col_c, options),
-                    (floor_a, options),
+                    (&floor_a, options),
                 ],
                 // expected: requirement is satisfied.
                 true,

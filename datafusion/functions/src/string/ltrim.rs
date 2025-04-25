@@ -18,20 +18,30 @@
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use std::any::Any;
+use std::sync::Arc;
 
 use crate::string::common::*;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::function::Hint;
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 /// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
 /// ltrim('zzzytest', 'xyz') = 'test'
 fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let use_string_view = args[0].data_type() == &DataType::Utf8View;
-    general_trim::<T>(args, TrimType::Left, use_string_view)
+    let args = if args.len() > 1 {
+        let arg1 = arrow::compute::kernels::cast::cast(&args[1], args[0].data_type())?;
+        vec![Arc::clone(&args[0]), arg1]
+    } else {
+        args.to_owned()
+    };
+    general_trim::<T>(&args, TrimType::Left, use_string_view)
 }
 
 #[user_doc(
@@ -76,7 +86,15 @@ impl LtrimFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::String(2), TypeSignature::String(1)],
+                vec![
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    ]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Native(logical_string()),
+                    )]),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -104,20 +122,16 @@ impl ScalarUDFImpl for LtrimFunc {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => make_scalar_function(
                 ltrim::<i32>,
                 vec![Hint::Pad, Hint::AcceptsSingular],
-            )(args),
+            )(&args.args),
             DataType::LargeUtf8 => make_scalar_function(
                 ltrim::<i64>,
                 vec![Hint::Pad, Hint::AcceptsSingular],
-            )(args),
+            )(&args.args),
             other => exec_err!(
                 "Unsupported data type {other:?} for function ltrim,\
                 expected Utf8, LargeUtf8 or Utf8View."

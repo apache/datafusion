@@ -15,25 +15,52 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::strings::StringArrayType;
-use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array};
+use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
 };
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_REGEX;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact,
     TypeSignature::Uniform, Volatility,
 };
+use datafusion_macros::user_doc;
 use itertools::izip;
 use regex::Regex;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "Regular Expression Functions"),
+    description = "Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.",
+    syntax_example = "regexp_count(str, regexp[, start, flags])",
+    sql_example = r#"```sql
+> select regexp_count('abcAbAbc', 'abc', 2, 'i');
++---------------------------------------------------------------+
+| regexp_count(Utf8("abcAbAbc"),Utf8("abc"),Int64(2),Utf8("i")) |
++---------------------------------------------------------------+
+| 1                                                             |
++---------------------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    standard_argument(name = "regexp", prefix = "Regular"),
+    argument(
+        name = "start",
+        description = "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function."
+    ),
+    argument(
+        name = "flags",
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?"#
+    )
+)]
 #[derive(Debug)]
 pub struct RegexpCountFunc {
     signature: Signature,
@@ -81,11 +108,12 @@ impl ScalarUDFImpl for RegexpCountFunc {
         Ok(Int64)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = &args.args;
+
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -111,38 +139,8 @@ impl ScalarUDFImpl for RegexpCountFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_regexp_count_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_regexp_count_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_REGEX,
-            "Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.",
-            "regexp_count(str, regexp[, start, flags])")
-            .with_sql_example(r#"```sql
-> select regexp_count('abcAbAbc', 'abc', 2, 'i');
-+---------------------------------------------------------------+
-| regexp_count(Utf8("abcAbAbc"),Utf8("abc"),Int64(2),Utf8("i")) |
-+---------------------------------------------------------------+
-| 1                                                             |
-+---------------------------------------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_standard_argument("regexp",Some("Regular"))
-            .with_argument("start", "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function.")
-            .with_argument("flags",
-                           r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#)
-            .build()
-    })
 }
 
 pub fn regexp_count_func(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -621,6 +619,7 @@ fn count_matches(
 mod tests {
     use super::*;
     use arrow::array::{GenericStringArray, StringViewArray};
+    use datafusion_expr::ScalarFunctionArgs;
 
     #[test]
     fn test_regexp_count() {
@@ -658,11 +657,11 @@ mod tests {
             let v_sv = ScalarValue::Utf8(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
             let expected = expected.get(pos).cloned();
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
-                1,
-            );
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
+                number_rows: 2,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -673,11 +672,11 @@ mod tests {
             // largeutf8
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
             let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
-                1,
-            );
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
+                number_rows: 2,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -688,11 +687,11 @@ mod tests {
             // utf8view
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
-                1,
-            );
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
+                number_rows: 2,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -714,15 +713,15 @@ mod tests {
             let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
             let start_sv = ScalarValue::Int64(Some(start));
             let expected = expected.get(pos).cloned();
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![
                     ColumnarValue::Scalar(v_sv),
                     ColumnarValue::Scalar(regex_sv),
                     ColumnarValue::Scalar(start_sv.clone()),
                 ],
-                1,
-            );
+                number_rows: 3,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -733,15 +732,15 @@ mod tests {
             // largeutf8
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
             let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![
                     ColumnarValue::Scalar(v_sv),
                     ColumnarValue::Scalar(regex_sv),
                     ColumnarValue::Scalar(start_sv.clone()),
                 ],
-                1,
-            );
+                number_rows: 3,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -752,15 +751,15 @@ mod tests {
             // utf8view
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![
                     ColumnarValue::Scalar(v_sv),
                     ColumnarValue::Scalar(regex_sv),
-                    ColumnarValue::Scalar(start_sv),
+                    ColumnarValue::Scalar(start_sv.clone()),
                 ],
-                1,
-            );
+                number_rows: 3,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -784,16 +783,16 @@ mod tests {
             let start_sv = ScalarValue::Int64(Some(start));
             let flags_sv = ScalarValue::Utf8(Some(flags.to_string()));
             let expected = expected.get(pos).cloned();
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![
                     ColumnarValue::Scalar(v_sv),
                     ColumnarValue::Scalar(regex_sv),
                     ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
-                1,
-            );
+                number_rows: 4,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -805,16 +804,16 @@ mod tests {
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
             let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
             let flags_sv = ScalarValue::LargeUtf8(Some(flags.to_string()));
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![
                     ColumnarValue::Scalar(v_sv),
                     ColumnarValue::Scalar(regex_sv),
                     ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
-                1,
-            );
+                number_rows: 4,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -826,16 +825,16 @@ mod tests {
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
             let flags_sv = ScalarValue::Utf8View(Some(flags.to_string()));
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![
                     ColumnarValue::Scalar(v_sv),
                     ColumnarValue::Scalar(regex_sv),
-                    ColumnarValue::Scalar(start_sv),
+                    ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
-                1,
-            );
+                number_rows: 4,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -908,16 +907,16 @@ mod tests {
             let start_sv = ScalarValue::Int64(Some(start));
             let flags_sv = ScalarValue::Utf8(flags.get(pos).map(|f| f.to_string()));
             let expected = expected.get(pos).cloned();
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![
                     ColumnarValue::Scalar(v_sv),
                     ColumnarValue::Scalar(regex_sv),
                     ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
-                1,
-            );
+                number_rows: 4,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -929,16 +928,16 @@ mod tests {
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
             let regex_sv = ScalarValue::LargeUtf8(regex.get(pos).map(|s| s.to_string()));
             let flags_sv = ScalarValue::LargeUtf8(flags.get(pos).map(|f| f.to_string()));
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![
                     ColumnarValue::Scalar(v_sv),
                     ColumnarValue::Scalar(regex_sv),
                     ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
-                1,
-            );
+                number_rows: 4,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");
@@ -950,16 +949,16 @@ mod tests {
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8View(regex.get(pos).map(|s| s.to_string()));
             let flags_sv = ScalarValue::Utf8View(flags.get(pos).map(|f| f.to_string()));
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let re = RegexpCountFunc::new().invoke_batch(
-                &[
+            let re = RegexpCountFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![
                     ColumnarValue::Scalar(v_sv),
                     ColumnarValue::Scalar(regex_sv),
-                    ColumnarValue::Scalar(start_sv),
+                    ColumnarValue::Scalar(start_sv.clone()),
                     ColumnarValue::Scalar(flags_sv.clone()),
                 ],
-                1,
-            );
+                number_rows: 4,
+                return_type: &Int64,
+            });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
                     assert_eq!(v, expected, "regexp_count scalar test failed");

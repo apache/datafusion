@@ -20,43 +20,133 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 
-use arrow_schema::*;
-use datafusion_common::{
-    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
-};
-use sqlparser::ast::TimezoneInfo;
-use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
-use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
-use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
-
+use arrow::datatypes::*;
+use datafusion_common::config::SqlParserOptions;
+use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::TableReference;
 use datafusion_common::{
-    not_impl_err, plan_err, unqualified_field_not_found, DFSchema, DataFusionError,
-    Result,
+    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
+    SchemaError,
 };
+use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
+use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
+use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
+use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use crate::utils::make_decimal_type;
 pub use datafusion_expr::planner::ContextProvider;
 
 /// SQL parser options
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParserOptions {
+    /// Whether to parse float as decimal.
     pub parse_float_as_decimal: bool,
+    /// Whether to normalize identifiers.
     pub enable_ident_normalization: bool,
+    /// Whether to support varchar with length.
     pub support_varchar_with_length: bool,
+    /// Whether to normalize options value.
     pub enable_options_value_normalization: bool,
+    /// Whether to collect spans
+    pub collect_spans: bool,
+    /// Whether `VARCHAR` is mapped to `Utf8View` during SQL planning.
+    pub map_varchar_to_utf8view: bool,
 }
 
-impl Default for ParserOptions {
-    fn default() -> Self {
+impl ParserOptions {
+    /// Creates a new `ParserOptions` instance with default values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_sql::planner::ParserOptions;
+    /// let opts = ParserOptions::new();
+    /// assert_eq!(opts.parse_float_as_decimal, false);
+    /// assert_eq!(opts.enable_ident_normalization, true);
+    /// ```
+    pub fn new() -> Self {
         Self {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
+            map_varchar_to_utf8view: false,
             enable_options_value_normalization: false,
+            collect_spans: false,
+        }
+    }
+
+    /// Sets the `parse_float_as_decimal` option.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_sql::planner::ParserOptions;
+    /// let opts = ParserOptions::new().with_parse_float_as_decimal(true);
+    /// assert_eq!(opts.parse_float_as_decimal, true);
+    /// ```
+    pub fn with_parse_float_as_decimal(mut self, value: bool) -> Self {
+        self.parse_float_as_decimal = value;
+        self
+    }
+
+    /// Sets the `enable_ident_normalization` option.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_sql::planner::ParserOptions;
+    /// let opts = ParserOptions::new().with_enable_ident_normalization(false);
+    /// assert_eq!(opts.enable_ident_normalization, false);
+    /// ```
+    pub fn with_enable_ident_normalization(mut self, value: bool) -> Self {
+        self.enable_ident_normalization = value;
+        self
+    }
+
+    /// Sets the `support_varchar_with_length` option.
+    pub fn with_support_varchar_with_length(mut self, value: bool) -> Self {
+        self.support_varchar_with_length = value;
+        self
+    }
+
+    /// Sets the `map_varchar_to_utf8view` option.
+    pub fn with_map_varchar_to_utf8view(mut self, value: bool) -> Self {
+        self.map_varchar_to_utf8view = value;
+        self
+    }
+
+    /// Sets the `enable_options_value_normalization` option.
+    pub fn with_enable_options_value_normalization(mut self, value: bool) -> Self {
+        self.enable_options_value_normalization = value;
+        self
+    }
+
+    /// Sets the `collect_spans` option.
+    pub fn with_collect_spans(mut self, value: bool) -> Self {
+        self.collect_spans = value;
+        self
+    }
+}
+
+impl Default for ParserOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<&SqlParserOptions> for ParserOptions {
+    fn from(options: &SqlParserOptions) -> Self {
+        Self {
+            parse_float_as_decimal: options.parse_float_as_decimal,
+            enable_ident_normalization: options.enable_ident_normalization,
+            support_varchar_with_length: options.support_varchar_with_length,
+            map_varchar_to_utf8view: options.map_varchar_to_utf8view,
+            enable_options_value_normalization: options
+                .enable_options_value_normalization,
+            collect_spans: options.collect_spans,
         }
     }
 }
@@ -87,16 +177,17 @@ impl IdentNormalizer {
     }
 }
 
-/// Struct to store the states used by the Planner. The Planner will leverage the states to resolve
-/// CTEs, Views, subqueries and PREPARE statements. The states include
+/// Struct to store the states used by the Planner. The Planner will leverage the states
+/// to resolve CTEs, Views, subqueries and PREPARE statements. The states include
 /// Common Table Expression (CTE) provided with WITH clause and
 /// Parameter Data Types provided with PREPARE statement and the query schema of the
 /// outer query plan.
 ///
 /// # Cloning
 ///
-/// Only the `ctes` are truly cloned when the `PlannerContext` is cloned. This helps resolve
-/// scoping issues of CTEs. By using cloning, a subquery can inherit CTEs from the outer query
+/// Only the `ctes` are truly cloned when the `PlannerContext` is cloned.
+/// This helps resolve scoping issues of CTEs.
+/// By using cloning, a subquery can inherit CTEs from the outer query
 /// and can also define its own private CTEs without affecting the outer query.
 ///
 #[derive(Debug, Clone)]
@@ -223,7 +314,25 @@ impl PlannerContext {
     }
 }
 
-/// SQL query planner
+/// SQL query planner and binder
+///
+/// This struct is used to convert a SQL AST into a [`LogicalPlan`].
+///
+/// You can control the behavior of the planner by providing [`ParserOptions`].
+///
+/// It performs the following tasks:
+///
+/// 1. Name and type resolution (called "binding" in other systems). This
+///    phase looks up table and column names using the [`ContextProvider`].
+/// 2. Mechanical translation of the AST into a [`LogicalPlan`].
+///
+/// It does not perform type coercion, or perform optimization, which are done
+/// by subsequent passes.
+///
+/// Key interfaces are:
+/// * [`Self::sql_statement_to_plan`]: Convert a statement
+///   (e.g. `SELECT ...`) into a [`LogicalPlan`]
+/// * [`Self::sql_to_expr`]: Convert an expression (e.g. `1 + 2`) into an [`Expr`]
 pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
     pub(crate) options: ParserOptions,
@@ -231,12 +340,18 @@ pub struct SqlToRel<'a, S: ContextProvider> {
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    /// Create a new query planner
+    /// Create a new query planner.
+    ///
+    /// The query planner derives the parser options from the context provider.
     pub fn new(context_provider: &'a S) -> Self {
-        Self::new_with_options(context_provider, ParserOptions::default())
+        let parser_options = ParserOptions::from(&context_provider.options().sql_parser);
+        Self::new_with_options(context_provider, parser_options)
     }
 
-    /// Create a new query planner
+    /// Create a new query planner with the given parser options.
+    ///
+    /// The query planner ignores the parser options from the context provider
+    /// and uses the given parser options instead.
     pub fn new_with_options(context_provider: &'a S, options: ParserOptions) -> Self {
         let ident_normalize = options.enable_ident_normalization;
 
@@ -329,7 +444,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Ok(plan)
         } else if idents.len() != plan.schema().fields().len() {
             plan_err!(
-                "Source table contains {} columns but only {} names given as column alias",
+                "Source table contains {} columns but only {} \
+                names given as column alias",
                 plan.schema().fields().len(),
                 idents.len()
             )
@@ -353,20 +469,49 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .try_for_each(|col| match col {
                 Expr::Column(col) => match &col.relation {
-                    Some(r) => {
-                        schema.field_with_qualified_name(r, &col.name)?;
-                        Ok(())
-                    }
+                    Some(r) => schema.field_with_qualified_name(r, &col.name).map(|_| ()),
                     None => {
                         if !schema.fields_with_unqualified_name(&col.name).is_empty() {
                             Ok(())
                         } else {
-                            Err(unqualified_field_not_found(col.name.as_str(), schema))
+                            Err(field_not_found(
+                                col.relation.clone(),
+                                col.name.as_str(),
+                                schema,
+                            ))
                         }
                     }
                 }
-                .map_err(|_: DataFusionError| {
-                    field_not_found(col.relation.clone(), col.name.as_str(), schema)
+                .map_err(|err: DataFusionError| match &err {
+                    DataFusionError::SchemaError(
+                        SchemaError::FieldNotFound {
+                            field,
+                            valid_fields,
+                        },
+                        _,
+                    ) => {
+                        let mut diagnostic = if let Some(relation) = &col.relation {
+                            Diagnostic::new_error(
+                                format!(
+                                    "column '{}' not found in '{}'",
+                                    &col.name, relation
+                                ),
+                                col.spans().first(),
+                            )
+                        } else {
+                            Diagnostic::new_error(
+                                format!("column '{}' not found", &col.name),
+                                col.spans().first(),
+                            )
+                        };
+                        add_possible_columns_to_diag(
+                            &mut diagnostic,
+                            field,
+                            valid_fields,
+                        );
+                        err.with_diagnostic(diagnostic)
+                    }
+                    _ => err,
                 }),
                 _ => internal_err!("Not a column"),
             })
@@ -414,28 +559,53 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Boolean | SQLDataType::Bool => Ok(DataType::Boolean),
             SQLDataType::TinyInt(_) => Ok(DataType::Int8),
             SQLDataType::SmallInt(_) | SQLDataType::Int2(_) => Ok(DataType::Int16),
-            SQLDataType::Int(_) | SQLDataType::Integer(_) | SQLDataType::Int4(_) => Ok(DataType::Int32),
-            SQLDataType::BigInt(_) | SQLDataType::Int8(_) => Ok(DataType::Int64),
-            SQLDataType::UnsignedTinyInt(_) => Ok(DataType::UInt8),
-            SQLDataType::UnsignedSmallInt(_) | SQLDataType::UnsignedInt2(_) => Ok(DataType::UInt16),
-            SQLDataType::UnsignedInt(_) | SQLDataType::UnsignedInteger(_) | SQLDataType::UnsignedInt4(_) => {
-                Ok(DataType::UInt32)
+            SQLDataType::Int(_) | SQLDataType::Integer(_) | SQLDataType::Int4(_) => {
+                Ok(DataType::Int32)
             }
+            SQLDataType::BigInt(_) | SQLDataType::Int8(_) => Ok(DataType::Int64),
+            SQLDataType::TinyIntUnsigned(_) => Ok(DataType::UInt8),
+            SQLDataType::SmallIntUnsigned(_) | SQLDataType::Int2Unsigned(_) => {
+                Ok(DataType::UInt16)
+            }
+            SQLDataType::IntUnsigned(_)
+            | SQLDataType::IntegerUnsigned(_)
+            | SQLDataType::Int4Unsigned(_) => Ok(DataType::UInt32),
             SQLDataType::Varchar(length) => {
                 match (length, self.options.support_varchar_with_length) {
-                    (Some(_), false) => plan_err!("does not support Varchar with length, please set `support_varchar_with_length` to be true"),
-                    _ => Ok(DataType::Utf8),
+                    (Some(_), false) => plan_err!(
+                        "does not support Varchar with length, \
+                    please set `support_varchar_with_length` to be true"
+                    ),
+                    _ => {
+                        if self.options.map_varchar_to_utf8view {
+                            Ok(DataType::Utf8View)
+                        } else {
+                            Ok(DataType::Utf8)
+                        }
+                    }
                 }
             }
-            SQLDataType::UnsignedBigInt(_) | SQLDataType::UnsignedInt8(_) => Ok(DataType::UInt64),
+            SQLDataType::BigIntUnsigned(_) | SQLDataType::Int8Unsigned(_) => {
+                Ok(DataType::UInt64)
+            }
             SQLDataType::Float(_) => Ok(DataType::Float32),
             SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
-            SQLDataType::Double | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
-            SQLDataType::Char(_)
-            | SQLDataType::Text
-            | SQLDataType::String(_) => Ok(DataType::Utf8),
+            SQLDataType::Double(ExactNumberInfo::None)
+            | SQLDataType::DoublePrecision
+            | SQLDataType::Float8 => Ok(DataType::Float64),
+            SQLDataType::Double(
+                ExactNumberInfo::Precision(_) | ExactNumberInfo::PrecisionAndScale(_, _),
+            ) => {
+                not_impl_err!(
+                    "Unsupported SQL type (precision/scale not supported) {sql_type}"
+                )
+            }
+            SQLDataType::Char(_) | SQLDataType::Text | SQLDataType::String(_) => {
+                Ok(DataType::Utf8)
+            }
             SQLDataType::Timestamp(precision, tz_info)
-            if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) => {
+                if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
+            {
                 let tz = if matches!(tz_info, TimezoneInfo::Tz)
                     || matches!(tz_info, TimezoneInfo::WithTimeZone)
                 {
@@ -464,9 +634,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(DataType::Time64(TimeUnit::Nanosecond))
                 } else {
                     // We don't support TIMETZ and TIME WITH TIME ZONE for now
-                    not_impl_err!(
-                        "Unsupported SQL type {sql_type:?}"
-                    )
+                    not_impl_err!("Unsupported SQL type {sql_type:?}")
                 }
             }
             SQLDataType::Numeric(exact_number_info)
@@ -488,9 +656,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .enumerate()
                     .map(|(idx, field)| {
                         let data_type = self.convert_data_type(&field.field_type)?;
-                        let field_name = match &field.field_name{
+                        let field_name = match &field.field_name {
                             Some(ident) => ident.clone(),
-                            None => Ident::new(format!("c{idx}"))
+                            None => Ident::new(format!("c{idx}")),
                         };
                         Ok(Arc::new(Field::new(
                             self.ident_normalizer.normalize(field_name),
@@ -501,9 +669,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(DataType::Struct(Fields::from(fields)))
             }
-            // Explicitly list all other types so that if sqlparser
-            // adds/changes the `SQLDataType` the compiler will tell us on upgrade
-            // and avoid bugs like https://github.com/apache/datafusion/issues/3059
             SQLDataType::Nvarchar(_)
             | SQLDataType::JSON
             | SQLDataType::Uuid
@@ -517,15 +682,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Enum(_, _)
             | SQLDataType::Set(_)
             | SQLDataType::MediumInt(_)
-            | SQLDataType::UnsignedMediumInt(_)
+            | SQLDataType::MediumIntUnsigned(_)
             | SQLDataType::Character(_)
             | SQLDataType::CharacterVarying(_)
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
-            // Unsupported precision
             | SQLDataType::Timestamp(_, _)
-            // Precision is not supported
             | SQLDataType::Time(Some(_), _)
             | SQLDataType::Dec(_)
             | SQLDataType::BigNumeric(_)
@@ -536,7 +699,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Float64
             | SQLDataType::JSONB
             | SQLDataType::Unspecified
-            // Clickhouse datatypes
             | SQLDataType::Int16
             | SQLDataType::Int32
             | SQLDataType::Int128
@@ -558,7 +720,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Nullable(_)
             | SQLDataType::LowCardinality(_)
             | SQLDataType::Trigger
-            // MySQL datatypes
             | SQLDataType::TinyBlob
             | SQLDataType::MediumBlob
             | SQLDataType::LongBlob
@@ -566,10 +727,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::MediumText
             | SQLDataType::LongText
             | SQLDataType::Bit(_)
-            |SQLDataType::BitVarying(_)
-            => not_impl_err!(
-                "Unsupported SQL type {sql_type:?}"
-            ),
+            | SQLDataType::BitVarying(_)
+            | SQLDataType::Signed
+            | SQLDataType::SignedInteger
+            | SQLDataType::Unsigned
+            | SQLDataType::UnsignedInteger
+            | SQLDataType::AnyType
+            | SQLDataType::Table(_)
+            | SQLDataType::VarBit(_)
+            | SQLDataType::GeometricType(_) => {
+                not_impl_err!("Unsupported SQL type {sql_type:?}")
+            }
         }
     }
 
@@ -599,7 +767,18 @@ pub fn object_name_to_table_reference(
     enable_normalization: bool,
 ) -> Result<TableReference> {
     // Use destructure to make it clear no fields on ObjectName are ignored
-    let ObjectName(idents) = object_name;
+    let ObjectName(object_name_parts) = object_name;
+    let idents = object_name_parts
+        .into_iter()
+        .map(|object_name_part| {
+            object_name_part.as_ident().cloned().ok_or_else(|| {
+                plan_datafusion_err!(
+                    "Expected identifier, but found: {:?}",
+                    object_name_part
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     idents_to_table_reference(idents, enable_normalization)
 }
 
@@ -681,7 +860,7 @@ pub(crate) fn idents_to_table_reference(
 pub fn object_name_to_qualifier(
     sql_table_name: &ObjectName,
     enable_normalization: bool,
-) -> String {
+) -> Result<String> {
     let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
     let normalizer = IdentNormalizer::new(enable_normalization);
     sql_table_name
@@ -689,13 +868,23 @@ pub fn object_name_to_qualifier(
         .iter()
         .rev()
         .zip(columns)
-        .map(|(ident, column_name)| {
-            format!(
-                r#"{} = '{}'"#,
-                column_name,
-                normalizer.normalize(ident.clone())
-            )
+        .map(|(object_name_part, column_name)| {
+            object_name_part
+                .as_ident()
+                .map(|ident| {
+                    format!(
+                        r#"{} = '{}'"#,
+                        column_name,
+                        normalizer.normalize(ident.clone())
+                    )
+                })
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Expected identifier, but found: {:?}",
+                        object_name_part
+                    )
+                })
         })
-        .collect::<Vec<_>>()
-        .join(" AND ")
+        .collect::<Result<Vec<_>>>()
+        .map(|parts| parts.join(" AND "))
 }

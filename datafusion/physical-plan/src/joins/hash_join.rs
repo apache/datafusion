@@ -24,25 +24,33 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, vec};
 
-use super::utils::{asymmetric_join_output_partitioning, reorder_output_after_swap};
+use super::utils::{
+    asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
+    reorder_output_after_swap, swap_join_projection,
+};
 use super::{
     utils::{OnceAsync, OnceFut},
-    PartitionMode,
+    PartitionMode, SharedBitmapBuilder,
 };
+use super::{JoinOn, JoinOnRef};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::projection::{
+    try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
+    ProjectionExec,
+};
+use crate::spill::get_record_batch_memory_size;
 use crate::ExecutionPlanProperties;
 use crate::{
-    coalesce_partitions::CoalescePartitionsExec,
     common::can_project,
     handle_state,
     hash_utils::create_hashes,
+    joins::join_hash_map::JoinHashMapOffset,
     joins::utils::{
         adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_from_indices, build_join_schema, check_join_is_valid,
-        estimate_join_statistics, get_final_indices_from_bit_map,
-        need_produce_result_in_final, symmetric_join_output_partitioning,
-        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMap, JoinHashMapOffset,
-        JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
+        estimate_join_statistics, need_produce_result_in_final,
+        symmetric_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
+        JoinFilter, JoinHashMap, JoinHashMapType, StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -50,15 +58,15 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array,
+    cast::downcast_array, Array, ArrayRef, BooleanArray, BooleanBufferBuilder,
+    UInt32Array, UInt64Array,
 };
 use arrow::compute::kernels::cmp::{eq, not_distinct};
 use arrow::compute::{and, concat_batches, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use arrow_array::cast::downcast_array;
-use arrow_schema::ArrowError;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
@@ -66,19 +74,17 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 use datafusion_physical_expr::PhysicalExprRef;
-
-use crate::spill::get_record_batch_memory_size;
-use ahash::RandomState;
-use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+
+use ahash::RandomState;
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
-
-type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
 
 /// HashTable and input data for the left (build side) of a join
 struct JoinLeftData {
@@ -86,8 +92,10 @@ struct JoinLeftData {
     hash_map: JoinHashMap,
     /// The input rows for the build side
     batch: RecordBatch,
+    /// The build side on expressions values
+    values: Vec<ArrayRef>,
     /// Shared bitmap builder for visited left indices
-    visited_indices_bitmap: Mutex<BooleanBufferBuilder>,
+    visited_indices_bitmap: SharedBitmapBuilder,
     /// Counter of running probe-threads, potentially
     /// able to update `visited_indices_bitmap`
     probe_threads_counter: AtomicUsize,
@@ -103,6 +111,7 @@ impl JoinLeftData {
     fn new(
         hash_map: JoinHashMap,
         batch: RecordBatch,
+        values: Vec<ArrayRef>,
         visited_indices_bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
@@ -110,6 +119,7 @@ impl JoinLeftData {
         Self {
             hash_map,
             batch,
+            values,
             visited_indices_bitmap,
             probe_threads_counter,
             _reservation: reservation,
@@ -124,6 +134,11 @@ impl JoinLeftData {
     /// returns a reference to the build side batch
     fn batch(&self) -> &RecordBatch {
         &self.batch
+    }
+
+    /// returns a reference to the build side expressions values
+    fn values(&self) -> &[ArrayRef] {
+        &self.values
     }
 
     /// returns a reference to the visited indices bitmap
@@ -216,8 +231,8 @@ impl JoinLeftData {
 ///                                                                         │                           │
 ///            ┌───────┐                                                    │          ┌───────┐        │
 ///            │ Row 6 │        3) update_hash for batch 1 with offset 5    │          │ Row 1 │    5   │
-///   Batch 3  │       │           - hashmap.insert(Row 2, idx 5)           │ Batch 1  │       │        │
-///            │ Row 7 │           - hashmap.insert(Row 1, idx 6)           │          │ Row 2 │    6   │
+///   Batch 3  │       │           - hashmap.insert(Row 2, idx 6)           │ Batch 1  │       │        │
+///            │ Row 7 │           - hashmap.insert(Row 1, idx 5)           │          │ Row 2 │    6   │
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///                                                                         └───────────────────────────┘
@@ -467,7 +482,7 @@ impl HashJoinExec {
     }
 
     /// Return whether the join contains a projection
-    pub fn contain_projection(&self) -> bool {
+    pub fn contains_projection(&self) -> bool {
         self.projection.is_some()
     }
 
@@ -616,38 +631,6 @@ impl HashJoinExec {
     }
 }
 
-/// This function swaps the given join's projection.
-fn swap_join_projection(
-    left_schema_len: usize,
-    right_schema_len: usize,
-    projection: Option<&Vec<usize>>,
-    join_type: &JoinType,
-) -> Option<Vec<usize>> {
-    match join_type {
-        // For Anti/Semi join types, projection should remain unmodified,
-        // since these joins output schema remains the same after swap
-        JoinType::LeftAnti
-        | JoinType::LeftSemi
-        | JoinType::RightAnti
-        | JoinType::RightSemi => projection.cloned(),
-
-        _ => projection.map(|p| {
-            p.iter()
-                .map(|i| {
-                    // If the index is less than the left schema length, it is from
-                    // the left schema, so we add the right schema length to it.
-                    // Otherwise, it is from the right schema, so we subtract the left
-                    // schema length from it.
-                    if *i < left_schema_len {
-                        *i + right_schema_len
-                    } else {
-                        *i - left_schema_len
-                    }
-                })
-                .collect()
-        }),
-    }
-}
 impl DisplayAs for HashJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
@@ -656,7 +639,7 @@ impl DisplayAs for HashJoinExec {
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
                 );
-                let display_projections = if self.contain_projection() {
+                let display_projections = if self.contains_projection() {
                     format!(
                         ", projection=[{}]",
                         self.projection
@@ -685,6 +668,21 @@ impl DisplayAs for HashJoinExec {
                     "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}",
                     self.mode, self.join_type, on, display_filter, display_projections
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                let on = self
+                    .on
+                    .iter()
+                    .map(|(c1, c2)| {
+                        format!("({} = {})", fmt_sql(c1.as_ref()), fmt_sql(c2.as_ref()))
+                    })
+                    .collect::<Vec<String>>()
+                    .join(", ");
+
+                if *self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)?;
+                }
+                writeln!(f, "on={}", on)
             }
         }
     }
@@ -793,34 +791,42 @@ impl ExecutionPlan for HashJoinExec {
             );
         }
 
+        if self.mode == PartitionMode::CollectLeft && left_partitions != 1 {
+            return internal_err!(
+                "Invalid HashJoinExec, the output partition count of the left child must be 1 in CollectLeft mode,\
+                 consider using CoalescePartitionsExec or the EnforceDistribution rule"
+            );
+        }
+
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
-            PartitionMode::CollectLeft => self.left_fut.once(|| {
+            PartitionMode::CollectLeft => self.left_fut.try_once(|| {
+                let left_stream = self.left.execute(0, Arc::clone(&context))?;
+
                 let reservation =
                     MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
-                collect_left_input(
-                    None,
+
+                Ok(collect_left_input(
                     self.random_state.clone(),
-                    Arc::clone(&self.left),
+                    left_stream,
                     on_left.clone(),
-                    Arc::clone(&context),
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
-                )
-            }),
+                ))
+            })?,
             PartitionMode::Partitioned => {
+                let left_stream = self.left.execute(partition, Arc::clone(&context))?;
+
                 let reservation =
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
 
                 OnceFut::new(collect_left_input(
-                    Some(partition),
                     self.random_state.clone(),
-                    Arc::clone(&self.left),
+                    left_stream,
                     on_left.clone(),
-                    Arc::clone(&context),
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
@@ -852,7 +858,6 @@ impl ExecutionPlan for HashJoinExec {
 
         Ok(Box::pin(HashJoinStream {
             schema: self.schema(),
-            on_left,
             on_right,
             filter: self.filter.clone(),
             join_type: self.join_type,
@@ -887,40 +892,67 @@ impl ExecutionPlan for HashJoinExec {
         // Project statistics if there is a projection
         Ok(stats.project(self.projection.as_ref()))
     }
+
+    /// Tries to push `projection` down through `hash_join`. If possible, performs the
+    /// pushdown and returns a new [`HashJoinExec`] as the top plan which has projections
+    /// as its children. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+        if self.contains_projection() {
+            return Ok(None);
+        }
+
+        if let Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            join_on,
+        }) = try_pushdown_through_join(
+            projection,
+            self.left(),
+            self.right(),
+            self.on(),
+            self.schema(),
+            self.filter(),
+        )? {
+            Ok(Some(Arc::new(HashJoinExec::try_new(
+                Arc::new(projected_left_child),
+                Arc::new(projected_right_child),
+                join_on,
+                join_filter,
+                self.join_type(),
+                // Returned early if projection is not None
+                None,
+                *self.partition_mode(),
+                self.null_equals_null,
+            )?)))
+        } else {
+            try_embed_projection(projection, self)
+        }
+    }
 }
 
 /// Reads the left (build) side of the input, buffering it in memory, to build a
 /// hash table (`LeftJoinData`)
-#[allow(clippy::too_many_arguments)]
 async fn collect_left_input(
-    partition: Option<usize>,
     random_state: RandomState,
-    left: Arc<dyn ExecutionPlan>,
+    left_stream: SendableRecordBatchStream,
     on_left: Vec<PhysicalExprRef>,
-    context: Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
 ) -> Result<JoinLeftData> {
-    let schema = left.schema();
-
-    let (left_input, left_input_partition) = if let Some(partition) = partition {
-        (left, partition)
-    } else if left.output_partitioning().partition_count() != 1 {
-        (Arc::new(CoalescePartitionsExec::new(left)) as _, 0)
-    } else {
-        (left, 0)
-    };
-
-    // Depending on partition argument load single partition or whole left side in memory
-    let stream = left_input.execute(left_input_partition, Arc::clone(&context))?;
+    let schema = left_stream.schema();
 
     // This operation performs 2 steps at once:
     // 1. creates a [JoinHashMap] of all batches from the stream
     // 2. stores the batches in a vector.
     let initial = (Vec::new(), 0, metrics, reservation);
-    let (batches, num_rows, metrics, mut reservation) = stream
+    let (batches, num_rows, metrics, mut reservation) = left_stream
         .try_fold(initial, |mut acc, batch| async {
             let batch_size = get_record_batch_memory_size(&batch);
             // Reserve memory for incoming batch
@@ -983,9 +1015,18 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
+    let left_values = on_left
+        .iter()
+        .map(|c| {
+            c.evaluate(&single_batch)?
+                .into_array(single_batch.num_rows())
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     let data = JoinLeftData::new(
         hashmap,
         single_batch,
+        left_values,
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
         reservation,
@@ -1135,6 +1176,8 @@ impl HashJoinStreamState {
 struct ProcessProbeBatchState {
     /// Current probe-side batch
     batch: RecordBatch,
+    /// Probe-side on expressions values
+    values: Vec<ArrayRef>,
     /// Starting offset for JoinHashMap lookups
     offset: JoinHashMapOffset,
     /// Max joined probe-side index from current batch
@@ -1161,8 +1204,6 @@ impl ProcessProbeBatchState {
 struct HashJoinStream {
     /// Input schema
     schema: Arc<Schema>,
-    /// equijoin columns from the left (build side)
-    on_left: Vec<PhysicalExprRef>,
     /// equijoin columns from the right (probe side)
     on_right: Vec<PhysicalExprRef>,
     /// optional join filter
@@ -1248,27 +1289,13 @@ impl RecordBatchStream for HashJoinStream {
 #[allow(clippy::too_many_arguments)]
 fn lookup_join_hashmap(
     build_hashmap: &JoinHashMap,
-    build_input_buffer: &RecordBatch,
-    probe_batch: &RecordBatch,
-    build_on: &[PhysicalExprRef],
-    probe_on: &[PhysicalExprRef],
+    build_side_values: &[ArrayRef],
+    probe_side_values: &[ArrayRef],
     null_equals_null: bool,
     hashes_buffer: &[u64],
     limit: usize,
     offset: JoinHashMapOffset,
 ) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
-    let keys_values = probe_on
-        .iter()
-        .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
-    let build_join_values = build_on
-        .iter()
-        .map(|c| {
-            c.evaluate(build_input_buffer)?
-                .into_array(build_input_buffer.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
-
     let (probe_indices, build_indices, next_offset) = build_hashmap
         .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
 
@@ -1278,8 +1305,8 @@ fn lookup_join_hashmap(
     let (build_indices, probe_indices) = equal_rows_arr(
         &build_indices,
         &probe_indices,
-        &build_join_values,
-        &keys_values,
+        build_side_values,
+        probe_side_values,
         null_equals_null,
     )?;
 
@@ -1349,14 +1376,6 @@ pub fn equal_rows_arr(
         downcast_array(left_filtered.as_ref()),
         downcast_array(right_filtered.as_ref()),
     ))
-}
-
-fn get_final_indices_from_shared_bitmap(
-    shared_bitmap: &SharedBitmapBuilder,
-    join_type: JoinType,
-) -> (UInt64Array, UInt32Array) {
-    let bitmap = shared_bitmap.lock();
-    get_final_indices_from_bit_map(&bitmap, join_type)
 }
 
 impl HashJoinStream {
@@ -1437,6 +1456,7 @@ impl HashJoinStream {
                 self.state =
                     HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
                         batch,
+                        values: keys_values,
                         offset: (0, None),
                         joined_probe_idx: None,
                     });
@@ -1461,10 +1481,8 @@ impl HashJoinStream {
         // get the matched by join keys indices
         let (left_indices, right_indices, next_offset) = lookup_join_hashmap(
             build_side.left_data.hash_map(),
-            build_side.left_data.batch(),
-            &state.batch,
-            &self.on_left,
-            &self.on_right,
+            build_side.left_data.values(),
+            &state.values,
             self.null_equals_null,
             &self.hashes_buffer,
             self.batch_size,
@@ -1621,18 +1639,26 @@ impl Stream for HashJoinStream {
     }
 }
 
+impl EmbeddedProjection for HashJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::test::TestMemoryExec;
     use crate::{
-        common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
-        test::build_table_i32, test::exec::MockExec,
+        common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
+        test::exec::MockExec,
     };
 
-    use arrow::array::{Date32Array, Int32Array};
+    use arrow::array::{Date32Array, Int32Array, StructArray};
+    use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field};
-    use arrow_array::StructArray;
-    use arrow_buffer::NullBuffer;
+    use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
         ScalarValue,
@@ -1642,8 +1668,8 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::PhysicalExpr;
-
-    use hashbrown::raw::RawTable;
+    use hashbrown::HashTable;
+    use insta::{allow_duplicates, assert_snapshot};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -1667,7 +1693,7 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
-        Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     fn join(
@@ -1854,18 +1880,18 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 3  | 5  | 9  | 20 | 5  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
-
-        // Inner join output is expected to preserve both inputs order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            // Inner join output is expected to preserve both inputs order
+            assert_snapshot!(batches_to_string(&batches), @r#"
+                +----+----+----+----+----+----+
+                | a1 | b1 | c1 | a2 | b1 | c2 |
+                +----+----+----+----+----+----+
+                | 1  | 4  | 7  | 10 | 4  | 70 |
+                | 2  | 5  | 8  | 20 | 5  | 80 |
+                | 3  | 5  | 9  | 20 | 5  | 80 |
+                +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -1901,16 +1927,17 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 3  | 5  | 9  | 20 | 5  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+                +----+----+----+----+----+----+
+                | a1 | b1 | c1 | a2 | b1 | c2 |
+                +----+----+----+----+----+----+
+                | 1  | 4  | 7  | 10 | 4  | 70 |
+                | 2  | 5  | 8  | 20 | 5  | 80 |
+                | 3  | 5  | 9  | 20 | 5  | 80 |
+                +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -1938,18 +1965,18 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 3  | 5  | 9  | 20 | 5  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
-
         // Inner join output is expected to preserve both inputs order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 5  | 9  | 20 | 5  | 80 |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -1977,19 +2004,19 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 3  | 5  | 9  | 20 | 5  | 80 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 0  | 4  | 6  | 10 | 4  | 70 |",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "+----+----+----+----+----+----+",
-        ];
-
         // Inner join output is expected to preserve both inputs order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 3  | 5  | 9  | 20 | 5  | 80 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 0  | 4  | 6  | 10 | 4  | 70 |
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2040,18 +2067,18 @@ mod tests {
 
         assert_eq!(batches.len(), expected_batch_count);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b2 | c1 | a1 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 1  | 7  | 1  | 1  | 70 |",
-            "| 2  | 2  | 8  | 2  | 2  | 80 |",
-            "| 2  | 2  | 9  | 2  | 2  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
-
         // Inner join output is expected to preserve both inputs order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b2 | c1 | a1 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 1  | 7  | 1  | 1  | 70 |
+            | 2  | 2  | 8  | 2  | 2  | 80 |
+            | 2  | 2  | 9  | 2  | 2  | 80 |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2069,9 +2096,10 @@ mod tests {
         let batch2 =
             build_table_i32(("a1", &vec![2]), ("b2", &vec![2]), ("c1", &vec![9]));
         let schema = batch1.schema();
-        let left = Arc::new(
-            MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
-        );
+        let left =
+            TestMemoryExec::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+                .unwrap();
+        let left = Arc::new(CoalescePartitionsExec::new(left));
 
         let right = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -2110,18 +2138,18 @@ mod tests {
 
         assert_eq!(batches.len(), expected_batch_count);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b2 | c1 | a1 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 1  | 7  | 1  | 1  | 70 |",
-            "| 2  | 2  | 8  | 2  | 2  | 80 |",
-            "| 2  | 2  | 9  | 2  | 2  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
-
         // Inner join output is expected to preserve both inputs order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b2 | c1 | a1 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 1  | 7  | 1  | 1  | 70 |
+            | 2  | 2  | 8  | 2  | 2  | 80 |
+            | 2  | 2  | 9  | 2  | 2  | 80 |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2141,9 +2169,10 @@ mod tests {
         );
         let schema = batch1.schema();
 
-        let left = Arc::new(
-            MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
-        );
+        let left =
+            TestMemoryExec::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+                .unwrap();
+        let left = Arc::new(CoalescePartitionsExec::new(left));
         let right = build_table(
             ("a2", &vec![20, 30, 10]),
             ("b2", &vec![5, 6, 4]),
@@ -2159,19 +2188,19 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 3  | 5  | 9  | 20 | 5  | 80 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 0  | 4  | 6  | 10 | 4  | 70 |",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "+----+----+----+----+----+----+",
-        ];
-
         // Inner join output is expected to preserve both inputs order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 3  | 5  | 9  | 20 | 5  | 80 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 0  | 4  | 6  | 10 | 4  | 70 |
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2195,9 +2224,9 @@ mod tests {
         let batch2 =
             build_table_i32(("a2", &vec![30]), ("b1", &vec![5]), ("c2", &vec![90]));
         let schema = batch1.schema();
-        let right = Arc::new(
-            MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
-        );
+        let right =
+            TestMemoryExec::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+                .unwrap();
 
         let on = vec![(
             Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
@@ -2228,16 +2257,16 @@ mod tests {
         };
         assert_eq!(batches.len(), expected_batch_count);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "+----+----+----+----+----+----+",
-        ];
-
         // Inner join output is expected to preserve both inputs order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         // second part
         let stream = join.execute(1, Arc::clone(&task_ctx))?;
@@ -2253,17 +2282,17 @@ mod tests {
         };
         assert_eq!(batches.len(), expected_batch_count);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 2  | 5  | 8  | 30 | 5  | 90 |",
-            "| 3  | 5  | 9  | 30 | 5  | 90 |",
-            "+----+----+----+----+----+----+",
-        ];
-
         // Inner join output is expected to preserve both inputs order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 2  | 5  | 8  | 30 | 5  | 90 |
+            | 3  | 5  | 9  | 30 | 5  | 90 |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2275,9 +2304,7 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
-        Arc::new(
-            MemoryExec::try_new(&[vec![batch.clone(), batch]], schema, None).unwrap(),
-        )
+        TestMemoryExec::try_new_exec(&[vec![batch.clone(), batch]], schema, None).unwrap()
     }
 
     #[apply(batch_sizes)]
@@ -2307,19 +2334,19 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 3  | 7  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 7  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+                "#);
+        }
     }
 
     #[apply(batch_sizes)]
@@ -2350,21 +2377,21 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "|    |    |    | 30 | 6  | 90 |",
-            "|    |    |    | 30 | 6  | 90 |",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 3  | 7  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            |    |    |    | 30 | 6  | 90 |
+            |    |    |    | 30 | 6  | 90 |
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 7  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+                "#);
+        }
     }
 
     #[apply(batch_sizes)]
@@ -2382,7 +2409,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
-        let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
+        let right = TestMemoryExec::try_new_exec(&[vec![right]], schema, None).unwrap();
         let join = join(left, right, on, &JoinType::Left, false).unwrap();
 
         let columns = columns(&join.schema());
@@ -2391,17 +2418,17 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  |    |    |    |",
-            "| 2  | 5  | 8  |    |    |    |",
-            "| 3  | 7  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  |    |    |    |
+            | 2  | 5  | 8  |    |    |    |
+            | 3  | 7  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+                "#);
+        }
     }
 
     #[apply(batch_sizes)]
@@ -2419,7 +2446,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
-        let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
+        let right = TestMemoryExec::try_new_exec(&[vec![right]], schema, None).unwrap();
         let join = join(left, right, on, &JoinType::Full, false).unwrap();
 
         let columns = columns(&join.schema());
@@ -2428,17 +2455,17 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  |    |    |    |",
-            "| 2  | 5  | 8  |    |    |    |",
-            "| 3  | 7  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  |    |    |    |
+            | 2  | 5  | 8  |    |    |    |
+            | 3  | 7  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+                "#);
+        }
     }
 
     #[apply(batch_sizes)]
@@ -2471,16 +2498,17 @@ mod tests {
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 3  | 7  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 7  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2515,16 +2543,17 @@ mod tests {
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 3  | 7  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 7  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2570,16 +2599,17 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         // ignore the order
-        let expected = [
-            "+----+----+-----+",
-            "| a1 | b1 | c1  |",
-            "+----+----+-----+",
-            "| 11 | 8  | 110 |",
-            "| 13 | 10 | 130 |",
-            "| 9  | 8  | 90  |",
-            "+----+----+-----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+
+            | a1 | b1 | c1  |
+            +----+----+-----+
+            | 11 | 8  | 110 |
+            | 13 | 10 | 130 |
+            | 9  | 8  | 90  |
+            +----+----+-----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2613,7 +2643,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2631,16 +2661,17 @@ mod tests {
         let stream = join.execute(0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+-----+",
-            "| a1 | b1 | c1  |",
-            "+----+----+-----+",
-            "| 11 | 8  | 110 |",
-            "| 13 | 10 | 130 |",
-            "| 9  | 8  | 90  |",
-            "+----+----+-----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+-----+
+            | a1 | b1 | c1  |
+            +----+----+-----+
+            | 11 | 8  | 110 |
+            | 13 | 10 | 130 |
+            | 9  | 8  | 90  |
+            +----+----+-----+
+            ");
+        }
 
         // left_table left semi join right_table on left_table.b1 = right_table.b2 and right_table.a2 > 10
         let filter_expression = Arc::new(BinaryExpr::new(
@@ -2648,8 +2679,11 @@ mod tests {
             Operator::Gt,
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
         )) as Arc<dyn PhysicalExpr>;
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join = join_with_filter(left, right, on, filter, &JoinType::LeftSemi, false)?;
 
@@ -2659,14 +2693,15 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+-----+",
-            "| a1 | b1 | c1  |",
-            "+----+----+-----+",
-            "| 13 | 10 | 130 |",
-            "+----+----+-----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+
+            | a1 | b1 | c1  |
+            +----+----+-----+
+            | 13 | 10 | 130 |
+            +----+----+-----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2692,18 +2727,18 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+-----+",
-            "| a2 | b2 | c2  |",
-            "+----+----+-----+",
-            "| 8  | 8  | 20  |",
-            "| 12 | 10 | 40  |",
-            "| 10 | 10 | 100 |",
-            "+----+----+-----+",
-        ];
-
         // RightSemi join output is expected to preserve right input order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+-----+
+            | a2 | b2 | c2  |
+            +----+----+-----+
+            | 8  | 8  | 20  |
+            | 12 | 10 | 40  |
+            | 10 | 10 | 100 |
+            +----+----+-----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2737,7 +2772,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2755,18 +2790,18 @@ mod tests {
         let stream = join.execute(0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+-----+",
-            "| a2 | b2 | c2  |",
-            "+----+----+-----+",
-            "| 8  | 8  | 20  |",
-            "| 12 | 10 | 40  |",
-            "| 10 | 10 | 100 |",
-            "+----+----+-----+",
-        ];
-
         // RightSemi join output is expected to preserve right input order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+-----+
+            | a2 | b2 | c2  |
+            +----+----+-----+
+            | 8  | 8  | 20  |
+            | 12 | 10 | 40  |
+            | 10 | 10 | 100 |
+            +----+----+-----+
+                "#);
+        }
 
         // left_table right semi join right_table on left_table.b1 = right_table.b2 on left_table.a1!=9
         let filter_expression = Arc::new(BinaryExpr::new(
@@ -2775,25 +2810,28 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(11)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema.clone()),
+        );
 
         let join =
             join_with_filter(left, right, on, filter, &JoinType::RightSemi, false)?;
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+-----+",
-            "| a2 | b2 | c2  |",
-            "+----+----+-----+",
-            "| 12 | 10 | 40  |",
-            "| 10 | 10 | 100 |",
-            "+----+----+-----+",
-        ];
-
         // RightSemi join output is expected to preserve right input order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+-----+
+            | a2 | b2 | c2  |
+            +----+----+-----+
+            | 12 | 10 | 40  |
+            | 10 | 10 | 100 |
+            +----+----+-----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2818,17 +2856,18 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+----+",
-            "| a1 | b1 | c1 |",
-            "+----+----+----+",
-            "| 1  | 1  | 10 |",
-            "| 3  | 3  | 30 |",
-            "| 5  | 5  | 50 |",
-            "| 7  | 7  | 70 |",
-            "+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+
+            | a1 | b1 | c1 |
+            +----+----+----+
+            | 1  | 1  | 10 |
+            | 3  | 3  | 30 |
+            | 5  | 5  | 50 |
+            | 7  | 7  | 70 |
+            +----+----+----+
+                "#);
+        }
         Ok(())
     }
 
@@ -2859,7 +2898,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2877,19 +2916,20 @@ mod tests {
         let stream = join.execute(0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+-----+",
-            "| a1 | b1 | c1  |",
-            "+----+----+-----+",
-            "| 1  | 1  | 10  |",
-            "| 11 | 8  | 110 |",
-            "| 3  | 3  | 30  |",
-            "| 5  | 5  | 50  |",
-            "| 7  | 7  | 70  |",
-            "| 9  | 8  | 90  |",
-            "+----+----+-----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+
+            | a1 | b1 | c1  |
+            +----+----+-----+
+            | 1  | 1  | 10  |
+            | 11 | 8  | 110 |
+            | 3  | 3  | 30  |
+            | 5  | 5  | 50  |
+            | 7  | 7  | 70  |
+            | 9  | 8  | 90  |
+            +----+----+-----+
+                "#);
+        }
 
         // left_table left anti join right_table on left_table.b1 = right_table.b2 and right_table.a2 != 13
         let filter_expression = Arc::new(BinaryExpr::new(
@@ -2898,8 +2938,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join = join_with_filter(left, right, on, filter, &JoinType::LeftAnti, false)?;
 
@@ -2909,19 +2952,20 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+-----+",
-            "| a1 | b1 | c1  |",
-            "+----+----+-----+",
-            "| 1  | 1  | 10  |",
-            "| 11 | 8  | 110 |",
-            "| 3  | 3  | 30  |",
-            "| 5  | 5  | 50  |",
-            "| 7  | 7  | 70  |",
-            "| 9  | 8  | 90  |",
-            "+----+----+-----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+
+            | a1 | b1 | c1  |
+            +----+----+-----+
+            | 1  | 1  | 10  |
+            | 11 | 8  | 110 |
+            | 3  | 3  | 30  |
+            | 5  | 5  | 50  |
+            | 7  | 7  | 70  |
+            | 9  | 8  | 90  |
+            +----+----+-----+
+                "#);
+        }
 
         Ok(())
     }
@@ -2945,18 +2989,18 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+-----+",
-            "| a2 | b2 | c2  |",
-            "+----+----+-----+",
-            "| 6  | 6  | 60  |",
-            "| 2  | 2  | 80  |",
-            "| 4  | 4  | 120 |",
-            "+----+----+-----+",
-        ];
-
         // RightAnti join output is expected to preserve right input order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+-----+
+            | a2 | b2 | c2  |
+            +----+----+-----+
+            | 6  | 6  | 60  |
+            | 2  | 2  | 80  |
+            | 4  | 4  | 120 |
+            +----+----+-----+
+                "#);
+        }
         Ok(())
     }
 
@@ -2988,7 +3032,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices,
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -3006,20 +3050,20 @@ mod tests {
         let stream = join.execute(0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+-----+",
-            "| a2 | b2 | c2  |",
-            "+----+----+-----+",
-            "| 12 | 10 | 40  |",
-            "| 6  | 6  | 60  |",
-            "| 2  | 2  | 80  |",
-            "| 10 | 10 | 100 |",
-            "| 4  | 4  | 120 |",
-            "+----+----+-----+",
-        ];
-
         // RightAnti join output is expected to preserve right input order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+-----+
+            | a2 | b2 | c2  |
+            +----+----+-----+
+            | 12 | 10 | 40  |
+            | 6  | 6  | 60  |
+            | 2  | 2  | 80  |
+            | 10 | 10 | 100 |
+            | 4  | 4  | 120 |
+            +----+----+-----+
+                "#);
+        }
 
         // left_table right anti join right_table on left_table.b1 = right_table.b2 and right_table.b2!=8
         let column_indices = vec![ColumnIndex {
@@ -3032,8 +3076,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join =
             join_with_filter(left, right, on, filter, &JoinType::RightAnti, false)?;
@@ -3044,19 +3091,19 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+-----+",
-            "| a2 | b2 | c2  |",
-            "+----+----+-----+",
-            "| 8  | 8  | 20  |",
-            "| 6  | 6  | 60  |",
-            "| 2  | 2  | 80  |",
-            "| 4  | 4  | 120 |",
-            "+----+----+-----+",
-        ];
-
         // RightAnti join output is expected to preserve right input order
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+-----+
+            | a2 | b2 | c2  |
+            +----+----+-----+
+            | 8  | 8  | 20  |
+            | 6  | 6  | 60  |
+            | 2  | 2  | 80  |
+            | 4  | 4  | 120 |
+            +----+----+-----+
+                "#);
+        }
 
         Ok(())
     }
@@ -3085,17 +3132,17 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "|    |    |    | 30 | 6  | 90 |",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            |    |    |    | 30 | 6  | 90 |
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -3125,17 +3172,17 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "|    |    |    | 30 | 6  | 90 |",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "+----+----+----+----+----+----+",
-        ];
-
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            |    |    |    | 30 | 6  | 90 |
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -3167,17 +3214,18 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b2 | c2 |",
-            "+----+----+----+----+----+----+",
-            "|    |    |    | 30 | 6  | 90 |",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "| 2  | 5  | 8  | 20 | 5  | 80 |",
-            "| 3  | 7  | 9  |    |    |    |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b2 | c2 |
+            +----+----+----+----+----+----+
+            |    |    |    | 30 | 6  | 90 |
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 7  | 9  |    |    |    |
+            +----+----+----+----+----+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -3212,16 +3260,17 @@ mod tests {
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
 
-        let expected = [
-            "+----+----+----+-------+",
-            "| a1 | b1 | c1 | mark  |",
-            "+----+----+----+-------+",
-            "| 1  | 4  | 7  | true  |",
-            "| 2  | 5  | 8  | true  |",
-            "| 3  | 7  | 9  | false |",
-            "+----+----+----+-------+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+-------+
+            | a1 | b1 | c1 | mark  |
+            +----+----+----+-------+
+            | 1  | 4  | 7  | true  |
+            | 2  | 5  | 8  | true  |
+            | 3  | 7  | 9  | false |
+            +----+----+----+-------+
+                "#);
+        }
 
         Ok(())
     }
@@ -3256,23 +3305,24 @@ mod tests {
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
 
-        let expected = [
-            "+----+----+----+-------+",
-            "| a1 | b1 | c1 | mark  |",
-            "+----+----+----+-------+",
-            "| 1  | 4  | 7  | true  |",
-            "| 2  | 5  | 8  | true  |",
-            "| 3  | 7  | 9  | false |",
-            "+----+----+----+-------+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+----+-------+
+            | a1 | b1 | c1 | mark  |
+            +----+----+----+-------+
+            | 1  | 4  | 7  | true  |
+            | 2  | 5  | 8  | true  |
+            | 3  | 7  | 9  | false |
+            +----+----+----+-------+
+                "#);
+        }
 
         Ok(())
     }
 
     #[test]
     fn join_with_hash_collision() -> Result<()> {
-        let mut hashmap_left = RawTable::with_capacity(2);
+        let mut hashmap_left = HashTable::with_capacity(2);
         let left = build_table_i32(
             ("a", &vec![10, 20]),
             ("x", &vec![100, 200]),
@@ -3288,8 +3338,8 @@ mod tests {
         )?;
 
         // Create hash collisions (same hashes)
-        hashmap_left.insert(hashes[0], (hashes[0], 1), |(h, _)| *h);
-        hashmap_left.insert(hashes[1], (hashes[1], 1), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[0], (hashes[0], 1), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 1), |(h, _)| *h);
 
         let next = vec![2, 0];
 
@@ -3304,17 +3354,20 @@ mod tests {
 
         let join_hash_map = JoinHashMap::new(hashmap_left, next);
 
+        let left_keys_values = key_column.evaluate(&left)?.into_array(left.num_rows())?;
         let right_keys_values =
             key_column.evaluate(&right)?.into_array(right.num_rows())?;
         let mut hashes_buffer = vec![0; right.num_rows()];
-        create_hashes(&[right_keys_values], &random_state, &mut hashes_buffer)?;
+        create_hashes(
+            &[Arc::clone(&right_keys_values)],
+            &random_state,
+            &mut hashes_buffer,
+        )?;
 
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
-            &left,
-            &right,
-            &[Arc::clone(&key_column)],
-            &[key_column],
+            &[left_keys_values],
+            &[right_keys_values],
             false,
             &hashes_buffer,
             8192,
@@ -3359,15 +3412,16 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+---+---+---+----+---+----+",
-            "| a | b | c | a  | b | c  |",
-            "+---+---+---+----+---+----+",
-            "| 1 | 4 | 7 | 10 | 1 | 70 |",
-            "| 2 | 5 | 8 | 20 | 2 | 80 |",
-            "+---+---+---+----+---+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +---+---+---+----+---+----+
+            | a | b | c | a  | b | c  |
+            +---+---+---+----+---+----+
+            | 1 | 4 | 7 | 10 | 1 | 70 |
+            | 2 | 5 | 8 | 20 | 2 | 80 |
+            +---+---+---+----+---+----+
+                "#);
+        }
 
         Ok(())
     }
@@ -3393,7 +3447,11 @@ mod tests {
             Arc::new(Column::new("c", 1)),
         )) as Arc<dyn PhysicalExpr>;
 
-        JoinFilter::new(filter_expression, column_indices, intermediate_schema)
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
     }
 
     #[apply(batch_sizes)]
@@ -3424,15 +3482,16 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+---+---+---+----+---+---+",
-            "| a | b | c | a  | b | c |",
-            "+---+---+---+----+---+---+",
-            "| 2 | 7 | 9 | 10 | 2 | 7 |",
-            "| 2 | 7 | 9 | 20 | 2 | 5 |",
-            "+---+---+---+----+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +---+---+---+----+---+---+
+            | a | b | c | a  | b | c |
+            +---+---+---+----+---+---+
+            | 2 | 7 | 9 | 10 | 2 | 7 |
+            | 2 | 7 | 9 | 20 | 2 | 5 |
+            +---+---+---+----+---+---+
+                "#);
+        }
 
         Ok(())
     }
@@ -3465,18 +3524,19 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+---+---+---+----+---+---+",
-            "| a | b | c | a  | b | c |",
-            "+---+---+---+----+---+---+",
-            "| 0 | 4 | 7 |    |   |   |",
-            "| 1 | 5 | 8 |    |   |   |",
-            "| 2 | 7 | 9 | 10 | 2 | 7 |",
-            "| 2 | 7 | 9 | 20 | 2 | 5 |",
-            "| 2 | 8 | 1 |    |   |   |",
-            "+---+---+---+----+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +---+---+---+----+---+---+
+            | a | b | c | a  | b | c |
+            +---+---+---+----+---+---+
+            | 0 | 4 | 7 |    |   |   |
+            | 1 | 5 | 8 |    |   |   |
+            | 2 | 7 | 9 | 10 | 2 | 7 |
+            | 2 | 7 | 9 | 20 | 2 | 5 |
+            | 2 | 8 | 1 |    |   |   |
+            +---+---+---+----+---+---+
+                "#);
+        }
 
         Ok(())
     }
@@ -3509,17 +3569,18 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+---+---+---+----+---+---+",
-            "| a | b | c | a  | b | c |",
-            "+---+---+---+----+---+---+",
-            "|   |   |   | 30 | 3 | 6 |",
-            "|   |   |   | 40 | 4 | 4 |",
-            "| 2 | 7 | 9 | 10 | 2 | 7 |",
-            "| 2 | 7 | 9 | 20 | 2 | 5 |",
-            "+---+---+---+----+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +---+---+---+----+---+---+
+            | a | b | c | a  | b | c |
+            +---+---+---+----+---+---+
+            |   |   |   | 30 | 3 | 6 |
+            |   |   |   | 40 | 4 | 4 |
+            | 2 | 7 | 9 | 10 | 2 | 7 |
+            | 2 | 7 | 9 | 20 | 2 | 5 |
+            +---+---+---+----+---+---+
+                "#);
+        }
 
         Ok(())
     }
@@ -3566,6 +3627,23 @@ mod tests {
             "+---+---+---+----+---+---+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
+
+        // THIS MIGRATION HAULTED DUE TO ISSUE #15312
+        //allow_duplicates! {
+        //    assert_snapshot!(batches_to_sort_string(&batches), @r#"
+        //    +---+---+---+----+---+---+
+        //    | a | b | c | a  | b | c |
+        //    +---+---+---+----+---+---+
+        //    |   |   |   | 30 | 3 | 6 |
+        //    |   |   |   | 40 | 4 | 4 |
+        //    | 2 | 7 | 9 | 10 | 2 | 7 |
+        //    | 2 | 7 | 9 | 20 | 2 | 5 |
+        //    | 0 | 4 | 7 |    |   |   |
+        //    | 1 | 5 | 8 |    |   |   |
+        //    | 2 | 8 | 1 |    |   |   |
+        //    +---+---+---+----+---+---+
+        //        "#)
+        //}
 
         Ok(())
     }
@@ -3704,15 +3782,13 @@ mod tests {
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![19107, 19108, 19109]));
         let n: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
-        let left = Arc::new(
-            MemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None).unwrap(),
-        );
-
+        let left =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+                .unwrap();
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![19108, 19108, 19109]));
         let n: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
-        let right = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
-
+        let right = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap();
         let on = vec![(
             Arc::new(Column::new_with_schema("date", &left.schema()).unwrap()) as _,
             Arc::new(Column::new_with_schema("date", &right.schema()).unwrap()) as _,
@@ -3724,16 +3800,17 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = [
-            "+------------+---+------------+---+",
-            "| date       | n | date       | n |",
-            "+------------+---+------------+---+",
-            "| 2022-04-26 | 2 | 2022-04-26 | 4 |",
-            "| 2022-04-26 | 2 | 2022-04-26 | 5 |",
-            "| 2022-04-27 | 3 | 2022-04-27 | 6 |",
-            "+------------+---+------------+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +------------+---+------------+---+
+            | date       | n | date       | n |
+            +------------+---+------------+---+
+            | 2022-04-26 | 2 | 2022-04-26 | 4 |
+            | 2022-04-26 | 2 | 2022-04-26 | 5 |
+            | 2022-04-27 | 3 | 2022-04-27 | 6 |
+            +------------+---+------------+---+
+                "#);
+        }
 
         Ok(())
     }
@@ -3981,7 +4058,7 @@ mod tests {
             // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
             );
 
             assert_contains!(
@@ -4002,27 +4079,23 @@ mod tests {
             ("b1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
             ("c1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
         );
-        let left = Arc::new(
-            MemoryExec::try_new(
-                &[vec![left_batch.clone()], vec![left_batch.clone()]],
-                left_batch.schema(),
-                None,
-            )
-            .unwrap(),
-        );
+        let left = TestMemoryExec::try_new_exec(
+            &[vec![left_batch.clone()], vec![left_batch.clone()]],
+            left_batch.schema(),
+            None,
+        )
+        .unwrap();
         let right_batch = build_table_i32(
             ("a2", &vec![10, 11]),
             ("b2", &vec![12, 13]),
             ("c2", &vec![14, 15]),
         );
-        let right = Arc::new(
-            MemoryExec::try_new(
-                &[vec![right_batch.clone()], vec![right_batch.clone()]],
-                right_batch.schema(),
-                None,
-            )
-            .unwrap(),
-        );
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![right_batch.clone()], vec![right_batch.clone()]],
+            right_batch.schema(),
+            None,
+        )
+        .unwrap();
         let on = vec![(
             Arc::new(Column::new_with_schema("b1", &left_batch.schema())?) as _,
             Arc::new(Column::new_with_schema("b2", &right_batch.schema())?) as _,
@@ -4066,7 +4139,7 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
 
             );
 
@@ -4102,7 +4175,7 @@ mod tests {
         )
         .unwrap();
         let schema_ref = batch.schema();
-        Arc::new(MemoryExec::try_new(&[vec![batch]], schema_ref, None).unwrap())
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema_ref, None).unwrap()
     }
 
     #[tokio::test]
@@ -4122,16 +4195,17 @@ mod tests {
 
         assert_eq!(columns, vec!["n1", "n2"]);
 
-        let expected = [
-            "+--------+--------+",
-            "| n1     | n2     |",
-            "+--------+--------+",
-            "| {a: }  | {a: }  |",
-            "| {a: 1} | {a: 1} |",
-            "| {a: 2} | {a: 2} |",
-            "+--------+--------+",
-        ];
-        assert_batches_eq!(expected, &batches);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r#"
+            +--------+--------+
+            | n1     | n2     |
+            +--------+--------+
+            | {a: }  | {a: }  |
+            | {a: 1} | {a: 1} |
+            | {a: 2} | {a: 2} |
+            +--------+--------+
+                "#);
+        }
 
         Ok(())
     }
@@ -4158,14 +4232,15 @@ mod tests {
         )
         .await?;
 
-        let expected_null_eq = [
-            "+----+----+",
-            "| n1 | n2 |",
-            "+----+----+",
-            "|    |    |",
-            "+----+----+",
-        ];
-        assert_batches_eq!(expected_null_eq, &batches_null_eq);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches_null_eq), @r#"
+            +----+----+
+            | n1 | n2 |
+            +----+----+
+            |    |    |
+            +----+----+
+                "#);
+        }
 
         let (_, batches_null_neq) =
             join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;

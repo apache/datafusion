@@ -22,7 +22,10 @@
 [![Crates.io][crates-badge]][crates-url]
 [![Apache licensed][license-badge]][license-url]
 [![Build Status][actions-badge]][actions-url]
+![Commit Activity][commit-activity-badge]
+[![Open Issues][open-issues-badge]][open-issues-url]
 [![Discord chat][discord-badge]][discord-url]
+[![Linkedin][linkedin-badge]][linkedin-url]
 
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
@@ -30,8 +33,13 @@
 [license-url]: https://github.com/apache/datafusion/blob/main/LICENSE.txt
 [actions-badge]: https://github.com/apache/datafusion/actions/workflows/rust.yml/badge.svg
 [actions-url]: https://github.com/apache/datafusion/actions?query=branch%3Amain
-[discord-badge]: https://img.shields.io/discord/885562378132000778.svg?logo=discord&style=flat-square
+[discord-badge]: https://img.shields.io/badge/Chat-Discord-purple
 [discord-url]: https://discord.com/invite/Qw5gKqHxUM
+[commit-activity-badge]: https://img.shields.io/github/commit-activity/m/apache/datafusion
+[open-issues-badge]: https://img.shields.io/github/issues-raw/apache/datafusion
+[open-issues-url]: https://github.com/apache/datafusion/issues
+[linkedin-badge]: https://img.shields.io/badge/Follow-Linkedin-blue
+[linkedin-url]: https://www.linkedin.com/company/apache-datafusion/
 
 [Website](https://datafusion.apache.org/) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
@@ -146,3 +154,14 @@ stable API, we also improve the API over time. As a result, we typically
 deprecate methods before removing them, according to the [deprecation guidelines].
 
 [deprecation guidelines]: https://datafusion.apache.org/library-user-guide/api-health.html
+
+## Dependencies and `Cargo.lock`
+
+Following the [guidance] on committing `Cargo.lock` files, this project commits
+its `Cargo.lock` file.
+
+CI uses the committed `Cargo.lock` file, and dependencies are updated regularly
+using [Dependabot] PRs.
+
+[guidance]: https://blog.rust-lang.org/2023/08/29/committing-lockfiles.html
+[dependabot]: https://docs.github.com/en/code-security/dependabot/working-with-dependabot

@@ -54,14 +54,16 @@ query TT
 EXPLAIN SELECT count(*) from json_test
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
-02)--TableScan: json_test projection=[]
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----TableScan: json_test projection=[]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[count(*)]
-02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[count(*)]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------JsonExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/2.json]]}
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/2.json]]}, file_type=json
 
 query ?
 SELECT mycol FROM single_nan
@@ -143,4 +145,4 @@ query TT
 EXPLAIN SELECT id FROM json_partitioned_test WHERE part = 2
 ----
 logical_plan TableScan: json_partitioned_test projection=[id], full_filters=[json_partitioned_test.part = Int32(2)]
-physical_plan JsonExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_json/part=2/data.json]]}, projection=[id]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_json/part=2/data.json]]}, projection=[id], file_type=json

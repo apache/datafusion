@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{
+    builder::StringViewBuilder, cast::AsArray, Array, ArrayRef, RecordBatch,
+    RecordBatchOptions,
+};
 use arrow::compute::concat_batches;
-use arrow_array::builder::StringViewBuilder;
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use std::sync::Arc;
 
 /// Concatenate multiple [`RecordBatch`]es
@@ -89,7 +90,7 @@ impl BatchCoalescer {
     /// # Arguments
     /// - `schema` - the schema of the output batches
     /// - `target_batch_size` - the minimum number of rows for each
-    ///    output batch (until limit reached)
+    ///   output batch (until limit reached)
     /// - `fetch` - the maximum number of rows to fetch, `None` means fetch all rows
     pub fn new(
         schema: SchemaRef,
@@ -277,15 +278,14 @@ mod tests {
 
     use super::*;
 
+    use arrow::array::{builder::ArrayBuilder, StringViewArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_array::builder::ArrayBuilder;
-    use arrow_array::{StringViewArray, UInt32Array};
 
     #[test]
     fn test_coalesce() {
         let batch = uint32_batch(0..8);
         Test::new()
-            .with_batches(std::iter::repeat(batch).take(10))
+            .with_batches(std::iter::repeat_n(batch, 10))
             // expected output is batches of at least 20 rows (except for the final batch)
             .with_target_batch_size(21)
             .with_expected_output_sizes(vec![24, 24, 24, 8])
@@ -296,7 +296,7 @@ mod tests {
     fn test_coalesce_with_fetch_larger_than_input_size() {
         let batch = uint32_batch(0..8);
         Test::new()
-            .with_batches(std::iter::repeat(batch).take(10))
+            .with_batches(std::iter::repeat_n(batch, 10))
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 100
             // expected to behave the same as `test_concat_batches`
             .with_target_batch_size(21)
@@ -309,7 +309,7 @@ mod tests {
     fn test_coalesce_with_fetch_less_than_input_size() {
         let batch = uint32_batch(0..8);
         Test::new()
-            .with_batches(std::iter::repeat(batch).take(10))
+            .with_batches(std::iter::repeat_n(batch, 10))
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 50
             .with_target_batch_size(21)
             .with_fetch(Some(50))
@@ -321,7 +321,7 @@ mod tests {
     fn test_coalesce_with_fetch_less_than_target_and_no_remaining_rows() {
         let batch = uint32_batch(0..8);
         Test::new()
-            .with_batches(std::iter::repeat(batch).take(10))
+            .with_batches(std::iter::repeat_n(batch, 10))
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 48
             .with_target_batch_size(21)
             .with_fetch(Some(48))
@@ -333,7 +333,7 @@ mod tests {
     fn test_coalesce_with_fetch_less_target_batch_size() {
         let batch = uint32_batch(0..8);
         Test::new()
-            .with_batches(std::iter::repeat(batch).take(10))
+            .with_batches(std::iter::repeat_n(batch, 10))
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 10
             .with_target_batch_size(21)
             .with_fetch(Some(10))

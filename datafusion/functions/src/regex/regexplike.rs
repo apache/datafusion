@@ -21,34 +21,25 @@ use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
-use datafusion_common::exec_err;
-use datafusion_common::ScalarValue;
-use datafusion_common::{arrow_datafusion_err, plan_err};
-use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_REGEX;
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::types::logical_string;
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, internal_err, plan_err, DataFusionError, Result,
+    ScalarValue,
+};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
+};
+use datafusion_macros::user_doc;
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-#[derive(Debug)]
-pub struct RegexpLikeFunc {
-    signature: Signature,
-}
-
-impl Default for RegexpLikeFunc {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_regexp_like_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(DOC_SECTION_REGEX,"Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.","regexp_like(str, regexp[, flags])")
-            .with_sql_example(r#"```sql
+#[user_doc(
+    doc_section(label = "Regular Expression Functions"),
+    description = "Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.",
+    syntax_example = "regexp_like(str, regexp[, flags])",
+    sql_example = r#"```sql
 select regexp_like('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
 +--------------------------------------------------------+
 | regexp_like(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
@@ -63,25 +54,45 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 +--------------------------------------------------+
 ```
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
-"#)
-            .with_standard_argument("str", Some("String"))
-            .with_standard_argument("regexp", Some("Regular"))
-            .with_argument("flags",
-                           r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+"#,
+    standard_argument(name = "str", prefix = "String"),
+    standard_argument(name = "regexp", prefix = "Regular"),
+    argument(
+        name = "flags",
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
   - **i**: case-insensitive: letters match both upper and lower case
   - **m**: multi-line mode: ^ and $ match begin/end of line
   - **s**: allow . to match \n
   - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#)
-            .build()
-    })
+  - **U**: swap the meaning of x* and x*?"#
+    )
+)]
+#[derive(Debug)]
+pub struct RegexpLikeFunc {
+    signature: Signature,
+}
+
+impl Default for RegexpLikeFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RegexpLikeFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::String(2), TypeSignature::String(3)],
+                vec![
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    ]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    ]),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -112,11 +123,12 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = &args.args;
+
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -142,7 +154,7 @@ impl ScalarUDFImpl for RegexpLikeFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_regexp_like_doc())
+        self.doc()
     }
 }
 

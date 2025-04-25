@@ -17,7 +17,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::{
     error::Result,

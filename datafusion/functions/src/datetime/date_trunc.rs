@@ -160,11 +160,11 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = args.args;
         let (granularity, array) = (&args[0], &args[1]);
 
         let granularity = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) =
@@ -185,10 +185,10 @@ impl ScalarUDFImpl for DateTruncFunc {
         ) -> Result<ColumnarValue> {
             let parsed_tz = parse_tz(tz_opt)?;
             let array = as_primitive_array::<T>(array)?;
-            let array = array
-                .iter()
-                .map(|x| general_date_trunc(T::UNIT, &x, parsed_tz, granularity.as_str()))
-                .collect::<Result<PrimitiveArray<T>>>()?
+            let array: PrimitiveArray<T> = array
+                .try_unary(|x| {
+                    general_date_trunc(T::UNIT, x, parsed_tz, granularity.as_str())
+                })?
                 .with_timezone_opt(tz_opt.clone());
             Ok(ColumnarValue::Array(Arc::new(array)))
         }
@@ -199,7 +199,16 @@ impl ScalarUDFImpl for DateTruncFunc {
             tz_opt: &Option<Arc<str>>,
         ) -> Result<ColumnarValue> {
             let parsed_tz = parse_tz(tz_opt)?;
-            let value = general_date_trunc(T::UNIT, v, parsed_tz, granularity.as_str())?;
+            let value = if let Some(v) = v {
+                Some(general_date_trunc(
+                    T::UNIT,
+                    *v,
+                    parsed_tz,
+                    granularity.as_str(),
+                )?)
+            } else {
+                None
+            };
             let value = ScalarValue::new_timestamp::<T>(value, tz_opt.clone());
             Ok(ColumnarValue::Scalar(value))
         }
@@ -417,10 +426,10 @@ fn date_trunc_coarse(granularity: &str, value: i64, tz: Option<Tz>) -> Result<i6
 // truncates a single value with the given timeunit to the specified granularity
 fn general_date_trunc(
     tu: TimeUnit,
-    value: &Option<i64>,
+    value: i64,
     tz: Option<Tz>,
     granularity: &str,
-) -> Result<Option<i64>, DataFusionError> {
+) -> Result<i64, DataFusionError> {
     let scale = match tu {
         Second => 1_000_000_000,
         Millisecond => 1_000_000,
@@ -428,35 +437,31 @@ fn general_date_trunc(
         Nanosecond => 1,
     };
 
-    let Some(value) = value else {
-        return Ok(None);
-    };
-
     // convert to nanoseconds
     let nano = date_trunc_coarse(granularity, scale * value, tz)?;
 
     let result = match tu {
         Second => match granularity {
-            "minute" => Some(nano / 1_000_000_000 / 60 * 60),
-            _ => Some(nano / 1_000_000_000),
+            "minute" => nano / 1_000_000_000 / 60 * 60,
+            _ => nano / 1_000_000_000,
         },
         Millisecond => match granularity {
-            "minute" => Some(nano / 1_000_000 / 1_000 / 60 * 1_000 * 60),
-            "second" => Some(nano / 1_000_000 / 1_000 * 1_000),
-            _ => Some(nano / 1_000_000),
+            "minute" => nano / 1_000_000 / 1_000 / 60 * 1_000 * 60,
+            "second" => nano / 1_000_000 / 1_000 * 1_000,
+            _ => nano / 1_000_000,
         },
         Microsecond => match granularity {
-            "minute" => Some(nano / 1_000 / 1_000_000 / 60 * 60 * 1_000_000),
-            "second" => Some(nano / 1_000 / 1_000_000 * 1_000_000),
-            "millisecond" => Some(nano / 1_000 / 1_000 * 1_000),
-            _ => Some(nano / 1_000),
+            "minute" => nano / 1_000 / 1_000_000 / 60 * 60 * 1_000_000,
+            "second" => nano / 1_000 / 1_000_000 * 1_000_000,
+            "millisecond" => nano / 1_000 / 1_000 * 1_000,
+            _ => nano / 1_000,
         },
         _ => match granularity {
-            "minute" => Some(nano / 1_000_000_000 / 60 * 1_000_000_000 * 60),
-            "second" => Some(nano / 1_000_000_000 * 1_000_000_000),
-            "millisecond" => Some(nano / 1_000_000 * 1_000_000),
-            "microsecond" => Some(nano / 1_000 * 1_000),
-            _ => Some(nano),
+            "minute" => nano / 1_000_000_000 / 60 * 1_000_000_000 * 60,
+            "second" => nano / 1_000_000_000 * 1_000_000_000,
+            "millisecond" => nano / 1_000_000 * 1_000_000,
+            "microsecond" => nano / 1_000 * 1_000,
+            _ => nano,
         },
     };
     Ok(result)
@@ -721,16 +726,15 @@ mod tests {
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
             let batch_len = input.len();
-            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
-            let result = DateTruncFunc::new()
-                .invoke_batch(
-                    &[
-                        ColumnarValue::Scalar(ScalarValue::from("day")),
-                        ColumnarValue::Array(Arc::new(input)),
-                    ],
-                    batch_len,
-                )
-                .unwrap();
+            let args = datafusion_expr::ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Scalar(ScalarValue::from("day")),
+                    ColumnarValue::Array(Arc::new(input)),
+                ],
+                number_rows: batch_len,
+                return_type: &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+            };
+            let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(
                     result.data_type(),
@@ -884,16 +888,15 @@ mod tests {
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
             let batch_len = input.len();
-            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
-            let result = DateTruncFunc::new()
-                .invoke_batch(
-                    &[
-                        ColumnarValue::Scalar(ScalarValue::from("hour")),
-                        ColumnarValue::Array(Arc::new(input)),
-                    ],
-                    batch_len,
-                )
-                .unwrap();
+            let args = datafusion_expr::ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Scalar(ScalarValue::from("hour")),
+                    ColumnarValue::Array(Arc::new(input)),
+                ],
+                number_rows: batch_len,
+                return_type: &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+            };
+            let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(
                     result.data_type(),

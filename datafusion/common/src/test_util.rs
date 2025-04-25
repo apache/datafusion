@@ -17,6 +17,9 @@
 
 //! Utility functions to make testing DataFusion based crates easier
 
+use crate::arrow::util::pretty::pretty_format_batches_with_options;
+use crate::format::DEFAULT_FORMAT_OPTIONS;
+use arrow::array::RecordBatch;
 use std::{error::Error, path::PathBuf};
 
 /// Compares formatted output of a record batch with an expected
@@ -28,13 +31,13 @@ use std::{error::Error, path::PathBuf};
 ///
 /// Expects to be called about like this:
 ///
-/// `assert_batch_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
+/// `assert_batches_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
 ///
 /// # Example
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::record_batch::RecordBatch;
-/// # use arrow_array::{ArrayRef, Int32Array};
+/// # use arrow::array::{ArrayRef, Int32Array};
 /// # use datafusion_common::assert_batches_eq;
 /// let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
 ///  let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
@@ -71,6 +74,31 @@ macro_rules! assert_batches_eq {
             expected_lines, actual_lines
         );
     };
+}
+
+pub fn batches_to_string(batches: &[RecordBatch]) -> String {
+    let actual = pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)
+        .unwrap()
+        .to_string();
+
+    actual.trim().to_string()
+}
+
+pub fn batches_to_sort_string(batches: &[RecordBatch]) -> String {
+    let actual_lines =
+        pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)
+            .unwrap()
+            .to_string();
+
+    let mut actual_lines: Vec<&str> = actual_lines.trim().lines().collect();
+
+    // sort except for header + footer
+    let num_lines = actual_lines.len();
+    if num_lines > 3 {
+        actual_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
+    }
+
+    actual_lines.join("\n")
 }
 
 /// Compares formatted output of a record batch with an expected
@@ -338,13 +366,13 @@ macro_rules! create_array {
 macro_rules! record_batch {
     ($(($name: expr, $type: ident, $values: expr)),*) => {
         {
-            let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
+            let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
                 $(
-                    arrow_schema::Field::new($name, arrow_schema::DataType::$type, true),
+                    arrow::datatypes::Field::new($name, arrow::datatypes::DataType::$type, true),
                 )*
             ]));
 
-            let batch = arrow_array::RecordBatch::try_new(
+            let batch = arrow::array::RecordBatch::try_new(
                 schema,
                 vec![$(
                     $crate::create_array!($type, $values),
@@ -416,7 +444,7 @@ mod tests {
 
     #[test]
     fn test_create_record_batch() -> Result<()> {
-        use arrow_array::Array;
+        use arrow::array::Array;
 
         let batch = record_batch!(
             ("a", Int32, vec![1, 2, 3, 4]),

@@ -23,11 +23,10 @@ use std::sync::Arc;
 use crate::strings::make_and_append_view;
 use arrow::array::{
     new_null_array, Array, ArrayRef, GenericStringArray, GenericStringBuilder,
-    OffsetSizeTrait, StringBuilder, StringViewArray,
+    NullBufferBuilder, OffsetSizeTrait, StringBuilder, StringViewArray,
 };
-use arrow::buffer::Buffer;
+use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::DataType;
-use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};

@@ -17,8 +17,11 @@
 
 //! [`ScalarUDFImpl`] definitions for array_position and array_positions functions.
 
-use arrow_schema::DataType::{LargeList, List, UInt64};
-use arrow_schema::{DataType, Field};
+use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    DataType::{LargeList, List, UInt64},
+    Field,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -27,14 +30,14 @@ use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow_array::types::UInt64Type;
-use arrow_array::{
-    Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait, UInt64Array,
+use arrow::array::{
+    types::UInt64Type, Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait,
+    UInt64Array,
 };
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
 use itertools::Itertools;
 
 use crate::utils::{compare_element_to_list, make_scalar_function};
@@ -76,9 +79,15 @@ make_udf_expr_and_func!(
     argument(name = "index", description = "Index at which to start searching.")
 )]
 #[derive(Debug)]
-pub(super) struct ArrayPosition {
+pub struct ArrayPosition {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayPosition {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl ArrayPosition {
     pub fn new() -> Self {
@@ -111,12 +120,11 @@ impl ScalarUDFImpl for ArrayPosition {
         Ok(UInt64)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_position_inner)(args)
+        make_scalar_function(array_position_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -265,12 +273,11 @@ impl ScalarUDFImpl for ArrayPositions {
         Ok(List(Arc::new(Field::new_list_field(UInt64, true))))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_positions_inner)(args)
+        make_scalar_function(array_positions_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -284,20 +291,16 @@ impl ScalarUDFImpl for ArrayPositions {
 
 /// Array_positions SQL function
 pub fn array_positions_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_positions expects two arguments");
-    }
+    let [array, element] = take_function_args("array_positions", args)?;
 
-    let element = &args[1];
-
-    match &args[0].data_type() {
+    match &array.data_type() {
         List(_) => {
-            let arr = as_list_array(&args[0])?;
+            let arr = as_list_array(&array)?;
             crate::utils::check_datatypes("array_positions", &[arr.values(), element])?;
             general_positions::<i32>(arr, element)
         }
         LargeList(_) => {
-            let arr = as_large_list_array(&args[0])?;
+            let arr = as_large_list_array(&array)?;
             crate::utils::check_datatypes("array_positions", &[arr.values(), element])?;
             general_positions::<i64>(arr, element)
         }

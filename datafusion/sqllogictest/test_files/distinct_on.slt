@@ -102,7 +102,7 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[first_value(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST], first_value(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]]
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
 
 # ON expressions are not a sub-set of the ORDER BY expressions
 query error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
@@ -153,7 +153,7 @@ b 1 29 -18218 994303988 5983957848665088916 204 9489 3275293996 1485709125918647
 c 2 1 18109 2033001162 -6513304855495910254 25 43062 1491205016 5863949479783605708 0.110830784 0.929409733247 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
 
 # can't distinct on *
-query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \*"\)
+query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \* at Line: 1, Column: 21"\)
 SELECT DISTINCT ON (*) c1 FROM aggregate_test_100 ORDER BY c1 LIMIT 3;
 
 

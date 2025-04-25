@@ -32,7 +32,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 as c1, __common_expr_1@0 as c2]
 02)--ProjectionExec: expr=[a@0 + 1 as __common_expr_1]
-03)----MemoryExec: partitions=1, partition_sizes=[0]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 # Common volatile expression
 query TT
@@ -46,7 +46,7 @@ logical_plan
 02)--TableScan: t1 projection=[a]
 physical_plan
 01)ProjectionExec: expr=[a@0 + random() as c1, a@0 + random() as c2]
-02)--MemoryExec: partitions=1, partition_sizes=[0]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
 
 # Volatile expression with non-volatile common child
 query TT
@@ -62,7 +62,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 + random() as c1, __common_expr_1@0 + random() as c2]
 02)--ProjectionExec: expr=[a@0 + 1 as __common_expr_1]
-03)----MemoryExec: partitions=1, partition_sizes=[0]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 # Volatile expression with non-volatile common children
 query TT
@@ -78,7 +78,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 + random() + __common_expr_2@1 as c1, __common_expr_1@0 + random() + __common_expr_2@1 as c2]
 02)--ProjectionExec: expr=[a@0 + 1 as __common_expr_1, a@0 + 2 as __common_expr_2]
-03)----MemoryExec: partitions=1, partition_sizes=[0]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 # Common short-circuit expression
 query TT
@@ -100,7 +100,7 @@ physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 as c1, __common_expr_1@0 as c2, __common_expr_2@1 as c3, __common_expr_2@1 as c4, __common_expr_3@2 as c5, __common_expr_3@2 as c6]
 02)--ProjectionExec: expr=[__common_expr_4@0 AND b@1 = 0 as __common_expr_1, __common_expr_4@0 OR b@1 = 0 as __common_expr_2, CASE WHEN __common_expr_4@0 THEN 0 ELSE 1 END as __common_expr_3]
 03)----ProjectionExec: expr=[a@0 = 0 as __common_expr_4, b@1 as b]
-04)------MemoryExec: partitions=1, partition_sizes=[0]
+04)------DataSourceExec: partitions=1, partition_sizes=[0]
 
 # Common children of short-circuit expression
 query TT
@@ -128,7 +128,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 AND b@4 = 0 as c1, __common_expr_1@0 AND b@4 = 1 as c2, b@4 = 2 AND a@3 = 1 as c3, b@4 = 3 AND a@3 = 1 as c4, __common_expr_2@1 OR b@4 = 4 as c5, __common_expr_2@1 OR b@4 = 5 as c6, b@4 = 6 OR a@3 = 3 as c7, b@4 = 7 OR a@3 = 3 as c8, CASE WHEN __common_expr_3@2 THEN 0 ELSE 1 END as c9, CASE WHEN __common_expr_3@2 THEN 0 ELSE 2 END as c10, CASE WHEN b@4 = 8 THEN a@3 + 1 ELSE 0 END as c11, CASE WHEN b@4 = 9 THEN a@3 + 1 ELSE 0 END as c12, CASE WHEN b@4 = 10 THEN 0 ELSE a@3 + 2 END as c13, CASE WHEN b@4 = 11 THEN 0 ELSE a@3 + 2 END as c14]
 02)--ProjectionExec: expr=[a@0 = 0 as __common_expr_1, a@0 = 2 as __common_expr_2, a@0 = 4 as __common_expr_3, a@0 as a, b@1 as b]
-03)----MemoryExec: partitions=1, partition_sizes=[0]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 # Common children of volatile, short-circuit expression
 query TT
@@ -156,7 +156,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 AND b@4 = random() as c1, __common_expr_1@0 AND b@4 = 1 + random() as c2, b@4 = 2 + random() AND a@3 = 1 as c3, b@4 = 3 + random() AND a@3 = 1 as c4, __common_expr_2@1 OR b@4 = 4 + random() as c5, __common_expr_2@1 OR b@4 = 5 + random() as c6, b@4 = 6 + random() OR a@3 = 3 as c7, b@4 = 7 + random() OR a@3 = 3 as c8, CASE WHEN __common_expr_3@2 THEN random() ELSE 1 END as c9, CASE WHEN __common_expr_3@2 THEN random() ELSE 2 END as c10, CASE WHEN b@4 = 8 + random() THEN a@3 + 1 ELSE 0 END as c11, CASE WHEN b@4 = 9 + random() THEN a@3 + 1 ELSE 0 END as c12, CASE WHEN b@4 = 10 + random() THEN 0 ELSE a@3 + 2 END as c13, CASE WHEN b@4 = 11 + random() THEN 0 ELSE a@3 + 2 END as c14]
 02)--ProjectionExec: expr=[a@0 = 0 as __common_expr_1, a@0 = 2 as __common_expr_2, a@0 = 4 as __common_expr_3, a@0 as a, b@1 as b]
-03)----MemoryExec: partitions=1, partition_sizes=[0]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 # Common volatile children of short-circuit expression
 query TT
@@ -174,7 +174,7 @@ logical_plan
 02)--TableScan: t1 projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 = random() AND b@1 = 0 as c1, a@0 = random() AND b@1 = 1 as c2, a@0 = 2 + random() OR b@1 = 4 as c3, a@0 = 2 + random() OR b@1 = 5 as c4, CASE WHEN a@0 = 4 + random() THEN 0 ELSE 1 END as c5, CASE WHEN a@0 = 4 + random() THEN 0 ELSE 2 END as c6]
-02)--MemoryExec: partitions=1, partition_sizes=[0]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
 
 # Surely only once but also conditionally evaluated expressions
 query TT
@@ -194,7 +194,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[(__common_expr_1@0 OR random() = 0) AND __common_expr_2@1 as c1, __common_expr_2@1 AND random() = 0 OR __common_expr_1@0 as c2, CASE WHEN __common_expr_3@2 = 0 THEN __common_expr_3@2 ELSE 0 END as c3, CASE WHEN __common_expr_4@3 = 0 THEN 0 WHEN CAST(__common_expr_4@3 AS Boolean) THEN 0 ELSE 0 END as c4, CASE WHEN __common_expr_5@4 = 0 THEN 0 WHEN random() = 0 THEN __common_expr_5@4 ELSE 0 END as c5, CASE WHEN __common_expr_6@5 = 0 THEN 0 ELSE __common_expr_6@5 END as c6]
 02)--ProjectionExec: expr=[a@0 = 1 as __common_expr_1, a@0 = 2 as __common_expr_2, a@0 + 3 as __common_expr_3, a@0 + 4 as __common_expr_4, a@0 + 5 as __common_expr_5, a@0 + 6 as __common_expr_6]
-03)----MemoryExec: partitions=1, partition_sizes=[0]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 # Surely only once but also conditionally evaluated subexpressions
 query TT
@@ -212,7 +212,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[(__common_expr_1@0 OR random() = 0) AND (__common_expr_2@1 OR random() = 1) as c1, __common_expr_2@1 AND random() = 0 OR __common_expr_1@0 AND random() = 1 as c2, CASE WHEN __common_expr_3@2 = 0 THEN __common_expr_3@2 + random() ELSE 0 END as c3, CASE WHEN __common_expr_4@3 = 0 THEN 0 ELSE __common_expr_4@3 + random() END as c4]
 02)--ProjectionExec: expr=[a@0 = 1 as __common_expr_1, a@0 = 2 as __common_expr_2, a@0 + 3 as __common_expr_3, a@0 + 4 as __common_expr_4]
-03)----MemoryExec: partitions=1, partition_sizes=[0]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 # Only conditionally evaluated expressions
 query TT
@@ -230,4 +230,4 @@ logical_plan
 02)--TableScan: t1 projection=[a]
 physical_plan
 01)ProjectionExec: expr=[(random() = 0 OR a@0 = 1) AND a@0 = 2 as c1, random() = 0 AND a@0 = 2 OR a@0 = 1 as c2, CASE WHEN random() = 0 THEN a@0 + 3 ELSE a@0 + 3 END as c3, CASE WHEN random() = 0 THEN 0 WHEN a@0 + 4 = 0 THEN a@0 + 4 ELSE 0 END as c4, CASE WHEN random() = 0 THEN 0 WHEN a@0 + 5 = 0 THEN 0 ELSE a@0 + 5 END as c5, CASE WHEN random() = 0 THEN 0 WHEN random() = 0 THEN a@0 + 6 ELSE a@0 + 6 END as c6]
-02)--MemoryExec: partitions=1, partition_sizes=[0]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]

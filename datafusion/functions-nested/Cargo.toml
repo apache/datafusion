@@ -28,23 +28,18 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
-[features]
-
 [lib]
 name = "datafusion_functions_nested"
-path = "src/lib.rs"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 arrow = { workspace = true }
-arrow-array = { workspace = true }
-arrow-buffer = { workspace = true }
 arrow-ord = { workspace = true }
-arrow-schema = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -58,8 +53,8 @@ log = { workspace = true }
 paste = "1.0.14"
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["async_tokio"] }
-rand = "0.8.5"
+criterion = { workspace = true, features = ["async_tokio"] }
+rand = { workspace = true }
 
 [[bench]]
 harness = false

@@ -15,7 +15,130 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Constraint propagator/solver for custom PhysicalExpr graphs.
+//! Constraint propagator/solver for custom [`PhysicalExpr`] graphs.
+//!
+//! The constraint propagator/solver in DataFusion uses interval arithmetic to
+//! perform mathematical operations on intervals, which represent a range of
+//! possible values rather than a single point value. This allows for the
+//! propagation of ranges through mathematical operations, and can be used to
+//! compute bounds for a complicated expression. The key idea is that by
+//! breaking down a complicated expression into simpler terms, and then
+//! combining the bounds for those simpler terms, one can obtain bounds for the
+//! overall expression.
+//!
+//! This way of using interval arithmetic to compute bounds for a complex
+//! expression by combining the bounds for the constituent terms within the
+//! original expression allows us to reason about the range of possible values
+//! of the expression. This information later can be used in range pruning of
+//! the provably unnecessary parts of `RecordBatch`es.
+//!
+//! # Example
+//!
+//! For example, consider a mathematical expression such as `x^2 + y = 4` \[1\].
+//! Since this expression would be a binary tree in [`PhysicalExpr`] notation,
+//! this type of an hierarchical computation is well-suited for a graph based
+//! implementation. In such an implementation, an equation system `f(x) = 0` is
+//! represented by a directed acyclic expression graph (DAEG).
+//!
+//! In order to use interval arithmetic to compute bounds for this expression,
+//! one would first determine intervals that represent the possible values of
+//! `x` and `y`` Let's say that the interval for `x` is `[1, 2]` and the interval
+//! for `y` is `[-3, 1]`. In the chart below, you can see how the computation
+//! takes place.
+//!
+//! # References
+//!
+//! 1. Kabak, Mehmet Ozan. Analog Circuit Start-Up Behavior Analysis: An Interval
+//!    Arithmetic Based Approach, Chapter 4. Stanford University, 2015.
+//! 2. Moore, Ramon E. Interval analysis. Vol. 4. Englewood Cliffs: Prentice-Hall, 1966.
+//! 3. F. Messine, "Deterministic global optimization using interval constraint
+//!    propagation techniques," RAIRO-Operations Research, vol. 38, no. 04,
+//!    pp. 277-293, 2004.
+//!
+//! # Illustration
+//!
+//! ## Computing bounds for an expression using interval arithmetic
+//!
+//! ```text
+//!             +-----+                         +-----+
+//!        +----|  +  |----+               +----|  +  |----+
+//!        |    |     |    |               |    |     |    |
+//!        |    +-----+    |               |    +-----+    |
+//!        |               |               |               |
+//!    +-----+           +-----+       +-----+           +-----+
+//!    |   2 |           |  y  |       |   2 | [1, 4]    |  y  |
+//!    |[.]  |           |     |       |[.]  |           |     |
+//!    +-----+           +-----+       +-----+           +-----+
+//!       |                               |
+//!       |                               |
+//!     +---+                           +---+
+//!     | x | [1, 2]                    | x | [1, 2]
+//!     +---+                           +---+
+//!
+//!  (a) Bottom-up evaluation: Step 1 (b) Bottom up evaluation: Step 2
+//!
+//!                                      [1 - 3, 4 + 1] = [-2, 5]
+//!             +-----+                         +-----+
+//!        +----|  +  |----+               +----|  +  |----+
+//!        |    |     |    |               |    |     |    |
+//!        |    +-----+    |               |    +-----+    |
+//!        |               |               |               |
+//!    +-----+           +-----+       +-----+           +-----+
+//!    |   2 |[1, 4]     |  y  |       |   2 |[1, 4]     |  y  |
+//!    |[.]  |           |     |       |[.]  |           |     |
+//!    +-----+           +-----+       +-----+           +-----+
+//!       |              [-3, 1]          |              [-3, 1]
+//!       |                               |
+//!     +---+                           +---+
+//!     | x | [1, 2]                    | x | [1, 2]
+//!     +---+                           +---+
+//!
+//!  (c) Bottom-up evaluation: Step 3 (d) Bottom-up evaluation: Step 4
+//! ```
+//!
+//! ## Top-down constraint propagation using inverse semantics
+//!
+//! ```text
+//!    [-2, 5] ∩ [4, 4] = [4, 4]               [4, 4]
+//!            +-----+                         +-----+
+//!       +----|  +  |----+               +----|  +  |----+
+//!       |    |     |    |               |    |     |    |
+//!       |    +-----+    |               |    +-----+    |
+//!       |               |               |               |
+//!    +-----+           +-----+       +-----+           +-----+
+//!    |   2 | [1, 4]    |  y  |       |   2 | [1, 4]    |  y  | [0, 1]*
+//!    |[.]  |           |     |       |[.]  |           |     |
+//!    +-----+           +-----+       +-----+           +-----+
+//!      |              [-3, 1]          |
+//!      |                               |
+//!    +---+                           +---+
+//!    | x | [1, 2]                    | x | [1, 2]
+//!    +---+                           +---+
+//!
+//!  (a) Top-down propagation: Step 1 (b) Top-down propagation: Step 2
+//!
+//!                                     [1 - 3, 4 + 1] = [-2, 5]
+//!            +-----+                         +-----+
+//!       +----|  +  |----+               +----|  +  |----+
+//!       |    |     |    |               |    |     |    |
+//!       |    +-----+    |               |    +-----+    |
+//!       |               |               |               |
+//!    +-----+           +-----+       +-----+           +-----+
+//!    |   2 |[3, 4]**   |  y  |       |   2 |[3, 4]     |  y  |
+//!    |[.]  |           |     |       |[.]  |           |     |
+//!    +-----+           +-----+       +-----+           +-----+
+//!      |              [0, 1]           |              [-3, 1]
+//!      |                               |
+//!    +---+                           +---+
+//!    | x | [1, 2]                    | x | [sqrt(3), 2]***
+//!    +---+                           +---+
+//!
+//!  (c) Top-down propagation: Step 3  (d) Top-down propagation: Step 4
+//!
+//!    * [-3, 1] ∩ ([4, 4] - [1, 4]) = [0, 1]
+//!    ** [1, 4] ∩ ([4, 4] - [0, 1]) = [3, 4]
+//!    *** [1, 2] ∩ [sqrt(3), sqrt(4)] = [sqrt(3), 2]
+//! ```
 
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -29,7 +152,7 @@ use crate::expressions::Literal;
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
-use arrow_schema::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
 use datafusion_expr::Operator;
@@ -39,102 +162,12 @@ use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
 use petgraph::Outgoing;
 
-// Interval arithmetic provides a way to perform mathematical operations on
-// intervals, which represent a range of possible values rather than a single
-// point value. This allows for the propagation of ranges through mathematical
-// operations, and can be used to compute bounds for a complicated expression.
-// The key idea is that by breaking down a complicated expression into simpler
-// terms, and then combining the bounds for those simpler terms, one can
-// obtain bounds for the overall expression.
-//
-// For example, consider a mathematical expression such as x^2 + y = 4. Since
-// it would be a binary tree in [PhysicalExpr] notation, this type of an
-// hierarchical computation is well-suited for a graph based implementation.
-// In such an implementation, an equation system f(x) = 0 is represented by a
-// directed acyclic expression graph (DAEG).
-//
-// In order to use interval arithmetic to compute bounds for this expression,
-// one would first determine intervals that represent the possible values of x
-// and y. Let's say that the interval for x is [1, 2] and the interval for y
-// is [-3, 1]. In the chart below, you can see how the computation takes place.
-//
-// This way of using interval arithmetic to compute bounds for a complex
-// expression by combining the bounds for the constituent terms within the
-// original expression allows us to reason about the range of possible values
-// of the expression. This information later can be used in range pruning of
-// the provably unnecessary parts of `RecordBatch`es.
-//
-// References
-// 1 - Kabak, Mehmet Ozan. Analog Circuit Start-Up Behavior Analysis: An Interval
-// Arithmetic Based Approach, Chapter 4. Stanford University, 2015.
-// 2 - Moore, Ramon E. Interval analysis. Vol. 4. Englewood Cliffs: Prentice-Hall, 1966.
-// 3 - F. Messine, "Deterministic global optimization using interval constraint
-// propagation techniques," RAIRO-Operations Research, vol. 38, no. 04,
-// pp. 277{293, 2004.
-//
-// ``` text
-// Computing bounds for an expression using interval arithmetic.           Constraint propagation through a top-down evaluation of the expression
-//                                                                         graph using inverse semantics.
-//
-//                                                                                 [-2, 5] ∩ [4, 4] = [4, 4]              [4, 4]
-//             +-----+                        +-----+                                      +-----+                        +-----+
-//        +----|  +  |----+              +----|  +  |----+                            +----|  +  |----+              +----|  +  |----+
-//        |    |     |    |              |    |     |    |                            |    |     |    |              |    |     |    |
-//        |    +-----+    |              |    +-----+    |                            |    +-----+    |              |    +-----+    |
-//        |               |              |               |                            |               |              |               |
-//    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
-//    |   2 |           |  y  |      |   2 | [1, 4]    |  y  |                    |   2 | [1, 4]    |  y  |      |   2 | [1, 4]    |  y  | [0, 1]*
-//    |[.]  |           |     |      |[.]  |           |     |                    |[.]  |           |     |      |[.]  |           |     |
-//    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
-//       |                              |                                            |              [-3, 1]         |
-//       |                              |                                            |                              |
-//     +---+                          +---+                                        +---+                          +---+
-//     | x | [1, 2]                   | x | [1, 2]                                 | x | [1, 2]                   | x | [1, 2]
-//     +---+                          +---+                                        +---+                          +---+
-//
-//  (a) Bottom-up evaluation: Step1 (b) Bottom up evaluation: Step2             (a) Top-down propagation: Step1 (b) Top-down propagation: Step2
-//
-//                                        [1 - 3, 4 + 1] = [-2, 5]                                                    [1 - 3, 4 + 1] = [-2, 5]
-//             +-----+                        +-----+                                      +-----+                        +-----+
-//        +----|  +  |----+              +----|  +  |----+                            +----|  +  |----+              +----|  +  |----+
-//        |    |     |    |              |    |     |    |                            |    |     |    |              |    |     |    |
-//        |    +-----+    |              |    +-----+    |                            |    +-----+    |              |    +-----+    |
-//        |               |              |               |                            |               |              |               |
-//    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
-//    |   2 |[1, 4]     |  y  |      |   2 |[1, 4]     |  y  |                    |   2 |[3, 4]**   |  y  |      |   2 |[1, 4]     |  y  |
-//    |[.]  |           |     |      |[.]  |           |     |                    |[.]  |           |     |      |[.]  |           |     |
-//    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
-//       |              [-3, 1]         |              [-3, 1]                       |              [0, 1]          |              [-3, 1]
-//       |                              |                                            |                              |
-//     +---+                          +---+                                        +---+                          +---+
-//     | x | [1, 2]                   | x | [1, 2]                                 | x | [1, 2]                   | x | [sqrt(3), 2]***
-//     +---+                          +---+                                        +---+                          +---+
-//
-//  (c) Bottom-up evaluation: Step3 (d) Bottom-up evaluation: Step4             (c) Top-down propagation: Step3  (d) Top-down propagation: Step4
-//
-//                                                                             * [-3, 1] ∩ ([4, 4] - [1, 4]) = [0, 1]
-//                                                                             ** [1, 4] ∩ ([4, 4] - [0, 1]) = [3, 4]
-//                                                                             *** [1, 2] ∩ [sqrt(3), sqrt(4)] = [sqrt(3), 2]
-// ```
-
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute ranges for expressions through interval arithmetic.
 #[derive(Clone, Debug)]
 pub struct ExprIntervalGraph {
     graph: StableGraph<ExprIntervalGraphNode, usize>,
     root: NodeIndex,
-}
-
-impl ExprIntervalGraph {
-    /// Estimate size of bytes including `Self`.
-    pub fn size(&self) -> usize {
-        let node_memory_usage = self.graph.node_count()
-            * (size_of::<ExprIntervalGraphNode>() + size_of::<NodeIndex>());
-        let edge_memory_usage =
-            self.graph.edge_count() * (size_of::<usize>() + size_of::<NodeIndex>() * 2);
-
-        size_of_val(self) + node_memory_usage + edge_memory_usage
-    }
 }
 
 /// This object encapsulates all possible constraint propagation results.
@@ -153,6 +186,12 @@ pub struct ExprIntervalGraphNode {
     interval: Interval,
 }
 
+impl PartialEq for ExprIntervalGraphNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr.eq(&other.expr)
+    }
+}
+
 impl Display for ExprIntervalGraphNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.expr)
@@ -160,7 +199,7 @@ impl Display for ExprIntervalGraphNode {
 }
 
 impl ExprIntervalGraphNode {
-    /// Constructs a new DAEG node with an [-∞, ∞] range.
+    /// Constructs a new DAEG node with an `[-∞, ∞]` range.
     pub fn new_unbounded(expr: Arc<dyn PhysicalExpr>, dt: &DataType) -> Result<Self> {
         Interval::make_unbounded(dt)
             .map(|interval| ExprIntervalGraphNode { expr, interval })
@@ -178,7 +217,7 @@ impl ExprIntervalGraphNode {
 
     /// This function creates a DAEG node from DataFusion's [`ExprTreeNode`]
     /// object. Literals are created with definite, singleton intervals while
-    /// any other expression starts with an indefinite interval ([-∞, ∞]).
+    /// any other expression starts with an indefinite interval (`[-∞, ∞]`).
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
         let expr = Arc::clone(&node.expr);
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
@@ -192,30 +231,24 @@ impl ExprIntervalGraphNode {
     }
 }
 
-impl PartialEq for ExprIntervalGraphNode {
-    fn eq(&self, other: &Self) -> bool {
-        self.expr.eq(&other.expr)
-    }
-}
-
 /// This function refines intervals `left_child` and `right_child` by applying
 /// constraint propagation through `parent` via operation. The main idea is
 /// that we can shrink ranges of variables x and y using parent interval p.
 ///
-/// Assuming that x,y and p has ranges [xL, xU], [yL, yU], and [pL, pU], we
+/// Assuming that x,y and p has ranges `[xL, xU]`, `[yL, yU]`, and `[pL, pU]`, we
 /// apply the following operations:
 /// - For plus operation, specifically, we would first do
-///     - [xL, xU] <- ([pL, pU] - [yL, yU]) ∩ [xL, xU], and then
-///     - [yL, yU] <- ([pL, pU] - [xL, xU]) ∩ [yL, yU].
+///     - `[xL, xU]` <- (`[pL, pU]` - `[yL, yU]`) ∩ `[xL, xU]`, and then
+///     - `[yL, yU]` <- (`[pL, pU]` - `[xL, xU]`) ∩ `[yL, yU]`.
 /// - For minus operation, specifically, we would first do
-///     - [xL, xU] <- ([yL, yU] + [pL, pU]) ∩ [xL, xU], and then
-///     - [yL, yU] <- ([xL, xU] - [pL, pU]) ∩ [yL, yU].
+///     - `[xL, xU]` <- (`[yL, yU]` + `[pL, pU]`) ∩ `[xL, xU]`, and then
+///     - `[yL, yU]` <- (`[xL, xU]` - `[pL, pU]`) ∩ `[yL, yU]`.
 /// - For multiplication operation, specifically, we would first do
-///     - [xL, xU] <- ([pL, pU] / [yL, yU]) ∩ [xL, xU], and then
-///     - [yL, yU] <- ([pL, pU] / [xL, xU]) ∩ [yL, yU].
+///     - `[xL, xU]` <- (`[pL, pU]` / `[yL, yU]`) ∩ `[xL, xU]`, and then
+///     - `[yL, yU]` <- (`[pL, pU]` / `[xL, xU]`) ∩ `[yL, yU]`.
 /// - For division operation, specifically, we would first do
-///     - [xL, xU] <- ([yL, yU] * [pL, pU]) ∩ [xL, xU], and then
-///     - [yL, yU] <- ([xL, xU] / [pL, pU]) ∩ [yL, yU].
+///     - `[xL, xU]` <- (`[yL, yU]` * `[pL, pU]`) ∩ `[xL, xU]`, and then
+///     - `[yL, yU]` <- (`[xL, xU]` / `[pL, pU]`) ∩ `[yL, yU]`.
 pub fn propagate_arithmetic(
     op: &Operator,
     parent: &Interval,
@@ -361,18 +394,30 @@ impl ExprIntervalGraph {
         self.graph.node_count()
     }
 
+    /// Estimate size of bytes including `Self`.
+    pub fn size(&self) -> usize {
+        let node_memory_usage = self.graph.node_count()
+            * (size_of::<ExprIntervalGraphNode>() + size_of::<NodeIndex>());
+        let edge_memory_usage =
+            self.graph.edge_count() * (size_of::<usize>() + size_of::<NodeIndex>() * 2);
+
+        size_of_val(self) + node_memory_usage + edge_memory_usage
+    }
+
     // Sometimes, we do not want to calculate and/or propagate intervals all
     // way down to leaf expressions. For example, assume that we have a
     // `SymmetricHashJoin` which has a child with an output ordering like:
     //
+    // ```text
     // PhysicalSortExpr {
     //     expr: BinaryExpr('a', +, 'b'),
     //     sort_option: ..
     // }
+    // ```
     //
-    // i.e. its output order comes from a clause like "ORDER BY a + b". In such
-    // a case, we must calculate the interval for the BinaryExpr('a', +, 'b')
-    // instead of the columns inside this BinaryExpr, because this interval
+    // i.e. its output order comes from a clause like `ORDER BY a + b`. In such
+    // a case, we must calculate the interval for the `BinaryExpr(a, +, b)`
+    // instead of the columns inside this `BinaryExpr`, because this interval
     // decides whether we prune or not. Therefore, children `PhysicalExpr`s of
     // this `BinaryExpr` may be pruned for performance. The figure below
     // explains this example visually.
@@ -510,9 +555,6 @@ impl ExprIntervalGraph {
     /// Computes bounds for an expression using interval arithmetic via a
     /// bottom-up traversal.
     ///
-    /// # Arguments
-    /// * `leaf_bounds` - &[(usize, Interval)]. Provide NodeIndex, Interval tuples for leaf variables.
-    ///
     /// # Examples
     ///
     /// ```
@@ -570,7 +612,7 @@ impl ExprIntervalGraph {
                     self.graph[node].expr.evaluate_bounds(&children_intervals)?;
             }
         }
-        Ok(&self.graph[self.root].interval)
+        Ok(self.graph[self.root].interval())
     }
 
     /// Updates/shrinks bounds for leaf expressions using interval arithmetic
@@ -579,14 +621,14 @@ impl ExprIntervalGraph {
         &mut self,
         given_range: Interval,
     ) -> Result<PropagationResult> {
-        let mut bfs = Bfs::new(&self.graph, self.root);
-
         // Adjust the root node with the given range:
         if let Some(interval) = self.graph[self.root].interval.intersect(given_range)? {
             self.graph[self.root].interval = interval;
         } else {
             return Ok(PropagationResult::Infeasible);
         }
+
+        let mut bfs = Bfs::new(&self.graph, self.root);
 
         while let Some(node) = bfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
@@ -722,9 +764,8 @@ mod tests {
     use crate::expressions::{BinaryExpr, Column};
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;
 
-    use arrow::datatypes::TimeUnit;
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-    use arrow_schema::Field;
+    use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+    use arrow::datatypes::{Field, TimeUnit};
     use datafusion_common::ScalarValue;
 
     use itertools::Itertools;

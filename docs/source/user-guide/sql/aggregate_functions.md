@@ -57,8 +57,9 @@ Aggregate functions operate on a set of values to compute a single result.
 ### `array_agg`
 
 Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.
+This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the argument expression.
 
-```
+```sql
 array_agg(expression [ORDER BY expression])
 ```
 
@@ -75,13 +76,19 @@ array_agg(expression [ORDER BY expression])
 +-----------------------------------------------+
 | [element1, element2, element3]                |
 +-----------------------------------------------+
+> SELECT array_agg(DISTINCT column_name ORDER BY column_name) FROM table_name;
++--------------------------------------------------------+
+| array_agg(DISTINCT column_name ORDER BY column_name)  |
++--------------------------------------------------------+
+| [element1, element2, element3]                         |
++--------------------------------------------------------+
 ```
 
 ### `avg`
 
 Returns the average of numeric values in the specified column.
 
-```
+```sql
 avg(expression)
 ```
 
@@ -108,7 +115,7 @@ avg(expression)
 
 Computes the bitwise AND of all non-null input values.
 
-```
+```sql
 bit_and(expression)
 ```
 
@@ -120,7 +127,7 @@ bit_and(expression)
 
 Computes the bitwise OR of all non-null input values.
 
-```
+```sql
 bit_or(expression)
 ```
 
@@ -132,7 +139,7 @@ bit_or(expression)
 
 Computes the bitwise exclusive OR of all non-null input values.
 
-```
+```sql
 bit_xor(expression)
 ```
 
@@ -144,7 +151,7 @@ bit_xor(expression)
 
 Returns true if all non-null input values are true, otherwise false.
 
-```
+```sql
 bool_and(expression)
 ```
 
@@ -167,7 +174,7 @@ bool_and(expression)
 
 Returns true if all non-null input values are true, otherwise false.
 
-```
+```sql
 bool_and(expression)
 ```
 
@@ -190,7 +197,7 @@ bool_and(expression)
 
 Returns the number of non-null values in the specified column. To include null values in the total count, use `count(*)`.
 
-```
+```sql
 count(expression)
 ```
 
@@ -220,7 +227,7 @@ count(expression)
 
 Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
 
-```
+```sql
 first_value(expression [ORDER BY expression])
 ```
 
@@ -243,7 +250,7 @@ first_value(expression [ORDER BY expression])
 
 Returns 1 if the data is aggregated across the specified column, or 0 if it is not aggregated in the result set.
 
-```
+```sql
 grouping(expression)
 ```
 
@@ -270,7 +277,7 @@ grouping(expression)
 
 Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
 
-```
+```sql
 last_value(expression [ORDER BY expression])
 ```
 
@@ -293,7 +300,7 @@ last_value(expression [ORDER BY expression])
 
 Returns the maximum value in the specified column.
 
-```
+```sql
 max(expression)
 ```
 
@@ -320,7 +327,7 @@ _Alias of [avg](#avg)._
 
 Returns the median value in the specified column.
 
-```
+```sql
 median(expression)
 ```
 
@@ -343,7 +350,7 @@ median(expression)
 
 Returns the minimum value in the specified column.
 
-```
+```sql
 min(expression)
 ```
 
@@ -364,10 +371,10 @@ min(expression)
 
 ### `string_agg`
 
-Concatenates the values of string expressions and places separator values between them.
+Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression.
 
-```
-string_agg(expression, delimiter)
+```sql
+string_agg([DISTINCT] expression, delimiter [ORDER BY expression])
 ```
 
 #### Arguments
@@ -383,7 +390,21 @@ string_agg(expression, delimiter)
 +--------------------------+
 | names_list               |
 +--------------------------+
-| Alice, Bob, Charlie      |
+| Alice, Bob, Bob, Charlie |
++--------------------------+
+> SELECT string_agg(name, ', ' ORDER BY name DESC) AS names_list
+  FROM employee;
++--------------------------+
+| names_list               |
++--------------------------+
+| Charlie, Bob, Bob, Alice |
++--------------------------+
+> SELECT string_agg(DISTINCT name, ', ' ORDER BY name DESC) AS names_list
+  FROM employee;
++--------------------------+
+| names_list               |
++--------------------------+
+| Charlie, Bob, Alice |
 +--------------------------+
 ```
 
@@ -391,7 +412,7 @@ string_agg(expression, delimiter)
 
 Returns the sum of all values in the specified column.
 
-```
+```sql
 sum(expression)
 ```
 
@@ -414,7 +435,7 @@ sum(expression)
 
 Returns the statistical sample variance of a set of numbers.
 
-```
+```sql
 var(expression)
 ```
 
@@ -431,7 +452,7 @@ var(expression)
 
 Returns the statistical population variance of a set of numbers.
 
-```
+```sql
 var_pop(expression)
 ```
 
@@ -479,7 +500,7 @@ _Alias of [var](#var)._
 
 Returns the coefficient of correlation between two numeric values.
 
-```
+```sql
 corr(expression1, expression2)
 ```
 
@@ -507,7 +528,7 @@ _Alias of [covar_samp](#covar_samp)._
 
 Returns the sample covariance of a set of number pairs.
 
-```
+```sql
 covar_samp(expression1, expression2)
 ```
 
@@ -531,7 +552,7 @@ covar_samp(expression1, expression2)
 
 Returns the sample covariance of a set of number pairs.
 
-```
+```sql
 covar_samp(expression1, expression2)
 ```
 
@@ -559,7 +580,7 @@ covar_samp(expression1, expression2)
 
 Returns the nth value in a group of values.
 
-```
+```sql
 nth_value(expression, n ORDER BY expression)
 ```
 
@@ -588,7 +609,7 @@ nth_value(expression, n ORDER BY expression)
 
 Computes the average of the independent variable (input) expression_x for the non-null paired data points.
 
-```
+```sql
 regr_avgx(expression_y, expression_x)
 ```
 
@@ -601,7 +622,7 @@ regr_avgx(expression_y, expression_x)
 
 Computes the average of the dependent variable (output) expression_y for the non-null paired data points.
 
-```
+```sql
 regr_avgy(expression_y, expression_x)
 ```
 
@@ -614,7 +635,7 @@ regr_avgy(expression_y, expression_x)
 
 Counts the number of non-null paired data points.
 
-```
+```sql
 regr_count(expression_y, expression_x)
 ```
 
@@ -627,7 +648,7 @@ regr_count(expression_y, expression_x)
 
 Computes the y-intercept of the linear regression line. For the equation (y = kx + b), this function returns b.
 
-```
+```sql
 regr_intercept(expression_y, expression_x)
 ```
 
@@ -640,7 +661,7 @@ regr_intercept(expression_y, expression_x)
 
 Computes the square of the correlation coefficient between the independent and dependent variables.
 
-```
+```sql
 regr_r2(expression_y, expression_x)
 ```
 
@@ -653,7 +674,7 @@ regr_r2(expression_y, expression_x)
 
 Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k\*X + b) using minimal RSS fitting.
 
-```
+```sql
 regr_slope(expression_y, expression_x)
 ```
 
@@ -666,7 +687,7 @@ regr_slope(expression_y, expression_x)
 
 Computes the sum of squares of the independent variable.
 
-```
+```sql
 regr_sxx(expression_y, expression_x)
 ```
 
@@ -679,7 +700,7 @@ regr_sxx(expression_y, expression_x)
 
 Computes the sum of products of paired data points.
 
-```
+```sql
 regr_sxy(expression_y, expression_x)
 ```
 
@@ -692,7 +713,7 @@ regr_sxy(expression_y, expression_x)
 
 Computes the sum of squares of the dependent variable.
 
-```
+```sql
 regr_syy(expression_y, expression_x)
 ```
 
@@ -705,7 +726,7 @@ regr_syy(expression_y, expression_x)
 
 Returns the standard deviation of a set of numbers.
 
-```
+```sql
 stddev(expression)
 ```
 
@@ -732,7 +753,7 @@ stddev(expression)
 
 Returns the population standard deviation of a set of numbers.
 
-```
+```sql
 stddev_pop(expression)
 ```
 
@@ -766,7 +787,7 @@ _Alias of [stddev](#stddev)._
 
 Returns the approximate number of distinct input values calculated using the HyperLogLog algorithm.
 
-```
+```sql
 approx_distinct(expression)
 ```
 
@@ -787,9 +808,9 @@ approx_distinct(expression)
 
 ### `approx_median`
 
-Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(x, 0.5)`.
+Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY x)`.
 
-```
+```sql
 approx_median(expression)
 ```
 
@@ -812,8 +833,8 @@ approx_median(expression)
 
 Returns the approximate percentile of input values using the t-digest algorithm.
 
-```
-approx_percentile_cont(expression, percentile, centroids)
+```sql
+approx_percentile_cont(percentile, centroids) WITHIN GROUP (ORDER BY expression)
 ```
 
 #### Arguments
@@ -825,20 +846,20 @@ approx_percentile_cont(expression, percentile, centroids)
 #### Example
 
 ```sql
-> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
-+-------------------------------------------------+
-| approx_percentile_cont(column_name, 0.75, 100)  |
-+-------------------------------------------------+
-| 65.0                                            |
-+-------------------------------------------------+
+> SELECT approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++-----------------------------------------------------------------------+
+| approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) |
++-----------------------------------------------------------------------+
+| 65.0                                                                  |
++-----------------------------------------------------------------------+
 ```
 
 ### `approx_percentile_cont_with_weight`
 
 Returns the weighted approximate percentile of input values using the t-digest algorithm.
 
-```
-approx_percentile_cont_with_weight(expression, weight, percentile)
+```sql
+approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (ORDER BY expression)
 ```
 
 #### Arguments
@@ -850,10 +871,10 @@ approx_percentile_cont_with_weight(expression, weight, percentile)
 #### Example
 
 ```sql
-> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
-+----------------------------------------------------------------------+
-| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
-+----------------------------------------------------------------------+
-| 78.5                                                                 |
-+----------------------------------------------------------------------+
+> SELECT approx_percentile_cont_with_weight(weight_column, 0.90) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++---------------------------------------------------------------------------------------------+
+| approx_percentile_cont_with_weight(weight_column, 0.90) WITHIN GROUP (ORDER BY column_name) |
++---------------------------------------------------------------------------------------------+
+| 78.5                                                                                        |
++---------------------------------------------------------------------------------------------+
 ```

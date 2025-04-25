@@ -20,7 +20,11 @@
 //! but provide an error message rather than a panic, as the corresponding
 //! kernels in arrow-rs such as `as_boolean_array` do.
 
-use crate::{downcast_value, DataFusionError, Result};
+use crate::{downcast_value, Result};
+use arrow::array::{
+    BinaryViewArray, Float16Array, Int16Array, Int8Array, LargeBinaryArray,
+    LargeStringArray, StringViewArray, UInt16Array,
+};
 use arrow::{
     array::{
         Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
@@ -35,10 +39,6 @@ use arrow::{
         UInt8Array, UnionArray,
     },
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
-};
-use arrow_array::{
-    BinaryViewArray, Float16Array, Int16Array, Int8Array, LargeBinaryArray,
-    LargeStringArray, StringViewArray, UInt16Array,
 };
 
 // Downcast ArrayRef to Date32Array

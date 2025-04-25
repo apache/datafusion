@@ -46,6 +46,8 @@ impl SessionContext {
         let listing_options = options
             .to_listing_options(&self.copied_config(), self.copied_table_options());
 
+        self.register_type_check(table_path.as_ref(), &listing_options.file_extension)?;
+
         self.register_listing_table(
             table_ref,
             table_path,

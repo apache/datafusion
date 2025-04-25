@@ -34,6 +34,7 @@ use crate::{
     ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
+
 use arrow::array::ArrayRef;
 use arrow::compute::{concat, concat_batches};
 use arrow::datatypes::SchemaRef;
@@ -44,6 +45,7 @@ use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+
 use futures::{ready, Stream, StreamExt};
 
 /// Window execution plan
@@ -55,8 +57,6 @@ pub struct WindowAggExec {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run
     schema: SchemaRef,
-    /// Partition Keys
-    pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Partition by indices that defines preset for existing ordering
@@ -64,6 +64,8 @@ pub struct WindowAggExec {
     ordered_partition_by_indices: Vec<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// If `can_partition` is false, partition_keys is always empty.
+    can_repartition: bool,
 }
 
 impl WindowAggExec {
@@ -71,7 +73,7 @@ impl WindowAggExec {
     pub fn try_new(
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: Arc<dyn ExecutionPlan>,
-        partition_keys: Vec<Arc<dyn PhysicalExpr>>,
+        can_repartition: bool,
     ) -> Result<Self> {
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
@@ -83,10 +85,10 @@ impl WindowAggExec {
             input,
             window_expr,
             schema,
-            partition_keys,
             metrics: ExecutionPlanMetricsSet::new(),
             ordered_partition_by_indices,
             cache,
+            can_repartition,
         })
     }
 
@@ -118,10 +120,10 @@ impl WindowAggExec {
     fn compute_properties(
         schema: SchemaRef,
         input: &Arc<dyn ExecutionPlan>,
-        window_expr: &[Arc<dyn WindowExpr>],
+        window_exprs: &[Arc<dyn WindowExpr>],
     ) -> PlanProperties {
         // Calculate equivalence properties:
-        let eq_properties = window_equivalence_properties(&schema, input, window_expr);
+        let eq_properties = window_equivalence_properties(&schema, input, window_exprs);
 
         // Get output partitioning:
         // Because we can have repartitioning using the partition keys this
@@ -136,6 +138,23 @@ impl WindowAggExec {
             EmissionType::Final,
             input.boundedness(),
         )
+    }
+
+    pub fn partition_keys(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        if !self.can_repartition {
+            vec![]
+        } else {
+            let all_partition_keys = self
+                .window_expr()
+                .iter()
+                .map(|expr| expr.partition_by().to_vec())
+                .collect::<Vec<_>>();
+
+            all_partition_keys
+                .into_iter()
+                .min_by_key(|s| s.len())
+                .unwrap_or_else(Vec::new)
+        }
     }
 }
 
@@ -161,6 +180,14 @@ impl DisplayAs for WindowAggExec {
                     })
                     .collect();
                 write!(f, "wdw=[{}]", g.join(", "))?;
+            }
+            DisplayFormatType::TreeRender => {
+                let g: Vec<String> = self
+                    .window_expr
+                    .iter()
+                    .map(|e| e.name().to_owned().to_string())
+                    .collect();
+                writeln!(f, "select_list={}", g.join(", "))?;
             }
         }
         Ok(())
@@ -204,10 +231,10 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_keys.is_empty() {
+        if self.partition_keys().is_empty() {
             vec![Distribution::SinglePartition]
         } else {
-            vec![Distribution::HashPartitioned(self.partition_keys.clone())]
+            vec![Distribution::HashPartitioned(self.partition_keys())]
         }
     }
 
@@ -218,7 +245,7 @@ impl ExecutionPlan for WindowAggExec {
         Ok(Arc::new(WindowAggExec::try_new(
             self.window_expr.clone(),
             Arc::clone(&children[0]),
-            self.partition_keys.clone(),
+            true,
         )?))
     }
 

@@ -5,7 +5,7 @@
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -75,6 +75,8 @@ pub mod logical_plan_node {
         RecursiveQuery(::prost::alloc::boxed::Box<super::RecursiveQueryNode>),
         #[prost(message, tag = "32")]
         CteWorkTableScan(super::CteWorkTableScanNode),
+        #[prost(message, tag = "33")]
+        Dml(::prost::alloc::boxed::Box<super::DmlNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -113,8 +115,8 @@ pub struct ListingTableScanNode {
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, repeated, tag = "6")]
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
-    #[prost(string, repeated, tag = "7")]
-    pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "7")]
+    pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
     #[prost(bool, tag = "8")]
     pub collect_stat: bool,
     #[prost(uint32, tag = "9")]
@@ -400,6 +402,68 @@ pub struct CopyToNode {
     pub partition_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DmlNode {
+    #[prost(enumeration = "dml_node::Type", tag = "1")]
+    pub dml_type: i32,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, optional, tag = "3")]
+    pub table_name: ::core::option::Option<TableReference>,
+    #[prost(message, optional, boxed, tag = "5")]
+    pub target: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+}
+/// Nested message and enum types in `DmlNode`.
+pub mod dml_node {
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum Type {
+        Update = 0,
+        Delete = 1,
+        Ctas = 2,
+        InsertAppend = 3,
+        InsertOverwrite = 4,
+        InsertReplace = 5,
+    }
+    impl Type {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Update => "UPDATE",
+                Self::Delete => "DELETE",
+                Self::Ctas => "CTAS",
+                Self::InsertAppend => "INSERT_APPEND",
+                Self::InsertOverwrite => "INSERT_OVERWRITE",
+                Self::InsertReplace => "INSERT_REPLACE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "UPDATE" => Some(Self::Update),
+                "DELETE" => Some(Self::Delete),
+                "CTAS" => Some(Self::Ctas),
+                "INSERT_APPEND" => Some(Self::InsertAppend),
+                "INSERT_OVERWRITE" => Some(Self::InsertOverwrite),
+                "INSERT_REPLACE" => Some(Self::InsertReplace),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnnestNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
@@ -675,6 +739,11 @@ pub struct AliasNode {
     pub alias: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "3")]
     pub relation: ::prost::alloc::vec::Vec<TableReference>,
+    #[prost(map = "string, string", tag = "4")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BinaryExprNode {
@@ -979,7 +1048,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1047,6 +1116,8 @@ pub mod physical_plan_node {
         ParquetSink(::prost::alloc::boxed::Box<super::ParquetSinkExecNode>),
         #[prost(message, tag = "30")]
         Unnest(::prost::alloc::boxed::Box<super::UnnestExecNode>),
+        #[prost(message, tag = "31")]
+        JsonScan(super::JsonScanExecNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1072,6 +1143,8 @@ pub struct FileSinkConfig {
     pub keep_partition_by_columns: bool,
     #[prost(enumeration = "InsertOp", tag = "10")]
     pub insert_op: i32,
+    #[prost(string, tag = "11")]
+    pub file_extension: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JsonSink {
@@ -1442,6 +1515,10 @@ pub struct FileScanExecConf {
     pub object_store_url: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "9")]
     pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
+    #[prost(message, optional, tag = "11")]
+    pub constraints: ::core::option::Option<super::datafusion_common::Constraints>,
+    #[prost(uint64, optional, tag = "12")]
+    pub batch_size: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -1449,6 +1526,10 @@ pub struct ParquetScanExecNode {
     pub base_conf: ::core::option::Option<FileScanExecConf>,
     #[prost(message, optional, tag = "3")]
     pub predicate: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "4")]
+    pub parquet_options: ::core::option::Option<
+        super::datafusion_common::TableParquetOptions,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {
@@ -1479,6 +1560,11 @@ pub mod csv_scan_exec_node {
         #[prost(string, tag = "6")]
         Comment(::prost::alloc::string::String),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct JsonScanExecNode {
+    #[prost(message, optional, tag = "1")]
+    pub base_conf: ::core::option::Option<FileScanExecConf>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroScanExecNode {
@@ -1722,6 +1808,8 @@ pub struct NestedLoopJoinExecNode {
     pub join_type: i32,
     #[prost(message, optional, tag = "4")]
     pub filter: ::core::option::Option<JoinFilter>,
+    #[prost(uint32, repeated, tag = "5")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CoalesceBatchesExecNode {
@@ -1736,6 +1824,8 @@ pub struct CoalesceBatchesExecNode {
 pub struct CoalescePartitionsExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(uint32, optional, tag = "2")]
+    pub fetch: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalHashRepartition {

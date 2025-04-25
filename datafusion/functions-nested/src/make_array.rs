@@ -22,13 +22,16 @@ use std::sync::Arc;
 use std::vec;
 
 use crate::utils::make_scalar_function;
-use arrow::array::{ArrayData, Capacities, MutableArrayData};
-use arrow_array::{
-    new_null_array, Array, ArrayRef, GenericListArray, NullArray, OffsetSizeTrait,
+use arrow::array::{
+    new_null_array, Array, ArrayData, ArrayRef, Capacities, GenericListArray,
+    MutableArrayData, NullArray, OffsetSizeTrait,
 };
-use arrow_buffer::OffsetBuffer;
-use arrow_schema::DataType::{List, Null};
-use arrow_schema::{DataType, Field};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    DataType::{List, Null},
+    Field,
+};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::binary::{
@@ -114,12 +117,11 @@ impl ScalarUDFImpl for MakeArray {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(make_array_inner)(args)
+        make_scalar_function(make_array_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -136,10 +138,7 @@ impl ScalarUDFImpl for MakeArray {
         }
 
         if let Some(new_type) = type_union_resolution(arg_types) {
-            // TODO: Move FixedSizeList to List in type_union_resolution
-            if let DataType::FixedSizeList(field, _) = new_type {
-                Ok(vec![List(field); arg_types.len()])
-            } else if new_type.is_null() {
+            if new_type.is_null() {
                 Ok(vec![DataType::Int64; arg_types.len()])
             } else {
                 Ok(vec![new_type; arg_types.len()])
@@ -278,7 +277,7 @@ fn array_array<O: OffsetSizeTrait>(
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         None,
     )?))
 }

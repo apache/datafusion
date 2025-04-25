@@ -25,7 +25,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -108,12 +108,11 @@ impl ScalarUDFImpl for SubstrIndexFunc {
         utf8_to_str_type(&arg_types[0], "substr_index")
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(substr_index, vec![])(args)
+        make_scalar_function(substr_index, vec![])(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -131,18 +130,13 @@ impl ScalarUDFImpl for SubstrIndexFunc {
 /// SUBSTRING_INDEX('www.apache.org', '.', -2) = apache.org
 /// SUBSTRING_INDEX('www.apache.org', '.', -1) = org
 fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!(
-            "substr_index was called with {} arguments. It requires 3.",
-            args.len()
-        );
-    }
+    let [str, delim, count] = take_function_args("substr_index", args)?;
 
-    match args[0].data_type() {
+    match str.data_type() {
         DataType::Utf8 => {
-            let string_array = args[0].as_string::<i32>();
-            let delimiter_array = args[1].as_string::<i32>();
-            let count_array: &PrimitiveArray<Int64Type> = args[2].as_primitive();
+            let string_array = str.as_string::<i32>();
+            let delimiter_array = delim.as_string::<i32>();
+            let count_array: &PrimitiveArray<Int64Type> = count.as_primitive();
             substr_index_general::<Int32Type, _, _>(
                 string_array,
                 delimiter_array,
@@ -150,9 +144,9 @@ fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
             )
         }
         DataType::LargeUtf8 => {
-            let string_array = args[0].as_string::<i64>();
-            let delimiter_array = args[1].as_string::<i64>();
-            let count_array: &PrimitiveArray<Int64Type> = args[2].as_primitive();
+            let string_array = str.as_string::<i64>();
+            let delimiter_array = delim.as_string::<i64>();
+            let count_array: &PrimitiveArray<Int64Type> = count.as_primitive();
             substr_index_general::<Int64Type, _, _>(
                 string_array,
                 delimiter_array,
@@ -160,9 +154,9 @@ fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
             )
         }
         DataType::Utf8View => {
-            let string_array = args[0].as_string_view();
-            let delimiter_array = args[1].as_string_view();
-            let count_array: &PrimitiveArray<Int64Type> = args[2].as_primitive();
+            let string_array = str.as_string_view();
+            let delimiter_array = delim.as_string_view();
+            let count_array: &PrimitiveArray<Int64Type> = count.as_primitive();
             substr_index_general::<Int32Type, _, _>(
                 string_array,
                 delimiter_array,

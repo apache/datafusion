@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::datasource::physical_plan::plan_to_csv;
 use datafusion_common::TableReference;
+use datafusion_datasource_csv::source::plan_to_csv;
 use std::sync::Arc;
 
 use super::super::options::{CsvReadOptions, ReadOptions};
@@ -62,6 +62,8 @@ impl SessionContext {
         let listing_options = options
             .to_listing_options(&self.copied_config(), self.copied_table_options());
 
+        self.register_type_check(table_path.as_ref(), &listing_options.file_extension)?;
+
         self.register_listing_table(
             table_ref,
             table_path,
@@ -87,8 +89,9 @@ impl SessionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_batches_eq;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
+    use datafusion_common::test_util::batches_to_string;
+    use insta::assert_snapshot;
 
     use tempfile::TempDir;
 
@@ -113,14 +116,13 @@ mod tests {
             plan_and_collect(&ctx, "SELECT sum(c1), sum(c2), count(*) FROM test").await?;
 
         assert_eq!(results.len(), 1);
-        let expected = [
-            "+--------------+--------------+----------+",
-            "| sum(test.c1) | sum(test.c2) | count(*) |",
-            "+--------------+--------------+----------+",
-            "| 10           | 110          | 20       |",
-            "+--------------+--------------+----------+",
-        ];
-        assert_batches_eq!(expected, &results);
+        assert_snapshot!(batches_to_string(&results), @r"
+        +--------------+--------------+----------+
+        | sum(test.c1) | sum(test.c2) | count(*) |
+        +--------------+--------------+----------+
+        | 10           | 110          | 20       |
+        +--------------+--------------+----------+
+        ");
 
         Ok(())
     }

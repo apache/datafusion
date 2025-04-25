@@ -133,14 +133,22 @@ impl DdlStatement {
                         constraints,
                         ..
                     }) => {
-                        write!(f, "CreateExternalTable: {name:?}{constraints}")
+                        if constraints.is_empty() {
+                            write!(f, "CreateExternalTable: {name:?}")
+                        } else {
+                            write!(f, "CreateExternalTable: {name:?} {constraints}")
+                        }
                     }
                     DdlStatement::CreateMemoryTable(CreateMemoryTable {
                         name,
                         constraints,
                         ..
                     }) => {
-                        write!(f, "CreateMemoryTable: {name:?}{constraints}")
+                        if constraints.is_empty() {
+                            write!(f, "CreateMemoryTable: {name:?}")
+                        } else {
+                            write!(f, "CreateMemoryTable: {name:?} {constraints}")
+                        }
                     }
                     DdlStatement::CreateView(CreateView { name, .. }) => {
                         write!(f, "CreateView: {name:?}")
@@ -181,7 +189,7 @@ impl DdlStatement {
                         write!(f, "CreateFunction: name {name:?}")
                     }
                     DdlStatement::DropFunction(DropFunction { name, .. }) => {
-                        write!(f, "CreateFunction: name {name:?}")
+                        write!(f, "DropFunction: name {name:?}")
                     }
                 }
             }

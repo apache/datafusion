@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use arrow_array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
+use arrow::array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
 use std::mem::size_of;

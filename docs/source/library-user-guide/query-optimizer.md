@@ -35,34 +35,34 @@ and applying it to a logical plan to produce an optimized logical plan.
 
 ```rust
 
+use std::sync::Arc;
+use datafusion::logical_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
+use datafusion::optimizer::{OptimizerRule, OptimizerContext, Optimizer};
+
 // We need a logical plan as the starting point. There are many ways to build a logical plan:
 //
 // The `datafusion-expr` crate provides a LogicalPlanBuilder
 // The `datafusion-sql` crate provides a SQL query planner that can create a LogicalPlan from SQL
 // The `datafusion` crate provides a DataFrame API that can create a LogicalPlan
-let logical_plan = ...
 
-let mut config = OptimizerContext::default();
-let optimizer = Optimizer::new(&config);
-let optimized_plan = optimizer.optimize(&logical_plan, &config, observe)?;
+let initial_logical_plan = LogicalPlanBuilder::empty(false).build().unwrap();
 
-fn observe(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
+// use builtin rules or customized rules
+let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> = vec![];
+
+let optimizer = Optimizer::with_rules(rules);
+
+let config = OptimizerContext::new().with_max_passes(16);
+
+let optimized_plan = optimizer.optimize(initial_logical_plan.clone(), &config, observer);
+
+fn observer(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
     println!(
         "After applying rule '{}':\n{}",
         rule.name(),
         plan.display_indent()
     )
 }
-```
-
-## Providing Custom Rules
-
-The optimizer can be created with a custom set of rules.
-
-```rust
-let optimizer = Optimizer::with_rules(vec![
-    Arc::new(MyRule {})
-]);
 ```
 
 ## Writing Optimization Rules
@@ -72,24 +72,69 @@ Please refer to the
 example to learn more about the general approach to writing optimizer rules and
 then move onto studying the existing rules.
 
+`OptimizerRule` transforms one ['LogicalPlan'] into another which
+computes the same results, but in a potentially more efficient
+way. If there are no suitable transformations for the input plan,
+the optimizer can simply return it as is.
+
 All rules must implement the `OptimizerRule` trait.
 
 ```rust
-/// `OptimizerRule` transforms one ['LogicalPlan'] into another which
-/// computes the same results, but in a potentially more efficient
-/// way. If there are no suitable transformations for the input plan,
-/// the optimizer can simply return it as is.
-pub trait OptimizerRule {
-    /// Rewrite `plan` to an optimized form
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
-    ) -> Result<LogicalPlan>;
+# use datafusion::common::tree_node::Transformed;
+# use datafusion::common::Result;
+# use datafusion::logical_expr::LogicalPlan;
+# use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
+#
 
-    /// A human readable name for this optimizer rule
-    fn name(&self) -> &str;
+#[derive(Default, Debug)]
+struct MyOptimizerRule {}
+
+impl OptimizerRule for MyOptimizerRule {
+    fn name(&self) -> &str {
+        "my_optimizer_rule"
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        unimplemented!()
+    }
 }
+```
+
+## Providing Custom Rules
+
+The optimizer can be created with a custom set of rules.
+
+```rust
+# use std::sync::Arc;
+# use datafusion::logical_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
+# use datafusion::optimizer::{OptimizerRule, OptimizerConfig, OptimizerContext, Optimizer};
+# use datafusion::common::tree_node::Transformed;
+# use datafusion::common::Result;
+#
+# #[derive(Default, Debug)]
+# struct MyOptimizerRule {}
+#
+# impl OptimizerRule for MyOptimizerRule {
+#     fn name(&self) -> &str {
+#         "my_optimizer_rule"
+#     }
+#
+#     fn rewrite(
+#         &self,
+#         plan: LogicalPlan,
+#         _config: &dyn OptimizerConfig,
+#     ) -> Result<Transformed<LogicalPlan>> {
+#         unimplemented!()
+#     }
+# }
+
+let optimizer = Optimizer::with_rules(vec![
+    Arc::new(MyOptimizerRule {})
+]);
 ```
 
 ### General Guidelines
@@ -168,16 +213,19 @@ and [#3555](https://github.com/apache/datafusion/issues/3555) occur where the ex
 There are currently two ways to create a name for an expression in the logical plan.
 
 ```rust
+# use datafusion::common::Result;
+# struct Expr;
+
 impl Expr {
     /// Returns the name of this expression as it should appear in a schema. This name
     /// will not include any CAST expressions.
     pub fn display_name(&self) -> Result<String> {
-        create_name(self)
+        Ok("display_name".to_string())
     }
 
     /// Returns a full and complete string representation of this expression.
     pub fn canonical_name(&self) -> String {
-        format!("{}", self)
+        "canonical_name".to_string()
     }
 }
 ```
@@ -187,93 +235,99 @@ name to be used in a schema, `display_name` should be used.
 
 ### Utilities
 
-There are a number of utility methods provided that take care of some common tasks.
+There are a number of [utility methods][util] provided that take care of some common tasks.
 
-### ExprVisitor
+[util]: https://github.com/apache/datafusion/blob/main/datafusion/expr/src/utils.rs
 
-The `ExprVisitor` and `ExprVisitable` traits provide a mechanism for applying a visitor pattern to an expression tree.
+### Recursively walk an expression tree
 
-Here is an example that demonstrates this.
+The [TreeNode API] provides a convenient way to recursively walk an expression or plan tree.
+
+For example, to find all subquery references in a logical plan, the following code can be used:
 
 ```rust
-fn extract_subquery_filters(expression: &Expr, extracted: &mut Vec<Expr>) -> Result<()> {
-    struct InSubqueryVisitor<'a> {
-        accum: &'a mut Vec<Expr>,
-    }
-
-    impl ExpressionVisitor for InSubqueryVisitor<'_> {
-        fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
+# use datafusion::prelude::*;
+# use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
+// Return all subquery references in an expression
+fn extract_subquery_filters(expression: &Expr) -> Result<Vec<&Expr>> {
+    let mut extracted = vec![];
+    expression.apply(|expr| {
             if let Expr::InSubquery(_) = expr {
-                self.accum.push(expr.to_owned());
+                extracted.push(expr);
             }
-            Ok(Recursion::Continue(self))
-        }
-    }
-
-    expression.accept(InSubqueryVisitor { accum: extracted })?;
-    Ok(())
+            Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(extracted)
 }
 ```
 
-### Rewriting Expressions
-
-The `MyExprRewriter` trait can be implemented to provide a way to rewrite expressions. This rule can then be applied
-to an expression by calling `Expr::rewrite` (from the `ExprRewritable` trait).
-
-The `rewrite` method will perform a depth first walk of the expression and its children to rewrite an expression,
-consuming `self` producing a new expression.
+Likewise you can use the [TreeNode API] to rewrite a `LogicalPlan` or `ExecutionPlan`
 
 ```rust
-let mut expr_rewriter = MyExprRewriter {};
-let expr = expr.rewrite(&mut expr_rewriter)?;
+# use datafusion::prelude::*;
+# use datafusion::logical_expr::{LogicalPlan, Join};
+# use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
+// Return all joins in a logical plan
+fn find_joins(overall_plan: &LogicalPlan) -> Result<Vec<&Join>> {
+    let mut extracted = vec![];
+    overall_plan.apply(|plan| {
+            if let LogicalPlan::Join(join) = plan {
+                extracted.push(join);
+            }
+            Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(extracted)
+}
 ```
 
-Here is an example implementation which will rewrite `expr BETWEEN a AND b` as `expr >= a AND expr <= b`. Note that the
-implementation does not need to perform any recursion since this is handled by the `rewrite` method.
+### Rewriting expressions
+
+The [TreeNode API] also provides a convenient way to rewrite expressions and
+plans as well. For example to rewrite all expressions like
+
+```sql
+col BETWEEN x AND y
+```
+
+into
+
+```sql
+col >= x AND col <= y
+```
+
+you can use the following code:
 
 ```rust
-struct MyExprRewriter {}
-
-impl ExprRewriter for MyExprRewriter {
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        match expr {
-            Expr::Between {
+# use datafusion::prelude::*;
+# use datafusion::logical_expr::{Between};
+# use datafusion::logical_expr::expr_fn::*;
+# use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
+// Recursively rewrite all BETWEEN expressions
+// returns Transformed::yes if any changes were made
+fn rewrite_between(expr: Expr) -> Result<Transformed<Expr>> {
+    // transform_up does a bottom up rewrite
+    expr.transform_up(|expr| {
+        // only handle BETWEEN expressions
+        let Expr::Between(Between {
                 negated,
                 expr,
                 low,
                 high,
-            } => {
-                let expr: Expr = expr.as_ref().clone();
-                let low: Expr = low.as_ref().clone();
-                let high: Expr = high.as_ref().clone();
-                if negated {
-                    Ok(expr.clone().lt(low).or(expr.clone().gt(high)))
-                } else {
-                    Ok(expr.clone().gt_eq(low).and(expr.clone().lt_eq(high)))
-                }
-            }
-            _ => Ok(expr.clone()),
-        }
-    }
-}
-```
-
-### optimize_children
-
-Typically a rule is applied recursively to all operators within a query plan. Rather than duplicate
-that logic in each rule, an `optimize_children` method is provided. This recursively invokes the `optimize` method on
-the plan's children and then returns a node of the same type.
-
-```rust
-fn optimize(
-    &self,
-    plan: &LogicalPlan,
-    _config: &mut OptimizerConfig,
-) -> Result<LogicalPlan> {
-    // recurse down and optimize children first
-    let plan = utils::optimize_children(self, plan, _config)?;
-
-    ...
+        }) = expr else {
+            return Ok(Transformed::no(expr))
+        };
+        let rewritten_expr = if negated {
+            // don't rewrite NOT BETWEEN
+            Expr::Between(Between::new(expr, negated, low, high))
+        } else {
+            // rewrite to (expr >= low) AND (expr <= high)
+            expr.clone().gt_eq(*low).and(expr.lt_eq(*high))
+        };
+        Ok(Transformed::yes(rewritten_expr))
+    })
 }
 ```
 
@@ -334,3 +388,119 @@ In the following example, the `type_coercion` and `simplify_expressions` passes 
 ```
 
 [df]: https://crates.io/crates/datafusion
+
+## Thinking about Query Optimization
+
+Query optimization in DataFusion uses a cost based model. The cost based model
+relies on table and column level statistics to estimate selectivity; selectivity
+estimates are an important piece in cost analysis for filters and projections
+as they allow estimating the cost of joins and filters.
+
+An important piece of building these estimates is _boundary analysis_ which uses
+interval arithmetic to take an expression such as `a > 2500 AND a <= 5000` and
+build an accurate selectivity estimate that can then be used to find more efficient
+plans.
+
+### `AnalysisContext` API
+
+The `AnalysisContext` serves as a shared knowledge base during expression evaluation
+and boundary analysis. Think of it as a dynamic repository that maintains information about:
+
+1. Current known boundaries for columns and expressions
+2. Statistics that have been gathered or inferred
+3. A mutable state that can be updated as analysis progresses
+
+What makes `AnalysisContext` particularly powerful is its ability to propagate information
+through the expression tree. As each node in the expression tree is analyzed, it can both
+read from and write to this shared context, allowing for sophisticated boundary analysis and inference.
+
+### `ColumnStatistics` for Cardinality Estimation
+
+Column statistics form the foundation of optimization decisions. Rather than just tracking
+simple metrics, DataFusion's `ColumnStatistics` provides a rich set of information including:
+
+- Null value counts
+- Maximum and minimum values
+- Value sums (for numeric columns)
+- Distinct value counts
+
+Each of these statistics is wrapped in a `Precision` type that indicates whether the value is
+exact or estimated, allowing the optimizer to make informed decisions about the reliability
+of its cardinality estimates.
+
+### Boundary Analaysis Flow
+
+The boundary analysis process flows through several stages, with each stage building
+upon the information gathered in previous stages. The `AnalysisContext` is continuously
+updated as the analysis progresses through the expression tree.
+
+#### Expression Boundary Analysis
+
+When analyzing expressions, DataFusion runs boundary analysis using interval arithmetic.
+Consider a simple predicate like age > 18 AND age <= 25. The analysis flows as follows:
+
+1. Context Initialization
+
+   - Begin with known column statistics
+   - Set up initial boundaries based on column constraints
+   - Initialize the shared analysis context
+
+2. Expression Tree Walk
+
+   - Analyze each node in the expression tree
+   - Propagate boundary information upward
+   - Allow child nodes to influence parent boundaries
+
+3. Boundary Updates
+   - Each expression can update the shared context
+   - Changes flow through the entire expression tree
+   - Final boundaries inform optimization decisions
+
+### Working with the analysis API
+
+The following example shows how you can run an analysis pass on a physical expression
+to infer the selectivity of the expression and the space of possible values it can
+take.
+
+```rust
+# use std::sync::Arc;
+# use datafusion::prelude::*;
+# use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
+# use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+# use datafusion::common::stats::Precision;
+#
+# use datafusion::common::{ColumnStatistics, DFSchema};
+# use datafusion::common::{ScalarValue, ToDFSchema};
+# use datafusion::error::Result;
+fn analyze_filter_example() -> Result<()> {
+    // Create a schema with an 'age' column
+    let age = Field::new("age", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![age]));
+
+    // Define column statistics
+    let column_stats = ColumnStatistics {
+        null_count: Precision::Exact(0),
+        max_value: Precision::Exact(ScalarValue::Int64(Some(79))),
+        min_value: Precision::Exact(ScalarValue::Int64(Some(14))),
+        distinct_count: Precision::Absent,
+        sum_value: Precision::Absent,
+    };
+
+    // Create expression: age > 18 AND age <= 25
+    let expr = col("age")
+        .gt(lit(18i64))
+        .and(col("age").lt_eq(lit(25i64)));
+
+    // Initialize analysis context
+    let initial_boundaries = vec![ExprBoundaries::try_from_column(
+        &schema, &column_stats, 0)?];
+    let context = AnalysisContext::new(initial_boundaries);
+
+    // Analyze expression
+    let df_schema = DFSchema::try_from(schema)?;
+    let physical_expr = SessionContext::new().create_physical_expr(expr, &df_schema)?;
+    let analysis = analyze(&physical_expr, context, df_schema.as_ref())?;
+
+    Ok(())
+}
+```

@@ -24,7 +24,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, Sort as SortExpr};
+use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -36,9 +36,11 @@ use crate::logical_plan::{
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
+use crate::select_expr::SelectExpr;
 use crate::utils::{
-    can_hash, columnize_expr, compare_sort_expr, expr_to_columns,
-    find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
+    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
+    group_window_expr_by_sort_keys,
 };
 use crate::{
     and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
@@ -46,16 +48,15 @@ use crate::{
 };
 
 use super::dml::InsertOp;
-use super::plan::ColumnUnnestList;
+use super::plan::{ColumnUnnestList, ExplainFormat};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
-    FunctionalDependencies, Result, ScalarValue, TableReference, ToDFSchema,
-    UnnestOptions,
+    plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -63,6 +64,26 @@ use indexmap::IndexSet;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
+
+/// Options for [`LogicalPlanBuilder`]
+#[derive(Default, Debug, Clone)]
+pub struct LogicalPlanBuilderOptions {
+    /// Flag indicating whether the plan builder should add
+    /// functionally dependent expressions as additional aggregation groupings.
+    add_implicit_group_by_exprs: bool,
+}
+
+impl LogicalPlanBuilderOptions {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Should the builder add functionally dependent expressions as additional aggregation groupings.
+    pub fn with_add_implicit_group_by_exprs(mut self, add: bool) -> Self {
+        self.add_implicit_group_by_exprs = add;
+        self
+    }
+}
 
 /// Builder for logical plans
 ///
@@ -104,6 +125,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 #[derive(Debug, Clone)]
 pub struct LogicalPlanBuilder {
     plan: Arc<LogicalPlan>,
+    options: LogicalPlanBuilderOptions,
 }
 
 impl LogicalPlanBuilder {
@@ -111,12 +133,21 @@ impl LogicalPlanBuilder {
     pub fn new(plan: LogicalPlan) -> Self {
         Self {
             plan: Arc::new(plan),
+            options: LogicalPlanBuilderOptions::default(),
         }
     }
 
     /// Create a builder from an existing plan
     pub fn new_from_arc(plan: Arc<LogicalPlan>) -> Self {
-        Self { plan }
+        Self {
+            plan,
+            options: LogicalPlanBuilderOptions::default(),
+        }
+    }
+
+    pub fn with_options(mut self, options: LogicalPlanBuilderOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// Return the output schema of the plan build so far
@@ -243,9 +274,10 @@ impl LogicalPlanBuilder {
         schema: &DFSchema,
     ) -> Result<Self> {
         let n_cols = values[0].len();
-        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
+        let mut fields = ValuesFields::new();
         for j in 0..n_cols {
             let field_type = schema.field(j).data_type();
+            let field_nullable = schema.field(j).is_nullable();
             for row in values.iter() {
                 let value = &row[j];
                 let data_type = value.get_type(schema)?;
@@ -261,17 +293,17 @@ impl LogicalPlanBuilder {
                     }
                 }
             }
-            field_types.push(field_type.to_owned());
+            fields.push(field_type.to_owned(), field_nullable);
         }
 
-        Self::infer_inner(values, &field_types, schema)
+        Self::infer_inner(values, fields, schema)
     }
 
     fn infer_data(values: Vec<Vec<Expr>>) -> Result<Self> {
         let n_cols = values[0].len();
         let schema = DFSchema::empty();
+        let mut fields = ValuesFields::new();
 
-        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
             let mut common_type: Option<DataType> = None;
             for (i, row) in values.iter().enumerate() {
@@ -294,20 +326,21 @@ impl LogicalPlanBuilder {
             }
             // assuming common_type was not set, and no error, therefore the type should be NULL
             // since the code loop skips NULL
-            field_types.push(common_type.unwrap_or(DataType::Null));
+            fields.push(common_type.unwrap_or(DataType::Null), true);
         }
 
-        Self::infer_inner(values, &field_types, &schema)
+        Self::infer_inner(values, fields, &schema)
     }
 
     fn infer_inner(
         mut values: Vec<Vec<Expr>>,
-        field_types: &[DataType],
+        fields: ValuesFields,
         schema: &DFSchema,
     ) -> Result<Self> {
+        let fields = fields.into_fields();
         // wrap cast if data type is not same as common type.
         for row in &mut values {
-            for (j, field_type) in field_types.iter().enumerate() {
+            for (j, field_type) in fields.iter().map(|f| f.data_type()).enumerate() {
                 if let Expr::Literal(ScalarValue::Null) = row[j] {
                     row[j] = Expr::Literal(ScalarValue::try_from(field_type)?);
                 } else {
@@ -315,16 +348,8 @@ impl LogicalPlanBuilder {
                 }
             }
         }
-        let fields = field_types
-            .iter()
-            .enumerate()
-            .map(|(j, data_type)| {
-                // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
-                let name = &format!("column{}", j + 1);
-                Field::new(name, data_type.clone(), true)
-            })
-            .collect::<Vec<_>>();
-        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let dfschema = DFSchema::from_unqualified_fields(fields, HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
 
         Ok(Self::new(LogicalPlan::Values(Values { schema, values })))
@@ -387,18 +412,49 @@ impl LogicalPlanBuilder {
         })))
     }
 
-    /// Create a [DmlStatement] for inserting the contents of this builder into the named table
+    /// Create a [`DmlStatement`] for inserting the contents of this builder into the named table.
+    ///
+    /// Note,  use a [`DefaultTableSource`] to insert into a [`TableProvider`]
+    ///
+    /// [`DefaultTableSource`]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
+    /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
+    ///
+    /// # Example:
+    /// ```
+    /// # use datafusion_expr::{lit, LogicalPlanBuilder,
+    /// #  logical_plan::builder::LogicalTableSource,
+    /// # };
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{Schema, DataType, Field};
+    /// # use datafusion_expr::dml::InsertOp;
+    /// #
+    /// # fn test() -> datafusion_common::Result<()> {
+    /// # let employee_schema = Arc::new(Schema::new(vec![
+    /// #     Field::new("id", DataType::Int32, false),
+    /// # ])) as _;
+    /// # let table_source = Arc::new(LogicalTableSource::new(employee_schema));
+    /// // VALUES (1), (2)
+    /// let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?
+    ///   .build()?;
+    /// // INSERT INTO MyTable VALUES (1), (2)
+    /// let insert_plan = LogicalPlanBuilder::insert_into(
+    ///   input,
+    ///   "MyTable",
+    ///   table_source,
+    ///   InsertOp::Append,
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn insert_into(
         input: LogicalPlan,
         table_name: impl Into<TableReference>,
-        table_schema: &Schema,
+        target: Arc<dyn TableSource>,
         insert_op: InsertOp,
     ) -> Result<Self> {
-        let table_schema = table_schema.clone().to_dfschema_ref()?;
-
         Ok(Self::new(LogicalPlan::Dml(DmlStatement::new(
             table_name.into(),
-            table_schema,
+            target,
             WriteOp::Insert(insert_op),
             Arc::new(input),
         ))))
@@ -411,9 +467,7 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
-        TableScan::try_new(table_name, table_source, projection, filters, None)
-            .map(LogicalPlan::TableScan)
-            .map(Self::new)
+        Self::scan_with_filters_inner(table_name, table_source, projection, filters, None)
     }
 
     /// Convert a table provider into a builder with a TableScan with filter and fetch
@@ -424,15 +478,58 @@ impl LogicalPlanBuilder {
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        TableScan::try_new(table_name, table_source, projection, filters, fetch)
-            .map(LogicalPlan::TableScan)
-            .map(Self::new)
+        Self::scan_with_filters_inner(
+            table_name,
+            table_source,
+            projection,
+            filters,
+            fetch,
+        )
+    }
+
+    fn scan_with_filters_inner(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<Expr>,
+        fetch: Option<usize>,
+    ) -> Result<Self> {
+        let table_scan =
+            TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
+
+        // Inline TableScan
+        if table_scan.filters.is_empty() {
+            if let Some(p) = table_scan.source.get_logical_plan() {
+                let sub_plan = p.into_owned();
+
+                if let Some(proj) = table_scan.projection {
+                    let projection_exprs = proj
+                        .into_iter()
+                        .map(|i| {
+                            Expr::Column(Column::from(
+                                sub_plan.schema().qualified_field(i),
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    return Self::new(sub_plan)
+                        .project(projection_exprs)?
+                        .alias(table_scan.table_name);
+                }
+
+                // Ensures that the reference to the inlined table remains the
+                // same, meaning we don't have to change any of the parent nodes
+                // that reference this table.
+                return Self::new(sub_plan).alias(table_scan.table_name);
+            }
+        }
+
+        Ok(Self::new(LogicalPlan::TableScan(table_scan)))
     }
 
     /// Wrap a plan in a window
     pub fn window_plan(
         input: LogicalPlan,
-        window_exprs: Vec<Expr>,
+        window_exprs: impl IntoIterator<Item = Expr>,
     ) -> Result<LogicalPlan> {
         let mut plan = input;
         let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
@@ -466,12 +563,22 @@ impl LogicalPlanBuilder {
         }
         Ok(plan)
     }
+
     /// Apply a projection without alias.
     pub fn project(
         self,
-        expr: impl IntoIterator<Item = impl Into<Expr>>,
+        expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
     ) -> Result<Self> {
         project(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
+    }
+
+    /// Apply a projection without alias with optional validation
+    /// (true to validate, false to not validate)
+    pub fn project_with_validation(
+        self,
+        expr: Vec<(impl Into<SelectExpr>, bool)>,
+    ) -> Result<Self> {
+        project_with_validation(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
     }
 
     /// Select the given column indices
@@ -713,6 +820,7 @@ impl LogicalPlanBuilder {
             &missing_cols,
             is_distinct,
         )?;
+
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
             input: Arc::new(plan),
@@ -727,6 +835,21 @@ impl LogicalPlanBuilder {
     /// Apply a union, preserving duplicate rows
     pub fn union(self, plan: LogicalPlan) -> Result<Self> {
         union(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
+    }
+
+    /// Apply a union by name, preserving duplicate rows
+    pub fn union_by_name(self, plan: LogicalPlan) -> Result<Self> {
+        union_by_name(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
+    }
+
+    /// Apply a union by name, removing duplicate rows
+    pub fn union_by_name_distinct(self, plan: LogicalPlan) -> Result<Self> {
+        let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
+        let right_plan: LogicalPlan = plan;
+
+        Ok(Self::new(LogicalPlan::Distinct(Distinct::All(Arc::new(
+            union_by_name(left_plan, right_plan)?,
+        )))))
     }
 
     /// Apply a union, removing duplicate rows
@@ -841,10 +964,16 @@ impl LogicalPlanBuilder {
         plan: &LogicalPlan,
         column: impl Into<Column>,
     ) -> Result<Column> {
+        let column = column.into();
+        if column.relation.is_some() {
+            // column is already normalized
+            return Ok(column);
+        }
+
         let schema = plan.schema();
         let fallback_schemas = plan.fallback_normalize_schemas();
         let using_columns = plan.using_columns()?;
-        column.into().normalize_with_schemas_and_ambiguity_check(
+        column.normalize_with_schemas_and_ambiguity_check(
             &[&[schema], &fallback_schemas],
             &using_columns,
         )
@@ -960,13 +1089,18 @@ impl LogicalPlanBuilder {
         let left_keys = left_keys.into_iter().collect::<Result<Vec<Column>>>()?;
         let right_keys = right_keys.into_iter().collect::<Result<Vec<Column>>>()?;
 
-        let on = left_keys
+        let on: Vec<_> = left_keys
             .into_iter()
             .zip(right_keys)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+
+        // Inner type without join condition is cross join
+        if join_type != JoinType::Inner && on.is_empty() && filter.is_none() {
+            return plan_err!("join condition should not be empty");
+        }
 
         Ok(Self::new(LogicalPlan::Join(Join {
             left: self.plan,
@@ -998,8 +1132,6 @@ impl LogicalPlanBuilder {
             .collect::<Result<_>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys).collect();
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
         let mut join_on: Vec<(Expr, Expr)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
@@ -1032,33 +1164,33 @@ impl LogicalPlanBuilder {
                 DataFusionError::Internal("filters should not be None here".to_string())
             })?)
         } else {
-            Ok(Self::new(LogicalPlan::Join(Join {
-                left: self.plan,
-                right: Arc::new(right),
-                on: join_on,
-                filter: filters,
+            let join = Join::try_new(
+                self.plan,
+                Arc::new(right),
+                join_on,
+                filters,
                 join_type,
-                join_constraint: JoinConstraint::Using,
-                schema: DFSchemaRef::new(join_schema),
-                null_equals_null: false,
-            })))
+                JoinConstraint::Using,
+                false,
+            )?;
+
+            Ok(Self::new(LogicalPlan::Join(join)))
         }
     }
 
     /// Apply a cross join
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &JoinType::Inner)?;
-        Ok(Self::new(LogicalPlan::Join(Join {
-            left: self.plan,
-            right: Arc::new(right),
-            on: vec![],
-            filter: None,
-            join_type: JoinType::Inner,
-            join_constraint: JoinConstraint::On,
-            null_equals_null: false,
-            schema: DFSchemaRef::new(join_schema),
-        })))
+        let join = Join::try_new(
+            self.plan,
+            Arc::new(right),
+            vec![],
+            None,
+            JoinType::Inner,
+            JoinConstraint::On,
+            false,
+        )?;
+
+        Ok(Self::new(LogicalPlan::Join(join)))
     }
 
     /// Repartition
@@ -1093,8 +1225,12 @@ impl LogicalPlanBuilder {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
 
-        let group_expr =
-            add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?;
+        let group_expr = if self.options.add_implicit_group_by_exprs {
+            add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?
+        } else {
+            group_expr
+        };
+
         Aggregate::try_new(self.plan, group_expr, aggr_expr)
             .map(LogicalPlan::Aggregate)
             .map(Self::new)
@@ -1123,6 +1259,7 @@ impl LogicalPlanBuilder {
             Ok(Self::new(LogicalPlan::Explain(Explain {
                 verbose,
                 plan: self.plan,
+                explain_format: ExplainFormat::Indent,
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded: false,
@@ -1214,7 +1351,7 @@ impl LogicalPlanBuilder {
     /// to columns from the existing input. `r`, the second element of the tuple,
     /// must only refer to columns from the right input.
     ///
-    /// `filter` contains any other other filter expression to apply during the
+    /// `filter` contains any other filter expression to apply during the
     /// join. Note that `equi_exprs` predicates are evaluated more efficiently
     /// than the filter expressions, so they are preferred.
     pub fn join_with_expr_keys(
@@ -1264,19 +1401,17 @@ impl LogicalPlanBuilder {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
-
-        Ok(Self::new(LogicalPlan::Join(Join {
-            left: self.plan,
-            right: Arc::new(right),
-            on: join_key_pairs,
+        let join = Join::try_new(
+            self.plan,
+            Arc::new(right),
+            join_key_pairs,
             filter,
             join_type,
-            join_constraint: JoinConstraint::On,
-            schema: DFSchemaRef::new(join_schema),
-            null_equals_null: false,
-        })))
+            JoinConstraint::On,
+            false,
+        )?;
+
+        Ok(Self::new(LogicalPlan::Join(join)))
     }
 
     /// Unnest the given column.
@@ -1321,19 +1456,60 @@ impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
     }
 }
 
+/// Container used when building fields for a `VALUES` node.
+#[derive(Default)]
+struct ValuesFields {
+    inner: Vec<Field>,
+}
+
+impl ValuesFields {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, data_type: DataType, nullable: bool) {
+        // Naming follows the convention described here:
+        // https://www.postgresql.org/docs/current/queries-values.html
+        let name = format!("column{}", self.inner.len() + 1);
+        self.inner.push(Field::new(name, data_type, nullable));
+    }
+
+    pub fn into_fields(self) -> Fields {
+        self.inner.into()
+    }
+}
+
+// `name_map` tracks a mapping between a field name and the number of appearances of that field.
+//
+// Some field names might already come to this function with the count (number of times it appeared)
+// as a sufix e.g. id:1, so there's still a chance of name collisions, for example,
+// if these three fields passed to this function: "col:1", "col" and "col", the function
+// would rename them to -> col:1, col, col:1 causing a posteriror error when building the DFSchema.
+// that's why we need the `seen` set, so the fields are always unique.
+//
 pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
     let mut name_map = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
     fields
         .into_iter()
         .map(|field| {
-            let counter = name_map.entry(field.name().to_string()).or_insert(0);
-            *counter += 1;
-            if *counter > 1 {
-                let new_name = format!("{}:{}", field.name(), *counter - 1);
-                Field::new(new_name, field.data_type().clone(), field.is_nullable())
-            } else {
-                field.as_ref().clone()
+            let base_name = field.name();
+            let count = name_map.entry(base_name.clone()).or_insert(0);
+            let mut new_name = base_name.clone();
+
+            // Loop until we find a name that hasn't been used
+            while seen.contains(&new_name) {
+                *count += 1;
+                new_name = format!("{}:{}", base_name, count);
             }
+
+            seen.insert(new_name.clone());
+
+            let mut modified_field =
+                Field::new(&new_name, field.data_type().clone(), field.is_nullable());
+            modified_field.set_metadata(field.metadata().clone());
+            modified_field
         })
         .collect()
 }
@@ -1482,6 +1658,7 @@ pub fn add_group_by_exprs_from_dependencies(
     }
     Ok(group_expr)
 }
+
 /// Errors if one or more expressions have equal names.
 pub fn validate_unique_names<'a>(
     node_name: &str,
@@ -1518,27 +1695,22 @@ pub fn validate_unique_names<'a>(
 /// [`TypeCoercionRewriter::coerce_union`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/struct.TypeCoercionRewriter.html#method.coerce_union
 /// [`coerce_union_schema`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/fn.coerce_union_schema.html
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
-    if left_plan.schema().fields().len() != right_plan.schema().fields().len() {
-        return plan_err!(
-            "UNION queries have different number of columns: \
-            left has {} columns whereas right has {} columns",
-            left_plan.schema().fields().len(),
-            right_plan.schema().fields().len()
-        );
-    }
+    Ok(LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+        Arc::new(left_plan),
+        Arc::new(right_plan),
+    ])?))
+}
 
-    // Temporarily use the schema from the left input and later rely on the analyzer to
-    // coerce the two schemas into a common one.
-
-    // Functional Dependencies doesn't preserve after UNION operation
-    let schema = (**left_plan.schema()).clone();
-    let schema =
-        Arc::new(schema.with_functional_dependencies(FunctionalDependencies::empty())?);
-
-    Ok(LogicalPlan::Union(Union {
-        inputs: vec![Arc::new(left_plan), Arc::new(right_plan)],
-        schema,
-    }))
+/// Like [`union`], but combine rows from different tables by name, rather than
+/// by position.
+pub fn union_by_name(
+    left_plan: LogicalPlan,
+    right_plan: LogicalPlan,
+) -> Result<LogicalPlan> {
+    Ok(LogicalPlan::Union(Union::try_new_by_name(vec![
+        Arc::new(left_plan),
+        Arc::new(right_plan),
+    ])?))
 }
 
 /// Create Projection
@@ -1548,19 +1720,102 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
 /// * An invalid expression is used (e.g. a `sort` expression)
 pub fn project(
     plan: LogicalPlan,
-    expr: impl IntoIterator<Item = impl Into<Expr>>,
+    expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
+) -> Result<LogicalPlan> {
+    project_with_validation(plan, expr.into_iter().map(|e| (e, true)))
+}
+
+/// Create Projection. Similar to project except that the expressions
+/// passed in have a flag to indicate if that expression requires
+/// validation (normalize & columnize) (true) or not (false)
+/// # Errors
+/// This function errors under any of the following conditions:
+/// * Two or more expressions have the same name
+/// * An invalid expression is used (e.g. a `sort` expression)
+fn project_with_validation(
+    plan: LogicalPlan,
+    expr: impl IntoIterator<Item = (impl Into<SelectExpr>, bool)>,
 ) -> Result<LogicalPlan> {
     let mut projected_expr = vec![];
-    for e in expr {
+    for (e, validate) in expr {
         let e = e.into();
         match e {
-            Expr::Wildcard { .. } => projected_expr.push(e),
-            _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
+            SelectExpr::Wildcard(opt) => {
+                let expanded = expand_wildcard(plan.schema(), &plan, Some(&opt))?;
+
+                // If there is a REPLACE statement, replace that column with the given
+                // replace expression. Column name remains the same.
+                let expanded = if let Some(replace) = opt.replace {
+                    replace_columns(expanded, &replace)?
+                } else {
+                    expanded
+                };
+
+                for e in expanded {
+                    if validate {
+                        projected_expr
+                            .push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                    } else {
+                        projected_expr.push(e)
+                    }
+                }
+            }
+            SelectExpr::QualifiedWildcard(table_ref, opt) => {
+                let expanded =
+                    expand_qualified_wildcard(&table_ref, plan.schema(), Some(&opt))?;
+
+                // If there is a REPLACE statement, replace that column with the given
+                // replace expression. Column name remains the same.
+                let expanded = if let Some(replace) = opt.replace {
+                    replace_columns(expanded, &replace)?
+                } else {
+                    expanded
+                };
+
+                for e in expanded {
+                    if validate {
+                        projected_expr
+                            .push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                    } else {
+                        projected_expr.push(e)
+                    }
+                }
+            }
+            SelectExpr::Expression(e) => {
+                if validate {
+                    projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                } else {
+                    projected_expr.push(e)
+                }
+            }
         }
     }
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+}
+
+/// If there is a REPLACE statement in the projected expression in the form of
+/// "REPLACE (some_column_within_an_expr AS some_column)", this function replaces
+/// that column with the given replace expression. Column name remains the same.
+/// Multiple REPLACEs are also possible with comma separations.
+fn replace_columns(
+    mut exprs: Vec<Expr>,
+    replace: &PlannedReplaceSelectItem,
+) -> Result<Vec<Expr>> {
+    for expr in exprs.iter_mut() {
+        if let Expr::Column(Column { name, .. }) = expr {
+            if let Some((_, new_expr)) = replace
+                .items()
+                .iter()
+                .zip(replace.expressions().iter())
+                .find(|(item, _)| item.column_name.value == *name)
+            {
+                *expr = new_expr.clone().alias(name.clone())
+            }
+        }
+    }
+    Ok(exprs)
 }
 
 /// Create a SubqueryAlias to wrap a LogicalPlan.
@@ -1620,9 +1875,23 @@ pub fn table_scan_with_filter_and_fetch(
     )
 }
 
-fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
+pub fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
     let table_schema = Arc::new(table_schema.clone());
-    Arc::new(LogicalTableSource { table_schema })
+    Arc::new(LogicalTableSource {
+        table_schema,
+        constraints: Default::default(),
+    })
+}
+
+pub fn table_source_with_constraints(
+    table_schema: &Schema,
+    constraints: Constraints,
+) -> Arc<dyn TableSource> {
+    let table_schema = Arc::new(table_schema.clone());
+    Arc::new(LogicalTableSource {
+        table_schema,
+        constraints,
+    })
 }
 
 /// Wrap projection for a plan, if the join keys contains normal expression.
@@ -1667,7 +1936,7 @@ pub fn wrap_projection_for_join_if_necessary(
         projection.extend(join_key_items);
 
         LogicalPlanBuilder::from(input)
-            .project(projection)?
+            .project(projection.into_iter().map(SelectExpr::from))?
             .build()?
     } else {
         input
@@ -1693,12 +1962,21 @@ pub fn wrap_projection_for_join_if_necessary(
 /// DefaultTableSource.
 pub struct LogicalTableSource {
     table_schema: SchemaRef,
+    constraints: Constraints,
 }
 
 impl LogicalTableSource {
     /// Create a new LogicalTableSource
     pub fn new(table_schema: SchemaRef) -> Self {
-        Self { table_schema }
+        Self {
+            table_schema,
+            constraints: Constraints::default(),
+        }
+    }
+
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
     }
 }
 
@@ -1709,6 +1987,10 @@ impl TableSource for LogicalTableSource {
 
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        Some(&self.constraints)
     }
 
     fn supports_filters_pushdown(
@@ -1921,12 +2203,10 @@ pub fn unnest_with_options(
 
                     // new columns dependent on the same original index
                     dependency_indices
-                        .extend(std::iter::repeat(index).take(transformed_columns.len()));
+                        .extend(std::iter::repeat_n(index, transformed_columns.len()));
                     Ok(transformed_columns
                         .iter()
-                        .map(|(col, data_type)| {
-                            (col.relation.to_owned(), data_type.to_owned())
-                        })
+                        .map(|(col, field)| (col.relation.to_owned(), field.to_owned()))
                         .collect())
                 }
                 None => {
@@ -1962,12 +2242,12 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
-    use datafusion_common::{RecursionUnnestOption, SchemaError};
+    use crate::test::function_stub::sum;
+    use datafusion_common::{Constraint, RecursionUnnestOption, SchemaError};
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -2212,6 +2492,7 @@ mod tests {
                         Column {
                             relation: Some(TableReference::Bare { table }),
                             name,
+                            spans: _,
                         },
                 },
                 _,
@@ -2478,10 +2759,13 @@ mod tests {
         let t1_field_1 = Field::new("a", DataType::Int32, false);
         let t2_field_1 = Field::new("a", DataType::Int32, false);
         let t2_field_3 = Field::new("a", DataType::Int32, false);
+        let t2_field_4 = Field::new("a:1", DataType::Int32, false);
         let t1_field_2 = Field::new("b", DataType::Int32, false);
         let t2_field_2 = Field::new("b", DataType::Int32, false);
 
-        let field_vec = vec![t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3];
+        let field_vec = vec![
+            t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3, t2_field_4,
+        ];
         let remove_redundant = change_redundant_column(&Fields::from(field_vec));
 
         assert_eq!(
@@ -2492,6 +2776,7 @@ mod tests {
                 Field::new("b", DataType::Int32, false),
                 Field::new("b:1", DataType::Int32, false),
                 Field::new("a:2", DataType::Int32, false),
+                Field::new("a:1:1", DataType::Int32, false),
             ]
         );
         Ok(())
@@ -2510,6 +2795,47 @@ mod tests {
         let plan_expected = format!("{plan}");
         let plan_builder: LogicalPlanBuilder = Arc::new(plan).into();
         assert_eq!(plan_expected, format!("{}", plan_builder.plan));
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_aggregate_without_implicit_group_by_exprs() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let table_source = table_source_with_constraints(&employee_schema(), constraints);
+
+        let plan =
+            LogicalPlanBuilder::scan("employee_csv", table_source, Some(vec![0, 3, 4]))?
+                .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+                .build()?;
+
+        let expected =
+            "Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]\
+        \n  TableScan: employee_csv projection=[id, state, salary]";
+        assert_eq!(expected, format!("{plan}"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_aggregate_with_implicit_group_by_exprs() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let table_source = table_source_with_constraints(&employee_schema(), constraints);
+
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
+        let plan =
+            LogicalPlanBuilder::scan("employee_csv", table_source, Some(vec![0, 3, 4]))?
+                .with_options(options)
+                .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+                .build()?;
+
+        let expected =
+            "Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]\
+        \n  TableScan: employee_csv projection=[id, state, salary]";
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }

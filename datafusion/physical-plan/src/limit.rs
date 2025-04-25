@@ -108,6 +108,12 @@ impl DisplayAs for GlobalLimitExec {
                     self.fetch.map_or("None".to_string(), |x| x.to_string())
                 )
             }
+            DisplayFormatType::TreeRender => {
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "limit={}", fetch)?;
+                }
+                write!(f, "skip={}", self.skip)
+            }
         }
     }
 }
@@ -260,6 +266,9 @@ impl DisplayAs for LocalLimitExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "LocalLimitExec: fetch={}", self.fetch)
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "limit={}", self.fetch)
             }
         }
     }
@@ -480,8 +489,8 @@ mod tests {
     use crate::test;
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
-    use arrow_array::RecordBatchOptions;
-    use arrow_schema::Schema;
+    use arrow::array::RecordBatchOptions;
+    use arrow::datatypes::Schema;
     use datafusion_common::stats::Precision;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalExpr;

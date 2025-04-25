@@ -32,14 +32,14 @@ AS VALUES
 
 statement ok
 CREATE TABLE nested_unnest_table
-AS VALUES 
+AS VALUES
     (struct('a', 'b', struct('c')), (struct('a', 'b', [10,20])), [struct('a', 'b')]),
     (struct('d', 'e', struct('f')), (struct('x', 'y', [30,40, 50])), null)
 ;
 
 statement ok
 CREATE TABLE recursive_unnest_table
-AS VALUES 
+AS VALUES
     (struct([1], 'a'), [[[1],[2]],[[1,1]]], [struct([1],[[1,2]])]),
     (struct([2], 'b'), [[[3,4],[5]],[[null,6],null,[7,8]]], [struct([2],[[3],[4]])])
 ;
@@ -264,9 +264,9 @@ NULL NULL 17
 NULL NULL 18
 
 query IIIT
-select 
-    unnest(column1), unnest(column2) + 2, 
-    column3 * 10, unnest(array_remove(column1, '4')) 
+select
+    unnest(column1), unnest(column2) + 2,
+    column3 * 10, unnest(array_remove(column1, '4'))
 from unnest_table;
 ----
 1 9 10 1
@@ -295,7 +295,7 @@ query error DataFusion error: Error during planning: unnest\(\) requires exactly
 select unnest();
 
 ## Unnest empty expression in from clause
-query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \)"\)
+query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 22"\)
 select * from unnest();
 
 
@@ -560,17 +560,17 @@ select unnest(column2), unnest(unnest(column2)), unnest(unnest(unnest(column2)))
 [[1], [2]] [1, 1] NULL NULL
 [[1, 1]] NULL NULL NULL
 [[3, 4], [5]] [3, 4] 3 4
-[[, 6], , [7, 8]] [5] 4 5
-[[3, 4], [5]] [, 6] 5 6
-[[, 6], , [7, 8]] NULL NULL NULL
+[[NULL, 6], NULL, [7, 8]] [5] 4 5
+[[3, 4], [5]] [NULL, 6] 5 6
+[[NULL, 6], NULL, [7, 8]] NULL NULL NULL
 NULL [7, 8] NULL NULL
 [[3, 4], [5]] [3, 4] NULL NULL
-[[, 6], , [7, 8]] [5] 6 7
-[[3, 4], [5]] [, 6] NULL NULL
-[[, 6], , [7, 8]] NULL NULL NULL
+[[NULL, 6], NULL, [7, 8]] [5] 6 7
+[[3, 4], [5]] [NULL, 6] NULL NULL
+[[NULL, 6], NULL, [7, 8]] NULL NULL NULL
 NULL [7, 8] NULL NULL
 [[3, 4], [5]] NULL 7 8
-[[, 6], , [7, 8]] NULL 8 9
+[[NULL, 6], NULL, [7, 8]] NULL 8 9
 
 ## the same composite expr (unnest(field_access(unnest(col)))) which containing unnest is referened multiple times
 query ??II
@@ -605,7 +605,7 @@ physical_plan
 03)----ProjectionExec: expr=[__unnest_placeholder(recursive_unnest_table.column3,depth=1)@0 as __unnest_placeholder(UNNEST(recursive_unnest_table.column3)), column3@1 as column3]
 04)------UnnestExec
 05)--------ProjectionExec: expr=[column3@0 as __unnest_placeholder(recursive_unnest_table.column3), column3@0 as column3]
-06)----------MemoryExec: partitions=1, partition_sizes=[1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 ## unnest->field_access->unnest->unnest
 query I?
@@ -624,13 +624,13 @@ select unnest(unnest(unnest(column2))), column2 from recursive_unnest_table;
 2 [[[1], [2]], [[1, 1]]]
 1 [[[1], [2]], [[1, 1]]]
 1 [[[1], [2]], [[1, 1]]]
-3 [[[3, 4], [5]], [[, 6], , [7, 8]]]
-4 [[[3, 4], [5]], [[, 6], , [7, 8]]]
-5 [[[3, 4], [5]], [[, 6], , [7, 8]]]
-NULL [[[3, 4], [5]], [[, 6], , [7, 8]]]
-6 [[[3, 4], [5]], [[, 6], , [7, 8]]]
-7 [[[3, 4], [5]], [[, 6], , [7, 8]]]
-8 [[[3, 4], [5]], [[, 6], , [7, 8]]]
+3 [[[3, 4], [5]], [[NULL, 6], NULL, [7, 8]]]
+4 [[[3, 4], [5]], [[NULL, 6], NULL, [7, 8]]]
+5 [[[3, 4], [5]], [[NULL, 6], NULL, [7, 8]]]
+NULL [[[3, 4], [5]], [[NULL, 6], NULL, [7, 8]]]
+6 [[[3, 4], [5]], [[NULL, 6], NULL, [7, 8]]]
+7 [[[3, 4], [5]], [[NULL, 6], NULL, [7, 8]]]
+8 [[[3, 4], [5]], [[NULL, 6], NULL, [7, 8]]]
 
 
 query I??
@@ -663,7 +663,7 @@ physical_plan
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------UnnestExec
 06)----------ProjectionExec: expr=[column3@0 as __unnest_placeholder(recursive_unnest_table.column3), column3@0 as column3]
-07)------------MemoryExec: partitions=1, partition_sizes=[1]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 
@@ -780,7 +780,7 @@ select unnest(unnest(column2)) c2 from recursive_unnest_table group by c2 order 
 [3, 4]
 [5]
 [7, 8]
-[, 6]
+[NULL, 6]
 NULL
 
 query ?I
@@ -792,10 +792,10 @@ select unnest(unnest(column2)) c2, count(column3) from recursive_unnest_table gr
 [3, 4] 1
 [5] 1
 [7, 8] 1
-[, 6] 1
+[NULL, 6] 1
 NULL 1
 
-query error DataFusion error: Error during planning: Projection references non\-aggregate values
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "nested_unnest_table\.column1" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "UNNEST\(nested_unnest_table\.column1\)\[c0\]" appears in the SELECT clause satisfies this requirement
 select unnest(column1) c1 from nested_unnest_table group by c1.c0;
 
 # TODO: this query should work. see issue: https://github.com/apache/datafusion/issues/12794
@@ -808,7 +808,7 @@ select unnest(column5), * from unnest_table;
 1 2 [1, 2, 3] [7] 1 [13, 14] {c0: 1, c1: 2}
 3 4 [4, 5] [8, 9, 10] 2 [15, 16] {c0: 3, c1: 4}
 NULL NULL [6] [11, 12] 3 NULL NULL
-7 8 [12] [, 42, ] NULL NULL {c0: 7, c1: 8}
+7 8 [12] [NULL, 42, NULL] NULL NULL {c0: 7, c1: 8}
 NULL NULL NULL NULL 4 [17, 18] NULL
 
 query TT????
@@ -821,7 +821,7 @@ query ?????
 select unnest(unnest(column3)), * from recursive_unnest_table
 ----
 [1] [[1, 2]] {c0: [1], c1: a} [[[1], [2]], [[1, 1]]] [{c0: [1], c1: [[1, 2]]}]
-[2] [[3], [4]] {c0: [2], c1: b} [[[3, 4], [5]], [[, 6], , [7, 8]]] [{c0: [2], c1: [[3], [4]]}]
+[2] [[3], [4]] {c0: [2], c1: b} [[[3, 4], [5]], [[NULL, 6], NULL, [7, 8]]] [{c0: [2], c1: [[3], [4]]}]
 
 statement ok
 CREATE TABLE join_table
@@ -844,7 +844,7 @@ select unnest(column5), * except (column5, column1) from unnest_table;
 1 2 [7] 1 [13, 14]
 3 4 [8, 9, 10] 2 [15, 16]
 NULL NULL [11, 12] 3 NULL
-7 8 [, 42, ] NULL NULL
+7 8 [NULL, 42, NULL] NULL NULL
 NULL NULL NULL 4 [17, 18]
 
 query III
@@ -875,7 +875,7 @@ query TT
 explain select * from unnest_table u, unnest(u.column1);
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--SubqueryAlias: u
 03)----TableScan: unnest_table projection=[column1, column2, column3, column4, column5]
 04)--Subquery:
@@ -901,6 +901,20 @@ logical_plan
 09)------------EmptyRelation
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Column { relation: Some(Bare { table: "u" }), name: "column1" })
 
+# uncorrelated EXISTS with unnest
+query I
+SELECT 1
+WHERE EXISTS (SELECT unnest([2]))
+----
+1
+
+# EXISTS with unnest below correlation
+query I
+SELECT i
+FROM (VALUES (1), (3), (7)) AS t(i)
+WHERE EXISTS (SELECT 1 FROM unnest([2,3,4]) AS u(j) WHERE i + j = 6)
+----
+3
 
 ## Unnest in subquery
 query IIII

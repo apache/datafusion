@@ -19,7 +19,7 @@ use arrow::array::{
     Array, ArrayRef, AsArray, BinaryBuilder, BinaryViewBuilder, BooleanArray,
     LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
 };
-use arrow_schema::DataType;
+use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;

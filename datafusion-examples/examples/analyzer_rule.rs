@@ -16,12 +16,12 @@
 // under the License.
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+use datafusion::common::config::ConfigOptions;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::Result;
+use datafusion::logical_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion::optimizer::analyzer::AnalyzerRule;
 use datafusion::prelude::SessionContext;
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::Result;
-use datafusion_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder};
-use datafusion_optimizer::analyzer::AnalyzerRule;
 use std::sync::{Arc, Mutex};
 
 /// This example demonstrates how to add your own [`AnalyzerRule`] to

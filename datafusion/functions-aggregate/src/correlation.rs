@@ -23,7 +23,7 @@ use std::mem::size_of_val;
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_array, Array, AsArray, BooleanArray, BooleanBufferBuilder, Float64Array,
+    downcast_array, Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder,
     UInt64Array,
 };
 use arrow::compute::{and, filter, is_not_null, kernels::cast};
@@ -451,7 +451,7 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         };
 
         let mut values = Vec::with_capacity(n);
-        let mut nulls = BooleanBufferBuilder::new(n);
+        let mut nulls = NullBufferBuilder::new(n);
 
         // Notes for `Null` handling:
         // - If the `count` state of a group is 0, no valid records are accumulated
@@ -466,7 +466,7 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             if self.count[i] < 2 {
                 // TODO: Evaluate as `Null` (see notes above)
                 values.push(0.0);
-                nulls.append(false);
+                nulls.append_null();
                 continue;
             }
 
@@ -487,17 +487,14 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             if denominator == 0.0 {
                 // TODO: Evaluate as `Null` (see notes above)
                 values.push(0.0);
-                nulls.append(false);
+                nulls.append_null();
             } else {
                 values.push(numerator / denominator);
-                nulls.append(true);
+                nulls.append_non_null();
             }
         }
 
-        Ok(Arc::new(Float64Array::new(
-            values.into(),
-            Some(nulls.finish().into()),
-        )))
+        Ok(Arc::new(Float64Array::new(values.into(), nulls.finish())))
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {

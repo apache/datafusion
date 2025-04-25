@@ -68,7 +68,9 @@ codegen-units = 1
 
 Then, in `main.rs.` update the memory allocator with the below after your imports:
 
-```rust ,ignore
+<!-- Note can't include snmalloc-rs in a runnable example, because it takes over the global allocator -->
+
+```no-run
 use datafusion::prelude::*;
 
 #[global_allocator]

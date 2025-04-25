@@ -159,10 +159,12 @@ impl TreeNode for LogicalPlan {
             LogicalPlan::Subquery(Subquery {
                 subquery,
                 outer_ref_columns,
+                spans,
             }) => subquery.map_elements(f)?.update_data(|subquery| {
                 LogicalPlan::Subquery(Subquery {
                     subquery,
                     outer_ref_columns,
+                    spans,
                 })
             }),
             LogicalPlan::SubqueryAlias(SubqueryAlias {
@@ -202,6 +204,7 @@ impl TreeNode for LogicalPlan {
             .update_data(LogicalPlan::Distinct),
             LogicalPlan::Explain(Explain {
                 verbose,
+                explain_format: format,
                 plan,
                 stringified_plans,
                 schema,
@@ -209,6 +212,7 @@ impl TreeNode for LogicalPlan {
             }) => plan.map_elements(f)?.update_data(|plan| {
                 LogicalPlan::Explain(Explain {
                     verbose,
+                    explain_format: format,
                     plan,
                     stringified_plans,
                     schema,
@@ -228,14 +232,14 @@ impl TreeNode for LogicalPlan {
             }),
             LogicalPlan::Dml(DmlStatement {
                 table_name,
-                table_schema,
+                target,
                 op,
                 input,
                 output_schema,
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Dml(DmlStatement {
                     table_name,
-                    table_schema,
+                    target,
                     op,
                     input,
                     output_schema,

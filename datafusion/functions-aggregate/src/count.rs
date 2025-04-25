@@ -17,6 +17,7 @@
 
 use ahash::RandomState;
 use datafusion_common::stats::Precision;
+use datafusion_expr::expr::WindowFunction;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
@@ -44,14 +45,16 @@ use arrow::{
     buffer::BooleanBuffer,
 };
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+    downcast_value, internal_err, not_impl_err, Result, ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    Documentation, EmitTo, GroupsAccumulator, Signature, Volatility,
+    Documentation, EmitTo, GroupsAccumulator, SetMonotonicity, Signature, Volatility,
 };
-use datafusion_expr::{Expr, ReversedUDAF, StatisticsArgs, TypeSignature};
+use datafusion_expr::{
+    Expr, ReversedUDAF, StatisticsArgs, TypeSignature, WindowFunctionDefinition,
+};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::{
     BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
     PrimitiveDistinctCountAccumulator,
@@ -76,6 +79,53 @@ pub fn count_distinct(expr: Expr) -> Expr {
         None,
         None,
         None,
+    ))
+}
+
+/// Creates aggregation to count all rows.
+///
+/// In SQL this is `SELECT COUNT(*) ... `
+///
+/// The expression is equivalent to `COUNT(*)`, `COUNT()`, `COUNT(1)`, and is
+/// aliased to a column named `"count(*)"` for backward compatibility.
+///
+/// Example
+/// ```
+/// # use datafusion_functions_aggregate::count::count_all;
+/// # use datafusion_expr::col;
+/// // create `count(*)` expression
+/// let expr = count_all();
+/// assert_eq!(expr.schema_name().to_string(), "count(*)");
+/// // if you need to refer to this column, use the `schema_name` function
+/// let expr = col(expr.schema_name().to_string());
+/// ```
+pub fn count_all() -> Expr {
+    count(Expr::Literal(COUNT_STAR_EXPANSION)).alias("count(*)")
+}
+
+/// Creates window aggregation to count all rows.
+///
+/// In SQL this is `SELECT COUNT(*) OVER (..) ... `
+///
+/// The expression is equivalent to `COUNT(*)`, `COUNT()`, `COUNT(1)`
+///
+/// Example
+/// ```
+/// # use datafusion_functions_aggregate::count::count_all_window;
+/// # use datafusion_expr::col;
+/// // create `count(*)` OVER ... window function expression
+/// let expr = count_all_window();
+/// assert_eq!(
+///   expr.schema_name().to_string(),
+///   "count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+/// );
+/// // if you need to refer to this column, use the `schema_name` function
+/// let expr = col(expr.schema_name().to_string());
+/// ```
+pub fn count_all_window() -> Expr {
+    Expr::WindowFunction(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(count_udaf()),
+        vec![Expr::Literal(COUNT_STAR_EXPANSION)],
     ))
 }
 
@@ -350,6 +400,12 @@ impl AggregateUDFImpl for Count {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn set_monotonicity(&self, _data_type: &DataType) -> SetMonotonicity {
+        // `COUNT` is monotonically increasing as it always increases or stays
+        // the same as new values are seen.
+        SetMonotonicity::Increasing
     }
 }
 
