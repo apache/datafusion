@@ -380,13 +380,89 @@ fn format_batches_with_limit(batches: &[RecordBatch]) -> impl std::fmt::Display 
 ///```
 #[derive(Debug, Default, Clone)]
 pub struct QueryBuilder {
+    // ===================================
+    // Table settings
+    // ===================================
     /// The name of the table to query
     table_name: String,
+
+    // ===================================
+    // Grouping settings
+    // ===================================
+    /// Columns to be used in randomly generate `groupings`
+    ///
+    /// # Example
+    ///
+    /// Columns:
+    ///
+    /// ```text
+    ///   [a,b,c,d]
+    /// ```
+    ///
+    /// And randomly generated `groupings` (at least 1 column)
+    /// can be:
+    ///
+    /// ```text
+    ///   [a]
+    ///   [a,b]
+    ///   [a,b,d]
+    ///   ...
+    /// ```
+    ///
+    /// So the finally generated sqls will be:
+    ///
+    /// ```text
+    ///   SELECT aggr FROM t GROUP BY a;
+    ///   SELECT aggr FROM t GROUP BY a,b;
+    ///   SELECT aggr FROM t GROUP BY a,b,d;
+    ///   ...
+    /// ```
+    random_grouping_columns: Vec<String>,
+
+    /// Max columns num in randomly generated `groupings`
+    max_random_grouping_columns: usize,
+
+    /// The sort keys of dataset
+    ///
+    /// Due to optimizations will be triggered when all or some
+    /// grouping columns are the sort keys of dataset.
+    /// So it is necessary to randomly generate some `groupings` basing on
+    /// dataset sort keys for test coverage.
+    ///
+    /// # Example
+    ///
+    /// Dataset including columns [a,b,c], and sorted by [a,b]
+    ///
+    /// And we may generate sqls to try covering the sort-optimization cases like:
+    ///
+    /// ```text
+    ///   SELECT aggr FROM t GROUP BY b; // no permutation case
+    ///   SELECT aggr FROM t GROUP BY a,c; // partial permutation case
+    ///   SELECT aggr FROM t GROUP BY a,b,c; // full permutation case
+    ///   ...
+    /// ```
+    ///
+    /// More details can see [`GroupOrdering`].
+    ///
+    /// [`GroupOrdering`]:  datafusion_physical_plan::aggregates::order::GroupOrdering
+    ///
+    dataset_sort_keys: Vec<Vec<String>>,
+
+    /// If we will also test the no grouping case like:
+    ///
+    /// ```text
+    ///   SELECT aggr FROM t;
+    /// ```
+    ///
+    no_grouping: bool,
+
+    // ====================================
+    // Aggregation function settings
+    // ====================================
     /// Aggregate functions to be used in the query
     /// (function_name, is_distinct)
     aggregate_functions: Vec<(String, bool)>,
-    /// Columns to be used in group by
-    group_by_columns: Vec<String>,
+
     /// Possible columns for arguments in the aggregate functions
     ///
     /// Assumes each
