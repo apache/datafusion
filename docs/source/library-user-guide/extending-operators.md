@@ -50,12 +50,17 @@ explain SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
 
 While this plan produces the correct answer, the careful reader will note it fully sorts the input before discarding everythingother than the top 3 elements.
 The same answer can be produced by simply keeping track of the top N elements, reducing the total amount of required buffer memory.
+
 ## Process for Defining Extending Operator
+
 The below example illustrates the example of topK node :
+
 ### LogicalPlan Node Definition
+
 - This section defines the custom logical plan node `TopKPlanNode`, which represents the `TopK` operation.
 - It includes trait implementations like `UserDefinedLogicalNodeCore` and Debug.
-code:
+  code:
+
 ```rust
 #[derive(Debug)]
 struct TopKQueryPlanner {}
@@ -81,10 +86,13 @@ impl QueryPlanner for TopKQueryPlanner {
     }
 }
 ```
+
 ### Optimizer Rule
+
 - Implements the `TopKOptimizerRule` to detect a `Limit` followed by a Sort and replace it with the `TopKPlanNode`.
 - Includes the logic for transforming the logical plan.
-code:
+  code:
+
 ```rust
 #[derive(Default, Debug)]
 struct TopKOptimizerRule {
@@ -144,8 +152,11 @@ impl OptimizerRule for TopKOptimizerRule {
     }
 }
 ```
+
 ### Physical planner
--The  `TopKPlanner` is implemented to map the custom logical plan node (`TopKPlanNode`) to a physical execution plan (`TopKExec`).
+
+-The `TopKPlanner` is implemented to map the custom logical plan node (`TopKPlanNode`) to a physical execution plan (`TopKExec`).
+
 ```rust
 struct TopKPlanner {}
 
@@ -178,9 +189,11 @@ impl ExtensionPlanner for TopKPlanner {
 ```
 
 ### Physical Execution Plan
+
 - Defines the physical execution operator `TopKExec` and its properties.
 - Implements the `ExecutionPlan` trait to describe how the operator is executed.
-code:
+  code:
+
 ```rust
 struct TopKExec {
     input: Arc<dyn ExecutionPlan>,
@@ -281,11 +294,11 @@ impl ExecutionPlan for TopKExec {
     }
 }
 ```
+
 ### Execution Logic
+
 - Implements the `TopKReade`r, which processes input batches to calculate the top `k` values.
 - Contains helper functions like `add_row`, `remove_lowest_value`, and `accumulate_batch` for execution logic.
-
-
 
 ```rust
 struct TopKReader {
@@ -399,5 +412,3 @@ impl RecordBatchStream for TopKReader {
     }
 }
 ```
-
-
