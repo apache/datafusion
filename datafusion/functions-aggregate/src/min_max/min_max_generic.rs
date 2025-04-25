@@ -17,9 +17,9 @@
 
 use crate::min_max::{MovingMax, MovingMin};
 use arrow::array::ArrayRef;
+use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow::row::{OwnedRow, Row, RowConverter, SortField};
-use arrow_schema::SortOptions;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
@@ -355,7 +355,7 @@ mod tests {
     use arrow::array::builder::{BooleanBuilder, GenericListBuilder};
     use arrow::array::types::Int32Type;
     use arrow::array::{ArrayRef, ListArray};
-    use arrow_schema::{DataType, Field};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_expr::Accumulator;
     use std::ops::Deref;
