@@ -501,6 +501,21 @@ impl LogicalPlanBuilder {
         if table_scan.filters.is_empty() {
             if let Some(p) = table_scan.source.get_logical_plan() {
                 let sub_plan = p.into_owned();
+
+                if let Some(proj) = table_scan.projection {
+                    let projection_exprs = proj
+                        .into_iter()
+                        .map(|i| {
+                            Expr::Column(Column::from(
+                                sub_plan.schema().qualified_field(i),
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    return Self::new(sub_plan)
+                        .project(projection_exprs)?
+                        .alias(table_scan.table_name);
+                }
+
                 // Ensures that the reference to the inlined table remains the
                 // same, meaning we don't have to change any of the parent nodes
                 // that reference this table.
