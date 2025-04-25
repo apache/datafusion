@@ -425,6 +425,11 @@ impl FileGroup {
         self.statistics.as_deref()
     }
 
+    /// Get the mutable reference to the statistics for this group
+    pub fn statistics_mut(&mut self) -> Option<&mut Statistics> {
+        self.statistics.as_mut().map(|arc| Arc::make_mut(arc))
+    }
+
     /// Partition the list of files into `n` groups
     pub fn split_files(mut self, n: usize) -> Vec<FileGroup> {
         if self.is_empty() {

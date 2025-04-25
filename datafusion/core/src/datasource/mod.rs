@@ -264,5 +264,12 @@ mod tests {
 
             Ok(RecordBatch::try_new(schema, new_columns).unwrap())
         }
+
+        fn map_column_statistics(
+            &self,
+            _file_col_statistics: &[datafusion_common::ColumnStatistics],
+        ) -> datafusion_common::Result<Vec<datafusion_common::ColumnStatistics>> {
+            todo!()
+        }
     }
 }
