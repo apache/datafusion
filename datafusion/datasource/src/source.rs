@@ -25,6 +25,7 @@ use std::sync::Arc;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::statistics::PartitionedStatistics;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
@@ -188,9 +189,7 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.statistics()
     }
 
-    fn statistics_by_partition(
-        &self,
-    ) -> datafusion_common::Result<PartitionedStatistics> {
+    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
         let mut statistics = {
             let mut v =
                 Vec::with_capacity(self.properties().partitioning.partition_count());
