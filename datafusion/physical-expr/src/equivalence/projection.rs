@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::expressions::Column;
@@ -24,13 +25,16 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, Result};
 
+use indexmap::IndexMap;
+
 /// Stores the mapping between source expressions and target expressions for a
 /// projection.
 #[derive(Debug, Clone)]
 pub struct ProjectionMapping {
     /// Mapping between source expressions and target expressions.
     /// Vector indices correspond to the indices after projection.
-    pub map: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    #[allow(clippy::type_complexity)]
+    pub map: IndexMap<Arc<dyn PhysicalExpr>, Vec<(Arc<dyn PhysicalExpr>, usize)>>,
 }
 
 impl ProjectionMapping {
@@ -52,36 +56,36 @@ impl ProjectionMapping {
         input_schema: &SchemaRef,
     ) -> Result<Self> {
         // Construct a map from the input expressions to the output expression of the projection:
-        expr.into_iter()
-            .enumerate()
-            .map(|(expr_idx, (expr, name))| {
-                let target_expr = Arc::new(Column::new(&name, expr_idx)) as _;
-                expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
-                    Some(col) => {
-                        // Sometimes, an expression and its name in the input_schema
-                        // doesn't match. This can cause problems, so we make sure
-                        // that the expression name matches with the name in `input_schema`.
-                        // Conceptually, `source_expr` and `expression` should be the same.
-                        let idx = col.index();
-                        let matching_input_field = input_schema.field(idx);
-                        if col.name() != matching_input_field.name() {
-                            return internal_err!(
-                                "Input field name {} does not match with the projection expression {}",
-                                matching_input_field.name(),
-                                col.name()
-                            );
-                        }
-                        let matching_input_column =
-                            Column::new(matching_input_field.name(), idx);
-                        Ok(Transformed::yes(Arc::new(matching_input_column)))
+        let mut map = IndexMap::new();
+        for (expr_idx, (expr, name)) in expr.into_iter().enumerate() {
+            let target_expr = Arc::new(Column::new(&name, expr_idx)) as _;
+            let source_expr = expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
+                Some(col) => {
+                    // Sometimes, an expression and its name in the input_schema
+                    // doesn't match. This can cause problems, so we make sure
+                    // that the expression name matches with the name in `input_schema`.
+                    // Conceptually, `source_expr` and `expression` should be the same.
+                    let idx = col.index();
+                    let matching_field = input_schema.field(idx);
+                    let matching_name = matching_field.name();
+                    if col.name() != matching_name {
+                        return internal_err!(
+                            "Input field name {} does not match with the projection expression {}",
+                            matching_name,
+                            col.name()
+                        );
                     }
-                    None => Ok(Transformed::no(e)),
-                })
-                .data()
-                .map(|source_expr| (source_expr, target_expr))
+                    let matching_column = Column::new(matching_name, idx);
+                    Ok(Transformed::yes(Arc::new(matching_column)))
+                }
+                None => Ok(Transformed::no(e)),
             })
-            .collect::<Result<_>>()
-            .map(|map| Self { map })
+            .data()?;
+            map.entry(source_expr)
+                .or_insert_with(Vec::new)
+                .push((target_expr, expr_idx));
+        }
+        Ok(Self { map })
     }
 
     /// Constructs a subset mapping using the provided indices.
@@ -96,32 +100,13 @@ impl ProjectionMapping {
         });
         ProjectionMapping::try_new(projection_exprs, schema)
     }
+}
 
-    /// Iterate over pairs of (source, target) expressions
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<Item = &(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> + '_ {
-        self.map.iter()
-    }
+impl Deref for ProjectionMapping {
+    type Target = IndexMap<Arc<dyn PhysicalExpr>, Vec<(Arc<dyn PhysicalExpr>, usize)>>;
 
-    /// This function returns the target expression for a given source expression.
-    ///
-    /// # Arguments
-    ///
-    /// * `expr` - Source physical expression.
-    ///
-    /// # Returns
-    ///
-    /// An `Option` containing the target for the given source expression,
-    /// where a `None` value means that `expr` is not inside the mapping.
-    pub fn target_expr(
-        &self,
-        expr: &Arc<dyn PhysicalExpr>,
-    ) -> Option<Arc<dyn PhysicalExpr>> {
-        self.map
-            .iter()
-            .find(|(source, _)| source.eq(expr))
-            .map(|(_, target)| Arc::clone(target))
+    fn deref(&self) -> &Self::Target {
+        &self.map
     }
 }
 

@@ -82,7 +82,7 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{plan_datafusion_err, Result};
+    use datafusion_common::{plan_err, Result};
     use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
 
     /// Converts a string to a physical sort expression
@@ -121,27 +121,21 @@ mod tests {
         mapping: &ProjectionMapping,
         input_schema: &Arc<Schema>,
     ) -> Result<SchemaRef> {
-        // Calculate output schema
-        let fields: Result<Vec<Field>> = mapping
-            .iter()
-            .map(|(source, target)| {
-                let name = target
-                    .as_any()
-                    .downcast_ref::<Column>()
-                    .ok_or_else(|| plan_datafusion_err!("Expects to have column"))?
-                    .name();
-                let field = Field::new(
-                    name,
-                    source.data_type(input_schema)?,
-                    source.nullable(input_schema)?,
-                );
-
-                Ok(field)
-            })
-            .collect();
+        // Calculate output schema:
+        let mut fields = vec![];
+        for (source, targets) in mapping.iter() {
+            let data_type = source.data_type(input_schema)?;
+            let nullable = source.nullable(input_schema)?;
+            for (target, _) in targets {
+                let Some(column) = target.as_any().downcast_ref::<Column>() else {
+                    return plan_err!("Expects to have column");
+                };
+                fields.push(Field::new(column.name(), data_type.clone(), nullable));
+            }
+        }
 
         let output_schema = Arc::new(Schema::new_with_metadata(
-            fields?,
+            fields,
             input_schema.metadata().clone(),
         ));
 

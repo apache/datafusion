@@ -157,7 +157,9 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
 
                 let projected_exprs = projection_mapping
                     .iter()
-                    .map(|(_source, target)| Arc::clone(target))
+                    .flat_map(|(_, targets)| {
+                        targets.iter().map(|(target, _)| Arc::clone(target))
+                    })
                     .collect::<Vec<_>>();
 
                 for n_req in 1..=projected_exprs.len() {

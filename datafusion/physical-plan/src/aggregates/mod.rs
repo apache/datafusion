@@ -693,11 +693,10 @@ impl AggregateExec {
             group_expr_mapping
                 .map
                 .iter()
-                .filter_map(|(_, target_col)| {
-                    target_col
-                        .as_any()
-                        .downcast_ref::<Column>()
-                        .map(|c| c.index())
+                .flat_map(|(_, target_cols)| {
+                    target_cols.iter().flat_map(|(expr, _)| {
+                        expr.as_any().downcast_ref::<Column>().map(|c| c.index())
+                    })
                 })
                 .collect(),
         );

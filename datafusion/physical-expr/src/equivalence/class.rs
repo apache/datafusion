@@ -535,9 +535,10 @@ impl EquivalenceGroup {
     ) -> Option<Arc<dyn PhysicalExpr>> {
         // First, we try to project expressions with an exact match. If we are
         // unable to do this, we consult equivalence classes.
-        if let Some(target) = mapping.target_expr(expr) {
+        if let Some(target) = mapping.get(expr) {
             // If we match the source, we can project directly:
-            return Some(target);
+            let (target, _) = target.first().unwrap();
+            return Some(Arc::clone(target));
         } else {
             // If the given expression is not inside the mapping, try to project
             // expressions considering the equivalence classes.
@@ -547,6 +548,7 @@ impl EquivalenceGroup {
                 // and the equivalence class `(a, b)`, expression `b` projects to `a1`.
                 let eq_class = self.get_equivalence_class(source);
                 if eq_class.is_some_and(|group| group.contains(expr)) {
+                    let (target, _) = target.first().unwrap();
                     return Some(Arc::clone(target));
                 }
             }
@@ -577,21 +579,23 @@ impl EquivalenceGroup {
         // class that contains the corresponding target expression.
         let mut new_constants = vec![];
         let mut new_classes = IndexMap::<_, EquivalenceClass>::new();
-        for (source, target) in mapping.iter() {
+        for (source, targets) in mapping.iter() {
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and
             // projection `[a + c, b + c]`. To conclude that `a + c == b + c`,
             // we first normalize all source expressions in the mapping, then
             // merge all equivalent expressions into the classes.
             let normalized_expr = self.normalize_expr(Arc::clone(source));
-            new_classes
-                .entry(normalized_expr)
-                .or_default()
-                .push(Arc::clone(target));
+            let cls = new_classes.entry(normalized_expr).or_default();
+            for (target, _) in targets {
+                cls.push(Arc::clone(target));
+            }
             // Save new constants arising from the projection:
             if let Some(across) = self.is_expr_constant(source) {
-                let const_expr = ConstExpr::new(Arc::clone(target), across);
-                new_constants.push(const_expr);
+                for (target, _) in targets {
+                    let const_expr = ConstExpr::new(Arc::clone(target), across.clone());
+                    new_constants.push(const_expr);
+                }
             }
         }
 
@@ -1074,7 +1078,7 @@ mod tests {
         ]));
 
         let mapping = ProjectionMapping {
-            map: vec![
+            map: [
                 (
                     binary(
                         col("a", &schema)?,
@@ -1082,7 +1086,7 @@ mod tests {
                         col("c", &schema)?,
                         &schema,
                     )?,
-                    col("a+c", &projected_schema)?,
+                    vec![(col("a+c", &projected_schema)?, 0)],
                 ),
                 (
                     binary(
@@ -1091,9 +1095,10 @@ mod tests {
                         col("c", &schema)?,
                         &schema,
                     )?,
-                    col("b+c", &projected_schema)?,
+                    vec![(col("b+c", &projected_schema)?, 1)],
                 ),
-            ],
+            ]
+            .into(),
         };
 
         let projected = group.project(&mapping);

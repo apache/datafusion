@@ -23,7 +23,7 @@ use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Arra
 use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
-use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -39,31 +39,26 @@ use datafusion_physical_plan::expressions::{col, Column};
 use itertools::izip;
 use rand::prelude::*;
 
+/// Projects the input schema based on the given projection mapping.
 pub fn output_schema(
     mapping: &ProjectionMapping,
     input_schema: &Arc<Schema>,
 ) -> Result<SchemaRef> {
-    // Calculate output schema
-    let fields: Result<Vec<Field>> = mapping
-        .iter()
-        .map(|(source, target)| {
-            let name = target
-                .as_any()
-                .downcast_ref::<Column>()
-                .ok_or_else(|| plan_datafusion_err!("Expects to have column"))?
-                .name();
-            let field = Field::new(
-                name,
-                source.data_type(input_schema)?,
-                source.nullable(input_schema)?,
-            );
-
-            Ok(field)
-        })
-        .collect();
+    // Calculate output schema:
+    let mut fields = vec![];
+    for (source, targets) in mapping.iter() {
+        let data_type = source.data_type(input_schema)?;
+        let nullable = source.nullable(input_schema)?;
+        for (target, _) in targets {
+            let Some(column) = target.as_any().downcast_ref::<Column>() else {
+                return plan_err!("Expects to have column");
+            };
+            fields.push(Field::new(column.name(), data_type.clone(), nullable));
+        }
+    }
 
     let output_schema = Arc::new(Schema::new_with_metadata(
-        fields?,
+        fields,
         input_schema.metadata().clone(),
     ));
 

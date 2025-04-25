@@ -931,7 +931,7 @@ impl EquivalenceProperties {
                 .map(|(source, target)| {
                     let normalized_source =
                         self.eq_group.normalize_expr(Arc::clone(source));
-                    (normalized_source, Arc::clone(target))
+                    (normalized_source, target.to_vec())
                 })
                 .collect(),
         }
@@ -957,7 +957,7 @@ impl EquivalenceProperties {
 
         // Get dependency map for existing orderings:
         let dependency_map = self.construct_dependency_map(&mapping);
-        let orderings = mapping.iter().flat_map(|(source, target)| {
+        let orderings = mapping.iter().flat_map(|(source, targets)| {
             referred_dependencies(&dependency_map, source)
                 .into_iter()
                 .filter_map(|relevant_deps| {
@@ -972,19 +972,25 @@ impl EquivalenceProperties {
                     }
                 })
                 .flat_map(|(options, relevant_deps)| {
-                    let sort_expr = PhysicalSortExpr::new(Arc::clone(target), options);
-                    // Generate dependent orderings (i.e. prefixes for `sort_expr`):
-                    let mut dependency_orderings =
+                    // Generate dependent orderings (i.e. prefixes for targets):
+                    let dependency_orderings =
                         generate_dependency_orderings(&relevant_deps, &dependency_map);
-                    // Append `sort_expr` to the dependent orderings:
+                    let sort_exprs = targets.iter().map(|(target, _)| {
+                        PhysicalSortExpr::new(Arc::clone(target), options)
+                    });
                     if dependency_orderings.is_empty() {
-                        dependency_orderings.push([sort_expr].into());
+                        sort_exprs.map(|sort_expr| [sort_expr].into()).collect()
                     } else {
-                        for ordering in dependency_orderings.iter_mut() {
-                            ordering.push(sort_expr.clone());
-                        }
+                        sort_exprs
+                            .flat_map(|sort_expr| {
+                                let mut result = dependency_orderings.clone();
+                                for ordering in result.iter_mut() {
+                                    ordering.push(sort_expr.clone());
+                                }
+                                result
+                            })
+                            .collect::<Vec<_>>()
                     }
-                    dependency_orderings
                 })
         });
 
@@ -1037,10 +1043,12 @@ impl EquivalenceProperties {
     fn projected_constraints(&self, mapping: &ProjectionMapping) -> Option<Constraints> {
         let indices = mapping
             .iter()
-            .filter_map(|(_, target)| target.as_any().downcast_ref::<Column>())
-            .map(|col| col.index())
+            .flat_map(|(_, targets)| {
+                targets.iter().flat_map(|(target, _)| {
+                    target.as_any().downcast_ref::<Column>().map(|c| c.index())
+                })
+            })
             .collect::<Vec<_>>();
-        debug_assert_eq!(mapping.map.len(), indices.len());
         self.constraints.project(&indices)
     }
 
