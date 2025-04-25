@@ -287,9 +287,7 @@ impl Interval {
     }
 
     /// Create a new `Interval` with the same lower and upper bounds.
-    pub fn try_singleton(
-        value: ScalarValue,
-    ) -> Self {
+    pub fn try_singleton(value: ScalarValue) -> Self {
         Self::new(value.clone(), value)
     }
 
