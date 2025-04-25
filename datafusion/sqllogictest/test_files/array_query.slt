@@ -118,6 +118,34 @@ SELECT max(column1) FROM data;
 ----
 [2, 3]
 
+query ?
+SELECT min(column1) OVER (ORDER BY column1) FROM data;
+----
+[1, 2, 3]
+[1, 2, 3]
+[1, 2, 3]
+
+query ?
+SELECT min(column2) OVER (ORDER BY column2) FROM data;
+----
+[2, 3]
+[2, 3]
+[2, 3]
+
+query ?
+SELECT min(column2) OVER (ORDER BY column2 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM data;
+----
+[2, 3]
+[2, 3]
+[4, 5]
+
+query ?
+SELECT max(column2) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM data;
+----
+[4, 5]
+[4, 5]
+[2, 3]
+
 query I
 SELECT count(column1) FROM data;
 ----
