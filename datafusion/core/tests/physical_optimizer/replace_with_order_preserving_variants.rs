@@ -1272,9 +1272,8 @@ fn test_plan_with_order_preserving_variants_preserves_fetch() -> Result<()> {
         "a", &schema,
     )];
     let parquet_exec = parquet_exec_sorted(&schema, parquet_sort_exprs);
-    let coalesced = CoalescePartitionsExec::new(parquet_exec.clone())
-        .with_fetch(Some(10))
-        .unwrap();
+    let coalesced =
+        Arc::new(CoalescePartitionsExec::new(parquet_exec.clone()).with_fetch(Some(10)));
 
     // Test sort's fetch is greater than coalesce fetch, return error because it's not reasonable
     let requirements = OrderPreservationContext::new(
