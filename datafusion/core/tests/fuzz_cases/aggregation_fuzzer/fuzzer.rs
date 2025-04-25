@@ -69,30 +69,16 @@ impl AggregationFuzzerBuilder {
     /// - 3 random queries
     /// - 3 random queries for each group by selected from the sort keys
     /// - 1 random query with no grouping
-    pub fn add_query_builder(mut self, mut query_builder: QueryBuilder) -> Self {
-        const NUM_QUERIES: usize = 3;
-        for _ in 0..NUM_QUERIES {
-            let sql = query_builder.generate_query();
-            self.candidate_sqls.push(Arc::from(sql));
-        }
-        // also add several queries limited to grouping on the group by columns only, if any
-        // So if the data is sorted on `a,b` only group by `a,b` or`a` or `b`
-        if let Some(data_gen_config) = &self.data_gen_config {
-            for sort_keys in &data_gen_config.sort_keys_set {
-                let group_by_columns = sort_keys.iter().map(|s| s.as_str());
-                query_builder = query_builder.set_group_by_columns(group_by_columns);
-                for _ in 0..NUM_QUERIES {
-                    let sql = query_builder.generate_query();
-                    self.candidate_sqls.push(Arc::from(sql));
-                }
-            }
-        }
-        // also add a query with no grouping
-        query_builder = query_builder.set_group_by_columns(vec![]);
-        let sql = query_builder.generate_query();
-        self.candidate_sqls.push(Arc::from(sql));
+    pub fn add_query_builder(mut self, query_builder: QueryBuilder) -> Self {
+        self = self.table_name(query_builder.table_name());
 
-        self.table_name(query_builder.table_name())
+        let sqls = query_builder
+            .generate_queries()
+            .into_iter()
+            .map(|sql| Arc::from(sql.as_str()));
+        self.candidate_sqls.extend(sqls);
+
+        self
     }
 
     pub fn table_name(mut self, table_name: &str) -> Self {
@@ -417,10 +403,10 @@ pub struct QueryBuilder {
     ///   SELECT aggr FROM t GROUP BY a,b,d;
     ///   ...
     /// ```
-    random_grouping_columns: Vec<String>,
+    group_by_columns: Vec<String>,
 
     /// Max columns num in randomly generated `groupings`
-    max_random_grouping_columns: usize,
+    max_group_by_columns: usize,
 
     /// The sort keys of dataset
     ///
@@ -470,7 +456,11 @@ pub struct QueryBuilder {
 }
 impl QueryBuilder {
     pub fn new() -> Self {
-        Default::default()
+        Self {
+            no_grouping: true,
+            max_group_by_columns: 3,
+            ..Default::default()
+        }
     }
 
     /// return the table name if any
@@ -526,7 +516,62 @@ impl QueryBuilder {
         self
     }
 
-    pub fn generate_query(&self) -> String {
+    /// Add max columns num in group by(default: 3), for example if it is set to 1,
+    /// the generated sql will group by at most 1 column
+    pub fn with_max_group_by_columns(mut self, group_by_columns: usize) -> Self {
+        self.max_group_by_columns = group_by_columns;
+        self
+    }
+
+    /// Add sort keys of dataset if any, then the builder will generate queries basing on it
+    /// to cover the sort-optimization cases
+    pub fn with_dataset_sort_keys(mut self, dataset_sort_keys: Vec<Vec<String>>) -> Self {
+        self.dataset_sort_keys = dataset_sort_keys;
+        self
+    }
+
+    /// Add if also test the no grouping aggregation case(default: true)
+    pub fn with_no_grouping(mut self, no_grouping: bool) -> Self {
+        self.no_grouping = no_grouping;
+        self
+    }
+
+    pub fn generate_queries(mut self) -> Vec<String> {
+        const NUM_QUERIES: usize = 3;
+        let mut sqls = Vec::new();
+
+        // Add several queries group on randomly picked columns
+        for _ in 0..NUM_QUERIES {
+            let sql = self.generate_query();
+            sqls.push(sql);
+        }
+
+        // Also add several queries limited to grouping on the group by
+        // dataset sorted columns only, if any.
+        // So if the data is sorted on `a,b` only group by `a,b` or`a` or `b`.
+        if !self.dataset_sort_keys.is_empty() {
+            let dataset_sort_keys = self.dataset_sort_keys.clone();
+            for sort_keys in dataset_sort_keys {
+                let group_by_columns = sort_keys.iter().map(|s| s.as_str());
+                self = self.set_group_by_columns(group_by_columns);
+                for _ in 0..NUM_QUERIES {
+                    let sql = self.generate_query();
+                    sqls.push(sql);
+                }
+            }
+        }
+
+        // Also add a query with no grouping
+        if self.no_grouping {
+            self = self.set_group_by_columns(vec![]);
+            let sql = self.generate_query();
+            sqls.push(sql);
+        }
+
+        sqls
+    }
+
+    fn generate_query(&self) -> String {
         let group_by = self.random_group_by();
         let mut query = String::from("SELECT ");
         query.push_str(&group_by.join(", "));
@@ -644,8 +689,7 @@ impl QueryBuilder {
     /// larger numbers of columns, each group has many fewer values.
     fn random_group_by(&self) -> Vec<String> {
         let mut rng = thread_rng();
-        const MAX_GROUPS: usize = 3;
-        let max_groups = self.group_by_columns.len().max(MAX_GROUPS);
+        let max_groups = self.group_by_columns.len().max(self.max_group_by_columns);
         let num_group_by = rng.gen_range(1..max_groups);
 
         let mut already_used = HashSet::new();
