@@ -36,3 +36,5 @@ the [Spark SQLLogicTest README](../sqllogictest/test_files/spark/README.md).
 
 When implementing Spark-compatible functions, you can check if there are existing implementations in
 the [Sail](https://github.com/lakehq/sail) or [Comet](https://github.com/apache/datafusion-comet) projects first.
+If you do port functionality from these sources, make sure to port over the corresponding tests too, to ensure
+correctness and compatibility.
