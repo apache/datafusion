@@ -286,6 +286,13 @@ impl Interval {
         }
     }
 
+    /// Create a new `Interval` with the same lower and upper bounds.
+    pub fn try_singleton(
+        value: ScalarValue,
+    ) -> Self {
+        Self::new(value.clone(), value)
+    }
+
     /// Only for internal usage. Responsible for standardizing booleans and
     /// floating-point values, as well as fixing NaNs. It doesn't validate
     /// the given bounds for ordering, or verify that they have the same data
