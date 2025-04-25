@@ -166,7 +166,7 @@ def lineformat(
         query_str = f"query=\"{query.query}\""
         timestamp = f"{query.start_time*10**9}"
         for iter_num, result in enumerate(query.iterations):
-            print(f"{benchamrk_str} {query_str},iteration={iter_num},row_count={result.row_count},elapsed_ms={result.elapsed:.0f} {timestamp}\n")
+            print(f"{benchamrk_str} {query_str},iteration={iter_num},row_count={result.row_count},elapsed_ms={result.elapsed:.3f} {timestamp}\n")
     
 def main() -> None:
     parser = ArgumentParser()
