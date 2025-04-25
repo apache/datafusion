@@ -46,7 +46,7 @@ use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties}
 use datafusion::parquet::schema::types::ColumnPath;
 use datafusion::physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_optimizer::pruning::{ColumnOrdering, PruningPredicate};
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;

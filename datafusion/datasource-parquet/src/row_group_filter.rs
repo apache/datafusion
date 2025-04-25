@@ -1330,12 +1330,9 @@ mod tests {
             false,
         );
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
-            expr,
-            Arc::new(schema),
-            vec![ColumnOrdering::Unknown; schema.fields().len()],
-        )
-        .unwrap();
+        let column_orders = vec![ColumnOrdering::Unknown; schema.fields().len()];
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema), column_orders).unwrap();
 
         let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
             file_name,
@@ -1551,12 +1548,9 @@ mod tests {
             let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
             let expr = logical2physical(&expr, &schema);
-            let pruning_predicate = PruningPredicate::try_new(
-                expr,
-                Arc::new(schema),
-                vec![ColumnOrdering::Unknown; schema.fields().len()],
-            )
-            .unwrap();
+            let column_orders = vec![ColumnOrdering::Unknown; schema.fields().len()];
+            let pruning_predicate =
+                PruningPredicate::try_new(expr, Arc::new(schema), column_orders).unwrap();
 
             let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
                 &file_name,
