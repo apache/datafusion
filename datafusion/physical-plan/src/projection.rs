@@ -48,7 +48,6 @@ use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::PhysicalExprRef;
 
-use crate::statistics::PartitionedStatistics;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use itertools::Itertools;
@@ -252,19 +251,12 @@ impl ExecutionPlan for ProjectionExec {
         ))
     }
 
-    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
-        Ok(PartitionedStatistics::new(
-            self.input
-                .statistics_by_partition()?
-                .iter()
-                .map(|input_stats| {
-                    Arc::new(stats_projection(
-                        input_stats.clone(),
-                        self.expr.iter().map(|(e, _)| Arc::clone(e)),
-                        Arc::clone(&self.schema),
-                    ))
-                })
-                .collect(),
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        let input_stats = self.input.partition_statistics(partition)?;
+        Ok(stats_projection(
+            input_stats,
+            self.expr.iter().map(|(e, _)| Arc::clone(e)),
+            Arc::clone(&self.schema),
         ))
     }
 

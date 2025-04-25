@@ -54,7 +54,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use crate::statistics::PartitionedStatistics;
 use futures::stream::{StreamExt, TryStreamExt};
 
 /// Represent nodes in the DataFusion Physical Plan.
@@ -431,17 +430,30 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(Statistics::new_unknown(&self.schema()))
     }
 
-    /// Returns statistics for each partition of this `ExecutionPlan` node.
-    /// If statistics are not available, returns an array of
-    /// [`Statistics::new_unknown`] for each partition.
-    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
-        Ok(PartitionedStatistics::new({
-            let mut v =
-                Vec::with_capacity(self.properties().partitioning.partition_count());
-            (0..self.properties().partitioning.partition_count())
-                .for_each(|_| v.push(Arc::new(Statistics::new_unknown(&self.schema()))));
-            v
-        }))
+    /// Returns statistics for a specific partition of this `ExecutionPlan` node.
+    /// If statistics are not available, should return [`Statistics::new_unknown`]
+    /// (the default), not an error.
+    /// If `partition` is `None`, it returns statistics for the entire plan.
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        match partition {
+            Some(idx) => {
+                // Validate partition index
+                let partition_count = self.properties().partitioning.partition_count();
+                if idx >= partition_count {
+                    return internal_err!(
+                        "Invalid partition index: {}, the partition count is {}",
+                        idx,
+                        partition_count
+                    );
+                }
+                // Default implementation: return unknown statistics for the specific partition
+                Ok(Statistics::new_unknown(&self.schema()))
+            }
+            None => {
+                // Return unknown statistics for the entire plan
+                Ok(Statistics::new_unknown(&self.schema()))
+            }
+        }
     }
 
     /// Returns `true` if a limit can be safely pushed down through this

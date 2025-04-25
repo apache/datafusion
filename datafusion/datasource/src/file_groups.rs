@@ -421,11 +421,6 @@ impl FileGroup {
     }
 
     /// Get the statistics for this group
-    pub fn statistics(&self) -> &Option<Arc<Statistics>> {
-        &self.statistics
-    }
-
-    /// Get the statistics for this group
     pub fn statistics_ref(&self) -> Option<&Statistics> {
         self.statistics.as_deref()
     }

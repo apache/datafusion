@@ -24,7 +24,6 @@ use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
-use crate::statistics::PartitionedStatistics;
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
@@ -200,24 +199,11 @@ impl ExecutionPlan for CoalesceBatchesExec {
         Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
     }
 
-    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
-        let input_stats = self.input.statistics_by_partition()?;
-
-        let stats: Result<Vec<Arc<Statistics>>> = input_stats
-            .iter()
-            .map(|stat| {
-                let fetched_stat = Statistics::with_fetch(
-                    stat.clone(),
-                    self.schema(),
-                    self.fetch,
-                    0,
-                    1,
-                )?;
-                Ok(Arc::new(fetched_stat))
-            })
-            .collect();
-
-        Ok(PartitionedStatistics::new(stats?))
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        let input_stats = self.input.partition_statistics(partition)?;
+        let fetched_stat =
+            Statistics::with_fetch(input_stats.clone(), self.schema(), self.fetch, 0, 1)?;
+        Ok(fetched_stat)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

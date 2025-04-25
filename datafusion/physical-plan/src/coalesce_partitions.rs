@@ -31,7 +31,6 @@ use crate::execution_plan::CardinalityEffect;
 use crate::projection::{make_with_child, ProjectionExec};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
-use crate::statistics::PartitionedStatistics;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
@@ -200,10 +199,8 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
     }
 
-    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
-        Ok(PartitionedStatistics::new(vec![Arc::new(
-            self.statistics()?,
-        )]))
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
     }
 
     fn supports_limit_pushdown(&self) -> bool {

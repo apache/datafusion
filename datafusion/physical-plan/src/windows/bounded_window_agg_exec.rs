@@ -63,7 +63,6 @@ use datafusion_physical_expr::window::{
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
-use crate::statistics::PartitionedStatistics;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use hashbrown::hash_table::HashTable;
@@ -365,16 +364,9 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.statistics_helper(input_stat)
     }
 
-    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
-        let input_stats = self.input.statistics_by_partition()?;
-        let stats: Result<Vec<Arc<Statistics>>> = input_stats
-            .iter()
-            .map(|stat| {
-                let stat = self.statistics_helper(stat.clone())?;
-                Ok(Arc::new(stat))
-            })
-            .collect();
-        Ok(PartitionedStatistics::new(stats?))
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        let input_stat = self.input.partition_statistics(partition)?;
+        self.statistics_helper(input_stat)
     }
 }
 

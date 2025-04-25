@@ -476,7 +476,7 @@ pub fn compute_all_files_statistics(
     // Then summary statistics across all file groups
     let file_groups_statistics = file_groups_with_stats
         .iter()
-        .filter_map(|file_group| file_group.statistics().as_deref());
+        .filter_map(|file_group| file_group.statistics_ref());
 
     let mut statistics =
         Statistics::try_merge_iter(file_groups_statistics, &table_schema)?;

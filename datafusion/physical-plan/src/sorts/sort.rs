@@ -60,7 +60,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use crate::statistics::PartitionedStatistics;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -1301,29 +1300,18 @@ impl ExecutionPlan for SortExec {
         Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
     }
 
-    fn statistics_by_partition(&self) -> Result<PartitionedStatistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if !self.preserve_partitioning() {
-            return Ok(PartitionedStatistics::new(vec![Arc::new(
-                self.statistics()?,
-            )]));
+            return Statistics::with_fetch(
+                self.input.partition_statistics(None)?,
+                self.schema(),
+                self.fetch,
+                0,
+                1,
+            );
         }
-        let input_stats = self.input.statistics_by_partition()?;
-
-        let stats: Result<Vec<Arc<Statistics>>> = input_stats
-            .iter()
-            .map(|stat| {
-                let fetched_stat = Statistics::with_fetch(
-                    stat.clone(),
-                    self.schema(),
-                    self.fetch,
-                    0,
-                    1,
-                )?;
-                Ok(Arc::new(fetched_stat))
-            })
-            .collect();
-
-        Ok(PartitionedStatistics::new(stats?))
+        let input_stats = self.input.partition_statistics(partition)?;
+        Statistics::with_fetch(input_stats, self.schema(), self.fetch, 0, 1)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
