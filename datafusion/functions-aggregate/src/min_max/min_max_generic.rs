@@ -303,7 +303,6 @@ impl<MovingWindowHelper: GenericSlidingMinMaxAccumulatorHelper> Accumulator
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // TODO - should assert getting only one column?
         let rows = self.row_converter.convert_columns(values)?;
 
         rows.iter()
@@ -316,7 +315,6 @@ impl<MovingWindowHelper: GenericSlidingMinMaxAccumulatorHelper> Accumulator
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // TODO - should assert getting only one column?
         let rows = self.row_converter.convert_columns(values)?;
 
         rows.iter()
