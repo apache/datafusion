@@ -45,10 +45,12 @@ use datafusion_common::{assert_contains, Result};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{self, col, Column};
 use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{plan_with_order_preserving_variants, replace_with_order_preserving_variants, OrderPreservationContext};
+use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{plan_with_order_breaking_variants, plan_with_order_preserving_variants, replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_common::config::ConfigOptions;
 
 use crate::physical_optimizer::enforce_sorting::parquet_exec_sorted;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use object_store::memory::InMemory;
 use object_store::ObjectStore;
 use rstest::rstest;
@@ -1308,5 +1310,31 @@ fn test_plan_with_order_preserving_variants_preserves_fetch() -> Result<()> {
     );
     let res = plan_with_order_preserving_variants(requirements, false, true, Some(5))?;
     assert_eq!(res.plan.fetch(), Some(5),);
+    Ok(())
+}
+
+#[test]
+fn test_plan_with_order_breaking_variants_preserves_fetch() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let parquet_sort_exprs = vec![crate::physical_optimizer::test_utils::sort_expr(
+        "a", &schema,
+    )];
+    let parquet_exec = parquet_exec_sorted(&schema, parquet_sort_exprs.clone());
+    let spm = SortPreservingMergeExec::new(
+        LexOrdering::new(parquet_sort_exprs),
+        parquet_exec.clone(),
+    )
+    .with_fetch(Some(10));
+    let requirements = OrderPreservationContext::new(
+        Arc::new(spm),
+        true,
+        vec![OrderPreservationContext::new(
+            parquet_exec.clone(),
+            true,
+            vec![],
+        )],
+    );
+    let res = plan_with_order_breaking_variants(requirements)?;
+    assert_eq!(res.plan.fetch(), Some(10));
     Ok(())
 }
