@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::SubstraitConsumer;
+use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::{not_impl_err, substrait_err};
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use substrait::proto::set_rel::SetOp;

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::SubstraitConsumer;
+use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::{not_impl_err, Column, DFSchema};
 use datafusion::logical_expr::Expr;
 use substrait::proto::expression::field_reference::ReferenceType::DirectReference;
@@ -30,7 +30,7 @@ pub async fn from_field_reference(
     from_substrait_field_reference(field_ref, input_schema)
 }
 
-pub(super) fn from_substrait_field_reference(
+pub(crate) fn from_substrait_field_reference(
     field_ref: &FieldReference,
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Expr> {

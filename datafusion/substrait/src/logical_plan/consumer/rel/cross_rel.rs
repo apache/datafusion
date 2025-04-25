@@ -15,21 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::from_substrait_sorts;
-use super::SubstraitConsumer;
-use datafusion::common::not_impl_err;
+use crate::logical_plan::consumer::utils::requalify_sides_if_needed;
+use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
-use substrait::proto::SortRel;
+use substrait::proto::CrossRel;
 
-pub async fn from_sort_rel(
+pub async fn from_cross_rel(
     consumer: &impl SubstraitConsumer,
-    sort: &SortRel,
+    cross: &CrossRel,
 ) -> datafusion::common::Result<LogicalPlan> {
-    if let Some(input) = sort.input.as_ref() {
-        let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
-        let sorts = from_substrait_sorts(consumer, &sort.sorts, input.schema()).await?;
-        input.sort(sorts)?.build()
-    } else {
-        not_impl_err!("Sort without an input is not valid")
-    }
+    let left = LogicalPlanBuilder::from(
+        consumer.consume_rel(cross.left.as_ref().unwrap()).await?,
+    );
+    let right = LogicalPlanBuilder::from(
+        consumer.consume_rel(cross.right.as_ref().unwrap()).await?,
+    );
+    let (left, right) = requalify_sides_if_needed(left, right)?;
+    left.cross_join(right.build()?)?.build()
 }

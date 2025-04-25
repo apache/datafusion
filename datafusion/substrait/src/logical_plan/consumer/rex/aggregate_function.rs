@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{from_substrait_func_args, substrait_fun_name, SubstraitConsumer};
+use crate::logical_plan::consumer::{
+    from_substrait_func_args, substrait_fun_name, SubstraitConsumer,
+};
 use datafusion::common::{not_impl_datafusion_err, plan_err, DFSchema, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{expr, Expr, SortExpr};

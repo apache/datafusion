@@ -15,19 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::bound::from_substrait_bound;
-use super::{
+use crate::logical_plan::consumer::{
     from_substrait_func_args, from_substrait_rex_vec, from_substrait_sorts,
     substrait_fun_name, SubstraitConsumer,
 };
 use datafusion::common::{
-    not_impl_err, plan_datafusion_err, plan_err, DFSchema, ScalarValue,
+    not_impl_err, plan_datafusion_err, plan_err, substrait_err, DFSchema, ScalarValue,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::WindowFunctionParams;
-use datafusion::logical_expr::{expr, Expr, WindowFrameUnits, WindowFunctionDefinition};
-use substrait::proto::expression::window_function::BoundsType;
+use datafusion::logical_expr::{
+    expr, Expr, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+};
+use substrait::proto::expression::window_function::{Bound, BoundsType};
 use substrait::proto::expression::WindowFunction;
+use substrait::proto::expression::{
+    window_function::bound as SubstraitBound, window_function::bound::Kind as BoundKind,
+};
 
 pub async fn from_window_function(
     consumer: &impl SubstraitConsumer,
@@ -110,4 +114,50 @@ pub async fn from_window_function(
             null_treatment: None,
         },
     }))
+}
+
+fn from_substrait_bound(
+    bound: &Option<Bound>,
+    is_lower: bool,
+) -> datafusion::common::Result<WindowFrameBound> {
+    match bound {
+        Some(b) => match &b.kind {
+            Some(k) => match k {
+                BoundKind::CurrentRow(SubstraitBound::CurrentRow {}) => {
+                    Ok(WindowFrameBound::CurrentRow)
+                }
+                BoundKind::Preceding(SubstraitBound::Preceding { offset }) => {
+                    if *offset <= 0 {
+                        return plan_err!("Preceding bound must be positive");
+                    }
+                    Ok(WindowFrameBound::Preceding(ScalarValue::UInt64(Some(
+                        *offset as u64,
+                    ))))
+                }
+                BoundKind::Following(SubstraitBound::Following { offset }) => {
+                    if *offset <= 0 {
+                        return plan_err!("Following bound must be positive");
+                    }
+                    Ok(WindowFrameBound::Following(ScalarValue::UInt64(Some(
+                        *offset as u64,
+                    ))))
+                }
+                BoundKind::Unbounded(SubstraitBound::Unbounded {}) => {
+                    if is_lower {
+                        Ok(WindowFrameBound::Preceding(ScalarValue::Null))
+                    } else {
+                        Ok(WindowFrameBound::Following(ScalarValue::Null))
+                    }
+                }
+            },
+            None => substrait_err!("WindowFunction missing Substrait Bound kind"),
+        },
+        None => {
+            if is_lower {
+                Ok(WindowFrameBound::Preceding(ScalarValue::Null))
+            } else {
+                Ok(WindowFrameBound::Following(ScalarValue::Null))
+            }
+        }
+    }
 }

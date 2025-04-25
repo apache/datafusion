@@ -15,7 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::SubstraitConsumer;
+mod aggregate_function;
+mod cast;
+mod extended_expression;
+mod field_reference;
+mod function_arguments;
+mod if_then;
+mod literal;
+mod scalar_function;
+mod singular_or_list;
+mod subquery;
+mod window_function;
+
+pub use aggregate_function::*;
+pub use cast::*;
+pub use extended_expression::*;
+pub use field_reference::*;
+pub use function_arguments::*;
+pub use if_then::*;
+pub use literal::*;
+pub use scalar_function::*;
+pub use singular_or_list::*;
+pub use subquery::*;
+pub use window_function::*;
+
+use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::{substrait_err, DFSchema};
 use datafusion::logical_expr::Expr;
 use substrait::proto::expression::RexType;
@@ -68,12 +92,30 @@ pub async fn from_substrait_rex(
     }
 }
 
+/// Convert Substrait Expressions to DataFusion Exprs
+pub async fn from_substrait_rex_vec(
+    consumer: &impl SubstraitConsumer,
+    exprs: &Vec<Expression>,
+    input_schema: &DFSchema,
+) -> datafusion::common::Result<Vec<Expr>> {
+    let mut expressions: Vec<Expr> = vec![];
+    for expr in exprs {
+        let expression = consumer.consume_expression(expr, input_schema).await?;
+        expressions.push(expression);
+    }
+    Ok(expressions)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
+    use crate::logical_plan::consumer::*;
+    use datafusion::common::DFSchema;
+    use datafusion::logical_expr::Expr;
     use substrait::proto::expression::window_function::BoundsType;
+    use substrait::proto::expression::RexType;
+    use substrait::proto::Expression;
 
     #[tokio::test]
     async fn window_function_with_range_unit_and_no_order_by(

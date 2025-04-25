@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::utils::NameTracker;
-use super::SubstraitConsumer;
+use crate::logical_plan::consumer::utils::NameTracker;
+use crate::logical_plan::consumer::SubstraitConsumer;
 use async_recursion::async_recursion;
 use datafusion::common::{not_impl_err, Column};
 use datafusion::logical_expr::builder::project;

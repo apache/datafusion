@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::utils::rename_field;
-use super::{from_substrait_named_struct, DefaultSubstraitConsumer, SubstraitConsumer};
 use crate::extensions::Extensions;
+use crate::logical_plan::consumer::utils::rename_field;
+use crate::logical_plan::consumer::{
+    from_substrait_named_struct, DefaultSubstraitConsumer, SubstraitConsumer,
+};
 use datafusion::arrow::datatypes::Field;
 use datafusion::common::{not_impl_err, plan_err, DFSchemaRef};
 use datafusion::execution::SessionState;

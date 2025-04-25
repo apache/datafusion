@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::from_substrait_named_struct;
-use super::literal::from_substrait_literal;
-use super::utils::ensure_schema_compatibility;
-use super::SubstraitConsumer;
+use crate::logical_plan::consumer::from_substrait_literal;
+use crate::logical_plan::consumer::from_substrait_named_struct;
+use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
+use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::{
     not_impl_err, plan_err, substrait_datafusion_err, substrait_err, DFSchema,
     DFSchemaRef, TableReference,

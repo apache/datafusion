@@ -15,8 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::utils::NameTracker;
-use super::SubstraitConsumer;
+mod aggregate_rel;
+mod cross_rel;
+mod exchange_rel;
+mod fetch_rel;
+mod filter_rel;
+mod join_rel;
+mod project_rel;
+mod read_rel;
+mod set_rel;
+mod sort_rel;
+
+pub use aggregate_rel::*;
+pub use cross_rel::*;
+pub use exchange_rel::*;
+pub use fetch_rel::*;
+pub use filter_rel::*;
+pub use join_rel::*;
+pub use project_rel::*;
+pub use read_rel::*;
+pub use set_rel::*;
+pub use sort_rel::*;
+
+use crate::logical_plan::consumer::utils::NameTracker;
+use crate::logical_plan::consumer::SubstraitConsumer;
 use async_recursion::async_recursion;
 use datafusion::common::{not_impl_err, substrait_datafusion_err, substrait_err, Column};
 use datafusion::logical_expr::builder::project;

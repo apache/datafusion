@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::SubstraitConsumer;
+use crate::logical_plan::consumer::SubstraitConsumer;
 use async_recursion::async_recursion;
 use datafusion::common::{not_impl_err, DFSchema, DFSchemaRef};
 use datafusion::logical_expr::{lit, LogicalPlan, LogicalPlanBuilder};

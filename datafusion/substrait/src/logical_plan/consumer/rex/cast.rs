@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::r#type::from_substrait_type_without_names;
-use super::SubstraitConsumer;
+use crate::logical_plan::consumer::types::from_substrait_type_without_names;
+use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::{substrait_err, DFSchema};
 use datafusion::logical_expr::{Cast, Expr, TryCast};
 use substrait::proto::expression as substrait_expression;

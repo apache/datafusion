@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::struct_type::from_substrait_struct_type;
-use super::utils::DEFAULT_TIMEZONE;
+use super::utils::{next_struct_field_name, DEFAULT_TIMEZONE};
 use super::SubstraitConsumer;
 #[allow(deprecated)]
 use crate::variation_const::{
@@ -30,10 +29,14 @@ use crate::variation_const::{
     TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
-use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
-use datafusion::common::{not_impl_err, substrait_datafusion_err};
+use datafusion::arrow::datatypes::{
+    DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
+};
+use datafusion::common::{
+    not_impl_err, substrait_datafusion_err, substrait_err, DFSchema,
+};
 use std::sync::Arc;
-use substrait::proto::{r#type, Type};
+use substrait::proto::{r#type, NamedStruct, Type};
 
 pub(crate) fn from_substrait_type_without_names(
     consumer: &impl SubstraitConsumer,
@@ -264,4 +267,46 @@ pub fn from_substrait_type(
         },
         _ => not_impl_err!("`None` Substrait kind is not supported"),
     }
+}
+
+/// Convert Substrait NamedStruct to DataFusion DFSchemaRef
+pub fn from_substrait_named_struct(
+    consumer: &impl SubstraitConsumer,
+    base_schema: &NamedStruct,
+) -> datafusion::common::Result<DFSchema> {
+    let mut name_idx = 0;
+    let fields = from_substrait_struct_type(
+        consumer,
+        base_schema.r#struct.as_ref().ok_or_else(|| {
+            substrait_datafusion_err!("Named struct must contain a struct")
+        })?,
+        &base_schema.names,
+        &mut name_idx,
+    );
+    if name_idx != base_schema.names.len() {
+        return substrait_err!(
+            "Names list must match exactly to nested schema, but found {} uses for {} names",
+            name_idx,
+            base_schema.names.len()
+        );
+    }
+    DFSchema::try_from(Schema::new(fields?))
+}
+
+fn from_substrait_struct_type(
+    consumer: &impl SubstraitConsumer,
+    s: &r#type::Struct,
+    dfs_names: &[String],
+    name_idx: &mut usize,
+) -> datafusion::common::Result<Fields> {
+    let mut fields = vec![];
+    for (i, f) in s.types.iter().enumerate() {
+        let field = Field::new(
+            next_struct_field_name(i, dfs_names, name_idx)?,
+            from_substrait_type(consumer, f, dfs_names, name_idx)?,
+            true, // We assume everything to be nullable since that's easier than ensuring it matches
+        );
+        fields.push(field);
+    }
+    Ok(fields.into())
 }

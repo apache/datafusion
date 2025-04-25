@@ -15,25 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::SubstraitConsumer;
-use datafusion::common::{not_impl_err, DFSchema};
+use crate::logical_plan::consumer::{from_substrait_rex_vec, SubstraitConsumer};
+use datafusion::common::DFSchema;
+use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::Expr;
-use substrait::proto::function_argument::ArgType;
-use substrait::proto::FunctionArgument;
+use substrait::proto::expression::SingularOrList;
 
-/// Convert Substrait FunctionArguments to DataFusion Exprs
-pub async fn from_substrait_func_args(
+pub async fn from_singular_or_list(
     consumer: &impl SubstraitConsumer,
-    arguments: &Vec<FunctionArgument>,
+    expr: &SingularOrList,
     input_schema: &DFSchema,
-) -> datafusion::common::Result<Vec<Expr>> {
-    let mut args: Vec<Expr> = vec![];
-    for arg in arguments {
-        let arg_expr = match &arg.arg_type {
-            Some(ArgType::Value(e)) => consumer.consume_expression(e, input_schema).await,
-            _ => not_impl_err!("Function argument non-Value type not supported"),
-        };
-        args.push(arg_expr?);
-    }
-    Ok(args)
+) -> datafusion::common::Result<Expr> {
+    let substrait_expr = expr.value.as_ref().unwrap();
+    let substrait_list = expr.options.as_ref();
+    Ok(Expr::InList(InList {
+        expr: Box::new(
+            consumer
+                .consume_expression(substrait_expr, input_schema)
+                .await?,
+        ),
+        list: from_substrait_rex_vec(consumer, substrait_list, input_schema).await?,
+        negated: false,
+    }))
 }

@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::grouping::from_substrait_grouping;
-use super::SubstraitConsumer;
-use super::{from_substrait_agg_func, from_substrait_sorts};
-use datafusion::common::not_impl_err;
+use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
+use datafusion::common::{not_impl_err, DFSchemaRef};
 use datafusion::logical_expr::{Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder};
 use substrait::proto::aggregate_function::AggregationInvocation;
+use substrait::proto::aggregate_rel::Grouping;
 use substrait::proto::AggregateRel;
 
 pub async fn from_aggregate_rel(
@@ -117,4 +117,26 @@ pub async fn from_aggregate_rel(
     } else {
         not_impl_err!("Aggregate without an input is not valid")
     }
+}
+
+#[allow(deprecated)]
+async fn from_substrait_grouping(
+    consumer: &impl SubstraitConsumer,
+    grouping: &Grouping,
+    expressions: &[Expr],
+    input_schema: &DFSchemaRef,
+) -> datafusion::common::Result<Vec<Expr>> {
+    let mut group_exprs = vec![];
+    if !grouping.grouping_expressions.is_empty() {
+        for e in &grouping.grouping_expressions {
+            let expr = consumer.consume_expression(e, input_schema).await?;
+            group_exprs.push(expr);
+        }
+        return Ok(group_exprs);
+    }
+    for idx in &grouping.expression_references {
+        let e = &expressions[*idx as usize];
+        group_exprs.push(e.clone());
+    }
+    Ok(group_exprs)
 }

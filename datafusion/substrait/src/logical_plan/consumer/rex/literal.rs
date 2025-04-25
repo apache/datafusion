@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::r#type::from_substrait_type;
-use super::utils::{next_struct_field_name, DEFAULT_TIMEZONE};
-use super::SubstraitConsumer;
+use crate::logical_plan::consumer::types::from_substrait_type;
+use crate::logical_plan::consumer::utils::{next_struct_field_name, DEFAULT_TIMEZONE};
+use crate::logical_plan::consumer::SubstraitConsumer;
 #[allow(deprecated)]
 use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
@@ -61,7 +61,7 @@ pub(crate) fn from_substrait_literal_without_names(
     from_substrait_literal(consumer, lit, &vec![], &mut 0)
 }
 
-pub(super) fn from_substrait_literal(
+pub(crate) fn from_substrait_literal(
     consumer: &impl SubstraitConsumer,
     lit: &Literal,
     dfs_names: &Vec<String>,

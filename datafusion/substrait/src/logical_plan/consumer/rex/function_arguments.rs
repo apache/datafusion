@@ -15,29 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::SubstraitConsumer;
-use datafusion::common::DFSchemaRef;
+use crate::logical_plan::consumer::SubstraitConsumer;
+use datafusion::common::{not_impl_err, DFSchema};
 use datafusion::logical_expr::Expr;
-use substrait::proto::aggregate_rel::Grouping;
+use substrait::proto::function_argument::ArgType;
+use substrait::proto::FunctionArgument;
 
-#[allow(deprecated)]
-pub(crate) async fn from_substrait_grouping(
+/// Convert Substrait FunctionArguments to DataFusion Exprs
+pub async fn from_substrait_func_args(
     consumer: &impl SubstraitConsumer,
-    grouping: &Grouping,
-    expressions: &[Expr],
-    input_schema: &DFSchemaRef,
+    arguments: &Vec<FunctionArgument>,
+    input_schema: &DFSchema,
 ) -> datafusion::common::Result<Vec<Expr>> {
-    let mut group_exprs = vec![];
-    if !grouping.grouping_expressions.is_empty() {
-        for e in &grouping.grouping_expressions {
-            let expr = consumer.consume_expression(e, input_schema).await?;
-            group_exprs.push(expr);
-        }
-        return Ok(group_exprs);
+    let mut args: Vec<Expr> = vec![];
+    for arg in arguments {
+        let arg_expr = match &arg.arg_type {
+            Some(ArgType::Value(e)) => consumer.consume_expression(e, input_schema).await,
+            _ => not_impl_err!("Function argument non-Value type not supported"),
+        };
+        args.push(arg_expr?);
     }
-    for idx in &grouping.expression_references {
-        let e = &expressions[*idx as usize];
-        group_exprs.push(e.clone());
-    }
-    Ok(group_exprs)
+    Ok(args)
 }

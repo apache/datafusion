@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::join_type::from_substrait_jointype;
-use super::utils::requalify_sides_if_needed;
-use super::SubstraitConsumer;
-use datafusion::common::{not_impl_err, Column};
+use crate::logical_plan::consumer::utils::requalify_sides_if_needed;
+use crate::logical_plan::consumer::SubstraitConsumer;
+use datafusion::common::{not_impl_err, plan_err, Column, JoinType};
 use datafusion::logical_expr::utils::split_conjunction;
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
 };
-use substrait::proto::JoinRel;
+use substrait::proto::{join_rel, JoinRel};
 
 pub async fn from_join_rel(
     consumer: &impl SubstraitConsumer,
@@ -121,4 +120,21 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
 
     let join_filter = accum_filters.into_iter().reduce(Expr::and);
     (accum_join_keys, nulls_equal_nulls, join_filter)
+}
+
+fn from_substrait_jointype(join_type: i32) -> datafusion::common::Result<JoinType> {
+    if let Ok(substrait_join_type) = join_rel::JoinType::try_from(join_type) {
+        match substrait_join_type {
+            join_rel::JoinType::Inner => Ok(JoinType::Inner),
+            join_rel::JoinType::Left => Ok(JoinType::Left),
+            join_rel::JoinType::Right => Ok(JoinType::Right),
+            join_rel::JoinType::Outer => Ok(JoinType::Full),
+            join_rel::JoinType::LeftAnti => Ok(JoinType::LeftAnti),
+            join_rel::JoinType::LeftSemi => Ok(JoinType::LeftSemi),
+            join_rel::JoinType::LeftMark => Ok(JoinType::LeftMark),
+            _ => plan_err!("unsupported join type {substrait_join_type:?}"),
+        }
+    } else {
+        plan_err!("invalid join type variant {join_type:?}")
+    }
 }

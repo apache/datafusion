@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::SubstraitConsumer;
+use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::DFSchema;
 use datafusion::logical_expr::{Case, Expr};
 use substrait::proto::expression::IfThen;
