@@ -2590,6 +2590,7 @@ mod test {
     use datafusion::common::scalar::ScalarStructBuilder;
     use datafusion::common::DFSchema;
     use datafusion::execution::{SessionState, SessionStateBuilder};
+    use datafusion::logical_expr::ExprSchemable;
     use datafusion::prelude::SessionContext;
     use std::sync::LazyLock;
 
@@ -2926,5 +2927,38 @@ mod test {
         let err = to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &state);
 
         assert!(matches!(err, Err(DataFusionError::SchemaError(_, _))));
+    }
+
+    #[tokio::test]
+    async fn fold_cast_null() {
+        let state = SessionStateBuilder::default().build();
+        let empty_schema = DFSchemaRef::new(DFSchema::empty());
+        let field = Field::new("out", DataType::Int32, false);
+
+        let expr = Expr::Literal(ScalarValue::Null)
+            .cast_to(&DataType::Int32, &empty_schema)
+            .unwrap();
+
+        let typed_null =
+            to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &state)
+                .unwrap();
+
+        if let ExprType::Expression(expr) =
+            typed_null.referred_expr[0].expr_type.as_ref().unwrap()
+        {
+            let lit = Literal {
+                nullable: true,
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                literal_type: Some(LiteralType::Null(
+                    to_substrait_type(&DataType::Int32, true).unwrap(),
+                )),
+            };
+            let expected = Expression {
+                rex_type: Some(RexType::Literal(lit)),
+            };
+            assert_eq!(*expr, expected);
+        } else {
+            panic!("Expected expression type");
+        }
     }
 }
