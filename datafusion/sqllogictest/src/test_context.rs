@@ -42,6 +42,8 @@ use datafusion::{
 
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
+use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::SessionStateBuilder;
 use log::info;
 use tempfile::TempDir;
 
@@ -70,8 +72,20 @@ impl TestContext {
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
             .with_target_partitions(4);
+        let runtime = Arc::new(RuntimeEnv::default());
+        let mut state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build();
 
-        let mut test_ctx = TestContext::new(SessionContext::new_with_config(config));
+        if relative_path.starts_with("spark/") {
+            info!("Registering Spark functions");
+            datafusion_spark::register_all(&mut state)
+                .expect("Can not register Spark functions");
+        }
+
+        let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
@@ -122,12 +136,6 @@ impl TestContext {
                 info!("Using default SessionContext");
             }
         };
-
-        if relative_path.starts_with("spark/") {
-            info!("Registering Spark functions");
-            datafusion_spark::register_all(&mut test_ctx.session_ctx().state())
-                .expect("Can not register Spark functions");
-        }
 
         Some(test_ctx)
     }
