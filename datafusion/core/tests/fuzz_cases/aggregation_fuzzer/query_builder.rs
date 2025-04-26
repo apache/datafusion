@@ -69,6 +69,9 @@ pub struct QueryBuilder {
     /// Max columns num in randomly generated `groupings`
     max_group_by_columns: usize,
 
+    /// Min columns num in randomly generated `groupings`
+    min_group_by_columns: usize,
+
     /// The sort keys of dataset
     ///
     /// Due to optimizations will be triggered when all or some
@@ -120,7 +123,8 @@ impl QueryBuilder {
     pub fn new() -> Self {
         Self {
             no_grouping: true,
-            max_group_by_columns: 3,
+            max_group_by_columns: 5,
+            min_group_by_columns: 1,
             ..Default::default()
         }
     }
@@ -181,8 +185,14 @@ impl QueryBuilder {
     /// Add max columns num in group by(default: 3), for example if it is set to 1,
     /// the generated sql will group by at most 1 column
     #[allow(dead_code)]
-    pub fn with_max_group_by_columns(mut self, group_by_columns: usize) -> Self {
-        self.max_group_by_columns = group_by_columns;
+    pub fn with_max_group_by_columns(mut self, max_group_by_columns: usize) -> Self {
+        self.max_group_by_columns = max_group_by_columns;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn with_min_group_by_columns(mut self, min_group_by_columns: usize) -> Self {
+        self.min_group_by_columns = min_group_by_columns;
         self
     }
 
@@ -237,6 +247,7 @@ impl QueryBuilder {
 
     fn generate_query(&self) -> String {
         let group_by = self.random_group_by();
+        dbg!(&group_by);
         let mut query = String::from("SELECT ");
         query.push_str(&group_by.join(", "));
         if !group_by.is_empty() {
@@ -267,7 +278,7 @@ impl QueryBuilder {
     fn random_aggregate_functions(&self, group_by_cols: &[String]) -> Vec<String> {
         const MAX_NUM_FUNCTIONS: usize = 5;
         let mut rng = thread_rng();
-        let num_aggregate_functions = rng.gen_range(1..MAX_NUM_FUNCTIONS);
+        let num_aggregate_functions = rng.gen_range(1..=MAX_NUM_FUNCTIONS);
 
         let mut alias_gen = 1;
 
@@ -349,12 +360,14 @@ impl QueryBuilder {
 
     /// Pick a random number of fields to group by (non-repeating)
     ///
-    /// Limited to 3 group by columns to ensure coverage for large groups. With
-    /// larger numbers of columns, each group has many fewer values.
+    /// Limited to `max_group_by_columns` group by columns to ensure coverage for large groups.
+    /// With larger numbers of columns, each group has many fewer values.
     fn random_group_by(&self) -> Vec<String> {
         let mut rng = thread_rng();
-        let max_groups = self.group_by_columns.len().max(self.max_group_by_columns);
-        let num_group_by = rng.gen_range(1..max_groups);
+        let min_groups = self.min_group_by_columns;
+        let max_groups = self.max_group_by_columns;
+        assert!(min_groups <= max_groups);
+        let num_group_by = rng.gen_range(min_groups..=max_groups);
 
         let mut already_used = HashSet::new();
         let mut group_by = vec![];
