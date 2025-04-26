@@ -286,11 +286,6 @@ impl Interval {
         }
     }
 
-    /// Create a new `Interval` with the same lower and upper bounds.
-    pub fn try_singleton(value: ScalarValue) -> Self {
-        Self::new(value.clone(), value)
-    }
-
     /// Only for internal usage. Responsible for standardizing booleans and
     /// floating-point values, as well as fixing NaNs. It doesn't validate
     /// the given bounds for ordering, or verify that they have the same data
@@ -951,6 +946,18 @@ impl Interval {
 impl Display for Interval {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "[{}, {}]", self.lower, self.upper)
+    }
+}
+
+impl From<ScalarValue> for Interval {
+    fn from(value: ScalarValue) -> Self {
+        Self::new(value.clone(), value)
+    }
+}
+
+impl From<&ScalarValue> for Interval {
+    fn from(value: &ScalarValue) -> Self {
+        Self::new(value.to_owned(), value.to_owned())
     }
 }
 
