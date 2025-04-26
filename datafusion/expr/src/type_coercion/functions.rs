@@ -345,7 +345,7 @@ pub fn check_function_length_with_diag(
                 }
             }
 
-            if !all_results.is_empty() {
+            if all_results.len() == signatures.len() {
                 // Create error for no matching signature
                 let error_message = format!(
                     "Function '{}' has no matching signature for {} arguments",
