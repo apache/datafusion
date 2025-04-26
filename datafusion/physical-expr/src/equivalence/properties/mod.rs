@@ -22,7 +22,6 @@ mod union; // Submodule containing calculate_union
 pub use joins::*;
 pub use union::*;
 
-use std::collections::VecDeque;
 use std::fmt::Display;
 use std::sync::Arc;
 use std::{fmt, mem};
@@ -41,9 +40,7 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{
-    internal_datafusion_err, plan_err, Constraint, Constraints, HashMap, Result,
-};
+use datafusion_common::{plan_err, Constraint, Constraints, HashMap, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
@@ -744,79 +741,64 @@ impl EquivalenceProperties {
                 .all(|(reference, given)| given.compatible(&reference))
     }
 
-    /// Substitute the ordering according to input expression type. We substitute
-    /// when the expression satisfies the following conditions:
+    /// Modify existing orderings by substituting sort expressions with appropriate
+    /// targets from the projection mapping. We substitute a sort expression when
+    /// its physical expression has a one-to-one functional relationship with a
+    /// target expression in the mapping.
     ///
-    /// 1. Has one column and is a `CAST` expression.
+    /// After substitution, we may generate more than one `LexOrdering` for each
+    /// existing equivalent ordering. For example, `[a ASC, b ASC]` will turn
+    /// into `[CAST(a) ASC, b ASC]` and `[a ASC, b ASC]` when applying projection
+    /// expressions `a, b, CAST(a)`.
     ///
-    /// After substitution, we may generate more than one `LexOrdering`. For
-    /// example, `[a ASC, b ASC]` will turn into `[CAST(a) ASC, b ASC]` and
-    /// `[a ASC, b ASC]` when applying projection expressions `a, b, CAST(a)`.
-    pub fn substitute_ordering_component(
+    /// TODO: Handle all scenarios that allow substitution; e.g. when `x` is
+    ///       sorted, `atan(x + 1000)` should also be substituted. For now, we
+    ///       only consider single-column `CAST` expressions.
+    fn substitute_oeq_class(
         &self,
+        oeq_class: OrderingEquivalenceClass,
         mapping: &ProjectionMapping,
-        sort_expr: LexOrdering,
-    ) -> Result<Vec<LexOrdering>> {
-        // TODO: Handle all scenarios that allow precomputation; e.g. when `x`
-        //       is sorted, `atan(x + 1000)` should also be substituted.
-        let new_orderings = sort_expr
-            .into_iter()
-            .map(|sort_expr| {
-                let referring_exprs = mapping
-                    .iter()
-                    .map(|(source, _target)| source)
-                    .filter(|source| expr_refers(source, &sort_expr.expr))
-                    .cloned();
-                let mut result = VecDeque::new();
-                let expr_type = sort_expr.expr.data_type(&self.schema)?;
-                // TODO: Add one-to-one analysis for ScalarFunctions.
-                for r_expr in referring_exprs {
-                    // We check whether this expression is substitutable.
-                    if let Some(cast_expr) = r_expr.as_any().downcast_ref::<CastExpr>() {
-                        // For casts, we need to know whether the cast expression matches:
-                        if cast_expr.expr.eq(&sort_expr.expr)
-                            && cast_expr.is_bigger_cast(&expr_type)
+    ) -> OrderingEquivalenceClass {
+        let new_orderings = oeq_class.into_iter().flat_map(|order| {
+            // Modify/expand existing orderings by substituting sort
+            // expressions with appropriate targets from the mapping:
+            order
+                .into_iter()
+                .map(|sort_expr| {
+                    let referring_exprs = mapping
+                        .iter()
+                        .map(|(source, _target)| source)
+                        .filter(|source| expr_refers(source, &sort_expr.expr))
+                        .cloned();
+                    let mut result = vec![];
+                    // The sort expression comes from this schema, so the
+                    // following call to `unwrap` is safe.
+                    let expr_type = sort_expr.expr.data_type(&self.schema).unwrap();
+                    // TODO: Add one-to-one analysis for ScalarFunctions.
+                    for r_expr in referring_exprs {
+                        // We check whether this expression is substitutable.
+                        if let Some(cast_expr) =
+                            r_expr.as_any().downcast_ref::<CastExpr>()
                         {
-                            result.push_back(PhysicalSortExpr {
-                                expr: r_expr,
-                                options: sort_expr.options,
-                            });
+                            // For casts, we need to know whether the cast
+                            // expression matches:
+                            if cast_expr.expr.eq(&sort_expr.expr)
+                                && cast_expr.is_bigger_cast(&expr_type)
+                            {
+                                result.push(PhysicalSortExpr::new(
+                                    r_expr,
+                                    sort_expr.options,
+                                ));
+                            }
                         }
                     }
-                }
-                result.push_front(sort_expr);
-                Ok(result)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        // Generate all valid orderings, given substituted expressions.
-        new_orderings
-            .into_iter()
-            .multi_cartesian_product()
-            .map(|o| {
-                LexOrdering::new(o).ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "Expected a non-empty list of sort expressions"
-                    )
+                    result.push(sort_expr);
+                    result
                 })
-            })
-            .collect()
-    }
-
-    /// In projection, supposed we have a input function 'A DESC B DESC' and the output shares the same expression
-    /// with A and B, we could surely use the ordering of the original ordering, However, if the A has been changed,
-    /// for example, A-> Cast(A, Int64) or any other form, it is invalid if we continue using the original ordering
-    /// Since it would cause bug in dependency constructions, we should substitute the input order in order to get correct
-    /// dependency map, happen in issue 8838: <https://github.com/apache/datafusion/issues/8838>
-    pub fn substitute_oeq_class(&mut self, mapping: &ProjectionMapping) -> Result<()> {
-        let oeq_class = mem::take(&mut self.oeq_class);
-        let new_orderings = oeq_class
-            .into_iter()
-            .map(|order| self.substitute_ordering_component(mapping, order))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten();
-        self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
-        Ok(())
+                // Generate all valid orderings given substituted expressions:
+                .multi_cartesian_product()
+        });
+        OrderingEquivalenceClass::new(new_orderings)
     }
 
     /// Projects argument `expr` according to `projection_mapping`, taking
@@ -869,9 +851,13 @@ impl EquivalenceProperties {
     /// b ASC: Node {Some(b_new ASC), HashSet{a ASC}}
     /// c ASC: Node {None, HashSet{a ASC}}
     /// ```
-    fn construct_dependency_map(&self, mapping: &ProjectionMapping) -> DependencyMap {
+    fn construct_dependency_map(
+        &self,
+        oeq_class: OrderingEquivalenceClass,
+        mapping: &ProjectionMapping,
+    ) -> DependencyMap {
         let mut map = DependencyMap::default();
-        for ordering in self.normalized_oeq_class().into_iter() {
+        for ordering in oeq_class.into_iter() {
             // Previous expression is a dependency. Note that there is no
             // dependency for the leading expression.
             if !self.insert_to_dependency_map(
@@ -971,7 +957,9 @@ impl EquivalenceProperties {
         let mapping = self.normalized_mapping(mapping);
 
         // Get dependency map for existing orderings:
-        let dependency_map = self.construct_dependency_map(&mapping);
+        let mut oeq_class = self.normalized_oeq_class();
+        oeq_class = self.substitute_oeq_class(oeq_class, &mapping);
+        let dependency_map = self.construct_dependency_map(oeq_class, &mapping);
         let orderings = mapping.iter().flat_map(|(source, targets)| {
             referred_dependencies(&dependency_map, source)
                 .into_iter()

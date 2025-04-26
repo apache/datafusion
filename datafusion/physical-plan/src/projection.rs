@@ -127,14 +127,12 @@ impl ProjectionExec {
         schema: SchemaRef,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let mut input_eq_properties = input.equivalence_properties().clone();
-        input_eq_properties.substitute_oeq_class(projection_mapping)?;
+        let input_eq_properties = input.equivalence_properties();
         let eq_properties = input_eq_properties.project(projection_mapping, schema);
-
         // Calculate output partitioning, which needs to respect aliases:
-        let input_partition = input.output_partitioning();
-        let output_partitioning =
-            input_partition.project(projection_mapping, &input_eq_properties);
+        let output_partitioning = input
+            .output_partitioning()
+            .project(projection_mapping, input_eq_properties);
 
         Ok(PlanProperties::new(
             eq_properties,
