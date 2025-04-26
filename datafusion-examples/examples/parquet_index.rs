@@ -39,7 +39,9 @@ use datafusion::parquet::arrow::{
     arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
 };
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_optimizer::pruning::{
+    ColumnOrdering, PruningPredicate, PruningStatistics,
+};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use std::any::Any;
