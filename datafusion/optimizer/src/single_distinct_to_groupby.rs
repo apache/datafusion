@@ -27,6 +27,7 @@ use datafusion_common::{
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
+use datafusion_expr::AggregateUDF;
 use datafusion_expr::{
     col,
     expr::AggregateFunction,
@@ -66,6 +67,7 @@ impl SingleDistinctToGroupBy {
 fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
+    let mut distinct_func: Option<Arc<AggregateUDF>> = None;
     for expr in aggr_expr {
         if let Expr::AggregateFunction(AggregateFunction {
             func,
@@ -87,6 +89,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
                 for e in args {
                     fields_set.insert(e);
                 }
+                distinct_func = Some(func.clone());
             } else if func.name() != "sum"
                 && func.name().to_lowercase() != "min"
                 && func.name().to_lowercase() != "max"
@@ -97,6 +100,15 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
             return Ok(false);
         }
     }
+
+    if aggregate_count == aggr_expr.len() && fields_set.len() == 1 {
+        if let Some(distinct_func) = distinct_func {
+            if distinct_func.name() == "count" {
+                return Ok(false);
+            }
+        }
+    }
+    
     Ok(aggregate_count == aggr_expr.len() && fields_set.len() == 1)
 }
 
