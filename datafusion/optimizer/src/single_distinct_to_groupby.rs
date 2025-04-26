@@ -89,7 +89,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
                 for e in args {
                     fields_set.insert(e);
                 }
-                distinct_func = Some(func.clone());
+                distinct_func = Some(Arc::clone(func));
             } else if func.name() != "sum"
                 && func.name().to_lowercase() != "min"
                 && func.name().to_lowercase() != "max"
@@ -101,14 +101,14 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
         }
     }
 
-    if aggregate_count == aggr_expr.len() && fields_set.len() == 1 {
+    if aggregate_count == 1 && fields_set.len() == 1 {
         if let Some(distinct_func) = distinct_func {
             if distinct_func.name() == "count" {
                 return Ok(false);
             }
         }
     }
-    
+
     Ok(aggregate_count == aggr_expr.len() && fields_set.len() == 1)
 }
 
