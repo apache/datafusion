@@ -22,10 +22,10 @@ use crate::parser::{
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
 };
-use std::ops::Not;
 use crate::statement::ast::Join;
 use crate::utils::normalize_ident;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ops::Not;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -47,10 +47,21 @@ use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::logical_plan::Join as PlanJoin;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    cast, col, lit, wildcard_with_options, Analyze, Case, CreateCatalog, CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody, CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate, DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView, EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable, Filter, JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode, TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart, Volatility, WriteOp
+    cast, col, lit, wildcard_with_options, Analyze, Case, CreateCatalog,
+    CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable, CreateFunction,
+    CreateFunctionBody, CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView,
+    Deallocate, DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable,
+    DropView, EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable,
+    Filter, JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder,
+    OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr,
+    Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
+    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
+    Volatility, WriteOp,
 };
 use sqlparser::ast::{
-    self, BeginTransactionKind, JoinOperator, MergeAction, MergeClause, MergeClauseKind, MergeInsertKind, NullsDistinctOption, ShowStatementIn, ShowStatementOptions, SqliteOnConflict, TableObject, UpdateTableFromKind, ValueWithSpan, Values
+    self, BeginTransactionKind, JoinOperator, MergeAction, MergeClause, MergeClauseKind,
+    MergeInsertKind, NullsDistinctOption, ShowStatementIn, ShowStatementOptions,
+    SqliteOnConflict, TableObject, UpdateTableFromKind, ValueWithSpan, Values,
 };
 use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
@@ -2107,7 +2118,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let target_src = self.context_provider.get_table_source(target_ref.clone())?;
         let target_scan =
             LogicalPlanBuilder::scan(target_ref.clone(), Arc::clone(&target_src), None)?
-                .project(projected_columns, lit(true).alias("target_exists")])? // add flag for matching target
+                .project(vec![projected_columns, lit(true).alias("target_exists")])? // add flag for matching target
                 .build()?;
 
         match source_table {
@@ -2134,20 +2145,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let source_src = self.context_provider.get_table_source(source_ref.clone())?;
         let source_scan =
             LogicalPlanBuilder::scan(source_ref.clone(), Arc::clone(&source_src), None)?
-                .project(projected_columns, lit(true).alias("source_exists")])? // add flag for matching source
+                .project(vec![projected_columns, lit(true).alias("source_exists")])? // add flag for matching source
                 .build()?;
 
         let target_schema = target_scan.schema();
 
-        let joined_schema = DFSchema::from(
-            target_scan.schema().join(source_scan.schema())?
-        );
+        let joined_schema =
+            DFSchema::from(target_scan.schema().join(source_scan.schema())?);
 
-        let on_df_expr = self.sql_to_expr(
-            *on,
-            &joined_schema,
-            &mut ctx,
-        )?;
+        let on_df_expr = self.sql_to_expr(*on, &joined_schema, &mut ctx)?;
 
         let join_plan = LogicalPlan::Join(PlanJoin {
             left: Arc::new(target_scan.clone()),
@@ -2161,28 +2167,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         });
 
         // Flag checks for both tables
-        let both_not_null = col("target_exists").is_not_null()
+        let both_not_null = col("target_exists")
+            .is_not_null()
             .and(col("source_exists").is_not_null());
-        let only_source = col("target_exists").is_null()
+        let only_source = col("target_exists")
+            .is_null()
             .and(col("source_exists").is_not_null());
-        let only_target = col("target_exists").is_not_null()
+        let only_target = col("target_exists")
+            .is_not_null()
             .and(col("source_exists").is_null());
 
         let mut when_then: Vec<(Box<Expr>, Box<Expr>)> = Vec::new();
         let mut delete_condition = Vec::<Expr>::new();
 
         let mut planner_context = PlannerContext::new();
-        
+
         for clause in clauses {
             let base = match clause.clause_kind {
                 MergeClauseKind::Matched => both_not_null.clone(),
-                MergeClauseKind::NotMatchedByTarget | MergeClauseKind::NotMatched => only_source.clone(),
+                MergeClauseKind::NotMatchedByTarget | MergeClauseKind::NotMatched => {
+                    only_source.clone()
+                }
                 MergeClauseKind::NotMatchedBySource => only_target.clone(),
             };
 
             // Combine predicate and column check
             let when_expr = if let Some(pred) = &clause.predicate {
-                let predicate = self.sql_to_expr(*pred, &joined_schema, &mut planner_context)?;
+                let predicate =
+                    self.sql_to_expr(*pred, &joined_schema, &mut planner_context)?;
                 base.and(predicate)
             } else {
                 base
@@ -2192,34 +2204,39 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 MergeAction::Update { assignments } => {
                     // each assignment (col = expr) becomes its own `when -> then`
                     for assign in assignments {
-                        let value = Box::new(self.sql_to_expr(assign.value, &joined_schema, &mut planner_context)?);
-                        when_then.push((
-                            Box::new(when_expr.clone()),
-                            value,
-                        ));
+                        let value = Box::new(self.sql_to_expr(
+                            assign.value,
+                            &joined_schema,
+                            &mut planner_context,
+                        )?);
+                        when_then.push((Box::new(when_expr.clone()), value));
                     }
                 }
-                MergeAction::Insert(insert_expr) => {
-                    match &insert_expr.kind {
-                        MergeInsertKind::Values(Values{ rows, .. }) => {
-                            let first_row = &rows[0];
-                            for (col_ident, val) in insert_expr.columns.iter().zip(first_row) {
-                                let value = Box::new(self.sql_to_expr(val.clone(), &joined_schema, &mut planner_context)?);
-                                when_then.push((
-                                    Box::new(when_expr.clone()),
-                                    Box::new(value.clone().alias(&col_ident.value)),
-                                ));
-                            }
-                        }
-                        MergeInsertKind::Row => {
-                            for col_ident in &insert_expr.columns {
-                                let src_col = Expr::Column(col_ident.clone().into());
-                                when_then.push((Box::new(when_expr.clone()), Box::new(src_col)));
-                            }
+                MergeAction::Insert(insert_expr) => match &insert_expr.kind {
+                    MergeInsertKind::Values(Values { rows, .. }) => {
+                        let first_row = &rows[0];
+                        for (col_ident, val) in insert_expr.columns.iter().zip(first_row)
+                        {
+                            let value = Box::new(self.sql_to_expr(
+                                val.clone(),
+                                &joined_schema,
+                                &mut planner_context,
+                            )?);
+                            when_then.push((
+                                Box::new(when_expr.clone()),
+                                Box::new(value.clone().alias(&col_ident.value)),
+                            ));
                         }
                     }
-                }
-        
+                    MergeInsertKind::Row => {
+                        for col_ident in &insert_expr.columns {
+                            let src_col = Expr::Column(col_ident.clone().into());
+                            when_then
+                                .push((Box::new(when_expr.clone()), Box::new(src_col)));
+                        }
+                    }
+                },
+
                 MergeAction::Delete => {
                     delete_condition.push(when_expr.clone());
                 }
@@ -2229,17 +2246,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let delete_pred = delete_condition
             .into_iter()
             .reduce(|a, b| a.or(b))
-            .unwrap_or_else(|| lit(false)); 
+            .unwrap_or_else(|| lit(false));
 
         let merged = LogicalPlanBuilder::from(join_plan)
             .filter(delete_pred.not())?
-            .project(vec![
-                Expr::Case(Case {
-                    expr: None,
-                    when_then_expr: when_then.clone(),
-                    else_expr: Some(Box::new(col(""))),
-                })
-            ])?
+            .project(vec![Expr::Case(Case {
+                expr: None,
+                when_then_expr: when_then.clone(),
+                else_expr: Some(Box::new(col(""))),
+            })])?
             .build()?;
 
         Ok(merged)
