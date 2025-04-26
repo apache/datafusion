@@ -3261,12 +3261,13 @@ mod test {
     }
 
     #[test]
-    fn infer_placeholder_like() {
+    fn infer_placeholder_like_and_similar_to() {
         // name LIKE $1
         let schema =
             Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)]));
         let df_schema = DFSchema::try_from(schema).unwrap();
-        let expr = Expr::Like(Like {
+
+        let like = Like {
             expr: Box::new(col("name")),
             pattern: Box::new(Expr::Placeholder(Placeholder {
                 id: "$1".to_string(),
@@ -3275,7 +3276,10 @@ mod test {
             negated: false,
             case_insensitive: false,
             escape_char: None,
-        });
+        };
+
+        let expr = Expr::Like(like.clone());
+
         let (inferred_expr, _) = expr.infer_placeholder_types(&df_schema).unwrap();
         match inferred_expr {
             Expr::Like(like) => match *like.pattern {
@@ -3285,6 +3289,25 @@ mod test {
                 _ => panic!("Expected Placeholder"),
             },
             _ => panic!("Expected Like"),
+        }
+
+        // name SIMILAR TO $1
+        let expr = Expr::SimilarTo(like);
+
+        let (inferred_expr, _) = expr.infer_placeholder_types(&df_schema).unwrap();
+        match inferred_expr {
+            Expr::SimilarTo(like) => match *like.pattern {
+                Expr::Placeholder(placeholder) => {
+                    assert_eq!(
+                        placeholder.data_type,
+                        Some(DataType::Utf8),
+                        "Placeholder {} should infer Utf8",
+                        placeholder.id
+                    );
+                }
+                _ => panic!("Expected Placeholder expression"),
+            },
+            _ => panic!("Expected SimilarTo expression"),
         }
     }
 
