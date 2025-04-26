@@ -24,7 +24,6 @@ pub use union::*;
 
 use std::collections::VecDeque;
 use std::fmt::Display;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::{fmt, mem};
 
@@ -832,7 +831,7 @@ impl EquivalenceProperties {
     /// ```
     ///
     /// Then, this function projects `a + b` to `Some(a1 + b1)`, `c + b` to
-    /// `Some(a1 + b1)` and `d` to `None`, meaning that it  cannot be projected.
+    /// `Some(a1 + b1)` and `d` to `None`, meaning that it is not projectable.
     pub fn project_expr(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
@@ -871,42 +870,58 @@ impl EquivalenceProperties {
     /// c ASC: Node {None, HashSet{a ASC}}
     /// ```
     fn construct_dependency_map(&self, mapping: &ProjectionMapping) -> DependencyMap {
-        let mut dependency_map = DependencyMap::new();
-        for ordering in self.normalized_oeq_class().iter() {
-            for (idx, sort_expr) in ordering.iter().enumerate() {
-                let target_sort_expr =
-                    self.project_expr(&sort_expr.expr, mapping).map(|expr| {
-                        PhysicalSortExpr {
-                            expr,
-                            options: sort_expr.options,
-                        }
-                    });
-                let is_projected = target_sort_expr.is_some();
-                if is_projected
-                    || mapping
-                        .iter()
-                        .any(|(source, _)| expr_refers(source, &sort_expr.expr))
-                {
-                    // Previous ordering is a dependency. Note that there is no,
-                    // dependency for a leading ordering (i.e. the first sort
-                    // expression).
-                    let dependency = idx.checked_sub(1).map(|a| &ordering[a]);
-                    // Add sort expressions that can be projected or referred to
-                    // by any of the projection expressions to the dependency map:
-                    dependency_map.insert(
-                        sort_expr,
-                        target_sort_expr.as_ref(),
-                        dependency,
-                    );
-                }
-                if !is_projected {
-                    // If we can not project, stop constructing the dependency
-                    // map as remaining dependencies will be invalid after projection.
+        let mut map = DependencyMap::default();
+        for ordering in self.normalized_oeq_class().into_iter() {
+            // Previous expression is a dependency. Note that there is no
+            // dependency for the leading expression.
+            if !self.insert_to_dependency_map(
+                mapping,
+                ordering[0].clone(),
+                None,
+                &mut map,
+            ) {
+                continue;
+            }
+            for (dependency, sort_expr) in ordering.into_iter().tuple_windows() {
+                if !self.insert_to_dependency_map(
+                    mapping,
+                    sort_expr,
+                    Some(dependency),
+                    &mut map,
+                ) {
+                    // If we can't project, stop constructing the dependency map
+                    // as remaining dependencies will be invalid post projection.
                     break;
                 }
             }
         }
-        dependency_map
+        map
+    }
+
+    /// Projects the sort expression according to the projection mapping and
+    /// inserts it into the dependency map with the given dependency. Returns
+    /// a boolean flag indicating whether the given expression is projectable.
+    fn insert_to_dependency_map(
+        &self,
+        mapping: &ProjectionMapping,
+        sort_expr: PhysicalSortExpr,
+        dependency: Option<PhysicalSortExpr>,
+        map: &mut DependencyMap,
+    ) -> bool {
+        let target_sort_expr = self
+            .project_expr(&sort_expr.expr, mapping)
+            .map(|expr| PhysicalSortExpr::new(expr, sort_expr.options));
+        let projectable = target_sort_expr.is_some();
+        if projectable
+            || mapping
+                .iter()
+                .any(|(source, _)| expr_refers(source, &sort_expr.expr))
+        {
+            // Add sort expressions that can be projected or referred to
+            // by any of the projection expressions to the dependency map:
+            map.insert(sort_expr, target_sort_expr, dependency);
+        }
+        projectable
     }
 
     /// Returns a new `ProjectionMapping` where source expressions are normalized.
@@ -1004,13 +1019,13 @@ impl EquivalenceProperties {
             if prefixes.is_empty() {
                 // If prefix is empty, there is no dependency. Insert
                 // empty ordering:
-                if let Some(target) = &node.target_sort_expr {
+                if let Some(target) = &node.target {
                     prefixes.push([target.clone()].into());
                 }
             } else {
                 // Append current ordering on top its dependencies:
                 for ordering in prefixes.iter_mut() {
-                    if let Some(target) = &node.target_sort_expr {
+                    if let Some(target) = &node.target {
                         ordering.push(target.clone())
                     }
                 }
@@ -1390,23 +1405,5 @@ fn get_expr_properties(
             .collect::<Result<Vec<_>>>()?;
         // Calculate expression ordering using ordering of its children.
         expr.get_properties(&child_states)
-    }
-}
-
-/// Wrapper struct for `Arc<dyn PhysicalExpr>` to use them as keys in a hash map.
-#[derive(Debug, Clone)]
-struct ExprWrapper(Arc<dyn PhysicalExpr>);
-
-impl PartialEq<Self> for ExprWrapper {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.eq(&other.0)
-    }
-}
-
-impl Eq for ExprWrapper {}
-
-impl Hash for ExprWrapper {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
     }
 }

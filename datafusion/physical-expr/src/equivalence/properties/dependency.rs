@@ -16,28 +16,28 @@
 // under the License.
 
 use std::fmt::{self, Display};
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
+use super::expr_refers;
 use crate::{LexOrdering, PhysicalSortExpr};
+
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use indexmap::IndexSet;
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
-
-use super::{expr_refers, ExprWrapper};
 
 // A list of sort expressions that can be calculated from a known set of
 /// dependencies.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Dependencies {
-    inner: IndexSet<PhysicalSortExpr>,
+    sort_exprs: IndexSet<PhysicalSortExpr>,
 }
 
 impl Display for Dependencies {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[")?;
-        let mut iter = self.inner.iter();
+        let mut iter = self.sort_exprs.iter();
         if let Some(dep) = iter.next() {
             write!(f, "{}", dep)?;
         }
@@ -49,38 +49,34 @@ impl Display for Dependencies {
 }
 
 impl Dependencies {
-    /// Create a new empty `Dependencies` instance.
-    fn new() -> Self {
+    // Creates a new `Dependencies` instance from the given sort expressions.
+    pub fn new(sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> Self {
         Self {
-            inner: IndexSet::new(),
+            sort_exprs: sort_exprs.into_iter().collect(),
         }
     }
+}
 
-    /// Create a new `Dependencies` from an iterator of `PhysicalSortExpr`.
-    pub fn new_from_iter(iter: impl IntoIterator<Item = PhysicalSortExpr>) -> Self {
-        Self {
-            inner: iter.into_iter().collect(),
-        }
+impl Deref for Dependencies {
+    type Target = IndexSet<PhysicalSortExpr>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sort_exprs
     }
+}
 
-    /// Insert a new dependency into the set.
-    pub fn insert(&mut self, sort_expr: PhysicalSortExpr) {
-        self.inner.insert(sort_expr);
+impl DerefMut for Dependencies {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sort_exprs
     }
+}
 
-    /// Iterator over  dependencies in the set
-    pub fn iter(&self) -> impl Iterator<Item = &PhysicalSortExpr> + Clone {
-        self.inner.iter()
-    }
+impl IntoIterator for Dependencies {
+    type Item = PhysicalSortExpr;
+    type IntoIter = <IndexSet<PhysicalSortExpr> as IntoIterator>::IntoIter;
 
-    /// Return the inner set of dependencies
-    pub fn into_inner(self) -> IndexSet<PhysicalSortExpr> {
-        self.inner
-    }
-
-    /// Returns true if there are no dependencies
-    fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+    fn into_iter(self) -> Self::IntoIter {
+        self.sort_exprs.into_iter()
     }
 }
 
@@ -133,26 +129,25 @@ impl<'a> DependencyEnumerator<'a> {
         let node = dependency_map
             .get(referred_sort_expr)
             .expect("`referred_sort_expr` should be inside `dependency_map`");
-        // Since we work on intermediate nodes, we are sure `val.target_sort_expr`
-        // exists.
-        let target_sort_expr = node.target_sort_expr.as_ref().unwrap();
+        // Since we work on intermediate nodes, we are sure `node.target` exists.
+        let target = node.target.as_ref().unwrap();
         // An empty dependency means the referred_sort_expr represents a global ordering.
         // Return its projected version, which is the target_expression.
         if node.dependencies.is_empty() {
-            return vec![[target_sort_expr.clone()].into()];
+            return vec![[target.clone()].into()];
         };
 
         node.dependencies
             .iter()
             .flat_map(|dep| {
-                let mut orderings = if self.insert(target_sort_expr, dep) {
+                let mut orderings = if self.insert(target, dep) {
                     self.construct_orderings(dep, dependency_map)
                 } else {
                     vec![]
                 };
 
                 for ordering in orderings.iter_mut() {
-                    ordering.push(target_sort_expr.clone())
+                    ordering.push(target.clone())
                 }
                 orderings
             })
@@ -178,70 +173,56 @@ impl<'a> DependencyEnumerator<'a> {
 /// # Note on IndexMap Rationale
 ///
 /// Using `IndexMap` (which preserves insert order) to ensure consistent results
-/// across different executions for the same query. We could have used
-/// `HashSet`, `HashMap` in place of them without any loss of functionality.
+/// across different executions for the same query. We could have used `HashSet`
+/// and `HashMap` instead without any loss of functionality.
 ///
 /// As an example, if existing orderings are
 /// 1. `[a ASC, b ASC]`
-/// 2. `[c ASC]` for
+/// 2. `[c ASC]`
 ///
 /// Then both the following output orderings are valid
 /// 1. `[a ASC, b ASC, c ASC]`
 /// 2. `[c ASC, a ASC, b ASC]`
 ///
-/// (this are both valid as they are concatenated versions of the alternative
-/// orderings). When using `HashSet`, `HashMap` it is not guaranteed to generate
-/// consistent result, among the possible 2 results in the example above.
-#[derive(Debug)]
+/// These are both valid as they are concatenated versions of the alternative
+/// orderings. Had we used `HashSet`/`HashMap`, we couldn't guarantee to generate
+/// the same result among the possible two results in the example above.
+#[derive(Debug, Default)]
 pub struct DependencyMap {
-    inner: IndexMap<PhysicalSortExpr, DependencyNode>,
+    map: IndexMap<PhysicalSortExpr, DependencyNode>,
 }
 
 impl DependencyMap {
-    pub fn new() -> Self {
-        Self {
-            inner: IndexMap::new(),
-        }
-    }
-
     /// Insert a new dependency `sort_expr` --> `dependency` into the map.
     ///
     /// If `target_sort_expr` is none, a new entry is created with empty dependencies.
     pub fn insert(
         &mut self,
-        sort_expr: &PhysicalSortExpr,
-        target_sort_expr: Option<&PhysicalSortExpr>,
-        dependency: Option<&PhysicalSortExpr>,
+        sort_expr: PhysicalSortExpr,
+        target_sort_expr: Option<PhysicalSortExpr>,
+        dependency: Option<PhysicalSortExpr>,
     ) {
-        self.inner
-            .entry(sort_expr.clone())
-            .or_insert_with(|| DependencyNode {
-                target_sort_expr: target_sort_expr.cloned(),
-                dependencies: Dependencies::new(),
-            })
-            .insert_dependency(dependency)
+        let entry = self.map.entry(sort_expr);
+        let node = entry.or_insert_with(|| DependencyNode {
+            target: target_sort_expr,
+            dependencies: Dependencies::default(),
+        });
+        node.dependencies.extend(dependency);
     }
+}
 
-    /// Iterator over (sort_expr, DependencyNode) pairs
-    pub fn iter(&self) -> impl Iterator<Item = (&PhysicalSortExpr, &DependencyNode)> {
-        self.inner.iter()
-    }
+impl Deref for DependencyMap {
+    type Target = IndexMap<PhysicalSortExpr, DependencyNode>;
 
-    /// iterator over all sort exprs
-    pub fn sort_exprs(&self) -> impl Iterator<Item = &PhysicalSortExpr> {
-        self.inner.keys()
-    }
-
-    /// Return the dependency node for the given sort expression, if any
-    pub fn get(&self, sort_expr: &PhysicalSortExpr) -> Option<&DependencyNode> {
-        self.inner.get(sort_expr)
+    fn deref(&self) -> &Self::Target {
+        &self.map
     }
 }
 
 impl Display for DependencyMap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "DependencyMap: {{")?;
-        for (sort_expr, node) in self.inner.iter() {
+        for (sort_expr, node) in self.map.iter() {
             writeln!(f, "  {sort_expr} --> {node}")?;
         }
         writeln!(f, "}}")
@@ -256,29 +237,20 @@ impl Display for DependencyMap {
 ///
 /// # Fields
 ///
-/// - `target_sort_expr`: An optional `PhysicalSortExpr` representing the target
-///   sort expression associated with the node. It is `None` if the sort expression
+/// - `target`: An optional `PhysicalSortExpr` representing the target sort
+///   expression associated with the node. It is `None` if the sort expression
 ///   cannot be projected.
 /// - `dependencies`: A [`Dependencies`] containing dependencies on other sort
 ///   expressions that are referred to by the target sort expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DependencyNode {
-    pub target_sort_expr: Option<PhysicalSortExpr>,
-    pub dependencies: Dependencies,
-}
-
-impl DependencyNode {
-    /// Insert dependency to the state (if exists).
-    fn insert_dependency(&mut self, dependency: Option<&PhysicalSortExpr>) {
-        if let Some(dep) = dependency {
-            self.dependencies.insert(dep.clone());
-        }
-    }
+    pub(crate) target: Option<PhysicalSortExpr>,
+    pub(crate) dependencies: Dependencies,
 }
 
 impl Display for DependencyNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(target) = &self.target_sort_expr {
+        if let Some(target) = &self.target {
             write!(f, "(target: {}, ", target)?;
         } else {
             write!(f, "(")?;
@@ -307,12 +279,12 @@ pub fn referred_dependencies(
     source: &Arc<dyn PhysicalExpr>,
 ) -> Vec<Dependencies> {
     // Associate `PhysicalExpr`s with `PhysicalSortExpr`s that contain them:
-    let mut expr_to_sort_exprs = IndexMap::<ExprWrapper, Dependencies>::new();
+    let mut expr_to_sort_exprs = IndexMap::<_, Dependencies>::new();
     for sort_expr in dependency_map
-        .sort_exprs()
+        .keys()
         .filter(|sort_expr| expr_refers(source, &sort_expr.expr))
     {
-        let key = ExprWrapper(Arc::clone(&sort_expr.expr));
+        let key = Arc::clone(&sort_expr.expr);
         expr_to_sort_exprs
             .entry(key)
             .or_default()
@@ -322,16 +294,10 @@ pub fn referred_dependencies(
     // Generate all valid dependencies for the source. For example, if the source
     // is `a + b` and the map is `[a -> (a ASC, a DESC), b -> (b ASC)]`, we get
     // `vec![HashSet(a ASC, b ASC), HashSet(a DESC, b ASC)]`.
-    let dependencies = expr_to_sort_exprs
+    expr_to_sort_exprs
         .into_values()
-        .map(Dependencies::into_inner)
-        .collect::<Vec<_>>();
-    dependencies
-        .iter()
         .multi_cartesian_product()
-        .map(|referred_deps| {
-            Dependencies::new_from_iter(referred_deps.into_iter().cloned())
-        })
+        .map(Dependencies::new)
         .collect()
 }
 
