@@ -201,6 +201,8 @@ mod tests {
         test_ascii_string_invoke!(Some(String::from("x")), Ok(Some(120)));
         test_ascii_string_invoke!(Some(String::from("a")), Ok(Some(97)));
         test_ascii_string_invoke!(Some(String::from("")), Ok(Some(0)));
+        test_ascii_string_invoke!(Some(String::from("\n")), Ok(Some(10)));
+        test_ascii_string_invoke!(Some(String::from("\t")), Ok(Some(9)));
         test_ascii_string_invoke!(None, Ok(None));
 
         Ok(())

@@ -40,6 +40,7 @@ use datafusion::{
     prelude::{CsvReadOptions, SessionContext},
 };
 
+use crate::is_spark_path;
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -79,7 +80,7 @@ impl TestContext {
             .with_default_features()
             .build();
 
-        if relative_path.starts_with("spark/") {
+        if is_spark_path(relative_path) {
             info!("Registering Spark functions");
             datafusion_spark::register_all(&mut state)
                 .expect("Can not register Spark functions");

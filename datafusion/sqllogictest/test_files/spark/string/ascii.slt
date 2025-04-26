@@ -31,6 +31,11 @@ SELECT ascii('222');
 50
 
 query I
+SELECT ascii('😀');
+----
+128512
+
+query I
 SELECT ascii(2::INT);
 ----
 50
