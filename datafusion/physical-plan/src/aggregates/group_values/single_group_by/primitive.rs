@@ -416,7 +416,7 @@ mod tests {
 
     use crate::aggregates::group_values::single_group_by::primitive::GroupValuesPrimitive;
     use crate::aggregates::group_values::GroupValues;
-    use arrow::array::{AsArray, Int64Array, NullBufferBuilder, UInt32Array};
+    use arrow::array::{AsArray, UInt32Array};
     use arrow::datatypes::{DataType, UInt32Type};
     use datafusion_expr::EmitTo;
     use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
@@ -450,7 +450,7 @@ mod tests {
 
         // Insert case 1.1, 1.3, 1.4 + Emit case 2.1
         group_values
-            .intern(&vec![Arc::clone(&data1) as _], &mut group_indices)
+            .intern(&[Arc::clone(&data1) as _], &mut group_indices)
             .unwrap();
 
         let mut expected = BTreeMap::new();
@@ -477,7 +477,7 @@ mod tests {
 
         // Insert case 1.1~1.3 + Emit case 2.2~2.3
         group_values
-            .intern(&vec![Arc::clone(&data2) as _], &mut group_indices)
+            .intern(&[Arc::clone(&data2) as _], &mut group_indices)
             .unwrap();
 
         let mut expected = BTreeMap::new();
@@ -528,7 +528,7 @@ mod tests {
 
         // Insert case 1.1, 1.3, 1.4 + Emit case 2.1
         group_values
-            .intern(&vec![Arc::clone(&data1) as _], &mut group_indices)
+            .intern(&[Arc::clone(&data1) as _], &mut group_indices)
             .unwrap();
 
         let mut expected = BTreeMap::new();
@@ -553,7 +553,7 @@ mod tests {
 
         // Insert case 1.1~1.2 + Emit case 2.2
         group_values
-            .intern(&vec![Arc::clone(&data2) as _], &mut group_indices)
+            .intern(&[Arc::clone(&data2) as _], &mut group_indices)
             .unwrap();
 
         let mut expected = BTreeMap::new();

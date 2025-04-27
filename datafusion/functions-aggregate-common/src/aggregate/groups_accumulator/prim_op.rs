@@ -254,6 +254,6 @@ impl<N: ArrowNativeTypeOp> Block for Vec<N> {
     }
 
     fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T) {
-        self.extend(iter::repeat(default_value.clone()).take(fill_len));
+        self.extend(iter::repeat_n(default_value, fill_len));
     }
 }

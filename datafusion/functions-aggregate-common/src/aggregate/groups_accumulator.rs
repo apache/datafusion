@@ -601,7 +601,7 @@ pub(crate) fn ensure_room_enough_for_blocks<B, F>(
     // For resize, we need to:
     //   1. Ensure the blks are enough first
     //   2. and then ensure slots in blks are enough
-    let (mut cur_blk_idx, exist_slots) = if blocks.len() > 0 {
+    let (mut cur_blk_idx, exist_slots) = if !blocks.is_empty() {
         let cur_blk_idx = blocks.len() - 1;
         let exist_slots = (blocks.len() - 1) * block_size + blocks.back().unwrap().len();
 
@@ -617,7 +617,7 @@ pub(crate) fn ensure_room_enough_for_blocks<B, F>(
 
     // 1. Ensure blks are enough
     let exist_blks = blocks.len();
-    let new_blks = ((total_num_groups + block_size - 1) / block_size) - exist_blks;
+    let new_blks = total_num_groups.div_ceil(block_size) - exist_blks;
     if new_blks > 0 {
         for _ in 0..new_blks {
             let block = new_block(block_size);

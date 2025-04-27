@@ -527,17 +527,22 @@ impl NullStateAdapter {
     }
 }
 
+/// [`NullState`] implementation for `flat group index`
 pub type FlatNullState = NullState<FlatSeenValues, FlatGroupIndexOperations>;
 
 impl FlatNullState {
     pub fn new() -> Self {
-        Self {
-            seen_values: FlatSeenValues::default(),
-            _phantom: PhantomData {},
-        }
+        Self::default()
     }
 }
 
+impl Default for FlatNullState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// [`NullState`] implementation for `blocked group index`
 pub type BlockedNullState = NullState<BlockedSeenValues, BlockedGroupIndexOperations>;
 
 impl BlockedNullState {
@@ -1210,7 +1215,6 @@ mod test {
 
                     let group_indices_chunks = group_indices
                         .chunks(chunk_size)
-                        .into_iter()
                         .map(|chunk| chunk.to_vec())
                         .collect::<Vec<_>>();
 
@@ -1295,7 +1299,7 @@ mod test {
                         let flatten_index = ((block_id as u64 * block_size as u64)
                             + block_offset)
                             as usize;
-                        accumulated_values.push((flatten_index as usize, value));
+                        accumulated_values.push((flatten_index, value));
                     },
                 );
             }
@@ -1413,7 +1417,6 @@ mod test {
 
                     let group_indices_chunks = group_indices
                         .chunks(chunk_size)
-                        .into_iter()
                         .map(|chunk| chunk.to_vec())
                         .collect::<Vec<_>>();
 
@@ -1498,7 +1501,7 @@ mod test {
                         let flatten_index = ((block_id as u64 * block_size as u64)
                             + block_offset)
                             as usize;
-                        accumulated_values.push((flatten_index as usize, value));
+                        accumulated_values.push((flatten_index, value));
                     },
                 );
             }
