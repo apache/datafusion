@@ -1597,7 +1597,7 @@ pub fn from_cast(
                 nullable: true,
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 literal_type: Some(LiteralType::Null(to_substrait_type(
-                    &data_type, true,
+                    data_type, true,
                 )?)),
             };
             return Ok(Expression {
