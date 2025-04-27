@@ -538,7 +538,10 @@ impl FlatNullState {
 
 impl Default for FlatNullState {
     fn default() -> Self {
-        Self::new()
+        Self {
+            seen_values: FlatSeenValues::default(),
+            _phantom: PhantomData {},
+        }
     }
 }
 
