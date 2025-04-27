@@ -18,9 +18,10 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    check_integrity, coalesce_batches_exec, coalesce_partitions_exec, sort_exec,
+    check_integrity, coalesce_batches_exec, coalesce_partitions_exec,
+    create_test_schema3, parquet_exec_with_sort, sort_exec,
     sort_exec_with_preserve_partitioning, sort_preserving_merge_exec,
-    stream_exec_ordered_with_projection,
+    sort_preserving_merge_exec_with_fetch, stream_exec_ordered_with_projection,
 };
 
 use datafusion::prelude::SessionContext;
@@ -29,7 +30,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
-use datafusion_common::Result;
+use datafusion_common::{assert_contains, Result};
 use datafusion_common::config::ConfigOptions;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
@@ -37,7 +38,7 @@ use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{self, col, Column};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{
-    replace_with_order_preserving_variants, OrderPreservationContext
+    plan_with_order_breaking_variants, plan_with_order_preserving_variants, replace_with_order_preserving_variants, OrderPreservationContext
 };
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::filter::FilterExec;
@@ -1218,4 +1219,75 @@ fn memory_exec_sorted(
                 .unwrap(),
         ))
     })
+}
+
+#[test]
+fn test_plan_with_order_preserving_variants_preserves_fetch() -> Result<()> {
+    // Create a schema
+    let schema = create_test_schema3()?;
+    let parquet_sort_exprs = vec![[sort_expr("a", &schema)].into()];
+    let parquet_exec = parquet_exec_with_sort(schema, parquet_sort_exprs);
+    let coalesced = coalesce_partitions_exec(parquet_exec.clone())
+        .with_fetch(Some(10))
+        .unwrap();
+
+    // Test sort's fetch is greater than coalesce fetch, return error because it's not reasonable
+    let requirements = OrderPreservationContext::new(
+        coalesced.clone(),
+        false,
+        vec![OrderPreservationContext::new(
+            parquet_exec.clone(),
+            false,
+            vec![],
+        )],
+    );
+    let res = plan_with_order_preserving_variants(requirements, false, true, Some(15));
+    assert_contains!(res.unwrap_err().to_string(), "CoalescePartitionsExec fetch [10] should be greater than or equal to SortExec fetch [15]");
+
+    // Test sort is without fetch, expected to get the fetch value from the coalesced
+    let requirements = OrderPreservationContext::new(
+        coalesced.clone(),
+        false,
+        vec![OrderPreservationContext::new(
+            parquet_exec.clone(),
+            false,
+            vec![],
+        )],
+    );
+    let res = plan_with_order_preserving_variants(requirements, false, true, None)?;
+    assert_eq!(res.plan.fetch(), Some(10),);
+
+    // Test sort's fetch is less than coalesces fetch, expected to get the fetch value from the sort
+    let requirements = OrderPreservationContext::new(
+        coalesced,
+        false,
+        vec![OrderPreservationContext::new(parquet_exec, false, vec![])],
+    );
+    let res = plan_with_order_preserving_variants(requirements, false, true, Some(5))?;
+    assert_eq!(res.plan.fetch(), Some(5),);
+    Ok(())
+}
+
+#[test]
+fn test_plan_with_order_breaking_variants_preserves_fetch() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let parquet_sort_exprs: LexOrdering = [sort_expr("a", &schema)].into();
+    let parquet_exec = parquet_exec_with_sort(schema, vec![parquet_sort_exprs.clone()]);
+    let spm = sort_preserving_merge_exec_with_fetch(
+        parquet_sort_exprs,
+        parquet_exec.clone(),
+        10,
+    );
+    let requirements = OrderPreservationContext::new(
+        spm,
+        true,
+        vec![OrderPreservationContext::new(
+            parquet_exec.clone(),
+            true,
+            vec![],
+        )],
+    );
+    let res = plan_with_order_breaking_variants(requirements)?;
+    assert_eq!(res.plan.fetch(), Some(10));
+    Ok(())
 }

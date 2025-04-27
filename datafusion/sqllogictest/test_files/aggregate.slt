@@ -5255,13 +5255,13 @@ physical_plan
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], file_type=csv, has_header=true
 
 query I
-SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
+SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 order by c3 limit 5;
 ----
-1
--40
-29
--85
--82
+-117
+-111
+-107
+-106
+-101
 
 query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
@@ -5279,13 +5279,13 @@ physical_plan
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query II
-SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
+SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 order by c2, c3 limit 5 offset 4;
 ----
-5 -82
-4 -111
-3 104
-3 13
-1 38
+1 -56
+1 -25
+1 -24
+1 -8
+1 -5
 
 # The limit should only apply to the aggregations which group by c3
 query TT
@@ -5314,12 +5314,12 @@ physical_plan
 13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query I
-SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
+SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c3 order by c3 limit 4;
 ----
-13
-17
 12
+13
 14
+17
 
 # An aggregate expression causes the limit to not be pushed to the aggregation
 query TT
@@ -5364,11 +5364,11 @@ physical_plan
 11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query II
-SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
+SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c3, c2 order by c3, c2 limit 3 offset 10;
 ----
-57 1
--54 4
-112 3
+-95 3
+-94 5
+-90 4
 
 query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;

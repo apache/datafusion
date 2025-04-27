@@ -47,7 +47,6 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
-use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -1379,7 +1378,7 @@ async fn test_multilayer_coalesce_partitions() -> Result<()> {
     let schema = create_test_schema()?;
     let source1 = parquet_exec(schema.clone());
     let repartition = repartition_exec(source1);
-    let coalesce = Arc::new(CoalescePartitionsExec::new(repartition)) as _;
+    let coalesce = coalesce_partitions_exec(repartition) as _;
     // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
     let filter = filter_exec(
         Arc::new(NotExpr::new(col("non_nullable_col", schema.as_ref())?)),
@@ -3808,5 +3807,40 @@ fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
     ];
     assert_optimized!(expected_input, expected_optimized, output_sort, true);
 
+    Ok(())
+}
+
+#[test]
+fn test_parallelize_sort_preserves_fetch() -> Result<()> {
+    // Create a schema
+    let schema = create_test_schema3()?;
+    let parquet_exec = parquet_exec(schema);
+    let coalesced = coalesce_partitions_exec(parquet_exec.clone());
+    let top_coalesced = coalesce_partitions_exec(coalesced.clone())
+        .with_fetch(Some(10))
+        .unwrap();
+
+    let requirements = PlanWithCorrespondingCoalescePartitions::new(
+        top_coalesced,
+        true,
+        vec![PlanWithCorrespondingCoalescePartitions::new(
+            coalesced,
+            true,
+            vec![PlanWithCorrespondingCoalescePartitions::new(
+                parquet_exec,
+                false,
+                vec![],
+            )],
+        )],
+    );
+
+    let res = parallelize_sorts(requirements)?;
+
+    // Verify fetch was preserved
+    assert_eq!(
+        res.data.plan.fetch(),
+        Some(10),
+        "Fetch value was not preserved after transformation"
+    );
     Ok(())
 }

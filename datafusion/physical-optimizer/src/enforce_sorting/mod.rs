@@ -429,6 +429,7 @@ pub fn parallelize_sorts(
             ),
         ))
     } else if is_coalesce_partitions(&requirements.plan) {
+        let fetch = requirements.plan.fetch();
         // There is an unnecessary `CoalescePartitionsExec` in the plan.
         // This will handle the recursive `CoalescePartitionsExec` plans.
         requirements = remove_bottleneck_in_subplan(requirements)?;
@@ -437,7 +438,10 @@ pub fn parallelize_sorts(
 
         Ok(Transformed::yes(
             PlanWithCorrespondingCoalescePartitions::new(
-                Arc::new(CoalescePartitionsExec::new(Arc::clone(&requirements.plan))),
+                Arc::new(
+                    CoalescePartitionsExec::new(Arc::clone(&requirements.plan))
+                        .with_fetch(fetch),
+                ),
                 false,
                 vec![requirements],
             ),
