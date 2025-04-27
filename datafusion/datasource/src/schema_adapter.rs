@@ -409,12 +409,16 @@ mod tests {
         let mut file_stats = Statistics::default();
 
         // Statistics for column b (index 0 in file)
-        let mut b_stats = ColumnStatistics::default();
-        b_stats.null_count = Precision::Exact(5);
+        let b_stats = ColumnStatistics {
+            null_count: Precision::Exact(5),
+            ..Default::default()
+        };
 
         // Statistics for column a (index 1 in file)
-        let mut a_stats = ColumnStatistics::default();
-        a_stats.null_count = Precision::Exact(10);
+        let a_stats = ColumnStatistics {
+            null_count: Precision::Exact(10),
+            ..Default::default()
+        };
 
         file_stats.column_statistics = vec![b_stats, a_stats];
 

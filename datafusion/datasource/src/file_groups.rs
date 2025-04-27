@@ -427,7 +427,7 @@ impl FileGroup {
 
     /// Get the mutable reference to the statistics for this group
     pub fn statistics_mut(&mut self) -> Option<&mut Statistics> {
-        self.statistics.as_mut().map(|arc| Arc::make_mut(arc))
+        self.statistics.as_mut().map(Arc::make_mut)
     }
 
     /// Partition the list of files into `n` groups
