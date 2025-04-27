@@ -450,7 +450,7 @@ mod tests {
 
         // Insert case 1.1, 1.3, 1.4 + Emit case 2.1
         group_values
-            .intern(&vec![data1.clone() as _], &mut group_indices)
+            .intern(&vec![Arc::clone(&data1) as _], &mut group_indices)
             .unwrap();
 
         let mut expected = BTreeMap::new();
@@ -477,7 +477,7 @@ mod tests {
 
         // Insert case 1.1~1.3 + Emit case 2.2~2.3
         group_values
-            .intern(&vec![data2.clone() as _], &mut group_indices)
+            .intern(&vec![Arc::clone(&data2) as _], &mut group_indices)
             .unwrap();
 
         let mut expected = BTreeMap::new();
@@ -528,7 +528,7 @@ mod tests {
 
         // Insert case 1.1, 1.3, 1.4 + Emit case 2.1
         group_values
-            .intern(&vec![data1.clone() as _], &mut group_indices)
+            .intern(&vec![Arc::clone(&data1) as _], &mut group_indices)
             .unwrap();
 
         let mut expected = BTreeMap::new();
@@ -553,7 +553,7 @@ mod tests {
 
         // Insert case 1.1~1.2 + Emit case 2.2
         group_values
-            .intern(&vec![data2.clone() as _], &mut group_indices)
+            .intern(&vec![Arc::clone(&data2) as _], &mut group_indices)
             .unwrap();
 
         let mut expected = BTreeMap::new();
