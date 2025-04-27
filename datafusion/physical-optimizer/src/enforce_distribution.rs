@@ -1035,10 +1035,9 @@ pub fn replace_order_preserving_variants(
 
     if is_sort_preserving_merge(&context.plan) {
         let child_plan = Arc::clone(&context.children[0].plan);
-        // It's safe to unwrap because `CoalescePartitionsExec` supports `fetch`.
-        context.plan = CoalescePartitionsExec::new(child_plan)
-            .with_fetch(context.plan.fetch())
-            .unwrap();
+        context.plan = Arc::new(
+            CoalescePartitionsExec::new(child_plan).with_fetch(context.plan.fetch()),
+        );
         return Ok(context);
     } else if let Some(repartition) =
         context.plan.as_any().downcast_ref::<RepartitionExec>()
