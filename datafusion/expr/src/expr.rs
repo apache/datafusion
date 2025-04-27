@@ -1655,6 +1655,25 @@ impl Expr {
         using_columns
     }
 
+    pub fn outer_column_refs(&self) -> HashSet<&Column> {
+        let mut using_columns = HashSet::new();
+        self.add_outer_column_refs(&mut using_columns);
+        using_columns
+    }
+
+    /// Adds references to all outer columns in this expression to the set
+    ///
+    /// See [`Self::column_refs`] for details
+    pub fn add_outer_column_refs<'a>(&'a self, set: &mut HashSet<&'a Column>) {
+        self.apply(|expr| {
+            if let Expr::OuterReferenceColumn(_, col) = expr {
+                set.insert(col);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("traversal is infallible");
+    }
+
     /// Adds references to all columns in this expression to the set
     ///
     /// See [`Self::column_refs`] for details
