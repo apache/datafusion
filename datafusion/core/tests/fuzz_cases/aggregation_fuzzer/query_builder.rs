@@ -247,7 +247,6 @@ impl QueryBuilder {
 
     fn generate_query(&self) -> String {
         let group_by = self.random_group_by();
-        dbg!(&group_by);
         let mut query = String::from("SELECT ");
         query.push_str(&group_by.join(", "));
         if !group_by.is_empty() {

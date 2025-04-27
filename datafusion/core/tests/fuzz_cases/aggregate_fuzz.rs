@@ -233,6 +233,46 @@ async fn test_median() {
         .await;
 }
 
+// Testing `blocked groups optimization`
+// Details of this optimization can see:
+// https://github.com/apache/datafusion/issues/7065
+#[tokio::test(flavor = "multi_thread")]
+async fn test_blocked_groups_optimization() {
+    let data_gen_config = baseline_config();
+
+    // Blocked groups supporting lists:
+    //
+    // `GroupAccumulator`:
+    //    - PrimitiveGroupsAccumulator
+    //
+    // `GroupValues`:
+    //   - GroupValuesPrimitive
+    //
+
+    // Test `Numeric aggregation` + `Single group by`
+    let aggr_functions = ["sum", "min", "max"];
+    let aggr_arguments = data_gen_config.numeric_columns();
+    let groups_by_columns = data_gen_config.numeric_columns();
+
+    let mut query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_arguments(aggr_arguments)
+        .set_group_by_columns(groups_by_columns)
+        .with_min_group_by_columns(1)
+        .with_max_group_by_columns(1)
+        .with_no_grouping(false);
+
+    for func in aggr_functions {
+        query_builder = query_builder.with_aggregate_function(func);
+    }
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
 /// Return a standard set of columns for testing data generation
 ///
 /// Includes numeric and string types

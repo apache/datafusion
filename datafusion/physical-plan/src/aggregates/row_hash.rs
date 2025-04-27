@@ -683,7 +683,7 @@ fn maybe_enable_blocked_groups(
         .enable_aggregation_blocked_groups
         || !matches!(group_ordering, GroupOrdering::None)
         || accumulators.is_empty()
-        || matches!(context.memory_pool().memory_limit(), MemoryLimit::Infinite)
+        || !matches!(context.memory_pool().memory_limit(), MemoryLimit::Infinite)
     {
         return Ok(false);
     }
