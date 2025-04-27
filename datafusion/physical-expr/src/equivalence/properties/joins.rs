@@ -243,7 +243,7 @@ mod tests {
         ];
         let orderings = convert_to_orderings(&orderings);
         // Right child ordering equivalences
-        let mut right_oeq_class = OrderingEquivalenceClass::new(orderings);
+        let mut right_oeq_class = OrderingEquivalenceClass::from(orderings);
 
         let left_columns_len = 4;
 
@@ -280,7 +280,7 @@ mod tests {
             vec![(col_z, option_asc), (col_w, option_asc)],
         ];
         let orderings = convert_to_orderings(&orderings);
-        let expected = OrderingEquivalenceClass::new(orderings);
+        let expected = OrderingEquivalenceClass::from(orderings);
 
         assert_eq!(result, expected);
 

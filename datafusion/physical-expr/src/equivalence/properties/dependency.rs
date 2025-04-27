@@ -193,9 +193,8 @@ pub struct DependencyMap {
 }
 
 impl DependencyMap {
-    /// Insert a new dependency `sort_expr` --> `dependency` into the map.
-    ///
-    /// If `target_sort_expr` is none, a new entry is created with empty dependencies.
+    /// Insert a new dependency of `sort_expr` (i.e. `dependency`) into the map
+    /// along with its target sort expression.
     pub fn insert(
         &mut self,
         sort_expr: PhysicalSortExpr,

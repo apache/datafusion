@@ -17,6 +17,7 @@
 
 use std::fmt::Display;
 use std::hash::Hash;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
@@ -27,18 +28,21 @@ use arrow::compute::SortOptions;
 use datafusion_common::HashSet;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
-/// An `OrderingEquivalenceClass` object keeps track of different alternative
-/// orderings than can describe a schema. For example, consider the following table:
+/// An `OrderingEquivalenceClass` keeps track of distinct alternative orderings
+/// than can describe a table. For example, consider the following table:
 ///
 /// ```text
-/// |a|b|c|d|
-/// |1|4|3|1|
-/// |2|3|3|2|
-/// |3|1|2|2|
-/// |3|2|1|3|
+/// ┌───┬───┬───┬───┐
+/// │ a │ b │ c │ d │
+/// ├───┼───┼───┼───┤
+/// │ 1 │ 4 │ 3 │ 1 │
+/// │ 2 │ 3 │ 3 │ 2 │
+/// │ 3 │ 1 │ 2 │ 2 │
+/// │ 3 │ 2 │ 1 │ 3 │
+/// └───┴───┴───┴───┘
 /// ```
 ///
-/// Here, both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the table
+/// Here, both `[a ASC, b ASC]` and `[c DESC, d ASC]` describe the table
 /// ordering. In this case, we say that these orderings are equivalent.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct OrderingEquivalenceClass {
@@ -63,37 +67,14 @@ impl OrderingEquivalenceClass {
         result
     }
 
-    /// Checks whether `ordering` is a member of this equivalence class.
-    pub fn contains(&self, ordering: &LexOrdering) -> bool {
-        self.orderings.contains(ordering)
-    }
-
-    /// Checks whether this ordering equivalence class is empty.
-    pub fn is_empty(&self) -> bool {
-        self.orderings.is_empty()
-    }
-
-    /// Returns an iterator over the equivalent orderings in this class.
-    ///
-    /// Note this class also implements [`IntoIterator`] to return an iterator
-    /// over owned [`LexOrdering`]s.
-    pub fn iter(&self) -> impl Iterator<Item = &LexOrdering> {
-        self.orderings.iter()
-    }
-
-    /// Returns how many equivalent orderings there are in this class.
-    pub fn len(&self) -> usize {
-        self.orderings.len()
-    }
-
-    /// Extend this ordering equivalence class with the `other` class.
-    pub fn extend(&mut self, other: Self) {
-        self.orderings.extend(other.orderings);
+    /// Extend this ordering equivalence class with the given orderings.
+    pub fn extend(&mut self, orderings: impl IntoIterator<Item = LexOrdering>) {
+        self.orderings.extend(orderings);
         // Make sure that there are no redundant orderings:
         self.remove_redundant_entries();
     }
 
-    /// Adds new orderings into this ordering equivalence class
+    /// Adds new orderings into this ordering equivalence class.
     pub fn add_new_orderings(
         &mut self,
         sort_exprs: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
@@ -104,15 +85,7 @@ impl OrderingEquivalenceClass {
         self.remove_redundant_entries();
     }
 
-    /// Adds a single ordering to the existing ordering equivalence class.
-    pub fn add_new_ordering(
-        &mut self,
-        ordering: impl IntoIterator<Item = PhysicalSortExpr>,
-    ) {
-        self.add_new_orderings(std::iter::once(ordering));
-    }
-
-    /// Removes redundant orderings from this equivalence class.
+    /// Removes redundant orderings from this ordering equivalence class.
     ///
     /// For instance, if we already have the ordering `[a ASC, b ASC, c DESC]`,
     /// then there is no need to keep ordering `[a ASC, b ASC]` in the state.
@@ -177,20 +150,14 @@ impl OrderingEquivalenceClass {
             .map(|o| o.collapse())
     }
 
-    // Append orderings in `other` to all existing orderings in this equivalence
-    // class.
+    // Append orderings in `other` to all existing orderings in this ordering
+    // equivalence class.
     pub fn join_suffix(mut self, other: &Self) -> Self {
         let n_ordering = self.orderings.len();
-        // Replicate entries before cross product
+        // Replicate entries before cross product:
         let n_cross = std::cmp::max(n_ordering, other.len() * n_ordering);
-        self.orderings = self
-            .orderings
-            .iter()
-            .cloned()
-            .cycle()
-            .take(n_cross)
-            .collect();
-        // Suffix orderings of other to the current orderings.
+        self.orderings = self.orderings.into_iter().cycle().take(n_cross).collect();
+        // Append sort expressions of `other` to the current orderings:
         for (outer_idx, ordering) in other.iter().enumerate() {
             let base = outer_idx * n_ordering;
             // Use the cross product index:
@@ -300,7 +267,23 @@ impl OrderingEquivalenceClass {
     }
 }
 
-/// Convert the `OrderingEquivalenceClass` into an iterator of LexOrderings
+impl Deref for OrderingEquivalenceClass {
+    type Target = [LexOrdering];
+
+    fn deref(&self) -> &Self::Target {
+        self.orderings.as_slice()
+    }
+}
+
+impl From<Vec<LexOrdering>> for OrderingEquivalenceClass {
+    fn from(orderings: Vec<LexOrdering>) -> Self {
+        let mut result = Self { orderings };
+        result.remove_redundant_entries();
+        result
+    }
+}
+
+/// Convert the `OrderingEquivalenceClass` into an iterator of `LexOrdering`s.
 impl IntoIterator for OrderingEquivalenceClass {
     type Item = LexOrdering;
     type IntoIter = IntoIter<Self::Item>;
@@ -320,8 +303,7 @@ impl Display for OrderingEquivalenceClass {
         for ordering in iter {
             write!(f, ", [{}]", ordering)?;
         }
-        write!(f, "]")?;
-        Ok(())
+        write!(f, "]")
     }
 }
 
@@ -957,8 +939,7 @@ mod tests {
         for (orderings, expected) in test_cases {
             let orderings = convert_to_orderings(&orderings);
             let expected = convert_to_orderings(&expected);
-            let actual = OrderingEquivalenceClass::new(orderings.clone());
-            let actual = actual.orderings;
+            let actual = OrderingEquivalenceClass::from(orderings.clone());
             let err_msg = format!(
                 "orderings: {:?}, expected: {:?}, actual :{:?}",
                 orderings, expected, actual

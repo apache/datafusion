@@ -399,7 +399,7 @@ impl EquivalenceProperties {
             if new_orderings.is_empty() {
                 new_orderings.push(filtered_exprs);
             }
-            self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
+            self.oeq_class = new_orderings.into();
         }
         self
     }
@@ -924,8 +924,6 @@ impl EquivalenceProperties {
     ///
     /// A new `ProjectionMapping` with normalized source expressions.
     fn normalized_mapping(&self, mapping: &ProjectionMapping) -> ProjectionMapping {
-        // Construct the mapping where source expressions are normalized. In this way
-        // In the algorithms below we can work on exact equalities
         ProjectionMapping {
             map: mapping
                 .iter()
@@ -954,8 +952,8 @@ impl EquivalenceProperties {
     ///
     /// A vector of `LexOrdering` containing all valid orderings after projection.
     fn projected_orderings(&self, mapping: &ProjectionMapping) -> Vec<LexOrdering> {
+        // Normalize source expressions in the mapping:
         let mapping = self.normalized_mapping(mapping);
-
         // Get dependency map for existing orderings:
         let mut oeq_class = self.normalized_oeq_class();
         oeq_class = self.substitute_oeq_class(oeq_class, &mapping);
@@ -1059,7 +1057,7 @@ impl EquivalenceProperties {
     /// and `output_schema`.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
         let eq_group = self.eq_group.project(mapping);
-        let oeq_class = OrderingEquivalenceClass::new(self.projected_orderings(mapping));
+        let oeq_class = self.projected_orderings(mapping).into();
         let constraints = self.projected_constraints(mapping).unwrap_or_default();
         Self {
             schema: output_schema,
@@ -1243,7 +1241,7 @@ impl EquivalenceProperties {
         // class:
         self.schema = schema;
         self.eq_group = EquivalenceGroup::new(eq_classes);
-        self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
+        self.oeq_class = new_orderings.into();
         Ok(self)
     }
 }
