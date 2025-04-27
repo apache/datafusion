@@ -67,6 +67,7 @@ impl SingleDistinctToGroupBy {
 fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
+    let mut distinct_count = 0;
     let mut distinct_func: Option<Arc<AggregateUDF>> = None;
     for expr in aggr_expr {
         if let Expr::AggregateFunction(AggregateFunction {
@@ -86,6 +87,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
             }
             aggregate_count += 1;
             if *distinct {
+                distinct_count += 1;
                 for e in args {
                     fields_set.insert(e);
                 }
@@ -101,7 +103,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
         }
     }
 
-    if aggregate_count == 1 && fields_set.len() == 1 {
+    if distinct_count == 1 && fields_set.len() == 1 {
         if let Some(distinct_func) = distinct_func {
             if distinct_func.name() == "count" {
                 return Ok(false);
@@ -543,10 +545,8 @@ mod tests {
             )?
             .build()?;
         // Should work
-        let expected = "Projection: test.a, sum(alias2) AS sum(test.c), max(alias3) AS max(test.c), count(alias1) AS count(DISTINCT test.b) [a:UInt32, sum(test.c):UInt64;N, max(test.c):UInt32;N, count(DISTINCT test.b):Int64]\
-                            \n  Aggregate: groupBy=[[test.a]], aggr=[[sum(alias2), max(alias3), count(alias1)]] [a:UInt32, sum(alias2):UInt64;N, max(alias3):UInt32;N, count(alias1):Int64]\
-                            \n    Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2, max(test.c) AS alias3]] [a:UInt32, alias1:UInt32, alias2:UInt64;N, alias3:UInt32;N]\
-                            \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[sum(test.c), max(test.c), count(DISTINCT test.b)]] [a:UInt32, sum(test.c):UInt64;N, max(test.c):UInt32;N, count(DISTINCT test.b):Int64]\
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(plan, expected)
     }
@@ -562,10 +562,8 @@ mod tests {
             )?
             .build()?;
         // Should work
-        let expected = "Projection: test.c, min(alias2) AS min(test.a), count(alias1) AS count(DISTINCT test.b) [c:UInt32, min(test.a):UInt32;N, count(DISTINCT test.b):Int64]\
-                            \n  Aggregate: groupBy=[[test.c]], aggr=[[min(alias2), count(alias1)]] [c:UInt32, min(alias2):UInt32;N, count(alias1):Int64]\
-                            \n    Aggregate: groupBy=[[test.c, test.b AS alias1]], aggr=[[min(test.a) AS alias2]] [c:UInt32, alias1:UInt32, alias2:UInt32;N]\
-                            \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[min(test.a), count(DISTINCT test.b)]] [c:UInt32, min(test.a):UInt32;N, count(DISTINCT test.b):Int64]\
+                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(plan, expected)
     }
