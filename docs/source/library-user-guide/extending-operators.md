@@ -29,7 +29,7 @@ DataFusion supports extension of operators by transforming logical plan and exec
 
 The `rewrite` function transforms logical plans by identifying temporal patterns and aggregation functions that match the stored wheel indices. When match is found, it queries the corresponding index to retrieve pre-computed aggregate values, stores these results in a [MemTable](https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemTable.html), and returns as a new `LogicalPlan::TableScan`. If no match is found, the original plan proceeds unchanged through DataFusion's standard execution path.
 
-```rust
+```rust,ignore
 fn rewrite(
   &self,
   plan: LogicalPlan,
@@ -45,7 +45,7 @@ fn rewrite(
 }
 ```
 
-```rust
+```rust,ignore
 // Converts a uwheel aggregate result to a TableScan with a MemTable as source
 fn agg_to_table_scan(result: f64, schema: SchemaRef) -> Result<LogicalPlan> {
   let data = Float64Array::from(vec![result]);
