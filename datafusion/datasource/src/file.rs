@@ -111,7 +111,7 @@ pub trait FileSource: Send + Sync {
     /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
     fn try_pushdown_filters(
         &self,
-        filters: &[Arc<dyn PhysicalExpr>],
+        filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         Ok(FilterPushdownPropagation::unsupported(filters))

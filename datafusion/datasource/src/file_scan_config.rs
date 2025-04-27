@@ -594,24 +594,28 @@ impl DataSource for FileScanConfig {
 
     fn try_pushdown_filters(
         &self,
-        filters: &[Arc<dyn PhysicalExpr>],
+        filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
         let result = self.file_source.try_pushdown_filters(filters, config)?;
-        match result.new_node {
-            Some(new_node) => {
-                let mut new_data_source = self.clone();
-                new_data_source.file_source = new_node;
+        match result.updated_node {
+            Some(new_file_source) => {
+                let file_scan_config = FileScanConfigBuilder::new(
+                    self.object_store_url.clone(),
+                    Arc::clone(&self.file_schema),
+                    new_file_source,
+                )
+                .build();
                 Ok(FilterPushdownPropagation {
-                    parent_filter_result: result.parent_filter_result,
-                    new_node: Some(Arc::new(new_data_source) as _),
+                    filters: result.filters,
+                    updated_node: Some(Arc::new(file_scan_config) as _),
                 })
             }
             None => {
                 // If the file source does not support filter pushdown, return the original config
                 Ok(FilterPushdownPropagation {
-                    parent_filter_result: result.parent_filter_result,
-                    new_node: None,
+                    filters: result.filters,
+                    updated_node: None,
                 })
             }
         }

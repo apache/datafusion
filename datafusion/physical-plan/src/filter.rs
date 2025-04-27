@@ -28,7 +28,7 @@ use super::{
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterPushdown, FilterPushdownPlan, FilterPushdownPropagation,
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation, PredicateSupport,
 };
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
@@ -45,7 +45,9 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
 };
@@ -63,6 +65,8 @@ use datafusion_physical_expr::{
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
+
+const FILTER_EXEC_DEFAULT_SELECTIVITY: u8 = 20;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
@@ -90,7 +94,7 @@ impl FilterExec {
     ) -> Result<Self> {
         match predicate.data_type(input.schema().as_ref())? {
             DataType::Boolean => {
-                let default_selectivity = 20;
+                let default_selectivity = FILTER_EXEC_DEFAULT_SELECTIVITY;
                 let cache = Self::compute_properties(
                     &input,
                     &predicate,
@@ -452,10 +456,12 @@ impl ExecutionPlan for FilterExec {
 
     fn gather_filters_for_pushdown(
         &self,
-        parent_filters: &[Arc<dyn PhysicalExpr>],
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownPlan> {
-        if let Some(projection_indices) = self.projection.as_ref() {
+    ) -> Result<FilterDescription> {
+        let self_filter = Arc::clone(&self.predicate);
+
+        let parent_filters = if let Some(projection_indices) = self.projection.as_ref() {
             // We need to invert the projection on any referenced columns in the filter
             // Create a mapping from the output columns to the input columns (the inverse of the projection)
             let inverse_projection = projection_indices
@@ -463,11 +469,11 @@ impl ExecutionPlan for FilterExec {
                 .enumerate()
                 .map(|(i, &p)| (p, i))
                 .collect::<HashMap<_, _>>();
-            let parent_filters = parent_filters
-                .iter()
+            parent_filters
+                .into_iter()
                 .map(|f| {
-                    Arc::clone(f)
-                        .transform_up(|expr| {
+                    f.transform_up(|expr| {
+                        let mut res =
                             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                                 let index = col.index();
                                 let index_in_input_schema =
@@ -477,52 +483,59 @@ impl ExecutionPlan for FilterExec {
                                             index
                                         ))
                                     })?;
-                                Ok(Transformed::yes(Arc::new(Column::new(
+                                Transformed::yes(Arc::new(Column::new(
                                     col.name(),
                                     *index_in_input_schema,
-                                ))
-                                    as _))
+                                )) as _)
                             } else {
-                                Ok(Transformed::no(expr))
-                            }
-                        })
-                        .data()
+                                Transformed::no(expr)
+                            };
+                        // Columns can only exist in the leaves, no need to try all nodes
+                        res.tnr = TreeNodeRecursion::Jump;
+                        Ok(res)
+                    })
+                    .data()
                 })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(FilterPushdownPlan::all_supported(&parent_filters, 1)
-                .with_self_filters_for_children(vec![vec![Arc::clone(&self.predicate)]]))
+                .collect::<Result<Vec<_>>>()?
         } else {
-            Ok(FilterPushdownPlan::all_supported(parent_filters, 1)
-                .with_self_filters_for_children(vec![vec![Arc::clone(&self.predicate)]]))
-        }
+            parent_filters
+        };
+
+        Ok(
+            FilterDescription::all_supported_from_parent(parent_filters, 1)
+                .with_self_filters(vec![vec![self_filter]]),
+        )
     }
 
     fn handle_child_pushdown_result(
         &self,
-        child_pushdown_result: ChildPushdownResult,
+        mut child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        // We absorb any parent filters that were not handled by our children
-        let mut unhandled_filters =
-            child_pushdown_result.parent_filters.collect_unsupported();
-        // Was our own predicate handled by our children?
         assert_eq!(
             child_pushdown_result.self_filters.len(),
             1,
             "FilterExec should only have one child"
         );
-        let child_filter = child_pushdown_result
+        assert_eq!(
+            child_pushdown_result.self_filters[0].len(),
+            1,
+            "FilterExec produces only one filter"
+        );
+
+        // We absorb any parent filters that were not handled by our children
+        let mut unhandled_filters =
+            child_pushdown_result.parent_filters.collect_unsupported();
+
+        let self_filters = child_pushdown_result
             .self_filters
-            .into_iter()
-            .next()
-            .expect("FilterExec should only have one child")
-            .iter()
-            .next()
-            .expect("FilterExec produces only one filter for each child")
-            .clone();
-        if let FilterPushdown::Unsupported(expr) = child_filter {
+            .swap_remove(0)
+            .into_inner()
+            .swap_remove(0);
+        if let PredicateSupport::Unsupported(expr) = self_filters {
             unhandled_filters.push(expr);
         }
+
         // If we have unhandled filters, we need to create a new FilterExec
         let filter_input = Arc::clone(self.input());
         let new_predicate = conjunction(unhandled_filters);
@@ -559,8 +572,8 @@ impl ExecutionPlan for FilterExec {
             )
         };
         Ok(FilterPushdownPropagation {
-            parent_filter_result: child_pushdown_result.parent_filters.as_supported(),
-            new_node: Some(new_exec),
+            filters: child_pushdown_result.parent_filters.make_supported(),
+            updated_node: Some(new_exec),
         })
     }
 }

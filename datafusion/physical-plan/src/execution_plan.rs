@@ -17,7 +17,7 @@
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPlan, FilterPushdownPropagation,
+    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -511,10 +511,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
     fn gather_filters_for_pushdown(
         &self,
-        parent_filters: &[Arc<dyn PhysicalExpr>],
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownPlan> {
-        Ok(FilterPushdownPlan::all_unsupported(
+    ) -> Result<FilterDescription> {
+        Ok(FilterDescription::all_unsupported_from_parent(
             parent_filters,
             self.children().len(),
         ))

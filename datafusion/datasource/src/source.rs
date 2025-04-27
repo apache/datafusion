@@ -99,7 +99,7 @@ pub trait DataSource: Send + Sync + Debug {
     /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
     fn try_pushdown_filters(
         &self,
-        filters: &[Arc<dyn PhysicalExpr>],
+        filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
         Ok(FilterPushdownPropagation::unsupported(filters))
@@ -245,23 +245,23 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // Push any remaining filters into our data source
         let res = self.data_source.try_pushdown_filters(
-            &child_pushdown_result.parent_filters.into_inner_filters(),
+            child_pushdown_result.parent_filters.collect_all(),
             config,
         )?;
-        match res.new_node {
+        match res.updated_node {
             Some(data_source) => {
                 let mut new_node = self.clone();
                 new_node.data_source = data_source;
                 new_node.cache =
                     Self::compute_properties(Arc::clone(&new_node.data_source));
                 Ok(FilterPushdownPropagation {
-                    parent_filter_result: res.parent_filter_result,
-                    new_node: Some(Arc::new(new_node)),
+                    filters: res.filters,
+                    updated_node: Some(Arc::new(new_node)),
                 })
             }
             None => Ok(FilterPushdownPropagation {
-                parent_filter_result: res.parent_filter_result,
-                new_node: None,
+                filters: res.filters,
+                updated_node: None,
             }),
         }
     }
