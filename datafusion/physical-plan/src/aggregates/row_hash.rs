@@ -344,6 +344,31 @@ impl SkipAggregationProbe {
 /// │ 2 │ 2     │ 3.0 │    │ 2 │ 2     │ 3.0 │                   └────────────┘
 /// └─────────────────┘    └─────────────────┘
 /// ```
+///
+/// # Blocked approach for intermediate results
+///
+/// An important optimization for [`group_values`] and [`accumulators`]
+/// is to manage such intermediate results using the blocked approach.
+///
+/// In the original method, intermediate results are managed within a single large block
+/// (can think of it as a Vec).  As this block grows, it often triggers numerous
+/// copies, resulting in poor performance.
+///
+/// In contrast, the blocked approach allocates capacity for the block
+/// based on a predefined block size firstly.
+/// And when the block reaches its limit, we allocate a new block
+/// (also with the same predefined block size based capacity)
+/// instead of expanding the current one and copying the data.
+/// This method eliminates unnecessary copies and significantly improves performance.
+/// For a nice introduction to the blocked approach, maybe you can see [#7065].
+///
+/// The conditions that trigger the blocked groups optimization can be found in
+/// [`maybe_enable_blocked_groups`].
+///  
+/// [`group_values`]: Self::group_values
+/// [`accumulators`]: Self::accumulators
+/// [#7065]: https://github.com/apache/datafusion/issues/7065
+///
 pub(crate) struct GroupedHashAggregateStream {
     // ========================================================================
     // PROPERTIES:
