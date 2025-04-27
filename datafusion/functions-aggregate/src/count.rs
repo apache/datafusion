@@ -56,8 +56,8 @@ use datafusion_expr::{
     Expr, ReversedUDAF, StatisticsArgs, TypeSignature, WindowFunctionDefinition,
 };
 use datafusion_functions_aggregate_common::aggregate::count_distinct::{
-    BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
-    PrimitiveDistinctCountAccumulator,
+    BytesDistinctCountAccumulator, DictionaryCountAccumulator,
+    FloatDistinctCountAccumulator, PrimitiveDistinctCountAccumulator,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
 use datafusion_physical_expr_common::binary_map::OutputType;
@@ -179,6 +179,107 @@ impl Count {
         }
     }
 }
+fn get_primitive_type_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
+    match data_type {
+        // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
+        DataType::Int8 => Box::new(PrimitiveDistinctCountAccumulator::<Int8Type>::new(
+            data_type,
+        )),
+        DataType::Int16 => Box::new(PrimitiveDistinctCountAccumulator::<Int16Type>::new(
+            data_type,
+        )),
+        DataType::Int32 => Box::new(PrimitiveDistinctCountAccumulator::<Int32Type>::new(
+            data_type,
+        )),
+        DataType::Int64 => Box::new(PrimitiveDistinctCountAccumulator::<Int64Type>::new(
+            data_type,
+        )),
+        DataType::UInt8 => Box::new(PrimitiveDistinctCountAccumulator::<UInt8Type>::new(
+            data_type,
+        )),
+        DataType::UInt16 => Box::new(
+            PrimitiveDistinctCountAccumulator::<UInt16Type>::new(data_type),
+        ),
+        DataType::UInt32 => Box::new(
+            PrimitiveDistinctCountAccumulator::<UInt32Type>::new(data_type),
+        ),
+        DataType::UInt64 => Box::new(
+            PrimitiveDistinctCountAccumulator::<UInt64Type>::new(data_type),
+        ),
+        DataType::Decimal128(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal128Type,
+        >::new(data_type)),
+        DataType::Decimal256(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal256Type,
+        >::new(data_type)),
+
+        DataType::Date32 => Box::new(
+            PrimitiveDistinctCountAccumulator::<Date32Type>::new(data_type),
+        ),
+        DataType::Date64 => Box::new(
+            PrimitiveDistinctCountAccumulator::<Date64Type>::new(data_type),
+        ),
+        DataType::Time32(TimeUnit::Millisecond) => Box::new(
+            PrimitiveDistinctCountAccumulator::<Time32MillisecondType>::new(data_type),
+        ),
+        DataType::Time32(TimeUnit::Second) => Box::new(
+            PrimitiveDistinctCountAccumulator::<Time32SecondType>::new(data_type),
+        ),
+        DataType::Time64(TimeUnit::Microsecond) => Box::new(
+            PrimitiveDistinctCountAccumulator::<Time64MicrosecondType>::new(data_type),
+        ),
+        DataType::Time64(TimeUnit::Nanosecond) => Box::new(
+            PrimitiveDistinctCountAccumulator::<Time64NanosecondType>::new(data_type),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Box::new(
+            PrimitiveDistinctCountAccumulator::<TimestampMicrosecondType>::new(data_type),
+        ),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => Box::new(
+            PrimitiveDistinctCountAccumulator::<TimestampMillisecondType>::new(data_type),
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(
+            PrimitiveDistinctCountAccumulator::<TimestampNanosecondType>::new(data_type),
+        ),
+        DataType::Timestamp(TimeUnit::Second, _) => Box::new(
+            PrimitiveDistinctCountAccumulator::<TimestampSecondType>::new(data_type),
+        ),
+
+        DataType::Float16 => {
+            Box::new(FloatDistinctCountAccumulator::<Float16Type>::new())
+        }
+        DataType::Float32 => {
+            Box::new(FloatDistinctCountAccumulator::<Float32Type>::new())
+        }
+        DataType::Float64 => {
+            Box::new(FloatDistinctCountAccumulator::<Float64Type>::new())
+        }
+
+        DataType::Utf8 => {
+            Box::new(BytesDistinctCountAccumulator::<i32>::new(OutputType::Utf8))
+        }
+        DataType::Utf8View => {
+            Box::new(BytesViewDistinctCountAccumulator::new(OutputType::Utf8View))
+        }
+        DataType::LargeUtf8 => {
+            Box::new(BytesDistinctCountAccumulator::<i64>::new(OutputType::Utf8))
+        }
+        DataType::Binary => Box::new(BytesDistinctCountAccumulator::<i32>::new(
+            OutputType::Binary,
+        )),
+        DataType::BinaryView => Box::new(BytesViewDistinctCountAccumulator::new(
+            OutputType::BinaryView,
+        )),
+        DataType::LargeBinary => Box::new(BytesDistinctCountAccumulator::<i64>::new(
+            OutputType::Binary,
+        )),
+
+        // Use the generic accumulator based on `ScalarValue` for all other types
+        _ => Box::new(DistinctCountAccumulator {
+            values: HashSet::default(),
+            state_data_type: data_type.clone(),
+        }),
+    }
+}
 
 impl AggregateUDFImpl for Count {
     fn as_any(&self) -> &dyn std::any::Any {
@@ -228,114 +329,13 @@ impl AggregateUDFImpl for Count {
         }
 
         let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
+
         Ok(match data_type {
-            // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
-            DataType::Int8 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Int8Type>::new(data_type),
-            ),
-            DataType::Int16 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Int16Type>::new(data_type),
-            ),
-            DataType::Int32 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Int32Type>::new(data_type),
-            ),
-            DataType::Int64 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Int64Type>::new(data_type),
-            ),
-            DataType::UInt8 => Box::new(
-                PrimitiveDistinctCountAccumulator::<UInt8Type>::new(data_type),
-            ),
-            DataType::UInt16 => Box::new(
-                PrimitiveDistinctCountAccumulator::<UInt16Type>::new(data_type),
-            ),
-            DataType::UInt32 => Box::new(
-                PrimitiveDistinctCountAccumulator::<UInt32Type>::new(data_type),
-            ),
-            DataType::UInt64 => Box::new(
-                PrimitiveDistinctCountAccumulator::<UInt64Type>::new(data_type),
-            ),
-            DataType::Decimal128(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
-                Decimal128Type,
-            >::new(data_type)),
-            DataType::Decimal256(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
-                Decimal256Type,
-            >::new(data_type)),
-
-            DataType::Date32 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Date32Type>::new(data_type),
-            ),
-            DataType::Date64 => Box::new(
-                PrimitiveDistinctCountAccumulator::<Date64Type>::new(data_type),
-            ),
-            DataType::Time32(TimeUnit::Millisecond) => Box::new(
-                PrimitiveDistinctCountAccumulator::<Time32MillisecondType>::new(
-                    data_type,
-                ),
-            ),
-            DataType::Time32(TimeUnit::Second) => Box::new(
-                PrimitiveDistinctCountAccumulator::<Time32SecondType>::new(data_type),
-            ),
-            DataType::Time64(TimeUnit::Microsecond) => Box::new(
-                PrimitiveDistinctCountAccumulator::<Time64MicrosecondType>::new(
-                    data_type,
-                ),
-            ),
-            DataType::Time64(TimeUnit::Nanosecond) => Box::new(
-                PrimitiveDistinctCountAccumulator::<Time64NanosecondType>::new(data_type),
-            ),
-            DataType::Timestamp(TimeUnit::Microsecond, _) => Box::new(
-                PrimitiveDistinctCountAccumulator::<TimestampMicrosecondType>::new(
-                    data_type,
-                ),
-            ),
-            DataType::Timestamp(TimeUnit::Millisecond, _) => Box::new(
-                PrimitiveDistinctCountAccumulator::<TimestampMillisecondType>::new(
-                    data_type,
-                ),
-            ),
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(
-                PrimitiveDistinctCountAccumulator::<TimestampNanosecondType>::new(
-                    data_type,
-                ),
-            ),
-            DataType::Timestamp(TimeUnit::Second, _) => Box::new(
-                PrimitiveDistinctCountAccumulator::<TimestampSecondType>::new(data_type),
-            ),
-
-            DataType::Float16 => {
-                Box::new(FloatDistinctCountAccumulator::<Float16Type>::new())
+            DataType::Dictionary(_, values_type) => {
+                let inner = get_primitive_type_accumulator(values_type);
+                Box::new(DictionaryCountAccumulator::new(inner))
             }
-            DataType::Float32 => {
-                Box::new(FloatDistinctCountAccumulator::<Float32Type>::new())
-            }
-            DataType::Float64 => {
-                Box::new(FloatDistinctCountAccumulator::<Float64Type>::new())
-            }
-
-            DataType::Utf8 => {
-                Box::new(BytesDistinctCountAccumulator::<i32>::new(OutputType::Utf8))
-            }
-            DataType::Utf8View => {
-                Box::new(BytesViewDistinctCountAccumulator::new(OutputType::Utf8View))
-            }
-            DataType::LargeUtf8 => {
-                Box::new(BytesDistinctCountAccumulator::<i64>::new(OutputType::Utf8))
-            }
-            DataType::Binary => Box::new(BytesDistinctCountAccumulator::<i32>::new(
-                OutputType::Binary,
-            )),
-            DataType::BinaryView => Box::new(BytesViewDistinctCountAccumulator::new(
-                OutputType::BinaryView,
-            )),
-            DataType::LargeBinary => Box::new(BytesDistinctCountAccumulator::<i64>::new(
-                OutputType::Binary,
-            )),
-
-            // Use the generic accumulator based on `ScalarValue` for all other types
-            _ => Box::new(DistinctCountAccumulator {
-                values: HashSet::default(),
-                state_data_type: data_type.clone(),
-            }),
+            _ => get_primitive_type_accumulator(data_type),
         })
     }
 
