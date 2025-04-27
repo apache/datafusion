@@ -78,10 +78,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
+        // println!("plan3");
+        // dbg!(&plan);
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
 
         // Process `where` clause
         let base_plan = self.plan_selection(select.selection, plan, planner_context)?;
+        // really base, no schema
+        // dbg!(&base_plan);
 
         // Handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
@@ -93,19 +97,40 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             empty_from,
             planner_context,
         )?;
+        // already have alias
+        dbg!(&select_exprs);
 
         let order_by =
             to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
 
         // Having and group by clause may reference aliases defined in select projection
+        // TODO: how do they project on this step?
         let projected_plan = self.project(base_plan.clone(), select_exprs)?;
+        // dbg!(&projected_plan.schema());
+        // name already changed to int
+        // [datafusion/sql/src/select.rs:105:9] &projected_plan.schema() = DFSchema {
+        //     inner: Schema {
+        //         fields: [
+        //             Field {
+        //                 name: "Utf8(\"1\")",
+        //                 data_type: Int32,
+        //                 nullable: false,
+        //                 dict_id: 0,
+        //                 dict_is_ordered: false,
+        //                 metadata: {},
+        //             },
+        //         ],
+        //         metadata: {},
+        //     },
         let select_exprs = projected_plan.expressions();
 
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
         // See https://github.com/apache/datafusion/issues/9162
         let mut combined_schema = base_plan.schema().as_ref().clone();
+        // dbg!(&combined_schema);
         combined_schema.merge(projected_plan.schema());
+        // dbg!(&combined_schema);
 
         // Order-by expressions prioritize referencing columns from the select list,
         // then from the FROM clause.
@@ -577,6 +602,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
     }
 
+    // tommy TODO:
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
     fn prepare_select_exprs(
         &self,
@@ -604,7 +630,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         empty_from: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<SelectExpr> {
+        use datafusion_expr::Expr::Cast;
         match sql {
+            // tommy TODO: here is the issue, handle unamed expr
+            // if unamed expr and no schema, set custom alias
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
                 let col = normalize_col_with_schemas_and_ambiguity_check(
@@ -612,6 +641,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
+                // dbg!(&col);
+                // [datafusion/sql/src/select.rs:624:17] &col = Cast(
+                //     Cast {
+                //         expr: Literal(
+                //             Utf8("1"),
+                //         ),
+                //         data_type: Int32,
+                //     },
+                // )
+                // if it is a cast, change to cast
+
+                if let Cast(literal) = &col {
+                    println!("is cast");
+                    // dbg!(&literal);
+                    // [datafusion/sql/src/select.rs:630:21] &literal = Cast {
+                    //     expr: Literal(
+                    //         Utf8("1"),
+                    //     ),
+                    //     data_type: Int32,
+                    // }
+                    // there is a field called expr inside cast
+                }
 
                 Ok(SelectExpr::Expression(col))
             }
@@ -746,9 +797,78 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        println!("project exprs");
+        dbg!(&exprs);
+        // should always be empty
+        //         [datafusion/sql/src/select.rs:773:9] &exprs = [
+        //     Cast(
+        //         Cast {
+        //             expr: Literal(
+        //                 Utf8("1"),
+        //             ),
+        //             data_type: Int32,
+        //         },
+        //     ),
+        // ]
+        dbg!(&input.schema());
+        // [datafusion/sql/src/select.rs:774:9] &input.schema() = DFSchema {
+        //     inner: Schema {
+        //         fields: [],
+        //         metadata: {},
+        //     },
+        //     field_qualifiers: [],
+        //     functional_dependencies: FunctionalDependencies {
+        //         deps: [],
+        //     },
+        // }
+        // schema is empty here?
         self.validate_schema_satisfies_exprs(input.schema(), &exprs)?;
 
-        LogicalPlanBuilder::from(input).project(expr)?.build()
+        let build = LogicalPlanBuilder::from(input).project(expr)?.build();
+        dbg!(&build);
+        // This expr needs an alias, then it change the schema name to int
+        // shcema now has filed after build
+        // Projection(
+        //     Projection {
+        //         expr: [
+        //             Cast(
+        //                 Cast {
+        //                     expr: Literal(
+        //                         Utf8("1"),
+        //                     ),
+        //                     data_type: Int32,
+        //                 },
+        //             ),
+        //         ],
+        //         input: EmptyRelation(
+        //             EmptyRelation {
+        //                 produce_one_row: true,
+        //                 schema: DFSchema {
+        //                     inner: Schema {
+        //                         fields: [],
+        //                         metadata: {},
+        //                     },
+        //                     field_qualifiers: [],
+        //                     functional_dependencies: FunctionalDependencies {
+        //                         deps: [],
+        //                     },
+        //                 },
+        //             },
+        //         ),
+        //         schema: DFSchema {
+        //             inner: Schema {
+        //                 fields: [
+        //                     Field {
+        //                         name: "Utf8(\"1\")",
+        //                         data_type: Int32,
+        //                         nullable: false,
+        //                         dict_id: 0,
+        //                         dict_is_ordered: false,
+        //                         metadata: {},
+        //                     },
+        //                 ],
+        //                 metadata: {},
+        build
     }
 
     /// Create an aggregate plan.

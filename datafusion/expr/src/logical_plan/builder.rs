@@ -1772,16 +1772,85 @@ fn project_with_validation(
             }
             SelectExpr::Expression(e) => {
                 if validate {
+                    // tommy TODO:: issue here
+                    // here make the expression a column
                     projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
                 } else {
                     projected_expr.push(e)
                 }
+                println!("Expression");
+                dbg!(&projected_expr);
+                //                 [datafusion/expr/src/logical_plan/builder.rs:1782:17] &projected_expr = [
+                //     Cast(
+                //         Cast {
+                //             expr: Literal(
+                //                 Utf8("1"),
+                //             ),
+                //             data_type: Int32,
+                //         },
+                //     ),
+                // ]
             }
         }
     }
     validate_unique_names("Projections", projected_expr.iter())?;
 
-    Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+    let pro =
+        Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection);
+    dbg!(&pro);
+    // &pro = Ok(
+    //     Projection(
+    //         Projection {
+    //             expr: [
+    //                 Cast(
+    //                     Cast {
+    //                         expr: Literal(
+    //                             Utf8("1"),
+    //                         ),
+    //                         data_type: Int32,
+    //                     },
+    //                 ),
+    //             ],
+    //             input: EmptyRelation(
+    //                 EmptyRelation {
+    //                     produce_one_row: true,
+    //                     schema: DFSchema {
+    //                         inner: Schema {
+    //                             fields: [],
+    //                             metadata: {},
+    //                         },
+    //                         field_qualifiers: [],
+    //                         functional_dependencies: FunctionalDependencies {
+    //                             deps: [],
+    //                         },
+    //                     },
+    //                 },
+    //             ),
+    //             schema: DFSchema {
+    //                 inner: Schema {
+    //                     fields: [
+    //                         Field {
+    //                             name: "Utf8(\"1\")",
+    //                             data_type: Int32,
+    //                             nullable: false,
+    //                             dict_id: 0,
+    //                             dict_is_ordered: false,
+    //                             metadata: {},
+    //                         },
+    //                     ],
+    //                     metadata: {},
+    //                 },
+    //                 field_qualifiers: [
+    //                     None,
+    //                 ],
+    //                 functional_dependencies: FunctionalDependencies {
+    //                     deps: [],
+    //                 },
+    //             },
+    //         },
+    //     ),
+    // )
+    pro
 }
 
 /// If there is a REPLACE statement in the projected expression in the form of

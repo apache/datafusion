@@ -227,13 +227,19 @@ pub(super) async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
+        dbg!(&statement);
         let adjusted =
             AdjustedPrintOptions::new(print_options.clone()).with_statement(&statement);
 
         let plan = create_plan(ctx, statement).await?;
+        // TODO: change here
+        // TODO: Plan is already casting Utf8 to Int32, how to fix it?
+        // dbg!(&plan);
         let adjusted = adjusted.with_plan(&plan);
 
+        // TODO: here is how we create logical plan
         let df = ctx.execute_logical_plan(plan).await?;
+        // TODO: how to get the physical plan? And why schema is gotten here?
         let physical_plan = df.create_physical_plan().await?;
 
         // Track memory usage for the query result if it's bounded

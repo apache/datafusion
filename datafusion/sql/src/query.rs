@@ -42,6 +42,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // It also inherits the CTEs from the outer query by cloning the outer planner context.
         let mut query_plan_context = outer_planner_context.clone();
         let planner_context = &mut query_plan_context;
+        dbg!(&planner_context);
 
         if let Some(with) = query.with {
             self.plan_with_clause(with, planner_context)?;
@@ -50,9 +51,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let set_expr = *query.body;
         match set_expr {
             SetExpr::Select(mut select) => {
+                println!("select!");
                 let select_into = select.into.take();
                 let plan =
                     self.select_to_plan(*select, query.order_by, planner_context)?;
+                // dbg!(&plan);
                 let plan =
                     self.limit(plan, query.offset, query.limit, planner_context)?;
                 // Process the `SELECT INTO` after `LIMIT`.

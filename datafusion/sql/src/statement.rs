@@ -447,6 +447,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     Some(query) => {
                         let plan = self.query_to_plan(*query, planner_context)?;
                         let input_schema = plan.schema();
+                        dbg!(&input_schema);
 
                         let plan = if has_columns {
                             if schema.fields().len() != input_schema.fields().len() {
@@ -496,6 +497,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
 
                     None => {
+                        dbg!(&schema);
                         let plan = EmptyRelation {
                             produce_one_row: false,
                             schema,
