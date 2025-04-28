@@ -120,7 +120,7 @@ use itertools::Itertools;
 /// // with a single constant value of b
 /// let mut eq_properties = EquivalenceProperties::new(schema);
 /// eq_properties.add_constants(vec![ConstExpr::from(col_b)]);
-/// eq_properties.add_new_ordering([
+/// eq_properties.add_ordering([
 ///   PhysicalSortExpr::new_default(col_a).asc(),
 ///   PhysicalSortExpr::new_default(col_c).desc(),
 /// ]);
