@@ -311,7 +311,7 @@ impl Unparser<'_> {
         lateral: bool,
         columns: Vec<Ident>,
     ) -> Result<()> {
-        if self.dialect.requires_derived_table_alias() || columns.len() > 0 {
+        if self.dialect.requires_derived_table_alias() || columns.is_empty() {
             self.derive(
                 plan,
                 relation,
