@@ -959,7 +959,7 @@ SELECT SUM(column1) FROM foo ORDER BY SUM(column1)
 16
 
 # Order by unprojected aggregate expressions is not supported
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression AggregateFunction
+query error DataFusion error: Error during planning: Aggregate functions are not allowed in the ORDER BY clause without a GROUP BY clause.
 SELECT column2 FROM foo ORDER BY SUM(column1)
 
 statement ok
@@ -1381,6 +1381,7 @@ physical_plan
 statement ok
 drop table table_with_ordered_not_null;
 
+
 # ORDER BY ALL
 statement ok
 set datafusion.sql_parser.dialect = 'DuckDB';
@@ -1419,3 +1420,35 @@ SELECT address, zip FROM addresses ORDER BY ALL;
 111 Duck Duck Goose Ln 11111
 111 Duck Duck Goose Ln 11111-0001
 123 Quack Blvd 11111
+
+# test order by agg func not selected
+statement ok
+CREATE TABLE order_by_agg_func_not_selected (
+  g INT,
+  o INT
+) AS VALUES
+(1, -1),
+(2, -2),
+(3, -3)
+
+query II
+SELECT g, max(o) + count(o)  FROM order_by_agg_func_not_selected group by g order by min(o)
+----
+3 -2
+2 -1
+1 0
+
+
+
+query II
+SELECT g, max(o) + count(o)  FROM order_by_agg_func_not_selected group by g  having  max(o) + min(o) >= -4 order by avg(o)
+----
+2 -1
+1 0
+
+query II
+SELECT g, max(o) + count(o)  FROM order_by_agg_func_not_selected group by g  having  max(o) + min(o) >= -4 order by max(o) + 1
+----
+2 -1
+1 0
+

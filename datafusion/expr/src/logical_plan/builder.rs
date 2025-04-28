@@ -53,6 +53,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
@@ -60,7 +61,7 @@ use datafusion_common::{
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -784,26 +785,35 @@ impl LogicalPlanBuilder {
         sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
         fetch: Option<usize>,
     ) -> Result<Self> {
+        // TODO: output missing_agg_funcs ?
         let sorts = rewrite_sort_cols_by_aggs(sorts, &self.plan)?;
 
         let schema = self.plan.schema();
 
+        let mut missing_agg_funcs = IndexSet::new();
+
         // Collect sort columns that are missing in the input plan's schema
         let mut missing_cols: IndexSet<Column> = IndexSet::new();
-        sorts.iter().try_for_each::<_, Result<()>>(|sort| {
-            let columns = sort.expr.column_refs();
 
-            missing_cols.extend(
-                columns
-                    .into_iter()
-                    .filter(|c| !schema.has_column(c))
-                    .cloned(),
-            );
+        sorts.iter().try_for_each::<_, Result<()>>(|sort| {
+            sort.expr.apply(|expr| match expr {
+                Expr::AggregateFunction(_) => {
+                    missing_agg_funcs.insert(expr.clone());
+                    Ok(TreeNodeRecursion::Stop)
+                }
+                Expr::Column(col) => {
+                    if !schema.has_column(col) {
+                        missing_cols.insert(col.clone());
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                }
+                _ => Ok(TreeNodeRecursion::Continue),
+            })?;
 
             Ok(())
         })?;
 
-        if missing_cols.is_empty() {
+        if missing_cols.is_empty() && missing_agg_funcs.is_empty() {
             return Ok(Self::new(LogicalPlan::Sort(Sort {
                 expr: normalize_sorts(sorts, &self.plan)?,
                 input: self.plan,
@@ -812,14 +822,34 @@ impl LogicalPlanBuilder {
         }
 
         // remove pushed down sort columns
-        let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
+        let sort_output = schema.columns().into_iter().map(Expr::Column).collect();
+
+        let plan = Arc::unwrap_or_clone(self.plan);
+
+        let (plan, agg_func_to_col, sorts) = if missing_agg_funcs.is_empty() {
+            (plan, HashMap::new(), sorts)
+        } else {
+            {
+                let (plan, agg_func_to_col) =
+                    Self::add_missing_agg_funcs_to_logical_agg(plan, &missing_agg_funcs)?;
+
+                let sorts = sorts
+                    .iter()
+                    .map(|x| {
+                        Self::replace_subexpr_to_col(&x.expr, &agg_func_to_col)
+                            .map(|expr| x.with_expr(expr))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                (plan, agg_func_to_col, sorts)
+            }
+        };
+
+        // we need downstream filter/project return missing col(agg_funcs)
+        missing_cols.extend(agg_func_to_col.into_values());
 
         let is_distinct = false;
-        let plan = Self::add_missing_columns(
-            Arc::unwrap_or_clone(self.plan),
-            &missing_cols,
-            is_distinct,
-        )?;
+        let plan = Self::add_missing_columns(plan, &missing_cols, is_distinct)?;
 
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
@@ -827,9 +857,109 @@ impl LogicalPlanBuilder {
             fetch,
         });
 
-        Projection::try_new(new_expr, Arc::new(sort_plan))
+        Projection::try_new(sort_output, Arc::new(sort_plan))
             .map(LogicalPlan::Projection)
             .map(Self::new)
+    }
+
+    fn replace_subexpr_to_col(
+        expr: &Expr,
+        func_to_col: &HashMap<Expr, Column>,
+    ) -> Result<Expr> {
+        Ok(expr
+            .clone()
+            .transform_down(|nested_expr| {
+                if let Some(col) = func_to_col.get(&nested_expr) {
+                    Ok(Transformed::yes(Expr::Column(col.clone())))
+                } else {
+                    Ok(Transformed::no(nested_expr))
+                }
+            })?
+            .data)
+    }
+
+    fn add_missing_agg_funcs_to_logical_agg(
+        plan: LogicalPlan,
+        missing_agg_funcs: &IndexSet<Expr>,
+    ) -> Result<(LogicalPlan, HashMap<Expr, Column>)> {
+        let mut agg_func_to_output_col: HashMap<Expr, Column> =
+            HashMap::with_capacity(missing_agg_funcs.len());
+
+        if missing_agg_funcs.is_empty() {
+            return Ok((plan, agg_func_to_output_col));
+        }
+
+        let plan = plan
+            .transform_down(|plan| {
+                match plan {
+                    LogicalPlan::Aggregate(Aggregate {
+                        input,
+                        group_expr,
+                        aggr_expr,
+                        schema: _,
+                    }) => {
+                        // Map aggregate functions to their corresponding column index in the aggregate node's output schema.
+                        let mut agg_funcs_to_idx_of_schema: IndexMap<Expr, usize> =
+                            IndexMap::with_capacity(
+                                aggr_expr.len() + missing_agg_funcs.len(),
+                            );
+
+                        for (idx, agg_func) in aggr_expr.into_iter().enumerate() {
+                            // The output schema is the group expressions followed by the aggregate expressions in order.
+                            // https://github.com/apache/datafusion/blob/9730404028a91a7fe875ea3f88bafdbcb305ae6c/datafusion/expr/src/logical_plan/plan.rs#L3402-L3403
+                            agg_funcs_to_idx_of_schema
+                                .insert(agg_func, idx + group_expr.len());
+                        }
+
+                        let mut missing_col_idx =
+                            Vec::with_capacity(missing_agg_funcs.len());
+                        for missing in missing_agg_funcs {
+                            let missing = normalize_col(missing.clone(), &input)?;
+                            let idx = if let Some(idx) =
+                                agg_funcs_to_idx_of_schema.get(&missing)
+                            {
+                                *idx
+                            } else {
+                                // we put missing agg func at last
+                                let idx =
+                                    agg_funcs_to_idx_of_schema.len() + group_expr.len();
+                                agg_funcs_to_idx_of_schema.insert(missing, idx);
+                                idx
+                            };
+                            missing_col_idx.push(idx);
+                        }
+
+                        let new_agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                            input,
+                            group_expr,
+                            agg_funcs_to_idx_of_schema.into_keys().collect::<Vec<_>>(),
+                        )?);
+
+                        let agg_output = new_agg.schema().columns();
+                        for (agg_funcs, idx) in
+                            missing_agg_funcs.iter().zip(missing_col_idx.into_iter())
+                        {
+                            agg_func_to_output_col
+                                .insert(agg_funcs.clone(), agg_output[idx].clone());
+                        }
+
+                        Ok(Transformed::new(new_agg, true, TreeNodeRecursion::Stop))
+                    }
+                    // cannot add new output to distinct
+                    // https://github.com/apache/datafusion/blob/1812494a53011cd234a255e92cd15b534ae0d47e/datafusion/expr/src/logical_plan/builder.rs#L644-L663
+                    LogicalPlan::Distinct(_) => {
+                        plan_err!("cannot add new output to distinct")
+                    }
+                    _ => Ok(Transformed::no(plan)),
+                }
+            })?
+            .data;
+
+        if agg_func_to_output_col.is_empty() {
+            return plan_err!("Aggregate functions are not allowed in the ORDER BY clause without a GROUP BY clause.");
+        }
+
+        Ok((plan, agg_func_to_output_col))
     }
 
     /// Apply a union, preserving duplicate rows
@@ -2258,7 +2388,7 @@ mod tests {
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
-    use crate::test::function_stub::sum;
+    use crate::test::function_stub::{max, min, sum};
     use datafusion_common::{Constraint, RecursionUnnestOption, SchemaError};
 
     #[test]
@@ -2325,6 +2455,44 @@ mod tests {
 
         let expected = "Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST\
         \n  TableScan: employee_csv projection=[state, salary]";
+
+        assert_eq!(expected, format!("{plan}"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_sort_after_agg() -> Result<()> {
+        let plan =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+                .aggregate(vec![col("state")], vec![max(col("salary"))])?
+                .sort(vec![expr::Sort::new(min(col("salary")), true, true)])?
+                .build()?;
+
+        let expected = "Projection: employee_csv.state, max(employee_csv.salary)\n  Sort: min(employee_csv.salary) ASC NULLS FIRST\n    Aggregate: groupBy=[[employee_csv.state]], aggr=[[max(employee_csv.salary), min(employee_csv.salary)]]\n      TableScan: employee_csv projection=[state, salary]";
+
+        assert_eq!(expected, format!("{plan}"));
+
+        let plan =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+                .aggregate(vec![col("state")], vec![max(col("salary"))])?
+                .filter(max(col("salary")).eq(lit("6")))?
+                .sort(vec![expr::Sort::new(min(col("salary")), true, true)])?
+                .build()?;
+
+        let expected = "Projection: employee_csv.state, max(employee_csv.salary)\n  Sort: min(employee_csv.salary) ASC NULLS FIRST\n    Filter: max(employee_csv.salary) = Utf8(\"6\")\n      Aggregate: groupBy=[[employee_csv.state]], aggr=[[max(employee_csv.salary), min(employee_csv.salary)]]\n        TableScan: employee_csv projection=[state, salary]";
+
+        assert_eq!(expected, format!("{plan}"));
+
+        let plan =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+                .aggregate(vec![col("state")], vec![min(col("salary"))])?
+                .project(vec![lit(1)])?
+                // .filter(max(col("salary")).eq(lit("6")))?
+                .sort(vec![expr::Sort::new(min(col("salary")), true, true)])?
+                .build()?;
+
+        let expected = "Projection: Int32(1)\n  Sort: min(employee_csv.salary) ASC NULLS FIRST\n    Projection: Int32(1), min(employee_csv.salary)\n      Aggregate: groupBy=[[employee_csv.state]], aggr=[[min(employee_csv.salary)]]\n        TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{plan}"));
 
