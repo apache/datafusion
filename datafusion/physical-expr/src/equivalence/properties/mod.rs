@@ -207,10 +207,9 @@ impl EquivalenceProperties {
         let mut sort_exprs: Vec<_> = self.oeq_class().output_ordering()?.into();
         // Prune out constant expressions:
         sort_exprs.retain(|sort_expr| {
-            let Some(cls) = self.eq_group.get_equivalence_class(&sort_expr.expr) else {
-                return true;
-            };
-            cls.constant.is_none()
+            self.eq_group
+                .get_equivalence_class(&sort_expr.expr)
+                .is_none_or(|cls| cls.constant.is_none())
         });
         LexOrdering::new(sort_exprs)
     }
@@ -219,12 +218,12 @@ impl EquivalenceProperties {
     /// Normalization removes constants and duplicates as well as standardizing
     /// expressions according to the equivalence group within.
     pub fn normalized_oeq_class(&self) -> OrderingEquivalenceClass {
-        OrderingEquivalenceClass::new(
-            self.oeq_class
-                .iter()
-                .cloned()
-                .filter_map(|ordering| self.normalize_sort_exprs(ordering)),
-        )
+        self.oeq_class
+            .iter()
+            .cloned()
+            .filter_map(|ordering| self.normalize_sort_exprs(ordering))
+            .collect::<Vec<_>>()
+            .into()
     }
 
     /// Extends this `EquivalenceProperties` with the `other` object.
