@@ -224,7 +224,7 @@ impl BatchPartitioner {
         Ok(Self { state, timer })
     }
 
-    /// Partition the provided [`RecordBatch`] into one or more partitioned [`RecordBatch`]
+    /// Partition a single [`RecordBatch`] into one or more partitioned [`RecordBatch`]
     /// based on the [`Partitioning`] specified on construction
     ///
     /// `f` will be called for each partitioned [`RecordBatch`] with the corresponding
@@ -233,7 +233,27 @@ impl BatchPartitioner {
     ///
     /// The time spent repartitioning, not including time spent in `f` will be recorded
     /// to the [`metrics::Time`] provided on construction
-    pub fn partition<F>(&mut self, batches: Vec<RecordBatch>, mut f: F) -> Result<()>
+    #[deprecated(since = "48.0.0", note = "use partition_batches instead")]
+    pub fn partition<F>(&mut self, batch: RecordBatch, mut f: F) -> Result<()>
+    where
+        F: FnMut(usize, RecordBatch) -> Result<()>,
+    {
+        self.partition_iter(vec![batch])?.try_for_each(|res| match res {
+            Ok((partition, batch)) => f(partition, batch),
+            Err(e) => Err(e),
+        })
+    }
+
+    /// Partition the provided [`Vec<RecordBatch>`] into one or more partitioned [`RecordBatch`]
+    /// based on the [`Partitioning`] specified on construction
+    ///
+    /// `f` will be called for each partitioned [`RecordBatch`] with the corresponding
+    /// partition index. Any error returned by `f` will be immediately returned by this
+    /// function without attempting to publish further [`RecordBatch`]
+    ///
+    /// The time spent repartitioning, not including time spent in `f` will be recorded
+    /// to the [`metrics::Time`] provided on construction
+    pub fn partition_batches<F>(&mut self, batches: Vec<RecordBatch>, mut f: F) -> Result<()>
     where
         F: FnMut(usize, RecordBatch) -> Result<()>,
     {
@@ -314,7 +334,7 @@ impl BatchPartitioner {
                             // Tracking time required for repartitioned batches construction
                             let _timer = partitioner_timer.timer();
                             let b: Vec<&RecordBatch> = batches.iter().collect();
-
+                            
                             // Produce batches based on indices
                             let batch = interleave_record_batch(&b, &indices)?;
                             Ok((partition, batch))
