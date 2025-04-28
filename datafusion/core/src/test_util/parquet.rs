@@ -149,13 +149,13 @@ impl TestParquetFile {
     ///   (DataSourceExec)
     /// ```
     ///
-    /// Otherwise if `maybe_filter` is None, return just a `DataSourceExec`
+    /// Otherwise, if `maybe_filter` is None, return just a `DataSourceExec`
     pub async fn create_scan(
         &self,
         ctx: &SessionContext,
         maybe_filter: Option<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let parquet_options = ctx.copied_table_options().parquet;
+        let parquet_options = ctx.copied_table_options().parquet_options_or_default();
         let source = Arc::new(ParquetSource::new(parquet_options.clone()));
         let scan_config_builder = FileScanConfigBuilder::new(
             self.object_store_url.clone(),

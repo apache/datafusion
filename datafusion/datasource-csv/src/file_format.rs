@@ -103,7 +103,7 @@ impl FileFormatFactory for CsvFormatFactory {
                 let mut table_options = state.default_table_options();
                 table_options.set_config_format(ConfigFileType::CSV);
                 table_options.alter_with_string_hash_map(format_options)?;
-                table_options.csv
+                table_options.csv_options_or_default().clone()
             }
             Some(csv_options) => {
                 let mut csv_options = csv_options.clone();

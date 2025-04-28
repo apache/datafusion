@@ -94,7 +94,7 @@ impl FileFormatFactory for JsonFormatFactory {
                 let mut table_options = state.default_table_options();
                 table_options.set_config_format(ConfigFileType::JSON);
                 table_options.alter_with_string_hash_map(format_options)?;
-                table_options.json
+                table_options.json_options_or_default()
             }
             Some(json_options) => {
                 let mut json_options = json_options.clone();

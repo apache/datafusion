@@ -400,7 +400,7 @@ pub(crate) async fn get_object_store(
 ) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
     let store: Arc<dyn ObjectStore> = match scheme {
         "s3" => {
-            let Some(options) = table_options.extensions.get::<AwsOptions>() else {
+            let Some(options) = table_options.extensions().get::<AwsOptions>() else {
                 return exec_err!(
                     "Given table options incompatible with the 's3' scheme"
                 );
@@ -409,7 +409,7 @@ pub(crate) async fn get_object_store(
             Arc::new(builder.build()?)
         }
         "oss" => {
-            let Some(options) = table_options.extensions.get::<AwsOptions>() else {
+            let Some(options) = table_options.extensions().get::<AwsOptions>() else {
                 return exec_err!(
                     "Given table options incompatible with the 'oss' scheme"
                 );
@@ -418,7 +418,7 @@ pub(crate) async fn get_object_store(
             Arc::new(builder.build()?)
         }
         "cos" => {
-            let Some(options) = table_options.extensions.get::<AwsOptions>() else {
+            let Some(options) = table_options.extensions().get::<AwsOptions>() else {
                 return exec_err!(
                     "Given table options incompatible with the 'cos' scheme"
                 );
@@ -427,7 +427,7 @@ pub(crate) async fn get_object_store(
             Arc::new(builder.build()?)
         }
         "gs" | "gcs" => {
-            let Some(options) = table_options.extensions.get::<GcpOptions>() else {
+            let Some(options) = table_options.extensions().get::<GcpOptions>() else {
                 return exec_err!(
                     "Given table options incompatible with the 'gs'/'gcs' scheme"
                 );
@@ -499,7 +499,7 @@ mod tests {
             ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
-            let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
+            let aws_options = table_options.extensions().get::<AwsOptions>().unwrap();
             let builder =
                 get_s3_object_store_builder(table_url.as_ref(), aws_options).await?;
             // get the actual configuration information, then assert_eq!
@@ -544,7 +544,7 @@ mod tests {
             ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
-            let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
+            let aws_options = table_options.extensions().get::<AwsOptions>().unwrap();
             let err = get_s3_object_store_builder(table_url.as_ref(), aws_options)
                 .await
                 .unwrap_err();
@@ -570,7 +570,7 @@ mod tests {
             ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
-            let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
+            let aws_options = table_options.extensions().get::<AwsOptions>().unwrap();
             // ensure this isn't an error
             get_s3_object_store_builder(table_url.as_ref(), aws_options).await?;
         } else {
@@ -598,7 +598,7 @@ mod tests {
             ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
-            let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
+            let aws_options = table_options.extensions().get::<AwsOptions>().unwrap();
             let builder = get_oss_object_store_builder(table_url.as_ref(), aws_options)?;
             // get the actual configuration information, then assert_eq!
             let config = [
@@ -635,7 +635,7 @@ mod tests {
             ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
-            let gcp_options = table_options.extensions.get::<GcpOptions>().unwrap();
+            let gcp_options = table_options.extensions().get::<GcpOptions>().unwrap();
             let builder = get_gcs_object_store_builder(table_url.as_ref(), gcp_options)?;
             // get the actual configuration information, then assert_eq!
             let config = [

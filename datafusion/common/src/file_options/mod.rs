@@ -31,7 +31,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::{
-        config::{ConfigFileType, TableOptions},
+        config::TableOptions,
         file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
         parsers::CompressionTypeVariant,
         Result,
@@ -74,12 +74,11 @@ mod tests {
         option_map.insert("format.bloom_filter_fpp".to_owned(), "0.123".to_owned());
         option_map.insert("format.bloom_filter_ndv".to_owned(), "123".to_owned());
 
-        let mut table_config = TableOptions::new();
-        table_config.set_config_format(ConfigFileType::PARQUET);
+        let mut table_config = TableOptions::new_parquet();
         table_config.alter_with_string_hash_map(&option_map)?;
-
+        let TableOptions::Parquet {options, ..} = table_config else { unreachable!() };
         let properties = WriterPropertiesBuilder::try_from(
-            &table_config.parquet.with_skip_arrow_metadata(true),
+            &options.with_skip_arrow_metadata(true),
         )?
         .build();
 
@@ -181,12 +180,12 @@ mod tests {
             "456".to_owned(),
         );
 
-        let mut table_config = TableOptions::new();
-        table_config.set_config_format(ConfigFileType::PARQUET);
+        let mut table_config = TableOptions::new_parquet();
         table_config.alter_with_string_hash_map(&option_map)?;
+        let TableOptions::Parquet {options, ..} = table_config else { unreachable!() };
 
         let properties = WriterPropertiesBuilder::try_from(
-            &table_config.parquet.with_skip_arrow_metadata(true),
+            &options.with_skip_arrow_metadata(true),
         )?
         .build();
 
@@ -286,11 +285,10 @@ mod tests {
         option_map.insert("format.compression".to_owned(), "gzip".to_owned());
         option_map.insert("format.delimiter".to_owned(), ";".to_owned());
 
-        let mut table_config = TableOptions::new();
-        table_config.set_config_format(ConfigFileType::CSV);
+        let mut table_config = TableOptions::new_csv();
         table_config.alter_with_string_hash_map(&option_map)?;
-
-        let csv_options = CsvWriterOptions::try_from(&table_config.csv)?;
+        let TableOptions::Csv {options, ..} = table_config else { unreachable!() };
+        let csv_options = CsvWriterOptions::try_from(&options)?;
 
         let builder = csv_options.writer_options;
         assert!(builder.header());
@@ -308,11 +306,18 @@ mod tests {
         let mut option_map: HashMap<String, String> = HashMap::new();
         option_map.insert("format.compression".to_owned(), "gzip".to_owned());
 
-        let mut table_config = TableOptions::new();
-        table_config.set_config_format(ConfigFileType::JSON);
+        // Start with a JSON-based TableOptions variant
+        let mut table_config = TableOptions::new_json();
+
+        // Apply the config changes
         table_config.alter_with_string_hash_map(&option_map)?;
 
-        let json_options = JsonWriterOptions::try_from(&table_config.json)?;
+        // Extract updated JsonOptions
+        let json_options = match &table_config {
+            TableOptions::Json { options, .. } => JsonWriterOptions::try_from(options)?,
+            _ => panic!("Expected TableOptions to be Json variant"),
+        };
+
         assert_eq!(json_options.compression, CompressionTypeVariant::GZIP);
 
         Ok(())

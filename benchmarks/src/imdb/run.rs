@@ -441,7 +441,7 @@ impl RunOpt {
                 "parquet" => {
                     let path = format!("{path}/{table}.parquet");
                     let format = ParquetFormat::default()
-                        .with_options(ctx.state().table_options().parquet.clone());
+                        .with_options(ctx.state().table_options().parquet_options_or_default());
                     (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
                 }
                 other => {

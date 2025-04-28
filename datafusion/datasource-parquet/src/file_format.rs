@@ -128,7 +128,7 @@ impl FileFormatFactory for ParquetFormatFactory {
                 let mut table_options = state.default_table_options();
                 table_options.set_config_format(ConfigFileType::PARQUET);
                 table_options.alter_with_string_hash_map(format_options)?;
-                table_options.parquet
+                table_options.parquet_options_or_default()
             }
             Some(parquet_options) => {
                 let mut parquet_options = parquet_options.clone();

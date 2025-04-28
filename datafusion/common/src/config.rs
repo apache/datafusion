@@ -1372,27 +1372,28 @@ pub enum ConfigFileType {
 /// Represents the configuration options available for handling different table formats within a data processing application.
 /// This struct encompasses options for various file formats including CSV, Parquet, and JSON, allowing for flexible configuration
 /// of parsing and writing behaviors specific to each format. Additionally, it supports extending functionality through custom extensions.
-#[derive(Debug, Clone, Default)]
-pub struct TableOptions {
-    /// Configuration options for CSV file handling. This includes settings like the delimiter,
-    /// quote character, and whether the first row is considered as headers.
-    pub csv: CsvOptions,
-
-    /// Configuration options for Parquet file handling. This includes settings for compression,
-    /// encoding, and other Parquet-specific file characteristics.
-    pub parquet: TableParquetOptions,
-
-    /// Configuration options for JSON file handling.
-    pub json: JsonOptions,
-
-    /// The current file format that the table operations should assume. This option allows
-    /// for dynamic switching between the supported file types (e.g., CSV, Parquet, JSON).
-    pub current_format: Option<ConfigFileType>,
-
-    /// Optional extensions that can be used to extend or customize the behavior of the table
-    /// options. Extensions can be registered using `Extensions::insert` and might include
-    /// custom file handling logic, additional configuration parameters, or other enhancements.
-    pub extensions: Extensions,
+#[derive(Debug, Clone)]
+pub enum TableOptions {
+    Csv {
+        options: CsvOptions,
+        extensions: Extensions,
+    },
+    #[cfg(feature = "parquet")]
+    Parquet {
+        options: TableParquetOptions,
+        extensions: Extensions,
+    },
+    Json {
+        options: JsonOptions,
+        extensions: Extensions,
+    },
+    // When no file format is set yet, just storing the session table options
+    NoTypeSpecified {
+        csv_options: CsvOptions,
+        json_options: JsonOptions,
+        parquet_options: TableParquetOptions,
+        extensions: Extensions
+    }
 }
 
 impl ConfigField for TableOptions {
@@ -1402,17 +1403,16 @@ impl ConfigField for TableOptions {
     /// If a format is selected, it visits only the settings relevant to that format. Otherwise,
     /// it visits all available format settings.
     fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
-        if let Some(file_type) = &self.current_format {
-            match file_type {
-                #[cfg(feature = "parquet")]
-                ConfigFileType::PARQUET => self.parquet.visit(v, "format", ""),
-                ConfigFileType::CSV => self.csv.visit(v, "format", ""),
-                ConfigFileType::JSON => self.json.visit(v, "format", ""),
-            }
-        } else {
-            self.csv.visit(v, "csv", "");
-            self.parquet.visit(v, "parquet", "");
-            self.json.visit(v, "json", "");
+        match self {
+            #[cfg(feature = "parquet")]
+            TableOptions::Parquet { options, .. } => {options.visit(v, "format", "");},
+            TableOptions::Csv { options, .. } => {options.visit(v, "format", "");},
+            TableOptions::Json { options, .. } => {options.visit(v, "format", "");},
+            TableOptions::NoTypeSpecified {csv_options, json_options, parquet_options, ..} => {
+                csv_options.visit(v, "csv", "");
+                parquet_options.visit(v, "parquet", "");
+                json_options.visit(v, "json", "");
+            },
         }
     }
 
@@ -1435,30 +1435,100 @@ impl ConfigField for TableOptions {
         // Extensions are handled in the public `ConfigOptions::set`
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
         match key {
-            "format" => {
-                let Some(format) = &self.current_format else {
-                    return _config_err!("Specify a format for TableOptions");
-                };
-                match format {
-                    #[cfg(feature = "parquet")]
-                    ConfigFileType::PARQUET => self.parquet.set(rem, value),
-                    ConfigFileType::CSV => self.csv.set(rem, value),
-                    ConfigFileType::JSON => self.json.set(rem, value),
-                }
-            }
+            "format" => match self {
+                #[cfg(feature = "parquet")]
+                Self::Parquet { options, .. } => options.set(rem, value),
+                Self::Csv { options, .. } => options.set(rem, value),
+                Self::Json { options, .. } => options.set(rem, value),
+                Self::NoTypeSpecified {..} => { return _config_err!("Specify a format for TableOptions") },
+            },
             _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
         }
     }
 }
 
+impl Default for TableOptions {
+    fn default() -> Self {
+        Self::NoTypeSpecified {
+            extensions: Extensions::default(),
+            csv_options: CsvOptions::default(),
+            json_options: JsonOptions::default(),
+            parquet_options: TableParquetOptions::default(),
+        }
+    }
+}
+
 impl TableOptions {
-    /// Constructs a new instance of `TableOptions` with default settings.
+    /// Constructs a new instance of `TableOptions` with JSON file type and default settings.
     ///
     /// # Returns
     ///
     /// A new `TableOptions` instance with default configuration values.
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new_json() -> Self {
+        Self::Json {
+            options: Default::default(),
+            extensions: Default::default(),
+        }
+    }
+
+    /// Constructs a new instance of `TableOptions` with CSV file type and default settings.
+    ///
+    /// # Returns
+    ///
+    /// A new `TableOptions` instance with default configuration values.
+    pub fn new_csv() -> Self {
+        Self::Csv {
+            options: Default::default(),
+            extensions: Default::default(),
+        }
+    }
+
+    /// Constructs a new instance of `TableOptions` with Parquet file type and default settings.
+    ///
+    /// # Returns
+    ///
+    /// A new `TableOptions` instance with default configuration values.
+    #[cfg(feature = "parquet")]
+    pub fn new_parquet() -> Self {
+        Self::Parquet {
+            options: Default::default(),
+            extensions: Default::default(),
+        }
+    }
+
+    pub fn csv_options_or_default(&self) -> CsvOptions {
+        match self {
+            TableOptions::Csv { options, .. } => options.clone(),
+            TableOptions::NoTypeSpecified {csv_options, ..} => csv_options.clone(),
+            _ => CsvOptions::default(),
+        }
+    }
+
+    #[cfg(feature = "parquet")]
+    pub fn parquet_options_or_default(&self) -> TableParquetOptions {
+        match self {
+            TableOptions::Parquet { options, .. } => options.clone(),
+            TableOptions::NoTypeSpecified {parquet_options, ..} => parquet_options.clone(),
+            _ => TableParquetOptions::default(),
+        }
+    }
+
+    pub fn json_options_or_default(&self) -> JsonOptions {
+        match self {
+            TableOptions::Json { options, .. } => options.clone(),
+            TableOptions::NoTypeSpecified {json_options, ..} => json_options.clone(),
+            _ => JsonOptions::default(),
+        }
+    }
+
+    pub fn extensions(&self) -> &Extensions {
+        match self {
+            TableOptions::Csv { extensions, .. } => {extensions}
+            #[cfg(feature = "parquet")]
+            TableOptions::Parquet { extensions, .. } => {extensions}
+            TableOptions::Json { extensions, .. } => {extensions},
+            TableOptions::NoTypeSpecified {extensions, ..} => { extensions },
+        }
     }
 
     /// Creates a new `TableOptions` instance initialized with settings from a given session config.
@@ -1486,9 +1556,28 @@ impl TableOptions {
     /// A new `TableOptions` instance with updated settings from the session config.
     #[must_use = "this method returns a new instance"]
     pub fn combine_with_session_config(&self, config: &ConfigOptions) -> Self {
-        let mut clone = self.clone();
-        clone.parquet.global = config.execution.parquet.clone();
-        clone
+        match self {
+            #[cfg(feature = "parquet")]
+            TableOptions::Parquet {options, extensions} => {
+                let mut updated_options = options.clone();
+                updated_options.global = config.execution.parquet.clone();
+                TableOptions::Parquet {
+                    options: updated_options,
+                    extensions: extensions.clone(),
+                }
+            },
+            TableOptions::NoTypeSpecified {parquet_options, csv_options, json_options, extensions} => {
+                let mut updated_options = parquet_options.clone();
+                updated_options.global = config.execution.parquet.clone();
+                TableOptions::NoTypeSpecified {
+                    parquet_options: updated_options,
+                    extensions: extensions.clone(),
+                    csv_options: csv_options.clone(),
+                    json_options: json_options.clone(),
+                }
+            }
+            _ => {self.clone()}
+        }
     }
 
     /// Sets the file format for the table.
@@ -1497,7 +1586,25 @@ impl TableOptions {
     ///
     /// * `format`: The file format to use (e.g., CSV, Parquet).
     pub fn set_config_format(&mut self, format: ConfigFileType) {
-        self.current_format = Some(format);
+        if !matches!(self, Self::NoTypeSpecified {..}) {
+            return;
+        }
+        let new = match format {
+            ConfigFileType::CSV => {
+                let options = self.csv_options_or_default();
+                TableOptions::new_csv().with_csv_options(options).with_extensions(self.extensions().clone())
+            }
+            #[cfg(feature = "parquet")]
+            ConfigFileType::PARQUET => {
+                let options = self.parquet_options_or_default();
+                TableOptions::new_parquet().with_parquet_options(options).with_extensions(self.extensions().clone())
+            }
+            ConfigFileType::JSON => {
+                let options = self.json_options_or_default();
+                TableOptions::new_json().with_json_options(options).with_extensions(self.extensions().clone())
+            }
+        };
+        *self = new;
     }
 
     /// Sets the extensions for this `TableOptions` instance.
@@ -1509,9 +1616,109 @@ impl TableOptions {
     /// # Returns
     ///
     /// A new `TableOptions` instance with the specified extensions applied.
-    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
-        self.extensions = extensions;
-        self
+    pub fn with_extensions(self, extensions: Extensions) -> Self {
+        match self {
+            TableOptions::Csv { options, .. } => TableOptions::Csv {
+                options,
+                extensions,
+            },
+            #[cfg(feature = "parquet")]
+            TableOptions::Parquet { options, .. } => TableOptions::Parquet {
+                options,
+                extensions,
+            },
+            TableOptions::Json { options, .. } => TableOptions::Json {
+                options,
+                extensions,
+            },
+            TableOptions::NoTypeSpecified { csv_options, json_options, parquet_options, .. } => TableOptions::NoTypeSpecified {
+                extensions,
+                csv_options,
+                json_options,
+                parquet_options
+            },
+        }
+    }
+
+    /// Sets the extensions for this `TableOptions` instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `options`: The `TableParquetOptions` instance to set.
+    ///
+    /// # Returns
+    ///
+    /// A new `TableOptions` instance with the specified parquet options applied, if applied on another type has no effect
+    pub fn with_parquet_options(self, options: TableParquetOptions) -> Self {
+        match self {
+            TableOptions::Csv { .. } => self,
+            #[cfg(feature = "parquet")]
+            TableOptions::Parquet { extensions, .. } => TableOptions::Parquet {
+                options,
+                extensions,
+            },
+            TableOptions::Json { .. } => self,
+            TableOptions::NoTypeSpecified { extensions, csv_options, json_options, .. } => TableOptions::NoTypeSpecified {
+                extensions,
+                csv_options,
+                json_options,
+                parquet_options: options
+            },
+        }
+    }
+
+    /// Sets the extensions for this `TableOptions` instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `options`: The `CsvOptions` instance to set.
+    ///
+    /// # Returns
+    ///
+    /// A new `TableOptions` instance with the specified csv options applied, if applied on another type has no effect
+    pub fn with_csv_options(self, options: CsvOptions) -> Self {
+        match self {
+            TableOptions::Csv { extensions, .. } => TableOptions::Csv {
+                options,
+                extensions
+            },
+            #[cfg(feature = "parquet")]
+            TableOptions::Parquet { .. } => self,
+            TableOptions::Json { .. } => self,
+            TableOptions::NoTypeSpecified { extensions, parquet_options, json_options, .. } => TableOptions::NoTypeSpecified {
+                extensions,
+                csv_options: options,
+                json_options,
+                parquet_options
+            },
+        }
+    }
+
+    /// Sets the extensions for this `TableOptions` instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `options`: The `JsonOptions` instance to set.
+    ///
+    /// # Returns
+    ///
+    /// A new `TableOptions` instance with the specified json options applied, if applied on another type has no effect
+    pub fn with_json_options(self, options: JsonOptions) -> Self {
+        match self {
+            TableOptions::Csv { .. } => self,
+            #[cfg(feature = "parquet")]
+            TableOptions::Parquet { .. } => self,
+            TableOptions::Json { extensions, .. } => TableOptions::Json {
+                extensions,
+                options
+            },
+            TableOptions::NoTypeSpecified {extensions, parquet_options, csv_options, .. } => TableOptions::NoTypeSpecified {
+                extensions,
+                json_options: options,
+                csv_options,
+                parquet_options
+            },
+        }
     }
 
     /// Sets a specific configuration option.
@@ -1529,18 +1736,45 @@ impl TableOptions {
             return _config_err!("could not find config namespace for key \"{key}\"");
         };
 
-        if prefix == "format" {
-            return ConfigField::set(self, key, value);
+        match prefix {
+            "format" => ConfigField::set(self, key, value),
+            "execution" => Ok(()),
+            _ => match self {
+                TableOptions::Csv { extensions, .. } => {
+                    let Some(e) = extensions.0.get_mut(prefix) else {
+                        return _config_err!(
+                            "Could not find config namespace \"{prefix}\""
+                        );
+                    };
+                    e.0.set(key, value)
+                },
+                #[cfg(feature = "parquet")]
+                TableOptions::Parquet { extensions, .. } => {
+                    let Some(e) = extensions.0.get_mut(prefix) else {
+                        return _config_err!(
+                            "Could not find config namespace \"{prefix}\""
+                        );
+                    };
+                    e.0.set(key, value)
+                },
+                TableOptions::Json { extensions, .. } => {
+                    let Some(e) = extensions.0.get_mut(prefix) else {
+                        return _config_err!(
+                            "Could not find config namespace \"{prefix}\""
+                        );
+                    };
+                    e.0.set(key, value)
+                },
+                TableOptions::NoTypeSpecified { extensions, .. } => {
+                    let Some(e) = extensions.0.get_mut(prefix) else {
+                        return _config_err!(
+                            "Could not find config namespace \"{prefix}\""
+                        );
+                    };
+                    e.0.set(key, value)
+                },
+            },
         }
-
-        if prefix == "execution" {
-            return Ok(());
-        }
-
-        let Some(e) = self.extensions.0.get_mut(prefix) else {
-            return _config_err!("Could not find config namespace \"{prefix}\"");
-        };
-        e.0.set(key, value)
     }
 
     /// Initializes a new `TableOptions` from a hash map of string settings.
@@ -1580,6 +1814,22 @@ impl TableOptions {
         Ok(())
     }
 
+    fn visit_format(&self, visitor: &mut impl Visit) {
+        match self {
+            TableOptions::Csv { options, .. } => {
+                options.visit(visitor, "format", "")
+            }
+            #[cfg(feature = "parquet")]
+            TableOptions::Parquet { options, .. } => {
+                options.visit(visitor, "format", "")
+            }
+            TableOptions::Json { options, .. } => {
+                options.visit(visitor, "format", "")
+            }
+            TableOptions::NoTypeSpecified { .. } => {}
+        }
+    }
+
     /// Retrieves all configuration entries from this `TableOptions`.
     ///
     /// # Returns
@@ -1612,10 +1862,27 @@ impl TableOptions {
         }
 
         let mut v = Visitor(vec![]);
-        self.visit(&mut v, "format", "");
-
-        v.0.extend(self.extensions.0.values().flat_map(|e| e.0.entries()));
+        self.visit_format(&mut v);
+        v.0.extend(self.extensions().0.values().flat_map(|e| e.0.entries()));
         v.0
+    }
+
+    pub fn insert_extension<T: ConfigExtension>(&mut self, extension: T) {
+        match self {
+            TableOptions::Csv {extensions, .. } => {
+                extensions.insert(extension)
+            }
+            #[cfg(feature = "parquet")]
+            TableOptions::Parquet {extensions, .. } => {
+                extensions.insert(extension)
+            }
+            TableOptions::Json {extensions, .. } => {
+                extensions.insert(extension)
+            }
+            TableOptions::NoTypeSpecified {extensions, .. } => {
+                extensions.insert(extension)
+            }
+        }
     }
 }
 
@@ -2030,7 +2297,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::config::{
-        ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
+        ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions,
         Extensions, TableOptions,
     };
 
@@ -2080,8 +2347,8 @@ mod tests {
     fn create_table_config() {
         let mut extension = Extensions::new();
         extension.insert(TestExtensionConfig::default());
-        let table_config = TableOptions::new().with_extensions(extension);
-        let kafka_config = table_config.extensions.get::<TestExtensionConfig>();
+        let table_config = TableOptions::default().with_extensions(extension);
+        let kafka_config = table_config.extensions().get::<TestExtensionConfig>();
         assert!(kafka_config.is_some())
     }
 
@@ -2089,13 +2356,12 @@ mod tests {
     fn alter_test_extension_config() {
         let mut extension = Extensions::new();
         extension.insert(TestExtensionConfig::default());
-        let mut table_config = TableOptions::new().with_extensions(extension);
-        table_config.set_config_format(ConfigFileType::CSV);
+        let mut table_config = TableOptions::new_csv().with_extensions(extension);
         table_config.set("format.delimiter", ";").unwrap();
-        assert_eq!(table_config.csv.delimiter, b';');
         table_config.set("test.bootstrap.servers", "asd").unwrap();
-        let kafka_config = table_config
-            .extensions
+        let TableOptions::Csv {options, extensions} = table_config else { unreachable!() };
+        assert_eq!(options.delimiter, b';');
+        let kafka_config = extensions
             .get::<TestExtensionConfig>()
             .unwrap();
         assert_eq!(
@@ -2106,14 +2372,15 @@ mod tests {
 
     #[test]
     fn csv_u8_table_options() {
-        let mut table_config = TableOptions::new();
-        table_config.set_config_format(ConfigFileType::CSV);
+        let mut table_config = TableOptions::new_csv();
         table_config.set("format.delimiter", ";").unwrap();
-        assert_eq!(table_config.csv.delimiter as char, ';');
         table_config.set("format.escape", "\"").unwrap();
-        assert_eq!(table_config.csv.escape.unwrap() as char, '"');
+        let options = table_config.csv_options_or_default();
+        assert_eq!(options.delimiter as char, ';');
+        assert_eq!(options.escape.unwrap() as char, '"');
         table_config.set("format.escape", "\'").unwrap();
-        assert_eq!(table_config.csv.escape.unwrap() as char, '\'');
+        let options = table_config.csv_options_or_default();
+        assert_eq!(options.escape.unwrap() as char, '\'');
     }
 
     #[test]
@@ -2150,13 +2417,13 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_options() {
-        let mut table_config = TableOptions::new();
-        table_config.set_config_format(ConfigFileType::PARQUET);
+        let mut table_config = TableOptions::new_parquet();
         table_config
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
+        let options = table_config.parquet_options_or_default();
         assert_eq!(
-            table_config.parquet.column_specific_options["col1"].bloom_filter_enabled,
+            options.column_specific_options["col1"].bloom_filter_enabled,
             Some(true)
         );
     }
@@ -2164,8 +2431,7 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_options_config_entry() {
-        let mut table_config = TableOptions::new();
-        table_config.set_config_format(ConfigFileType::PARQUET);
+        let mut table_config = TableOptions::new_parquet();
         table_config
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
@@ -2178,8 +2444,7 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_options_config_metadata_entry() {
-        let mut table_config = TableOptions::new();
-        table_config.set_config_format(ConfigFileType::PARQUET);
+        let mut table_config = TableOptions::new_parquet();
         table_config.set("format.metadata::key1", "").unwrap();
         table_config.set("format.metadata::key2", "value2").unwrap();
         table_config
@@ -2189,7 +2454,7 @@ mod tests {
             .set("format.metadata::key4", "value with special chars :: :")
             .unwrap();
 
-        let parsed_metadata = table_config.parquet.key_value_metadata.clone();
+        let parsed_metadata = table_config.parquet_options_or_default().key_value_metadata.clone();
         assert_eq!(parsed_metadata.get("should not exist1"), None);
         assert_eq!(parsed_metadata.get("key1"), Some(&Some("".into())));
         assert_eq!(parsed_metadata.get("key2"), Some(&Some("value2".into())));
@@ -2205,7 +2470,7 @@ mod tests {
         // duplicate keys are overwritten
         table_config.set("format.metadata::key_dupe", "A").unwrap();
         table_config.set("format.metadata::key_dupe", "B").unwrap();
-        let parsed_metadata = table_config.parquet.key_value_metadata;
+        let parsed_metadata = table_config.parquet_options_or_default().key_value_metadata;
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
     }
 }

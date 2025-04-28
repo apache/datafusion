@@ -184,12 +184,12 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
                 match scheme {
                     "s3" | "oss" | "cos" => {
                         if let Some(table_options) = builder.table_options() {
-                            table_options.extensions.insert(AwsOptions::default())
+                            table_options.insert_extension(AwsOptions::default())
                         }
                     }
                     "gs" | "gcs" => {
                         if let Some(table_options) = builder.table_options() {
-                            table_options.extensions.insert(GcpOptions::default())
+                            table_options.insert_extension(GcpOptions::default())
                         }
                     }
                     _ => {}
