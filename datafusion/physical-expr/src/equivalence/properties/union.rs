@@ -77,7 +77,7 @@ fn calculate_union_binary(
 
     let mut eq_properties = EquivalenceProperties::new(lhs.schema);
     eq_properties.add_constants(constants);
-    eq_properties.add_new_orderings(orderings);
+    eq_properties.add_orderings(orderings);
     Ok(eq_properties)
 }
 

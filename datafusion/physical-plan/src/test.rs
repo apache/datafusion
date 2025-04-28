@@ -40,10 +40,12 @@ use datafusion_common::{
     config::ConfigOptions, internal_err, project_schema, Result, Statistics,
 };
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{
-    equivalence::ProjectionMapping, expressions::Column, utils::collect_columns,
-    EquivalenceProperties, LexOrdering, Partitioning,
+use datafusion_physical_expr::equivalence::{
+    OrderingEquivalenceClass, ProjectionMapping,
 };
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
 
 use futures::{Future, FutureExt};
 
@@ -329,10 +331,10 @@ impl TestMemoryExec {
                 Arc::clone(&base_schema),
                 sort_information,
             );
-            sort_information = base_eqp
-                .project(&projection_mapping, Arc::clone(&self.projected_schema))
-                .into_oeq_class()
-                .into();
+            let proj_eqp =
+                base_eqp.project(&projection_mapping, Arc::clone(&self.projected_schema));
+            let oeq_class: OrderingEquivalenceClass = proj_eqp.into();
+            sort_information = oeq_class.into();
         }
 
         self.sort_information = sort_information;

@@ -159,7 +159,7 @@ impl SortPreservingMergeExec {
     ) -> PlanProperties {
         let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_per_partition_constants();
-        eq_properties.add_new_ordering(ordering);
+        eq_properties.add_ordering(ordering);
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
@@ -1307,7 +1307,7 @@ mod tests {
                 .map(|(i, f)| Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>)
                 .collect::<Vec<_>>();
             let mut eq_properties = EquivalenceProperties::new(schema);
-            eq_properties.add_new_ordering(
+            eq_properties.add_ordering(
                 columns
                     .iter()
                     .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),

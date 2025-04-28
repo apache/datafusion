@@ -467,7 +467,7 @@ mod tests {
 
         let mut input_properties = EquivalenceProperties::new(Arc::clone(&input_schema));
         // add equivalent ordering [a, b, c, d]
-        input_properties.add_new_ordering([
+        input_properties.add_ordering([
             parse_sort_expr("a", &input_schema),
             parse_sort_expr("b", &input_schema),
             parse_sort_expr("c", &input_schema),
@@ -475,7 +475,7 @@ mod tests {
         ]);
 
         // add equivalent ordering [a, c, b, d]
-        input_properties.add_new_ordering([
+        input_properties.add_ordering([
             parse_sort_expr("a", &input_schema),
             parse_sort_expr("c", &input_schema),
             parse_sort_expr("b", &input_schema), // NB b and c are swapped
@@ -513,13 +513,13 @@ mod tests {
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
 
         eq_properties.add_equal_conditions(col_a_expr, Arc::clone(&col_c_expr))?;
-        eq_properties.add_new_orderings([
+        eq_properties.add_orderings([
             vec![PhysicalSortExpr::new_default(Arc::clone(&col_b_expr))],
             vec![PhysicalSortExpr::new_default(Arc::clone(&col_c_expr))],
         ]);
 
         let mut expected_eqs = EquivalenceProperties::new(Arc::new(schema));
-        expected_eqs.add_new_orderings([
+        expected_eqs.add_orderings([
             vec![PhysicalSortExpr::new_default(Arc::clone(&col_b_expr))],
             vec![PhysicalSortExpr::new_default(Arc::clone(&col_c_expr))],
         ]);
@@ -544,7 +544,7 @@ mod tests {
         let col_b = &col("b", &schema)?;
         let required_columns = [Arc::clone(col_b), Arc::clone(col_a)];
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
-        eq_properties.add_new_ordering([
+        eq_properties.add_ordering([
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
                 options: sort_options_not,
@@ -579,7 +579,7 @@ mod tests {
         let col_b = &col("b", &schema)?;
         let required_columns = [Arc::clone(col_b), Arc::clone(col_a)];
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
-        eq_properties.add_new_orderings([
+        eq_properties.add_orderings([
             vec![PhysicalSortExpr {
                 expr: Arc::new(Column::new("c", 2)),
                 options: sort_options,
@@ -623,7 +623,7 @@ mod tests {
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
 
         // not satisfied orders
-        eq_properties.add_new_ordering([
+        eq_properties.add_ordering([
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
                 options: sort_options_not,
@@ -664,7 +664,7 @@ mod tests {
         // b=a (e.g they are aliases)
         eq_properties.add_equal_conditions(Arc::clone(col_b), Arc::clone(col_a))?;
         // [b ASC], [d ASC]
-        eq_properties.add_new_orderings([
+        eq_properties.add_orderings([
             vec![PhysicalSortExpr {
                 expr: Arc::clone(col_b),
                 options: option_asc,
@@ -747,7 +747,7 @@ mod tests {
             nulls_first: true,
         };
         // [d ASC, h DESC] also satisfies schema.
-        eq_properties.add_new_ordering([
+        eq_properties.add_ordering([
             PhysicalSortExpr {
                 expr: Arc::clone(col_d),
                 options: option_asc,
@@ -1108,7 +1108,7 @@ mod tests {
         // Assume existing ordering is [c ASC, a ASC, b ASC]
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
-        eq_properties.add_new_ordering([
+        eq_properties.add_ordering([
             PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
@@ -1162,7 +1162,7 @@ mod tests {
         ]
         .into();
 
-        eq_properties.add_new_ordering(initial_ordering.clone());
+        eq_properties.add_ordering(initial_ordering.clone());
 
         // Add equality condition c = a * b
         eq_properties.add_equal_conditions(col_c, a_times_b)?;
@@ -1198,7 +1198,7 @@ mod tests {
         // Assume existing ordering is [concat(a, b) ASC, a ASC, b ASC]
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
-        eq_properties.add_new_ordering([
+        eq_properties.add_ordering([
             PhysicalSortExpr::new_default(Arc::clone(&a_concat_b)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
@@ -1301,7 +1301,7 @@ mod tests {
         };
 
         // Initial ordering: [a ASC, b DESC, c ASC]
-        eq_properties.add_new_ordering([
+        eq_properties.add_ordering([
             PhysicalSortExpr {
                 expr: Arc::clone(&col_a),
                 options: asc,
@@ -1353,7 +1353,7 @@ mod tests {
         let asc = SortOptions::default();
 
         // Initial ordering: [a ASC, c ASC]
-        eq_properties.add_new_ordering([
+        eq_properties.add_ordering([
             PhysicalSortExpr {
                 expr: Arc::clone(&col_a),
                 options: asc,
@@ -1401,7 +1401,7 @@ mod tests {
         };
 
         // Initial ordering: [a ASC, b DESC]
-        eq_properties.add_new_ordering([
+        eq_properties.add_ordering([
             PhysicalSortExpr::new(Arc::clone(&col_a), asc),
             PhysicalSortExpr::new(Arc::clone(&col_b), desc),
         ]);
@@ -1439,7 +1439,7 @@ mod tests {
         eq_properties.add_equal_conditions(Arc::clone(&col_b), Arc::clone(&col_d))?;
 
         // Orderings: [d ASC, a ASC], [e ASC]
-        eq_properties.add_new_orderings([
+        eq_properties.add_orderings([
             vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(&col_d),
@@ -1625,7 +1625,7 @@ mod tests {
                 expr: col(col_name, schema).unwrap(),
                 options: SortOptions::default(),
             });
-            eq_properties.add_new_ordering(base_ordering);
+            eq_properties.add_ordering(base_ordering);
 
             // Add constraints
             eq_properties =

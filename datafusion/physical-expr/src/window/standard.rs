@@ -282,7 +282,7 @@ pub(crate) fn add_new_ordering_expr_with_partition_by(
 ) {
     if partition_by.is_empty() {
         // In the absence of a PARTITION BY, ordering of `self.expr` is global:
-        eqp.add_new_ordering([expr]);
+        eqp.add_ordering([expr]);
     } else {
         // If we have a PARTITION BY, standard functions can not introduce
         // a global ordering unless the existing ordering is compatible
@@ -293,7 +293,7 @@ pub(crate) fn add_new_ordering_expr_with_partition_by(
         let (mut ordering, _) = eqp.find_longest_permutation(partition_by);
         if ordering.len() == partition_by.len() {
             ordering.push(expr);
-            eqp.add_new_ordering(ordering);
+            eqp.add_ordering(ordering);
         }
     }
 }

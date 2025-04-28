@@ -179,33 +179,27 @@ impl EquivalenceProperties {
         &self.oeq_class
     }
 
-    /// Return the inner OrderingEquivalenceClass, consuming self
-    pub fn into_oeq_class(self) -> OrderingEquivalenceClass {
-        self.oeq_class
-    }
-
     /// Returns a reference to the equivalence group within.
     pub fn eq_group(&self) -> &EquivalenceGroup {
         &self.eq_group
     }
 
-    /// Returns a reference to the constants within.
+    /// Returns a reference to the constraints within.
+    pub fn constraints(&self) -> &Constraints {
+        &self.constraints
+    }
+
+    /// Returns all the known constants expressions.
     pub fn constants(&self) -> Vec<ConstExpr> {
         self.eq_group
             .iter()
             .filter_map(|c| {
-                c.canonical_expr().cloned().and_then(|expr| {
-                    c.constant
-                        .as_ref()
-                        .map(|across| ConstExpr::new(expr, across.clone()))
+                c.constant.as_ref().and_then(|across| {
+                    c.canonical_expr()
+                        .map(|expr| ConstExpr::new(Arc::clone(expr), across.clone()))
                 })
             })
             .collect()
-    }
-
-    /// Returns a reference to the constraints within.
-    pub fn constraints(&self) -> &Constraints {
-        &self.constraints
     }
 
     /// Returns the output ordering of the properties.
@@ -252,26 +246,23 @@ impl EquivalenceProperties {
         self.eq_group.clear_per_partition_constants();
     }
 
-    /// Extends this `EquivalenceProperties` by adding the orderings inside the
-    /// ordering equivalence class `other`.
-    pub fn add_ordering_equivalence_class(&mut self, other: OrderingEquivalenceClass) {
+    /// Extends this `EquivalenceProperties` by adding the orderings inside
+    /// collection `other`.
+    pub fn extend_orderings(&mut self, other: impl IntoIterator<Item = LexOrdering>) {
         self.oeq_class.extend(other);
     }
 
     /// Adds new orderings into the existing ordering equivalence class.
-    pub fn add_new_orderings(
+    pub fn add_orderings(
         &mut self,
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) {
-        self.oeq_class.add_new_orderings(orderings);
+        self.oeq_class.add_orderings(orderings);
     }
 
     /// Adds a single ordering to the existing ordering equivalence class.
-    pub fn add_new_ordering(
-        &mut self,
-        ordering: impl IntoIterator<Item = PhysicalSortExpr>,
-    ) {
-        self.add_new_orderings(std::iter::once(ordering));
+    pub fn add_ordering(&mut self, ordering: impl IntoIterator<Item = PhysicalSortExpr>) {
+        self.add_orderings(std::iter::once(ordering));
     }
 
     /// Incorporates the given equivalence group to into the existing
@@ -371,7 +362,7 @@ impl EquivalenceProperties {
             }
         }
 
-        self.oeq_class.add_new_orderings(new_orderings);
+        self.oeq_class.add_orderings(new_orderings);
         Ok(())
     }
 
@@ -1243,6 +1234,12 @@ impl EquivalenceProperties {
         self.eq_group = EquivalenceGroup::new(eq_classes);
         self.oeq_class = new_orderings.into();
         Ok(self)
+    }
+}
+
+impl From<EquivalenceProperties> for OrderingEquivalenceClass {
+    fn from(eq_properties: EquivalenceProperties) -> Self {
+        eq_properties.oeq_class
     }
 }
 

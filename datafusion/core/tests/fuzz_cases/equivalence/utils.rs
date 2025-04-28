@@ -120,7 +120,7 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
                     options: options_asc,
                 });
 
-        eq_properties.add_new_ordering(ordering);
+        eq_properties.add_ordering(ordering);
     }
 
     Ok((test_schema, eq_properties))
@@ -345,7 +345,7 @@ pub fn create_test_params() -> Result<(SchemaRef, EquivalenceProperties)> {
         ],
     ];
     let orderings = convert_to_orderings(&orderings);
-    eq_properties.add_new_orderings(orderings);
+    eq_properties.add_orderings(orderings);
     Ok((test_schema, eq_properties))
 }
 

@@ -852,7 +852,7 @@ mod tests {
             )));
 
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
-            union_expected_eq.add_new_orderings(union_expected_orderings);
+            union_expected_eq.add_orderings(union_expected_orderings);
 
             let union = UnionExec::new(vec![child1, child2]);
             let union_eq_properties = union.properties().equivalence_properties();

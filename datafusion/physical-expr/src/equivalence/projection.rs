@@ -581,7 +581,7 @@ mod tests {
             let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
             let orderings = convert_to_orderings(&orderings);
-            eq_properties.add_new_orderings(orderings);
+            eq_properties.add_orderings(orderings);
 
             let proj_exprs = proj_exprs
                 .into_iter()
@@ -784,7 +784,7 @@ mod tests {
             let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
             let orderings = convert_to_orderings(orderings);
-            eq_properties.add_new_orderings(orderings);
+            eq_properties.add_orderings(orderings);
 
             let expected = convert_to_orderings(expected);
 
@@ -929,7 +929,7 @@ mod tests {
             }
 
             let orderings = convert_to_orderings(&orderings);
-            eq_properties.add_new_orderings(orderings);
+            eq_properties.add_orderings(orderings);
 
             let expected = convert_to_orderings(&expected);
 

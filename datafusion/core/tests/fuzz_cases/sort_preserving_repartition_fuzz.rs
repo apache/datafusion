@@ -104,7 +104,7 @@ mod sp_repartition_fuzz_tests {
                         options: options_asc,
                     });
 
-            eq_properties.add_new_ordering(ordering);
+            eq_properties.add_ordering(ordering);
         }
 
         Ok((test_schema, eq_properties))

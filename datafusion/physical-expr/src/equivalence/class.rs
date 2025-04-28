@@ -16,6 +16,7 @@
 // under the License.
 
 use std::fmt::Display;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
@@ -312,21 +313,6 @@ impl EquivalenceGroup {
         result
     }
 
-    /// Returns how many equivalence classes there are in this group.
-    pub fn len(&self) -> usize {
-        self.classes.len()
-    }
-
-    /// Checks whether this equivalence group is empty.
-    pub fn is_empty(&self) -> bool {
-        self.classes.is_empty()
-    }
-
-    /// Returns an iterator over the equivalence classes in this group.
-    pub fn iter(&self) -> impl Iterator<Item = &EquivalenceClass> {
-        self.classes.iter()
-    }
-
     /// Returns an iterator over the equivalence classes in this group.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut EquivalenceClass> {
         self.classes.iter_mut()
@@ -440,9 +426,9 @@ impl EquivalenceGroup {
 
     /// Removes redundant entries from this group.
     fn remove_redundant_entries(&mut self) {
-        // Remove duplicate entries from each equivalence class:
+        // First, remove trivial equivalence classes:
         self.classes.retain(|cls| !cls.is_trivial());
-        // Unify/bridge groups that have common expressions:
+        // Then, unify/bridge groups that have common expressions:
         self.bridge_classes()
     }
 
@@ -750,6 +736,14 @@ impl EquivalenceGroup {
             .into_iter()
             .zip(right_children)
             .all(|(left_child, right_child)| self.exprs_equal(left_child, right_child))
+    }
+}
+
+impl Deref for EquivalenceGroup {
+    type Target = [EquivalenceClass];
+
+    fn deref(&self) -> &Self::Target {
+        &self.classes
     }
 }
 

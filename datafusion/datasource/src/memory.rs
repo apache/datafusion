@@ -41,7 +41,9 @@ use datafusion_common::{
     internal_err, plan_err, project_schema, Constraints, Result, ScalarValue,
 };
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::equivalence::{
+    OrderingEquivalenceClass, ProjectionMapping,
+};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
@@ -706,10 +708,10 @@ impl MemorySourceConfig {
                 Arc::clone(&base_schema),
                 sort_information,
             );
-            sort_information = base_eqp
-                .project(&projection_mapping, Arc::clone(&self.projected_schema))
-                .into_oeq_class()
-                .into();
+            let proj_eqp =
+                base_eqp.project(&projection_mapping, Arc::clone(&self.projected_schema));
+            let oeq_class: OrderingEquivalenceClass = proj_eqp.into();
+            sort_information = oeq_class.into();
         }
 
         self.sort_information = sort_information;

@@ -308,10 +308,11 @@ fn require_top_ordering_helper(
     if children.len() != 1 {
         Ok((plan, false))
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        // In case of constant columns, output ordering of SortExec would give an empty set.
-        // Therefore; we check the sort expression field of the SortExec to assign the requirements.
+        // In case of constant columns, output ordering of the `SortExec` would
+        // be an empty set. Therefore; we check the sort expression field to
+        // assign the requirements.
         let req_ordering = sort_exec.expr();
-        let req_dist = sort_exec.required_input_distribution()[0].clone();
+        let req_dist = sort_exec.required_input_distribution().swap_remove(0);
         let reqs = OrderingRequirements::from(req_ordering.clone());
         Ok((
             Arc::new(OutputRequirementExec::new(plan, Some(reqs), req_dist)) as _,
@@ -328,11 +329,9 @@ fn require_top_ordering_helper(
             true,
         ))
     } else if plan.maintains_input_order()[0]
-        && (plan.required_input_ordering()[0].is_none()
-            || matches!(
-                plan.required_input_ordering()[0].clone().unwrap(),
-                OrderingRequirements::Soft(_)
-            ))
+        && (plan.required_input_ordering()[0]
+            .as_ref()
+            .is_none_or(|o| matches!(o, OrderingRequirements::Soft(_))))
     {
         // Keep searching for a `SortExec` as long as ordering is maintained,
         // and on-the-way operators do not themselves require an ordering.

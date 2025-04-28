@@ -654,7 +654,7 @@ impl AggregateExec {
             return false;
         }
         // ensure no ordering is required on the input
-        if let Some(requirement) = self.required_input_ordering()[0].clone() {
+        if let Some(requirement) = self.required_input_ordering().swap_remove(0) {
             return matches!(requirement, OrderingRequirements::Hard(_));
         }
         true
