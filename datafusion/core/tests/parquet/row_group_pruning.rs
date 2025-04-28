@@ -665,8 +665,8 @@ async fn prune_f64_lt() {
 
 #[tokio::test]
 async fn prune_f64_scalar_fun_and_gt() {
-    // TODO: because NaN could be present but not accounted for in the statistics, these
-    // expressions should not be pruned at present. When IEEE 754 total order is added to
+    // TODO: because NaN could be present but not accounted for in the statistics, this
+    // expression should not be pruned at present. When IEEE 754 total order is added to
     // the Parquet spec this can be revisited.
     // See https://github.com/apache/parquet-format/pull/221
 
