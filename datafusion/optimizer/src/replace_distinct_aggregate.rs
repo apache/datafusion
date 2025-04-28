@@ -217,7 +217,11 @@ mod tests {
             .distinct()?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @ "Projection: test.c\n  Aggregate: groupBy=[[test.c]], aggr=[[]]\n    TableScan: test")
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test.c
+          Aggregate: groupBy=[[test.c]], aggr=[[]]
+            TableScan: test
+        ")
     }
 
     #[test]
@@ -229,7 +233,11 @@ mod tests {
             .distinct()?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @ "Projection: test.a, test.b\n  Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n    TableScan: test")
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test.a, test.b
+          Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]
+            TableScan: test
+        ")
     }
 
     #[test]
@@ -240,7 +248,11 @@ mod tests {
             .distinct()?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @ "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  Projection: test.a, test.b\n    TableScan: test")
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]
+          Projection: test.a, test.b
+            TableScan: test
+        ")
     }
 
     #[test]
@@ -252,6 +264,11 @@ mod tests {
             .distinct()?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @ "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  Projection: test.a, test.b\n    Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[sum(test.c)]]\n      TableScan: test")
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]
+          Projection: test.a, test.b
+            Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[sum(test.c)]]
+              TableScan: test
+        ")
     }
 }
