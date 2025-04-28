@@ -545,6 +545,23 @@ impl Unparser<'_> {
                         false,
                     );
                 }
+
+                // If this distinct is the parent of a Union and we're in a query context,
+                // then we need to unparse as a `UNION` rather than a `UNION ALL`.
+                if let Distinct::All(input) = distinct {
+                    if matches!(input.as_ref(), LogicalPlan::Union(_)) {
+                        if let Some(query_mut) = query.as_mut() {
+                            query_mut.distinct_union();
+                            return self.select_to_sql_recursively(
+                                input.as_ref(),
+                                query,
+                                select,
+                                relation,
+                            );
+                        }
+                    }
+                }
+
                 let (select_distinct, input) = match distinct {
                     Distinct::All(input) => (ast::Distinct::Distinct, input.as_ref()),
                     Distinct::On(on) => {
@@ -829,6 +846,15 @@ impl Unparser<'_> {
                     return internal_err!("UNION operator requires at least 2 inputs");
                 }
 
+                let set_quantifier =
+                    if query.as_ref().is_some_and(|q| q.is_distinct_union()) {
+                        // Setting the SetQuantifier to None will unparse as a `UNION`
+                        // rather than a `UNION ALL`.
+                        ast::SetQuantifier::None
+                    } else {
+                        ast::SetQuantifier::All
+                    };
+
                 // Build the union expression tree bottom-up by reversing the order
                 // note that we are also swapping left and right inputs because of the rev
                 let union_expr = input_exprs
@@ -836,7 +862,7 @@ impl Unparser<'_> {
                     .rev()
                     .reduce(|a, b| SetExpr::SetOperation {
                         op: ast::SetOperator::Union,
-                        set_quantifier: ast::SetQuantifier::All,
+                        set_quantifier,
                         left: Box::new(b),
                         right: Box::new(a),
                     })

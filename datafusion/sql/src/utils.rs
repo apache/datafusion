@@ -158,20 +158,19 @@ fn check_column_satisfies_expr(
     purpose: CheckColumnsSatisfyExprsPurpose,
 ) -> Result<()> {
     if !columns.contains(expr) {
+        let diagnostic = Diagnostic::new_error(
+            purpose.diagnostic_message(expr),
+            expr.spans().and_then(|spans| spans.first()),
+        )
+        .with_help(format!("Either add '{expr}' to GROUP BY clause, or use an aggregare function like ANY_VALUE({expr})"), None);
+
         return plan_err!(
             "{}: While expanding wildcard, column \"{}\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"{}\" appears in the SELECT clause satisfies this requirement",
             purpose.message_prefix(),
             expr,
-            expr_vec_fmt!(columns)
-        )
-        .map_err(|err| {
-            let diagnostic = Diagnostic::new_error(
-                purpose.diagnostic_message(expr),
-                expr.spans().and_then(|spans| spans.first()),
-            )
-            .with_help(format!("Either add '{expr}' to GROUP BY clause, or use an aggregare function like ANY_VALUE({expr})"), None);
-            err.with_diagnostic(diagnostic)
-        });
+            expr_vec_fmt!(columns);
+            diagnostic=diagnostic
+        );
     }
     Ok(())
 }
