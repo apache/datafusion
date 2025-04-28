@@ -27,7 +27,7 @@ use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
 
 use arrow::buffer::OffsetBuffer;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::prelude::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
@@ -55,16 +55,16 @@ fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
 pub fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
-    Standard: Distribution<T::Native>,
+    StandardUniform: Distribution<T::Native>,
 {
     let mut rng = seedable_rng();
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
-                Some(rng.gen())
+                Some(rng.random())
             }
         })
         .collect()
@@ -114,24 +114,6 @@ where
         Arc::new(values),
         nulls_builder.finish(),
     )
-}
-
-fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
-where
-    T: ArrowPrimitiveType,
-    StandardUniform: Distribution<T::Native>,
-{
-    let mut rng = StdRng::seed_from_u64(42);
-
-    (0..size)
-        .map(|_| {
-            if rng.random::<f32>() < null_density {
-                None
-            } else {
-                Some(rng.random())
-            }
-        })
-        .collect()
 }
 
 fn array_agg_benchmark(c: &mut Criterion) {
