@@ -238,10 +238,11 @@ impl BatchPartitioner {
     where
         F: FnMut(usize, RecordBatch) -> Result<()>,
     {
-        self.partition_iter(vec![batch])?.try_for_each(|res| match res {
-            Ok((partition, batch)) => f(partition, batch),
-            Err(e) => Err(e),
-        })
+        self.partition_iter(vec![batch])?
+            .try_for_each(|res| match res {
+                Ok((partition, batch)) => f(partition, batch),
+                Err(e) => Err(e),
+            })
     }
 
     /// Partition the provided [`Vec<RecordBatch>`] into one or more partitioned [`RecordBatch`]
@@ -253,7 +254,11 @@ impl BatchPartitioner {
     ///
     /// The time spent repartitioning, not including time spent in `f` will be recorded
     /// to the [`metrics::Time`] provided on construction
-    pub fn partition_batches<F>(&mut self, batches: Vec<RecordBatch>, mut f: F) -> Result<()>
+    pub fn partition_batches<F>(
+        &mut self,
+        batches: Vec<RecordBatch>,
+        mut f: F,
+    ) -> Result<()>
     where
         F: FnMut(usize, RecordBatch) -> Result<()>,
     {
@@ -334,7 +339,7 @@ impl BatchPartitioner {
                             // Tracking time required for repartitioned batches construction
                             let _timer = partitioner_timer.timer();
                             let b: Vec<&RecordBatch> = batches.iter().collect();
-                            
+
                             // Produce batches based on indices
                             let batch = interleave_record_batch(&b, &indices)?;
                             Ok((partition, batch))
