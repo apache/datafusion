@@ -1658,6 +1658,8 @@ fn column_index_for_expr(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> Optio
         column_index_for_expr(cast.expr(), schema)
     } else if let Some(cast) = expr.as_any().downcast_ref::<phys_expr::TryCastExpr>() {
         column_index_for_expr(cast.expr(), schema)
+    } else if let Some(neg) = expr.as_any().downcast_ref::<phys_expr::NegativeExpr>() {
+        column_index_for_expr(neg.arg(), schema)
     } else {
         None
     }
