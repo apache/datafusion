@@ -574,22 +574,22 @@
      Removed Deprecated APIs
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#filescanconfig-filescanconfigbuilder">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       FileScanConfig
+      </span>
+     </code>
+     –&gt;
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       FileScanConfigBuilder
+      </span>
+     </code>
+    </a>
+   </li>
   </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#filescanconfig-filescanconfigbuilder">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     FileScanConfig
-    </span>
-   </code>
-   –&gt;
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     FileScanConfigBuilder
-    </span>
-   </code>
-  </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#datafusion-46-0-0">
@@ -794,9 +794,8 @@ previously or were hard to use correctly such as the multiple different
 <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::invoke*</span></code> APIs. See <a class="reference external" href="https://github.com/apache/datafusion/pull/15130">#15130</a>, <a class="reference external" href="https://github.com/apache/datafusion/pull/15123">#15123</a>, and <a class="reference external" href="https://github.com/apache/datafusion/pull/15027">#15027</a> for more
 details.</p>
 </section>
-</section>
 <section id="filescanconfig-filescanconfigbuilder">
-<h2><code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> –&gt; <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code><a class="headerlink" href="#filescanconfig-filescanconfigbuilder" title="Link to this heading">¶</a></h2>
+<h3><code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> –&gt; <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code><a class="headerlink" href="#filescanconfig-filescanconfigbuilder" title="Link to this heading">¶</a></h3>
 <p>Previously, <code class="docutils literal notranslate"><span class="pre">FileScanConfig::build()</span></code> directly created ExecutionPlans. In
 DataFusion 47.0.0 this has been changed to use <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code>. See
 <a class="reference external" href="https://github.com/apache/datafusion/pull/15352">#15352</a> for details.</p>
@@ -815,6 +814,7 @@ DataFusion 47.0.0 this has been changed to use <code class="docutils literal not
 <span class="kd">let</span><span class="w"> </span><span class="n">scan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataSourceExec</span><span class="p">::</span><span class="n">from_data_source</span><span class="p">(</span><span class="n">config</span><span class="p">);</span>
 </pre></div>
 </div>
+</section>
 </section>
 <section id="datafusion-46-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">46.0.0</span></code><a class="headerlink" href="#datafusion-46-0-0" title="Link to this heading">¶</a></h2>
