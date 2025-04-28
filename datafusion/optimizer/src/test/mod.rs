@@ -189,9 +189,9 @@ macro_rules! assert_optimized_plan_eq_snapshot {
         @ $expected:literal $(,)?
     ) => {{
     // Apply the rule once
-    let opt_context = crate::OptimizerContext::new().with_max_passes(1);
+    let opt_context = $crate::OptimizerContext::new().with_max_passes(1);
 
-    let optimizer = crate::Optimizer::with_rules(vec![Arc::clone(&$rule)]);
+    let optimizer = $crate::Optimizer::with_rules(vec![Arc::clone(&$rule)]);
     let optimized_plan = optimizer.optimize($plan, &opt_context, |_, _| {})?;
     insta::assert_snapshot!(optimized_plan, @ $expected);
 
