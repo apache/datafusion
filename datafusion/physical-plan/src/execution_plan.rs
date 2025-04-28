@@ -435,25 +435,18 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// (the default), not an error.
     /// If `partition` is `None`, it returns statistics for the entire plan.
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        match partition {
-            Some(idx) => {
-                // Validate partition index
-                let partition_count = self.properties().partitioning.partition_count();
-                if idx >= partition_count {
-                    return internal_err!(
-                        "Invalid partition index: {}, the partition count is {}",
-                        idx,
-                        partition_count
-                    );
-                }
-                // Default implementation: return unknown statistics for the specific partition
-                Ok(Statistics::new_unknown(&self.schema()))
-            }
-            None => {
-                // Return unknown statistics for the entire plan
-                Ok(Statistics::new_unknown(&self.schema()))
+        if let Some(idx) = partition {
+            // Validate partition index
+            let partition_count = self.properties().partitioning.partition_count();
+            if idx >= partition_count {
+                return internal_err!(
+                    "Invalid partition index: {}, the partition count is {}",
+                    idx,
+                    partition_count
+                );
             }
         }
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 
     /// Returns `true` if a limit can be safely pushed down through this

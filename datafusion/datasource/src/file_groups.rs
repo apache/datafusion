@@ -420,9 +420,14 @@ impl FileGroup {
         self.files.push(file);
     }
 
-    /// Get the statistics for this group
-    pub fn statistics_ref(&self) -> Option<&Statistics> {
-        self.statistics.as_deref()
+    /// Get the specific file statistics for the given index
+    /// If the index is None, return the `FileGroup` statistics
+    pub fn file_statistics(&self, index: Option<usize>) -> Option<&Statistics> {
+        if let Some(index) = index {
+            self.files.get(index).and_then(|f| f.statistics.as_deref())
+        } else {
+            self.statistics.as_deref()
+        }
     }
 
     /// Get the mutable reference to the statistics for this group

@@ -208,7 +208,7 @@ impl ExecutionPlan for DataSourceExec {
                 self.data_source.as_any().downcast_ref::<FileScanConfig>()
             {
                 if let Some(file_group) = file_config.file_groups.get(partition) {
-                    if let Some(stat) = file_group.statistics_ref() {
+                    if let Some(stat) = file_group.file_statistics(None) {
                         statistics = stat.clone();
                     }
                 }
