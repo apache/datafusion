@@ -195,7 +195,7 @@ macro_rules! assert_optimized_plan_eq_snapshot {
     let optimized_plan = optimizer.optimize($plan, &opt_context, |_, _| {})?;
     insta::assert_snapshot!(optimized_plan, @ $expected);
 
-    Ok(())
+    Ok::<(), datafusion_common::DataFusionError>(())
     }};
 }
 
@@ -228,6 +228,24 @@ pub fn assert_optimized_plan_with_rules(
     }
     Ok(())
 }
+
+// #[macro_export]
+// macro_rules! assert_optimized_plan_with_rules_snapshot {
+//     (
+//         $rule:expr,
+//         $plan:expr,
+//         @ $expected:literal,
+//         $eq:expr $(,)?
+//     ) => {{
+//         let optimized_plan = generate_optimized_plan_with_rules(rules, plan);
+//         if eq {
+//             assert_eq!(formatted_plan, expected);
+//         } else {
+//             assert_ne!(formatted_plan, expected);
+//         }
+//         Ok(())
+//     }};
+// }
 
 pub fn assert_optimized_plan_eq_display_indent(
     rule: Arc<dyn OptimizerRule + Send + Sync>,
