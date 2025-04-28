@@ -1594,7 +1594,8 @@ fn build_predicate_expression(
 
     // TODO(ets): this is rather parquet specific...still wonder if this should be done
     //            at the datasource level
-    let colidx = column_index_for_expr(&left).or(column_index_for_expr(&right));
+    let colidx =
+        column_index_for_expr(&left, schema).or(column_index_for_expr(&right, schema));
     if let Some(colidx) = colidx {
         let col_order = column_orderings[colidx];
 
@@ -1643,13 +1644,20 @@ fn build_predicate_expression(
 }
 
 // Find column index for the given expression. Expects either column or cast-like expressions.
-fn column_index_for_expr(expr: &Arc<dyn PhysicalExpr>) -> Option<usize> {
+fn column_index_for_expr(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> Option<usize> {
     if let Some(col) = expr.as_any().downcast_ref::<phys_expr::Column>() {
-        Some(col.index())
+        // Cannot always trust `col.index()` since the schema may be rewritten along the way.
+        let col_idx = schema.index_of(col.name());
+        // Sanity check that columns are still in the same order as the `ColumnOrder` array.
+        if col_idx.is_ok_and(|idx| idx == col.index()) {
+            Some(col.index())
+        } else {
+            None
+        }
     } else if let Some(cast) = expr.as_any().downcast_ref::<phys_expr::CastExpr>() {
-        column_index_for_expr(cast.expr())
+        column_index_for_expr(cast.expr(), schema)
     } else if let Some(cast) = expr.as_any().downcast_ref::<phys_expr::TryCastExpr>() {
-        column_index_for_expr(cast.expr())
+        column_index_for_expr(cast.expr(), schema)
     } else {
         None
     }
