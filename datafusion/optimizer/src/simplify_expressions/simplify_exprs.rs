@@ -123,10 +123,11 @@ impl SimplifyExpressions {
         let name_preserver = NamePreserver::new(&plan);
         let mut rewrite_expr = |expr: Expr| {
             let name = name_preserver.save(&expr);
-            let expr = simplifier.simplify(expr)?;
-            // TODO it would be nice to have a way to know if the expression was simplified
-            // or not. For now conservatively return Transformed::yes
-            Ok(Transformed::yes(name.restore(expr)))
+            let expr = simplifier.simplify_with_cycle_count_transformed(expr)?.0;
+            Ok(Transformed::new_transformed(
+                name.restore(expr.data),
+                expr.transformed,
+            ))
         };
 
         plan.map_expressions(|expr| {
