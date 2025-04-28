@@ -50,7 +50,7 @@ use datafusion_expr::{
     UserDefinedLogicalNode,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
-use std::sync::Arc;
+use std::{sync::Arc, vec};
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
 ///
@@ -309,12 +309,13 @@ impl Unparser<'_> {
         plan: &LogicalPlan,
         relation: &mut RelationBuilder,
         lateral: bool,
+        columns: Vec<Ident>,
     ) -> Result<()> {
-        if self.dialect.requires_derived_table_alias() {
+        if self.dialect.requires_derived_table_alias() || columns.len() > 0 {
             self.derive(
                 plan,
                 relation,
-                Some(self.new_table_alias(alias.to_string(), vec![])),
+                Some(self.new_table_alias(alias.to_string(), columns)),
                 lateral,
             )
         } else {
@@ -392,6 +393,18 @@ impl Unparser<'_> {
                     }
                 }
 
+                // If it's a unnest projection, we should provide the table column alias
+                // to provide a column name for the unnest relation.
+                let columns = if unnest_input_type.is_some() {
+                    p.expr
+                        .iter()
+                        .map(|e| {
+                            self.new_ident_quoted_if_needs(e.schema_name().to_string())
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                };
                 // Projection can be top-level plan for derived table
                 if select.already_projected() {
                     return self.derive_with_dialect_alias(
@@ -401,6 +414,7 @@ impl Unparser<'_> {
                         unnest_input_type
                             .filter(|t| matches!(t, UnnestInputType::OuterReference))
                             .is_some(),
+                        columns,
                     );
                 }
                 self.reconstruct_select_statement(plan, p, select)?;
@@ -434,6 +448,7 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
                 if let Some(fetch) = &limit.fetch {
@@ -472,6 +487,7 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
                 let Some(query_ref) = query else {
@@ -543,6 +559,7 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
 
@@ -833,6 +850,7 @@ impl Unparser<'_> {
                         plan,
                         relation,
                         false,
+                        vec![],
                     );
                 }
 
@@ -950,6 +968,7 @@ impl Unparser<'_> {
                         subquery.subquery.as_ref(),
                         relation,
                         true,
+                        vec![],
                     )
                 }
             }
