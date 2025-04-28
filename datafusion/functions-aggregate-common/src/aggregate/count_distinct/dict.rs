@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, BooleanArray};
 use arrow::downcast_dictionary_array;
-use datafusion_common::ScalarValue;
+use datafusion_common::DataFusionError;
+use datafusion_common::{arrow_datafusion_err, ScalarValue};
 use datafusion_expr_common::accumulator::Accumulator;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct DictionaryCountAccumulator {
@@ -39,12 +39,17 @@ impl Accumulator for DictionaryCountAccumulator {
             .map(|dict| {
                 downcast_dictionary_array! {
                     dict => {
-                        Arc::clone(dict.values())
+                        let buff: BooleanArray = dict.occupancy().into();
+                        arrow::compute::filter(
+                            dict.values(),
+                            &buff
+                        )
                     },
                     _ => unreachable!()
                 }
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| arrow_datafusion_err!(e))?;
         self.inner.update_batch(values.as_slice())
     }
 

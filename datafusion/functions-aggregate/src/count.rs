@@ -304,10 +304,15 @@ impl AggregateUDFImpl for Count {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         if args.is_distinct {
+            let dtype: DataType = match &args.input_types[0] {
+                DataType::Dictionary(_, values_type) => (**values_type).clone(),
+                dtype => dtype.clone(),
+            };
+
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "count distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.input_types[0].clone(), true),
+                Field::new_list_field(dtype, true),
                 false,
             )])
         } else {
