@@ -22,7 +22,18 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
-#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+//
+// Eliminate unnecessary function calls(some may be not cheap) due to `xxx_or`
+// for performance. Also avoid abusing `xxx_or_else` for readability:
+// https://github.com/apache/datafusion/issues/15802
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::clone_on_ref_ptr,
+        clippy::or_fun_call,
+        clippy::unnecessary_lazy_evaluations
+    )
+)]
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that
@@ -1030,8 +1041,8 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/user-guide/sql/write_options.md",
-    user_guide_sql_write_options
+    "../../../docs/source/user-guide/sql/format_options.md",
+    user_guide_sql_format_options
 );
 
 #[cfg(doctest)]

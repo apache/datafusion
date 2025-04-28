@@ -273,13 +273,6 @@ impl Unparser<'_> {
                 pattern,
                 escape_char,
                 case_insensitive: _,
-            })
-            | Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive: _,
             }) => Ok(ast::Expr::Like {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
@@ -287,12 +280,39 @@ impl Unparser<'_> {
                 escape_char: escape_char.map(|c| c.to_string()),
                 any: false,
             }),
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            }) => {
+                if *case_insensitive {
+                    Ok(ast::Expr::ILike {
+                        negated: *negated,
+                        expr: Box::new(self.expr_to_sql_inner(expr)?),
+                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
+                        escape_char: escape_char.map(|c| c.to_string()),
+                        any: false,
+                    })
+                } else {
+                    Ok(ast::Expr::Like {
+                        negated: *negated,
+                        expr: Box::new(self.expr_to_sql_inner(expr)?),
+                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
+                        escape_char: escape_char.map(|c| c.to_string()),
+                        any: false,
+                    })
+                }
+            }
+
             Expr::AggregateFunction(agg) => {
                 let func_name = agg.func.name();
                 let AggregateFunctionParams {
                     distinct,
                     args,
                     filter,
+                    order_by,
                     ..
                 } = &agg.params;
 
@@ -300,6 +320,16 @@ impl Unparser<'_> {
                 let filter = match filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
+                };
+                let within_group = if agg.func.is_ordered_set_aggregate() {
+                    order_by
+                        .as_ref()
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .map(|sort_expr| self.sort_to_sql(sort_expr))
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    Vec::new()
                 };
                 Ok(ast::Expr::Function(Function {
                     name: ObjectName::from(vec![Ident {
@@ -316,7 +346,7 @@ impl Unparser<'_> {
                     filter,
                     null_treatment: None,
                     over: None,
-                    within_group: vec![],
+                    within_group,
                     parameters: ast::FunctionArguments::None,
                     uses_odbc_syntax: false,
                 }))
@@ -1855,9 +1885,19 @@ mod tests {
                     expr: Box::new(col("a")),
                     pattern: Box::new(lit("foo")),
                     escape_char: Some('o'),
-                    case_insensitive: true,
+                    case_insensitive: false,
                 }),
                 r#"a NOT LIKE 'foo' ESCAPE 'o'"#,
+            ),
+            (
+                Expr::Like(Like {
+                    negated: true,
+                    expr: Box::new(col("a")),
+                    pattern: Box::new(lit("foo")),
+                    escape_char: Some('o'),
+                    case_insensitive: true,
+                }),
+                r#"a NOT ILIKE 'foo' ESCAPE 'o'"#,
             ),
             (
                 Expr::SimilarTo(Like {
