@@ -668,10 +668,9 @@ CREATE EXTERNAL TABLE int96_from_spark
 STORED AS PARQUET
 LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
 
-# The value should be read as MICROSECOND precision
-# see https://github.com/apache/datafusion/issues/15721
+# Print schema
 query TTT
-describe int96_from_spark
+describe int96_from_spark;
 ----
 a Timestamp(Millisecond, None) YES
 
@@ -704,4 +703,4 @@ statement ok
 drop table int96_from_spark;
 
 statement ok
-set datafusion.execution.parquet.coerce_int96 = ns
+set datafusion.execution.parquet.coerce_int96 = ns;
