@@ -567,9 +567,16 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         estimate_join_statistics(
-            self.left.statistics()?,
-            self.right.statistics()?,
+            self.left.partition_statistics(None)?,
+            self.right.partition_statistics(None)?,
             vec![],
             &self.join_type,
             &self.join_schema,

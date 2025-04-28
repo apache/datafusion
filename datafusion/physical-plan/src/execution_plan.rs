@@ -426,6 +426,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// For TableScan executors, which supports filter pushdown, special attention
     /// needs to be paid to whether the stats returned by this method are exact or not
+    #[deprecated(since = "48.0.0", note = "Use `partition_statistics` method instead")]
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }
@@ -1196,6 +1197,10 @@ mod tests {
         fn statistics(&self) -> Result<Statistics> {
             unimplemented!()
         }
+
+        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+            unimplemented!()
+        }
     }
 
     #[derive(Debug)]
@@ -1257,6 +1262,10 @@ mod tests {
         }
 
         fn statistics(&self) -> Result<Statistics> {
+            unimplemented!()
+        }
+
+        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
             unimplemented!()
         }
     }

@@ -360,8 +360,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        let input_stat = self.input.statistics()?;
-        self.statistics_helper(input_stat)
+        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

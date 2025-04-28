@@ -1324,8 +1324,14 @@ mod tests {
         assert_eq!(exec.output_partitioning().partition_count(), 1);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
 
         Ok(())
     }
@@ -1350,9 +1356,15 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
 
         Ok(())
     }
@@ -1378,8 +1390,11 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
+        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Absent
+        );
 
         Ok(())
     }

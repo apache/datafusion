@@ -258,16 +258,7 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        let stats = self
-            .inputs
-            .iter()
-            .map(|stat| stat.statistics())
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(stats
-            .into_iter()
-            .reduce(stats_union)
-            .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -484,10 +475,17 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         let stats = self
             .inputs
             .iter()
-            .map(|stat| stat.statistics())
+            .map(|stat| stat.partition_statistics(None))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(stats
