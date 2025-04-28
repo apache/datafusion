@@ -186,21 +186,26 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
 mod tests {
     use std::sync::Arc;
 
+    use crate::assert_optimized_plan_eq_snapshot;
     use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
     use crate::test::*;
 
     use datafusion_common::Result;
-    use datafusion_expr::{
-        col, logical_plan::builder::LogicalPlanBuilder, Expr, LogicalPlan,
-    };
+    use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder, Expr};
     use datafusion_functions_aggregate::sum::sum;
 
-    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq(
-            Arc::new(ReplaceDistinctWithAggregate::new()),
-            plan.clone(),
-            expected,
-        )
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(ReplaceDistinctWithAggregate::new());
+            assert_optimized_plan_eq_snapshot!(
+                rule,
+                $plan,
+                @ $expected,
+            )
+        }};
     }
 
     #[test]
@@ -212,8 +217,7 @@ mod tests {
             .distinct()?
             .build()?;
 
-        let expected = "Projection: test.c\n  Aggregate: groupBy=[[test.c]], aggr=[[]]\n    TableScan: test";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal!(plan, @ "Projection: test.c\n  Aggregate: groupBy=[[test.c]], aggr=[[]]\n    TableScan: test")
     }
 
     #[test]
@@ -225,9 +229,7 @@ mod tests {
             .distinct()?
             .build()?;
 
-        let expected =
-            "Projection: test.a, test.b\n  Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n    TableScan: test";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal!(plan, @ "Projection: test.a, test.b\n  Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n    TableScan: test")
     }
 
     #[test]
@@ -238,8 +240,7 @@ mod tests {
             .distinct()?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  Projection: test.a, test.b\n    TableScan: test";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal!(plan, @ "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  Projection: test.a, test.b\n    TableScan: test")
     }
 
     #[test]
@@ -251,8 +252,6 @@ mod tests {
             .distinct()?
             .build()?;
 
-        let expected =
-            "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  Projection: test.a, test.b\n    Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[sum(test.c)]]\n      TableScan: test";
-        assert_optimized_plan_equal(&plan, expected)
+        assert_optimized_plan_equal!(plan, @ "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  Projection: test.a, test.b\n    Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[sum(test.c)]]\n      TableScan: test")
     }
 }
