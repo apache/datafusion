@@ -1200,12 +1200,22 @@ impl EquivalenceProperties {
         // Rewrite equivalence classes according to the new schema:
         let mut eq_classes = vec![];
         for mut eq_class in self.eq_group {
+            // Rewrite the expressions in the equivalence class:
             eq_class.exprs = eq_class
                 .exprs
                 .into_iter()
                 .map(|expr| with_new_schema(expr, &schema))
                 .collect::<Result<_>>()?;
-            // TODO: Also change the data type of the constant value if it exists.
+            // Rewrite the constant value (if available and known):
+            let data_type = eq_class
+                .canonical_expr()
+                .map(|e| e.data_type(&schema))
+                .transpose()?;
+            if let (Some(data_type), Some(AcrossPartitions::Uniform(Some(value)))) =
+                (data_type, &mut eq_class.constant)
+            {
+                *value = value.cast_to(&data_type)?;
+            }
             eq_classes.push(eq_class);
         }
 

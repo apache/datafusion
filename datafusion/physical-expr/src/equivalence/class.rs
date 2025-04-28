@@ -89,6 +89,10 @@ pub struct ConstExpr {
     /// Indicates whether the constant have the same value across all partitions.
     pub across_partitions: AcrossPartitions,
 }
+// TODO: The `ConstExpr` definition above can be in an inconsistent state where
+//       `expr` is a literal but `across_partitions` is not `Uniform`. Consider
+//       a refactor to ensure that `ConstExpr` is always in a consistent state
+//       (either by changing type definition, or by API constraints).
 
 impl ConstExpr {
     /// Create a new constant expression from a physical expression, specifying
@@ -102,7 +106,6 @@ impl ConstExpr {
         let mut result = ConstExpr::from(expr);
         // Override the across partitions specification if the expression is not
         // a literal.
-        // TODO: Consider dropping across partitions from the constructor.
         if result.across_partitions == AcrossPartitions::Heterogeneous {
             result.across_partitions = across_partitions;
         }
