@@ -506,7 +506,7 @@ impl ListingOptions {
 
     /// Infer the schema of the files at the given path on the provided object store.
     ///
-    /// If the table_path contains one ir more files (i.e. it is a directory /
+    /// If the table_path contains one or more files (i.e. it is a directory /
     /// prefix of files) their schema is merged by calling [`FileFormat::infer_schema`]
     ///
     /// Note: The inferred schema does not include any partitioning columns.
