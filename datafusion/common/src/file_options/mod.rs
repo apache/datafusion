@@ -76,11 +76,12 @@ mod tests {
 
         let mut table_config = TableOptions::new_parquet();
         table_config.alter_with_string_hash_map(&option_map)?;
-        let TableOptions::Parquet {options, ..} = table_config else { unreachable!() };
-        let properties = WriterPropertiesBuilder::try_from(
-            &options.with_skip_arrow_metadata(true),
-        )?
-        .build();
+        let TableOptions::Parquet { options, .. } = table_config else {
+            unreachable!()
+        };
+        let properties =
+            WriterPropertiesBuilder::try_from(&options.with_skip_arrow_metadata(true))?
+                .build();
 
         // Verify the expected options propagated down to parquet crate WriterProperties struct
         assert_eq!(properties.max_row_group_size(), 123);
@@ -182,12 +183,13 @@ mod tests {
 
         let mut table_config = TableOptions::new_parquet();
         table_config.alter_with_string_hash_map(&option_map)?;
-        let TableOptions::Parquet {options, ..} = table_config else { unreachable!() };
+        let TableOptions::Parquet { options, .. } = table_config else {
+            unreachable!()
+        };
 
-        let properties = WriterPropertiesBuilder::try_from(
-            &options.with_skip_arrow_metadata(true),
-        )?
-        .build();
+        let properties =
+            WriterPropertiesBuilder::try_from(&options.with_skip_arrow_metadata(true))?
+                .build();
 
         let col1 = ColumnPath::from(vec!["col1".to_owned()]);
         let col2_nested = ColumnPath::from(vec!["col2".to_owned(), "nested".to_owned()]);
@@ -287,7 +289,9 @@ mod tests {
 
         let mut table_config = TableOptions::new_csv();
         table_config.alter_with_string_hash_map(&option_map)?;
-        let TableOptions::Csv {options, ..} = table_config else { unreachable!() };
+        let TableOptions::Csv { options, .. } = table_config else {
+            unreachable!()
+        };
         let csv_options = CsvWriterOptions::try_from(&options)?;
 
         let builder = csv_options.writer_options;

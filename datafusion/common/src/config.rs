@@ -1392,8 +1392,8 @@ pub enum TableOptions {
         csv_options: CsvOptions,
         json_options: JsonOptions,
         parquet_options: TableParquetOptions,
-        extensions: Extensions
-    }
+        extensions: Extensions,
+    },
 }
 
 impl ConfigField for TableOptions {
@@ -1405,14 +1405,25 @@ impl ConfigField for TableOptions {
     fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
         match self {
             #[cfg(feature = "parquet")]
-            TableOptions::Parquet { options, .. } => {options.visit(v, "format", "");},
-            TableOptions::Csv { options, .. } => {options.visit(v, "format", "");},
-            TableOptions::Json { options, .. } => {options.visit(v, "format", "");},
-            TableOptions::NoTypeSpecified {csv_options, json_options, parquet_options, ..} => {
+            TableOptions::Parquet { options, .. } => {
+                options.visit(v, "format", "");
+            }
+            TableOptions::Csv { options, .. } => {
+                options.visit(v, "format", "");
+            }
+            TableOptions::Json { options, .. } => {
+                options.visit(v, "format", "");
+            }
+            TableOptions::NoTypeSpecified {
+                csv_options,
+                json_options,
+                parquet_options,
+                ..
+            } => {
                 csv_options.visit(v, "csv", "");
                 parquet_options.visit(v, "parquet", "");
                 json_options.visit(v, "json", "");
-            },
+            }
         }
     }
 
@@ -1440,7 +1451,9 @@ impl ConfigField for TableOptions {
                 Self::Parquet { options, .. } => options.set(rem, value),
                 Self::Csv { options, .. } => options.set(rem, value),
                 Self::Json { options, .. } => options.set(rem, value),
-                Self::NoTypeSpecified {..} => { return _config_err!("Specify a format for TableOptions") },
+                Self::NoTypeSpecified { .. } => {
+                    return _config_err!("Specify a format for TableOptions")
+                }
             },
             _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
         }
@@ -1499,7 +1512,7 @@ impl TableOptions {
     pub fn csv_options_or_default(&self) -> CsvOptions {
         match self {
             TableOptions::Csv { options, .. } => options.clone(),
-            TableOptions::NoTypeSpecified {csv_options, ..} => csv_options.clone(),
+            TableOptions::NoTypeSpecified { csv_options, .. } => csv_options.clone(),
             _ => CsvOptions::default(),
         }
     }
@@ -1508,7 +1521,9 @@ impl TableOptions {
     pub fn parquet_options_or_default(&self) -> TableParquetOptions {
         match self {
             TableOptions::Parquet { options, .. } => options.clone(),
-            TableOptions::NoTypeSpecified {parquet_options, ..} => parquet_options.clone(),
+            TableOptions::NoTypeSpecified {
+                parquet_options, ..
+            } => parquet_options.clone(),
             _ => TableParquetOptions::default(),
         }
     }
@@ -1516,18 +1531,18 @@ impl TableOptions {
     pub fn json_options_or_default(&self) -> JsonOptions {
         match self {
             TableOptions::Json { options, .. } => options.clone(),
-            TableOptions::NoTypeSpecified {json_options, ..} => json_options.clone(),
+            TableOptions::NoTypeSpecified { json_options, .. } => json_options.clone(),
             _ => JsonOptions::default(),
         }
     }
 
     pub fn extensions(&self) -> &Extensions {
         match self {
-            TableOptions::Csv { extensions, .. } => {extensions}
+            TableOptions::Csv { extensions, .. } => extensions,
             #[cfg(feature = "parquet")]
-            TableOptions::Parquet { extensions, .. } => {extensions}
-            TableOptions::Json { extensions, .. } => {extensions},
-            TableOptions::NoTypeSpecified {extensions, ..} => { extensions },
+            TableOptions::Parquet { extensions, .. } => extensions,
+            TableOptions::Json { extensions, .. } => extensions,
+            TableOptions::NoTypeSpecified { extensions, .. } => extensions,
         }
     }
 
@@ -1558,15 +1573,23 @@ impl TableOptions {
     pub fn combine_with_session_config(&self, config: &ConfigOptions) -> Self {
         match self {
             #[cfg(feature = "parquet")]
-            TableOptions::Parquet {options, extensions} => {
+            TableOptions::Parquet {
+                options,
+                extensions,
+            } => {
                 let mut updated_options = options.clone();
                 updated_options.global = config.execution.parquet.clone();
                 TableOptions::Parquet {
                     options: updated_options,
                     extensions: extensions.clone(),
                 }
-            },
-            TableOptions::NoTypeSpecified {parquet_options, csv_options, json_options, extensions} => {
+            }
+            TableOptions::NoTypeSpecified {
+                parquet_options,
+                csv_options,
+                json_options,
+                extensions,
+            } => {
                 let mut updated_options = parquet_options.clone();
                 updated_options.global = config.execution.parquet.clone();
                 TableOptions::NoTypeSpecified {
@@ -1576,7 +1599,7 @@ impl TableOptions {
                     json_options: json_options.clone(),
                 }
             }
-            _ => {self.clone()}
+            _ => self.clone(),
         }
     }
 
@@ -1586,22 +1609,28 @@ impl TableOptions {
     ///
     /// * `format`: The file format to use (e.g., CSV, Parquet).
     pub fn set_config_format(&mut self, format: ConfigFileType) {
-        if !matches!(self, Self::NoTypeSpecified {..}) {
+        if !matches!(self, Self::NoTypeSpecified { .. }) {
             return;
         }
         let new = match format {
             ConfigFileType::CSV => {
                 let options = self.csv_options_or_default();
-                TableOptions::new_csv().with_csv_options(options).with_extensions(self.extensions().clone())
+                TableOptions::new_csv()
+                    .with_csv_options(options)
+                    .with_extensions(self.extensions().clone())
             }
             #[cfg(feature = "parquet")]
             ConfigFileType::PARQUET => {
                 let options = self.parquet_options_or_default();
-                TableOptions::new_parquet().with_parquet_options(options).with_extensions(self.extensions().clone())
+                TableOptions::new_parquet()
+                    .with_parquet_options(options)
+                    .with_extensions(self.extensions().clone())
             }
             ConfigFileType::JSON => {
                 let options = self.json_options_or_default();
-                TableOptions::new_json().with_json_options(options).with_extensions(self.extensions().clone())
+                TableOptions::new_json()
+                    .with_json_options(options)
+                    .with_extensions(self.extensions().clone())
             }
         };
         *self = new;
@@ -1631,11 +1660,16 @@ impl TableOptions {
                 options,
                 extensions,
             },
-            TableOptions::NoTypeSpecified { csv_options, json_options, parquet_options, .. } => TableOptions::NoTypeSpecified {
+            TableOptions::NoTypeSpecified {
+                csv_options,
+                json_options,
+                parquet_options,
+                ..
+            } => TableOptions::NoTypeSpecified {
                 extensions,
                 csv_options,
                 json_options,
-                parquet_options
+                parquet_options,
             },
         }
     }
@@ -1658,11 +1692,16 @@ impl TableOptions {
                 extensions,
             },
             TableOptions::Json { .. } => self,
-            TableOptions::NoTypeSpecified { extensions, csv_options, json_options, .. } => TableOptions::NoTypeSpecified {
+            TableOptions::NoTypeSpecified {
                 extensions,
                 csv_options,
                 json_options,
-                parquet_options: options
+                ..
+            } => TableOptions::NoTypeSpecified {
+                extensions,
+                csv_options,
+                json_options,
+                parquet_options: options,
             },
         }
     }
@@ -1680,16 +1719,21 @@ impl TableOptions {
         match self {
             TableOptions::Csv { extensions, .. } => TableOptions::Csv {
                 options,
-                extensions
+                extensions,
             },
             #[cfg(feature = "parquet")]
             TableOptions::Parquet { .. } => self,
             TableOptions::Json { .. } => self,
-            TableOptions::NoTypeSpecified { extensions, parquet_options, json_options, .. } => TableOptions::NoTypeSpecified {
+            TableOptions::NoTypeSpecified {
+                extensions,
+                parquet_options,
+                json_options,
+                ..
+            } => TableOptions::NoTypeSpecified {
                 extensions,
                 csv_options: options,
                 json_options,
-                parquet_options
+                parquet_options,
             },
         }
     }
@@ -1710,13 +1754,18 @@ impl TableOptions {
             TableOptions::Parquet { .. } => self,
             TableOptions::Json { extensions, .. } => TableOptions::Json {
                 extensions,
-                options
+                options,
             },
-            TableOptions::NoTypeSpecified {extensions, parquet_options, csv_options, .. } => TableOptions::NoTypeSpecified {
+            TableOptions::NoTypeSpecified {
+                extensions,
+                parquet_options,
+                csv_options,
+                ..
+            } => TableOptions::NoTypeSpecified {
                 extensions,
                 json_options: options,
                 csv_options,
-                parquet_options
+                parquet_options,
             },
         }
     }
@@ -1747,7 +1796,7 @@ impl TableOptions {
                         );
                     };
                     e.0.set(key, value)
-                },
+                }
                 #[cfg(feature = "parquet")]
                 TableOptions::Parquet { extensions, .. } => {
                     let Some(e) = extensions.0.get_mut(prefix) else {
@@ -1756,7 +1805,7 @@ impl TableOptions {
                         );
                     };
                     e.0.set(key, value)
-                },
+                }
                 TableOptions::Json { extensions, .. } => {
                     let Some(e) = extensions.0.get_mut(prefix) else {
                         return _config_err!(
@@ -1764,7 +1813,7 @@ impl TableOptions {
                         );
                     };
                     e.0.set(key, value)
-                },
+                }
                 TableOptions::NoTypeSpecified { extensions, .. } => {
                     let Some(e) = extensions.0.get_mut(prefix) else {
                         return _config_err!(
@@ -1772,7 +1821,7 @@ impl TableOptions {
                         );
                     };
                     e.0.set(key, value)
-                },
+                }
             },
         }
     }
@@ -1816,16 +1865,10 @@ impl TableOptions {
 
     fn visit_format(&self, visitor: &mut impl Visit) {
         match self {
-            TableOptions::Csv { options, .. } => {
-                options.visit(visitor, "format", "")
-            }
+            TableOptions::Csv { options, .. } => options.visit(visitor, "format", ""),
             #[cfg(feature = "parquet")]
-            TableOptions::Parquet { options, .. } => {
-                options.visit(visitor, "format", "")
-            }
-            TableOptions::Json { options, .. } => {
-                options.visit(visitor, "format", "")
-            }
+            TableOptions::Parquet { options, .. } => options.visit(visitor, "format", ""),
+            TableOptions::Json { options, .. } => options.visit(visitor, "format", ""),
             TableOptions::NoTypeSpecified { .. } => {}
         }
     }
@@ -1869,17 +1912,11 @@ impl TableOptions {
 
     pub fn insert_extension<T: ConfigExtension>(&mut self, extension: T) {
         match self {
-            TableOptions::Csv {extensions, .. } => {
-                extensions.insert(extension)
-            }
+            TableOptions::Csv { extensions, .. } => extensions.insert(extension),
             #[cfg(feature = "parquet")]
-            TableOptions::Parquet {extensions, .. } => {
-                extensions.insert(extension)
-            }
-            TableOptions::Json {extensions, .. } => {
-                extensions.insert(extension)
-            }
-            TableOptions::NoTypeSpecified {extensions, .. } => {
+            TableOptions::Parquet { extensions, .. } => extensions.insert(extension),
+            TableOptions::Json { extensions, .. } => extensions.insert(extension),
+            TableOptions::NoTypeSpecified { extensions, .. } => {
                 extensions.insert(extension)
             }
         }
@@ -2297,8 +2334,8 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::config::{
-        ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions,
-        Extensions, TableOptions,
+        ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, Extensions,
+        TableOptions,
     };
 
     #[derive(Default, Debug, Clone)]
@@ -2359,11 +2396,15 @@ mod tests {
         let mut table_config = TableOptions::new_csv().with_extensions(extension);
         table_config.set("format.delimiter", ";").unwrap();
         table_config.set("test.bootstrap.servers", "asd").unwrap();
-        let TableOptions::Csv {options, extensions} = table_config else { unreachable!() };
+        let TableOptions::Csv {
+            options,
+            extensions,
+        } = table_config
+        else {
+            unreachable!()
+        };
         assert_eq!(options.delimiter, b';');
-        let kafka_config = extensions
-            .get::<TestExtensionConfig>()
-            .unwrap();
+        let kafka_config = extensions.get::<TestExtensionConfig>().unwrap();
         assert_eq!(
             kafka_config.properties.get("bootstrap.servers").unwrap(),
             "asd"
@@ -2454,7 +2495,10 @@ mod tests {
             .set("format.metadata::key4", "value with special chars :: :")
             .unwrap();
 
-        let parsed_metadata = table_config.parquet_options_or_default().key_value_metadata.clone();
+        let parsed_metadata = table_config
+            .parquet_options_or_default()
+            .key_value_metadata
+            .clone();
         assert_eq!(parsed_metadata.get("should not exist1"), None);
         assert_eq!(parsed_metadata.get("key1"), Some(&Some("".into())));
         assert_eq!(parsed_metadata.get("key2"), Some(&Some("value2".into())));
@@ -2470,7 +2514,8 @@ mod tests {
         // duplicate keys are overwritten
         table_config.set("format.metadata::key_dupe", "A").unwrap();
         table_config.set("format.metadata::key_dupe", "B").unwrap();
-        let parsed_metadata = table_config.parquet_options_or_default().key_value_metadata;
+        let parsed_metadata =
+            table_config.parquet_options_or_default().key_value_metadata;
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
     }
 }
