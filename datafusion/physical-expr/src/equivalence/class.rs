@@ -84,10 +84,9 @@ impl Display for AcrossPartitions {
 /// ```
 #[derive(Clone, Debug)]
 pub struct ConstExpr {
-    /// The expression that is known to be constant (e.g. a `Column`)
+    /// The expression that is known to be constant (e.g. a `Column`).
     pub expr: Arc<dyn PhysicalExpr>,
-    /// Does the constant have the same value across all partitions? See
-    /// struct docs for more details
+    /// Indicates whether the constant have the same value across all partitions.
     pub across_partitions: AcrossPartitions,
 }
 
