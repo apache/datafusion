@@ -201,6 +201,24 @@ impl ExecutionPlan for DataSourceExec {
         self.data_source.statistics()
     }
 
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(partition) = partition {
+            let mut statistics = Statistics::new_unknown(&self.schema());
+            if let Some(file_config) =
+                self.data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
+                if let Some(file_group) = file_config.file_groups.get(partition) {
+                    if let Some(stat) = file_group.file_statistics(None) {
+                        statistics = stat.clone();
+                    }
+                }
+            }
+            Ok(statistics)
+        } else {
+            Ok(self.data_source.statistics()?)
+        }
+    }
+
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let data_source = self.data_source.with_fetch(limit)?;
         let cache = self.cache.clone();
