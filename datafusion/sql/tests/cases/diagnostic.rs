@@ -19,14 +19,14 @@ use datafusion_functions::string;
 use insta::assert_snapshot;
 use std::{collections::HashMap, sync::Arc};
 
+use crate::{MockContextProvider, MockSessionState};
 use datafusion_common::{Diagnostic, Location, Result, Span};
+use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_sql::{
     parser::{DFParser, DFParserBuilder},
     planner::{ParserOptions, SqlToRel},
 };
 use regex::Regex;
-
-use crate::{MockContextProvider, MockSessionState};
 
 fn do_query(sql: &'static str) -> Diagnostic {
     let statement = DFParserBuilder::new(sql)
@@ -39,7 +39,8 @@ fn do_query(sql: &'static str) -> Diagnostic {
         ..ParserOptions::default()
     };
     let state = MockSessionState::default()
-        .with_scalar_function(Arc::new(string::concat().as_ref().clone()));
+        .with_scalar_function(Arc::new(string::concat().as_ref().clone()))
+        .with_aggregate_function(sum_udaf());
     let context = MockContextProvider { state };
     let sql_to_rel = SqlToRel::new_with_options(&context, options);
     match sql_to_rel.statement_to_plan(statement) {
@@ -131,6 +132,19 @@ fn get_spans(query: &'static str) -> HashMap<String, Span> {
     }
 
     spans
+}
+
+#[test]
+fn test_wrong_argument_number() -> Result<()> {
+    let query = "SELECT /*a*/sum(1, 2)/*a*/";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_eq!(
+        diag.message,
+        "Wrong number of arguments for sum function call"
+    );
+    assert_eq!(diag.span, Some(spans["a"]));
+    Ok(())
 }
 
 #[test]
