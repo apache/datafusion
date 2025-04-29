@@ -1217,6 +1217,7 @@ message CoalesceBatchesExecNode {
 
 message CoalescePartitionsExecNode {
   PhysicalPlanNode input = 1;
+  optional uint32 fetch = 2;
 }
 
 message PhysicalHashRepartition {
