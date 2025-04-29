@@ -1391,7 +1391,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use async_trait::async_trait;
 
-    use datafusion_common::{DFSchemaRef, ScalarValue};
+    use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
     use datafusion_expr::expr::{ScalarFunction, WindowFunction};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
@@ -1401,38 +1401,45 @@ mod tests {
         WindowFunctionDefinition,
     };
 
+    use crate::assert_optimized_plan_eq_snapshot;
     use crate::optimizer::Optimizer;
     use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::*;
     use crate::OptimizerContext;
     use datafusion_expr::test::function_stub::sum;
+    use insta::assert_snapshot;
 
     use super::*;
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
-    fn assert_optimized_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
-        crate::test::assert_optimized_plan_eq(
-            Arc::new(PushDownFilter::new()),
-            plan,
-            expected,
-        )
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(PushDownFilter::new());
+            assert_optimized_plan_eq_snapshot!(
+                rule,
+                $plan,
+                @ $expected,
+            )
+        }};
     }
 
-    fn assert_optimized_plan_eq_with_rewrite_predicate(
-        plan: LogicalPlan,
-        expected: &str,
-    ) -> Result<()> {
-        let optimizer = Optimizer::with_rules(vec![
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(PushDownFilter::new()),
-        ]);
-        let optimized_plan =
-            optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
-
-        let formatted_plan = format!("{optimized_plan}");
-        assert_eq!(expected, formatted_plan);
-        Ok(())
+    macro_rules! assert_optimized_plan_eq_with_rewrite_predicate {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let optimizer = Optimizer::with_rules(vec![
+                Arc::new(SimplifyExpressions::new()),
+                Arc::new(PushDownFilter::new()),
+            ]);
+            let optimized_plan = optimizer.optimize($plan, &OptimizerContext::new(), observe)?;
+            assert_snapshot!(optimized_plan, @ $expected);
+            Ok::<(), DataFusionError>(())
+        }};
     }
 
     #[test]
@@ -1443,10 +1450,13 @@ mod tests {
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
         // filter is before projection
-        let expected = "\
-            Projection: test.a, test.b\
-            \n  TableScan: test, full_filters=[test.a = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test.b
+          TableScan: test, full_filters=[test.a = Int64(1)]
+        "
+        )
     }
 
     #[test]
@@ -1458,12 +1468,15 @@ mod tests {
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
         // filter is before single projection
-        let expected = "\
-            Filter: test.a = Int64(1)\
-            \n  Limit: skip=0, fetch=10\
-            \n    Projection: test.a, test.b\
-            \n      TableScan: test";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a = Int64(1)
+          Limit: skip=0, fetch=10
+            Projection: test.a, test.b
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1472,8 +1485,10 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(lit(0i64).eq(lit(1i64)))?
             .build()?;
-        let expected = "TableScan: test, full_filters=[Int64(0) = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @"TableScan: test, full_filters=[Int64(0) = Int64(1)]"
+        )
     }
 
     #[test]
@@ -1485,11 +1500,14 @@ mod tests {
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
         // filter is before double projection
-        let expected = "\
-            Projection: test.c, test.b\
-            \n  Projection: test.a, test.b, test.c\
-            \n    TableScan: test, full_filters=[test.a = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.c, test.b
+          Projection: test.a, test.b, test.c
+            TableScan: test, full_filters=[test.a = Int64(1)]
+        "
+        )
     }
 
     #[test]
@@ -1500,10 +1518,13 @@ mod tests {
             .filter(col("a").gt(lit(10i64)))?
             .build()?;
         // filter of key aggregation is commutative
-        let expected = "\
-            Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b) AS total_salary]]\
-            \n  TableScan: test, full_filters=[test.a > Int64(10)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b) AS total_salary]]
+          TableScan: test, full_filters=[test.a > Int64(10)]
+        "
+        )
     }
 
     #[test]
@@ -1513,10 +1534,14 @@ mod tests {
             .aggregate(vec![add(col("b"), col("a"))], vec![sum(col("a")), col("b")])?
             .filter(col("b").gt(lit(10i64)))?
             .build()?;
-        let expected = "Filter: test.b > Int64(10)\
-        \n  Aggregate: groupBy=[[test.b + test.a]], aggr=[[sum(test.a), test.b]]\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.b > Int64(10)
+          Aggregate: groupBy=[[test.b + test.a]], aggr=[[sum(test.a), test.b]]
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -1525,10 +1550,13 @@ mod tests {
             .aggregate(vec![add(col("b"), col("a"))], vec![sum(col("a")), col("b")])?
             .filter(col("test.b + test.a").gt(lit(10i64)))?
             .build()?;
-        let expected =
-            "Aggregate: groupBy=[[test.b + test.a]], aggr=[[sum(test.a), test.b]]\
-        \n  TableScan: test, full_filters=[test.b + test.a > Int64(10)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.b + test.a]], aggr=[[sum(test.a), test.b]]
+          TableScan: test, full_filters=[test.b + test.a > Int64(10)]
+        "
+        )
     }
 
     #[test]
@@ -1539,11 +1567,14 @@ mod tests {
             .filter(col("b").gt(lit(10i64)))?
             .build()?;
         // filter of aggregate is after aggregation since they are non-commutative
-        let expected = "\
-            Filter: b > Int64(10)\
-            \n  Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b) AS b]]\
-            \n    TableScan: test";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: b > Int64(10)
+          Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b) AS b]]
+            TableScan: test
+        "
+        )
     }
 
     /// verifies that when partitioning by 'a' and 'b', and filtering by 'b', 'b' is pushed
@@ -1567,10 +1598,13 @@ mod tests {
             .filter(col("b").gt(lit(10i64)))?
             .build()?;
 
-        let expected = "\
-        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a, test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n  TableScan: test, full_filters=[test.b > Int64(10)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a, test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test.b > Int64(10)]
+        "
+        )
     }
 
     /// verifies that when partitioning by 'a' and 'b', and filtering by 'a' and 'b', both 'a' and
@@ -1595,10 +1629,13 @@ mod tests {
             .filter(and(col("a").gt(lit(10i64)), col("b").eq(lit(1i64))))?
             .build()?;
 
-        let expected = "\
-            WindowAggr: windowExpr=[[rank() PARTITION BY [test.a, test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-            \n  TableScan: test, full_filters=[test.a > Int64(10), test.b = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a, test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test.a > Int64(10), test.b = Int64(1)]
+        "
+        )
     }
 
     /// verifies that when partitioning by 'a' and filtering by 'a' and 'b', only 'a' is pushed
@@ -1622,11 +1659,14 @@ mod tests {
             .filter(and(col("a").gt(lit(10i64)), col("b").eq(lit(1i64))))?
             .build()?;
 
-        let expected = "\
-        Filter: test.b = Int64(1)\
-        \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n    TableScan: test, full_filters=[test.a > Int64(10)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.b = Int64(1)
+          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: test, full_filters=[test.a > Int64(10)]
+        "
+        )
     }
 
     /// verifies that filters on partition expressions are not pushed, as the single expression
@@ -1653,11 +1693,14 @@ mod tests {
             .filter(add(col("a"), col("b")).gt(lit(10i64)))?
             .build()?;
 
-        let expected = "\
-        Filter: test.a + test.b > Int64(10)\
-        \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a + test.b > Int64(10)
+          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: test
+        "
+        )
     }
 
     /// verifies that filters are not pushed on order by columns (that are not used in partitioning)
@@ -1681,11 +1724,14 @@ mod tests {
             .filter(col("c").gt(lit(10i64)))?
             .build()?;
 
-        let expected = "\
-        Filter: test.c > Int64(10)\
-        \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.c > Int64(10)
+          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: test
+        "
+        )
     }
 
     /// verifies that when we use multiple window functions with a common partition key, the filter
@@ -1721,10 +1767,13 @@ mod tests {
             .filter(col("a").gt(lit(10i64)))? // a appears in both window functions
             .build()?;
 
-        let expected = "\
-            WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.b, test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-            \n  TableScan: test, full_filters=[test.a > Int64(10)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.b, test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test.a > Int64(10)]
+        "
+        )
     }
 
     /// verifies that when we use multiple window functions with different partitions keys, the
@@ -1760,11 +1809,14 @@ mod tests {
             .filter(col("b").gt(lit(10i64)))? // b only appears in one window function
             .build()?;
 
-        let expected = "\
-            Filter: test.b > Int64(10)\
-            \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.b, test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
-            \n    TableScan: test";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.b > Int64(10)
+          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.b, test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: test
+        "
+        )
     }
 
     /// verifies that a filter is pushed to before a projection, the filter expression is correctly re-written
@@ -1776,10 +1828,13 @@ mod tests {
             .filter(col("b").eq(lit(1i64)))?
             .build()?;
         // filter is before projection
-        let expected = "\
-            Projection: test.a AS b, test.c\
-            \n  TableScan: test, full_filters=[test.a = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a AS b, test.c
+          TableScan: test, full_filters=[test.a = Int64(1)]
+        "
+        )
     }
 
     fn add(left: Expr, right: Expr) -> Expr {
@@ -1820,10 +1875,13 @@ mod tests {
         );
 
         // filter is before projection
-        let expected = "\
-            Projection: test.a * Int32(2) + test.c AS b, test.c\
-            \n  TableScan: test, full_filters=[test.a * Int32(2) + test.c = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a * Int32(2) + test.c AS b, test.c
+          TableScan: test, full_filters=[test.a * Int32(2) + test.c = Int64(1)]
+        "
+        )
     }
 
     /// verifies that when a filter is pushed to after 2 projections, the filter expression is correctly re-written
@@ -1851,11 +1909,14 @@ mod tests {
         );
 
         // filter is before the projections
-        let expected = "\
-        Projection: b * Int32(3) AS a, test.c\
-        \n  Projection: test.a * Int32(2) + test.c AS b, test.c\
-        \n    TableScan: test, full_filters=[(test.a * Int32(2) + test.c) * Int32(3) = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: b * Int32(3) AS a, test.c
+          Projection: test.a * Int32(2) + test.c AS b, test.c
+            TableScan: test, full_filters=[(test.a * Int32(2) + test.c) * Int32(3) = Int64(1)]
+        "
+        )
     }
 
     #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1930,10 +1991,13 @@ mod tests {
             .build()?;
 
         // Push filter below NoopPlan
-        let expected = "\
-            NoopPlan\
-            \n  TableScan: test, full_filters=[test.a = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)?;
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        NoopPlan
+          TableScan: test, full_filters=[test.a = Int64(1)]
+        "
+        )?;
 
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
@@ -1946,11 +2010,14 @@ mod tests {
             .build()?;
 
         // Push only predicate on `a` below NoopPlan
-        let expected = "\
-            Filter: test.c = Int64(2)\
-            \n  NoopPlan\
-            \n    TableScan: test, full_filters=[test.a = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)?;
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.c = Int64(2)
+          NoopPlan
+            TableScan: test, full_filters=[test.a = Int64(1)]
+        "
+        )?;
 
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
@@ -1963,11 +2030,14 @@ mod tests {
             .build()?;
 
         // Push filter below NoopPlan for each child branch
-        let expected = "\
-            NoopPlan\
-            \n  TableScan: test, full_filters=[test.a = Int64(1)]\
-            \n  TableScan: test, full_filters=[test.a = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)?;
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        NoopPlan
+          TableScan: test, full_filters=[test.a = Int64(1)]
+          TableScan: test, full_filters=[test.a = Int64(1)]
+        "
+        )?;
 
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
@@ -1980,12 +2050,15 @@ mod tests {
             .build()?;
 
         // Push only predicate on `a` below NoopPlan
-        let expected = "\
-            Filter: test.c = Int64(2)\
-            \n  NoopPlan\
-            \n    TableScan: test, full_filters=[test.a = Int64(1)]\
-            \n    TableScan: test, full_filters=[test.a = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.c = Int64(2)
+          NoopPlan
+            TableScan: test, full_filters=[test.a = Int64(1)]
+            TableScan: test, full_filters=[test.a = Int64(1)]
+        "
+        )
     }
 
     /// verifies that when two filters apply after an aggregation that only allows one to be pushed, one is pushed
@@ -2013,12 +2086,15 @@ mod tests {
         );
 
         // filter is before the projections
-        let expected = "\
-        Filter: sum(test.c) > Int64(10)\
-        \n  Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
-        \n    Projection: test.a AS b, test.c\
-        \n      TableScan: test, full_filters=[test.a > Int64(10)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: sum(test.c) > Int64(10)
+          Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]
+            Projection: test.a AS b, test.c
+              TableScan: test, full_filters=[test.a > Int64(10)]
+        "
+        )
     }
 
     /// verifies that when a filter with two predicates is applied after an aggregation that only allows one to be pushed, one is pushed
@@ -2047,12 +2123,15 @@ mod tests {
         );
 
         // filter is before the projections
-        let expected = "\
-        Filter: sum(test.c) > Int64(10) AND sum(test.c) < Int64(20)\
-        \n  Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
-        \n    Projection: test.a AS b, test.c\
-        \n      TableScan: test, full_filters=[test.a > Int64(10)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: sum(test.c) > Int64(10) AND sum(test.c) < Int64(20)
+          Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]
+            Projection: test.a AS b, test.c
+              TableScan: test, full_filters=[test.a > Int64(10)]
+        "
+        )
     }
 
     /// verifies that when two limits are in place, we jump neither
@@ -2067,14 +2146,17 @@ mod tests {
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
         // filter does not just any of the limits
-        let expected = "\
-            Projection: test.a, test.b\
-            \n  Filter: test.a = Int64(1)\
-            \n    Limit: skip=0, fetch=10\
-            \n      Limit: skip=0, fetch=20\
-            \n        Projection: test.a, test.b\
-            \n          TableScan: test";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test.b
+          Filter: test.a = Int64(1)
+            Limit: skip=0, fetch=10
+              Limit: skip=0, fetch=20
+                Projection: test.a, test.b
+                  TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -2086,10 +2168,14 @@ mod tests {
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
         // filter appears below Union
-        let expected = "Union\
-        \n  TableScan: test, full_filters=[test.a = Int64(1)]\
-        \n  TableScan: test2, full_filters=[test2.a = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Union
+          TableScan: test, full_filters=[test.a = Int64(1)]
+          TableScan: test2, full_filters=[test2.a = Int64(1)]
+        "
+        )
     }
 
     #[test]
@@ -2106,13 +2192,18 @@ mod tests {
             .build()?;
 
         // filter appears below Union
-        let expected = "Union\n  SubqueryAlias: test2\
-        \n    Projection: test.a AS b\
-        \n      TableScan: test, full_filters=[test.a = Int64(1)]\
-        \n  SubqueryAlias: test2\
-        \n    Projection: test.a AS b\
-        \n      TableScan: test, full_filters=[test.a = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Union
+          SubqueryAlias: test2
+            Projection: test.a AS b
+              TableScan: test, full_filters=[test.a = Int64(1)]
+          SubqueryAlias: test2
+            Projection: test.a AS b
+              TableScan: test, full_filters=[test.a = Int64(1)]
+        "
+        )
     }
 
     #[test]
@@ -2136,14 +2227,17 @@ mod tests {
             .filter(filter)?
             .build()?;
 
-        let expected = "Projection: test.a, test1.d\
-        \n  Cross Join: \
-        \n    Projection: test.a, test.b, test.c\
-        \n      TableScan: test, full_filters=[test.a = Int32(1)]\
-        \n    Projection: test1.d, test1.e, test1.f\
-        \n      TableScan: test1, full_filters=[test1.d > Int32(2)]";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test1.d
+          Cross Join: 
+            Projection: test.a, test.b, test.c
+              TableScan: test, full_filters=[test.a = Int32(1)]
+            Projection: test1.d, test1.e, test1.f
+              TableScan: test1, full_filters=[test1.d > Int32(2)]
+        "
+        )
     }
 
     #[test]
@@ -2163,13 +2257,17 @@ mod tests {
             .filter(filter)?
             .build()?;
 
-        let expected = "Projection: test.a, test1.a\
-        \n  Cross Join: \
-        \n    Projection: test.a, test.b, test.c\
-        \n      TableScan: test, full_filters=[test.a = Int32(1)]\
-        \n    Projection: test1.a, test1.b, test1.c\
-        \n      TableScan: test1, full_filters=[test1.a > Int32(2)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test1.a
+          Cross Join: 
+            Projection: test.a, test.b, test.c
+              TableScan: test, full_filters=[test.a = Int32(1)]
+            Projection: test1.a, test1.b, test1.c
+              TableScan: test1, full_filters=[test1.a > Int32(2)]
+        "
+        )
     }
 
     /// verifies that filters with the same columns are correctly placed
@@ -2196,14 +2294,16 @@ mod tests {
              \n          TableScan: test"
         );
 
-        let expected = "\
-        Projection: test.a\
-        \n  Filter: test.a >= Int64(1)\
-        \n    Limit: skip=0, fetch=1\
-        \n      Projection: test.a\
-        \n        TableScan: test, full_filters=[test.a <= Int64(1)]";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a
+          Filter: test.a >= Int64(1)
+            Limit: skip=0, fetch=1
+              Projection: test.a
+                TableScan: test, full_filters=[test.a <= Int64(1)]
+        "
+        )
     }
 
     /// verifies that filters to be placed on the same depth are ANDed
@@ -2227,13 +2327,15 @@ mod tests {
             \n        TableScan: test"
         );
 
-        let expected = "\
-        Projection: test.a\
-        \n  Filter: test.a >= Int64(1) AND test.a <= Int64(1)\
-        \n    Limit: skip=0, fetch=1\
-        \n      TableScan: test";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a
+          Filter: test.a >= Int64(1) AND test.a <= Int64(1)
+            Limit: skip=0, fetch=1
+              TableScan: test
+        "
+        )
     }
 
     /// verifies that filters on a plan with user nodes are not lost
@@ -2255,11 +2357,13 @@ mod tests {
         // not part of the test
         assert_eq!(format!("{plan}"), expected);
 
-        let expected = "\
-        TestUserDefined\
-         \n  TableScan: test, full_filters=[test.a <= Int64(1)]";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        TestUserDefined
+          TableScan: test, full_filters=[test.a <= Int64(1)]
+        "
+        )
     }
 
     /// post-on-join predicates on a column common to both sides is pushed to both sides
@@ -2292,12 +2396,15 @@ mod tests {
         );
 
         // filter sent to side before the join
-        let expected = "\
-        Inner Join: test.a = test2.a\
-        \n  TableScan: test, full_filters=[test.a <= Int64(1)]\
-        \n  Projection: test2.a\
-        \n    TableScan: test2, full_filters=[test2.a <= Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: test.a = test2.a
+          TableScan: test, full_filters=[test.a <= Int64(1)]
+          Projection: test2.a
+            TableScan: test2, full_filters=[test2.a <= Int64(1)]
+        "
+        )
     }
 
     /// post-using-join predicates on a column common to both sides is pushed to both sides
@@ -2329,12 +2436,15 @@ mod tests {
         );
 
         // filter sent to side before the join
-        let expected = "\
-        Inner Join: Using test.a = test2.a\
-        \n  TableScan: test, full_filters=[test.a <= Int64(1)]\
-        \n  Projection: test2.a\
-        \n    TableScan: test2, full_filters=[test2.a <= Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: Using test.a = test2.a
+          TableScan: test, full_filters=[test.a <= Int64(1)]
+          Projection: test2.a
+            TableScan: test2, full_filters=[test2.a <= Int64(1)]
+        "
+        )
     }
 
     /// post-join predicates with columns from both sides are converted to join filters
@@ -2370,13 +2480,16 @@ mod tests {
         );
 
         // Filter is converted to Join Filter
-        let expected = "\
-        Inner Join: test.a = test2.a Filter: test.c <= test2.b\
-        \n  Projection: test.a, test.c\
-        \n    TableScan: test\
-        \n  Projection: test2.a, test2.b\
-        \n    TableScan: test2";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: test.a = test2.a Filter: test.c <= test2.b
+          Projection: test.a, test.c
+            TableScan: test
+          Projection: test2.a, test2.b
+            TableScan: test2
+        "
+        )
     }
 
     /// post-join predicates with columns from one side of a join are pushed only to that side
@@ -2412,13 +2525,16 @@ mod tests {
             \n      TableScan: test2"
         );
 
-        let expected = "\
-        Inner Join: test.a = test2.a\
-        \n  Projection: test.a, test.b\
-        \n    TableScan: test, full_filters=[test.b <= Int64(1)]\
-        \n  Projection: test2.a, test2.c\
-        \n    TableScan: test2";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: test.a = test2.a
+          Projection: test.a, test.b
+            TableScan: test, full_filters=[test.b <= Int64(1)]
+          Projection: test2.a, test2.c
+            TableScan: test2
+        "
+        )
     }
 
     /// post-join predicates on the right side of a left join are not duplicated
@@ -2451,13 +2567,16 @@ mod tests {
         );
 
         // filter not duplicated nor pushed down - i.e. noop
-        let expected = "\
-        Filter: test2.a <= Int64(1)\
-        \n  Left Join: Using test.a = test2.a\
-        \n    TableScan: test, full_filters=[test.a <= Int64(1)]\
-        \n    Projection: test2.a\
-        \n      TableScan: test2";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test2.a <= Int64(1)
+          Left Join: Using test.a = test2.a
+            TableScan: test, full_filters=[test.a <= Int64(1)]
+            Projection: test2.a
+              TableScan: test2
+        "
+        )
     }
 
     /// post-join predicates on the left side of a right join are not duplicated
@@ -2489,13 +2608,16 @@ mod tests {
         );
 
         // filter not duplicated nor pushed down - i.e. noop
-        let expected = "\
-        Filter: test.a <= Int64(1)\
-        \n  Right Join: Using test.a = test2.a\
-        \n    TableScan: test\
-        \n    Projection: test2.a\
-        \n      TableScan: test2, full_filters=[test2.a <= Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a <= Int64(1)
+          Right Join: Using test.a = test2.a
+            TableScan: test
+            Projection: test2.a
+              TableScan: test2, full_filters=[test2.a <= Int64(1)]
+        "
+        )
     }
 
     /// post-left-join predicate on a column common to both sides is only pushed to the left side
@@ -2528,12 +2650,15 @@ mod tests {
         );
 
         // filter sent to left side of the join, not the right
-        let expected = "\
-        Left Join: Using test.a = test2.a\
-        \n  TableScan: test, full_filters=[test.a <= Int64(1)]\
-        \n  Projection: test2.a\
-        \n    TableScan: test2";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: Using test.a = test2.a
+          TableScan: test, full_filters=[test.a <= Int64(1)]
+          Projection: test2.a
+            TableScan: test2
+        "
+        )
     }
 
     /// post-right-join predicate on a column common to both sides is only pushed to the right side
@@ -2566,12 +2691,15 @@ mod tests {
         );
 
         // filter sent to right side of join, not duplicated to the left
-        let expected = "\
-        Right Join: Using test.a = test2.a\
-        \n  TableScan: test\
-        \n  Projection: test2.a\
-        \n    TableScan: test2, full_filters=[test2.a <= Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Right Join: Using test.a = test2.a
+          TableScan: test
+          Projection: test2.a
+            TableScan: test2, full_filters=[test2.a <= Int64(1)]
+        "
+        )
     }
 
     /// single table predicate parts of ON condition should be pushed to both inputs
@@ -2608,13 +2736,16 @@ mod tests {
             \n    TableScan: test2"
         );
 
-        let expected = "\
-        Inner Join: test.a = test2.a Filter: test.b < test2.b\
-        \n  Projection: test.a, test.b, test.c\
-        \n    TableScan: test, full_filters=[test.c > UInt32(1)]\
-        \n  Projection: test2.a, test2.b, test2.c\
-        \n    TableScan: test2, full_filters=[test2.c > UInt32(4)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: test.a = test2.a Filter: test.b < test2.b
+          Projection: test.a, test.b, test.c
+            TableScan: test, full_filters=[test.c > UInt32(1)]
+          Projection: test2.a, test2.b, test2.c
+            TableScan: test2, full_filters=[test2.c > UInt32(4)]
+        "
+        )
     }
 
     /// join filter should be completely removed after pushdown
@@ -2650,13 +2781,16 @@ mod tests {
             \n    TableScan: test2"
         );
 
-        let expected = "\
-        Inner Join: test.a = test2.a\
-        \n  Projection: test.a, test.b, test.c\
-        \n    TableScan: test, full_filters=[test.b > UInt32(1)]\
-        \n  Projection: test2.a, test2.b, test2.c\
-        \n    TableScan: test2, full_filters=[test2.c > UInt32(4)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: test.a = test2.a
+          Projection: test.a, test.b, test.c
+            TableScan: test, full_filters=[test.b > UInt32(1)]
+          Projection: test2.a, test2.b, test2.c
+            TableScan: test2, full_filters=[test2.c > UInt32(4)]
+        "
+        )
     }
 
     /// predicate on join key in filter expression should be pushed down to both inputs
@@ -2690,13 +2824,16 @@ mod tests {
             \n    TableScan: test2"
         );
 
-        let expected = "\
-        Inner Join: test.a = test2.b\
-        \n  Projection: test.a\
-        \n    TableScan: test, full_filters=[test.a > UInt32(1)]\
-        \n  Projection: test2.b\
-        \n    TableScan: test2, full_filters=[test2.b > UInt32(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: test.a = test2.b
+          Projection: test.a
+            TableScan: test, full_filters=[test.a > UInt32(1)]
+          Projection: test2.b
+            TableScan: test2, full_filters=[test2.b > UInt32(1)]
+        "
+        )
     }
 
     /// single table predicate parts of ON condition should be pushed to right input
@@ -2733,13 +2870,16 @@ mod tests {
             \n    TableScan: test2"
         );
 
-        let expected = "\
-        Left Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b\
-        \n  Projection: test.a, test.b, test.c\
-        \n    TableScan: test\
-        \n  Projection: test2.a, test2.b, test2.c\
-        \n    TableScan: test2, full_filters=[test2.c > UInt32(4)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b
+          Projection: test.a, test.b, test.c
+            TableScan: test
+          Projection: test2.a, test2.b, test2.c
+            TableScan: test2, full_filters=[test2.c > UInt32(4)]
+        "
+        )
     }
 
     /// single table predicate parts of ON condition should be pushed to left input
@@ -2776,13 +2916,16 @@ mod tests {
             \n    TableScan: test2"
         );
 
-        let expected = "\
-        Right Join: test.a = test2.a Filter: test.b < test2.b AND test2.c > UInt32(4)\
-        \n  Projection: test.a, test.b, test.c\
-        \n    TableScan: test, full_filters=[test.a > UInt32(1)]\
-        \n  Projection: test2.a, test2.b, test2.c\
-        \n    TableScan: test2";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Right Join: test.a = test2.a Filter: test.b < test2.b AND test2.c > UInt32(4)
+          Projection: test.a, test.b, test.c
+            TableScan: test, full_filters=[test.a > UInt32(1)]
+          Projection: test2.a, test2.b, test2.c
+            TableScan: test2
+        "
+        )
     }
 
     /// single table predicate parts of ON condition should not be pushed
@@ -2819,8 +2962,16 @@ mod tests {
             \n    TableScan: test2"
         );
 
-        let expected = &format!("{plan}");
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Full Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
+          Projection: test.a, test.b, test.c
+            TableScan: test
+          Projection: test2.a, test2.b, test2.c
+            TableScan: test2
+        "
+        )
     }
 
     struct PushDownProvider {
@@ -2887,9 +3038,10 @@ mod tests {
     fn filter_with_table_provider_exact() -> Result<()> {
         let plan = table_scan_with_pushdown_provider(TableProviderFilterPushDown::Exact)?;
 
-        let expected = "\
-        TableScan: test, full_filters=[a = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @"TableScan: test, full_filters=[a = Int64(1)]"
+        )
     }
 
     #[test]
@@ -2897,10 +3049,13 @@ mod tests {
         let plan =
             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
 
-        let expected = "\
-        Filter: a = Int64(1)\
-        \n  TableScan: test, partial_filters=[a = Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: a = Int64(1)
+          TableScan: test, partial_filters=[a = Int64(1)]
+        "
+        )
     }
 
     #[test]
@@ -2913,13 +3068,15 @@ mod tests {
             .expect("failed to optimize plan")
             .data;
 
-        let expected = "\
-        Filter: a = Int64(1)\
-        \n  TableScan: test, partial_filters=[a = Int64(1)]";
-
         // Optimizing the same plan multiple times should produce the same plan
         // each time.
-        assert_optimized_plan_eq(optimized_plan, expected)
+        assert_optimized_plan_equal!(
+            optimized_plan,
+            @r"
+        Filter: a = Int64(1)
+          TableScan: test, partial_filters=[a = Int64(1)]
+        "
+        )
     }
 
     #[test]
@@ -2927,10 +3084,13 @@ mod tests {
         let plan =
             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Unsupported)?;
 
-        let expected = "\
-        Filter: a = Int64(1)\
-        \n  TableScan: test";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: a = Int64(1)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -2944,11 +3104,14 @@ mod tests {
         .project(vec![col("a"), col("b")])?
         .build()?;
 
-        let expected = "Projection: a, b\
-            \n  Filter: a = Int64(10) AND b > Int64(11)\
-            \n    TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: a, b
+          Filter: a = Int64(10) AND b > Int64(11)
+            TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]
+        "
+        )
     }
 
     #[test]
@@ -2962,13 +3125,13 @@ mod tests {
         .project(vec![col("a"), col("b")])?
         .build()?;
 
-        let expected = r#"
-Projection: a, b
-  TableScan: test projection=[a], full_filters=[a = Int64(10), b > Int64(11)]
-        "#
-        .trim();
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: a, b
+          TableScan: test projection=[a], full_filters=[a = Int64(10), b > Int64(11)]
+        "
+        )
     }
 
     #[test]
@@ -2991,12 +3154,13 @@ Projection: a, b
         );
 
         // rewrite filter col b to test.a
-        let expected = "\
-            Projection: test.a AS b, test.c\
-            \n  TableScan: test, full_filters=[test.a > Int64(10), test.c > Int64(10)]\
-            ";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a AS b, test.c
+          TableScan: test, full_filters=[test.a > Int64(10), test.c > Int64(10)]
+        "
+        )
     }
 
     #[test]
@@ -3022,13 +3186,14 @@ Projection: a, b
         );
 
         // rewrite filter col b to test.a
-        let expected = "\
-            Projection: b, test.c\
-            \n  Projection: test.a AS b, test.c\
-            \n    TableScan: test, full_filters=[test.a > Int64(10), test.c > Int64(10)]\
-            ";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: b, test.c
+          Projection: test.a AS b, test.c
+            TableScan: test, full_filters=[test.a > Int64(10), test.c > Int64(10)]
+        "
+        )
     }
 
     #[test]
@@ -3049,11 +3214,13 @@ Projection: a, b
         );
 
         // rewrite filter col b to test.a, col d to test.c
-        let expected = "\
-            Projection: test.a AS b, test.c AS d\
-            \n  TableScan: test, full_filters=[test.a > Int64(10), test.c > Int64(10)]";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a AS b, test.c AS d
+          TableScan: test, full_filters=[test.a > Int64(10), test.c > Int64(10)]
+        "
+        )
     }
 
     /// predicate on join key in filter expression should be pushed down to both inputs
@@ -3087,13 +3254,16 @@ Projection: a, b
         );
 
         // Change filter on col `c`, 'd' to `test.a`, 'test.b'
-        let expected = "\
-        Inner Join: c = d\
-        \n  Projection: test.a AS c\
-        \n    TableScan: test, full_filters=[test.a > UInt32(1)]\
-        \n  Projection: test2.b AS d\
-        \n    TableScan: test2, full_filters=[test2.b > UInt32(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: c = d
+          Projection: test.a AS c
+            TableScan: test, full_filters=[test.a > UInt32(1)]
+          Projection: test2.b AS d
+            TableScan: test2, full_filters=[test2.b > UInt32(1)]
+        "
+        )
     }
 
     #[test]
@@ -3118,11 +3288,13 @@ Projection: a, b
         );
 
         // rewrite filter col b to test.a
-        let expected = "\
-            Projection: test.a AS b, test.c\
-            \n  TableScan: test, full_filters=[test.a IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])]";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a AS b, test.c
+          TableScan: test, full_filters=[test.a IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])]
+        "
+        )
     }
 
     #[test]
@@ -3149,12 +3321,14 @@ Projection: a, b
         );
 
         // rewrite filter col b to test.a
-        let expected = "\
-            Projection: b, test.c\
-            \n  Projection: test.a AS b, test.c\
-            \n    TableScan: test, full_filters=[test.a IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])]";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: b, test.c
+          Projection: test.a AS b, test.c
+            TableScan: test, full_filters=[test.a IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])]
+        "
+        )
     }
 
     #[test]
@@ -3184,13 +3358,16 @@ Projection: a, b
         assert_eq!(format!("{plan}"), expected_before);
 
         // rewrite filter col b to test.a
-        let expected_after = "\
-        Projection: test.a AS b, test.c\
-        \n  TableScan: test, full_filters=[test.a IN (<subquery>)]\
-        \n    Subquery:\
-        \n      Projection: sq.c\
-        \n        TableScan: sq";
-        assert_optimized_plan_eq(plan, expected_after)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a AS b, test.c
+          TableScan: test, full_filters=[test.a IN (<subquery>)]
+            Subquery:
+              Projection: sq.c
+                TableScan: sq
+        "
+        )
     }
 
     #[test]
@@ -3216,14 +3393,18 @@ Projection: a, b
 
         // Ensure that the predicate without any columns (0 = 1) is
         // still there.
-        let expected_after = "Projection: b.a\
-        \n  SubqueryAlias: b\
-        \n    Projection: b.a\
-        \n      SubqueryAlias: b\
-        \n        Projection: Int64(0) AS a\
-        \n          Filter: Int64(0) = Int64(1)\
-        \n            EmptyRelation";
-        assert_optimized_plan_eq(plan, expected_after)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: b.a
+          SubqueryAlias: b
+            Projection: b.a
+              SubqueryAlias: b
+                Projection: Int64(0) AS a
+                  Filter: Int64(0) = Int64(1)
+                    EmptyRelation
+        "
+        )
     }
 
     #[test]
@@ -3245,13 +3426,14 @@ Projection: a, b
             .cross_join(right)?
             .filter(filter)?
             .build()?;
-        let expected = "\
-        Inner Join:  Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)\
-        \n  Projection: test.a, test.b, test.c\
-        \n    TableScan: test, full_filters=[test.b > UInt32(1) OR test.c < UInt32(10)]\
-        \n  Projection: test1.a AS d, test1.a AS e\
-        \n    TableScan: test1";
-        assert_optimized_plan_eq_with_rewrite_predicate(plan.clone(), expected)?;
+
+        assert_optimized_plan_eq_with_rewrite_predicate!(plan.clone(), @r"
+        Inner Join:  Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)
+          Projection: test.a, test.b, test.c
+            TableScan: test, full_filters=[test.b > UInt32(1) OR test.c < UInt32(10)]
+          Projection: test1.a AS d, test1.a AS e
+            TableScan: test1
+        ")?;
 
         // Originally global state which can help to avoid duplicate Filters been generated and pushed down.
         // Now the global state is removed. Need to double confirm that avoid duplicate Filters.
@@ -3259,7 +3441,16 @@ Projection: a, b
             .rewrite(plan, &OptimizerContext::new())
             .expect("failed to optimize plan")
             .data;
-        assert_optimized_plan_eq(optimized_plan, expected)
+        assert_optimized_plan_equal!(
+            optimized_plan,
+            @r"
+        Inner Join:  Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)
+          Projection: test.a, test.b, test.c
+            TableScan: test, full_filters=[test.b > UInt32(1) OR test.c < UInt32(10)]
+          Projection: test1.a AS d, test1.a AS e
+            TableScan: test1
+        "
+        )
     }
 
     #[test]
@@ -3293,13 +3484,16 @@ Projection: a, b
         );
 
         // Inferred the predicate `test1.a <= Int64(1)` and push it down to the left side.
-        let expected = "\
-        Filter: test2.a <= Int64(1)\
-        \n  LeftSemi Join: test1.a = test2.a\
-        \n    TableScan: test1, full_filters=[test1.a <= Int64(1)]\
-        \n    Projection: test2.a, test2.b\
-        \n      TableScan: test2";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test2.a <= Int64(1)
+          LeftSemi Join: test1.a = test2.a
+            TableScan: test1, full_filters=[test1.a <= Int64(1)]
+            Projection: test2.a, test2.b
+              TableScan: test2
+        "
+        )
     }
 
     #[test]
@@ -3335,12 +3529,15 @@ Projection: a, b
         );
 
         // Both side will be pushed down.
-        let expected = "\
-        LeftSemi Join: test1.a = test2.a\
-        \n  TableScan: test1, full_filters=[test1.b > UInt32(1)]\
-        \n  Projection: test2.a, test2.b\
-        \n    TableScan: test2, full_filters=[test2.b > UInt32(2)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        LeftSemi Join: test1.a = test2.a
+          TableScan: test1, full_filters=[test1.b > UInt32(1)]
+          Projection: test2.a, test2.b
+            TableScan: test2, full_filters=[test2.b > UInt32(2)]
+        "
+        )
     }
 
     #[test]
@@ -3374,13 +3571,16 @@ Projection: a, b
         );
 
         // Inferred the predicate `test2.a <= Int64(1)` and push it down to the right side.
-        let expected = "\
-        Filter: test1.a <= Int64(1)\
-        \n  RightSemi Join: test1.a = test2.a\
-        \n    TableScan: test1\
-        \n    Projection: test2.a, test2.b\
-        \n      TableScan: test2, full_filters=[test2.a <= Int64(1)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test1.a <= Int64(1)
+          RightSemi Join: test1.a = test2.a
+            TableScan: test1
+            Projection: test2.a, test2.b
+              TableScan: test2, full_filters=[test2.a <= Int64(1)]
+        "
+        )
     }
 
     #[test]
@@ -3416,12 +3616,15 @@ Projection: a, b
         );
 
         // Both side will be pushed down.
-        let expected = "\
-        RightSemi Join: test1.a = test2.a\
-        \n  TableScan: test1, full_filters=[test1.b > UInt32(1)]\
-        \n  Projection: test2.a, test2.b\
-        \n    TableScan: test2, full_filters=[test2.b > UInt32(2)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        RightSemi Join: test1.a = test2.a
+          TableScan: test1, full_filters=[test1.b > UInt32(1)]
+          Projection: test2.a, test2.b
+            TableScan: test2, full_filters=[test2.b > UInt32(2)]
+        "
+        )
     }
 
     #[test]
@@ -3459,14 +3662,17 @@ Projection: a, b
         );
 
         // For left anti, filter of the right side filter can be pushed down.
-        let expected = "\
-        Filter: test2.a > UInt32(2)\
-        \n  LeftAnti Join: test1.a = test2.a\
-        \n    Projection: test1.a, test1.b\
-        \n      TableScan: test1, full_filters=[test1.a > UInt32(2)]\
-        \n    Projection: test2.a, test2.b\
-        \n      TableScan: test2";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test2.a > UInt32(2)
+          LeftAnti Join: test1.a = test2.a
+            Projection: test1.a, test1.b
+              TableScan: test1, full_filters=[test1.a > UInt32(2)]
+            Projection: test2.a, test2.b
+              TableScan: test2
+        "
+        )
     }
 
     #[test]
@@ -3506,13 +3712,16 @@ Projection: a, b
         );
 
         // For left anti, filter of the right side filter can be pushed down.
-        let expected = "\
-        LeftAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1)\
-        \n  Projection: test1.a, test1.b\
-        \n    TableScan: test1\
-        \n  Projection: test2.a, test2.b\
-        \n    TableScan: test2, full_filters=[test2.b > UInt32(2)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        LeftAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1)
+          Projection: test1.a, test1.b
+            TableScan: test1
+          Projection: test2.a, test2.b
+            TableScan: test2, full_filters=[test2.b > UInt32(2)]
+        "
+        )
     }
 
     #[test]
@@ -3550,14 +3759,17 @@ Projection: a, b
         );
 
         // For right anti, filter of the left side can be pushed down.
-        let expected = "\
-        Filter: test1.a > UInt32(2)\
-        \n  RightAnti Join: test1.a = test2.a\
-        \n    Projection: test1.a, test1.b\
-        \n      TableScan: test1\
-        \n    Projection: test2.a, test2.b\
-        \n      TableScan: test2, full_filters=[test2.a > UInt32(2)]";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test1.a > UInt32(2)
+          RightAnti Join: test1.a = test2.a
+            Projection: test1.a, test1.b
+              TableScan: test1
+            Projection: test2.a, test2.b
+              TableScan: test2, full_filters=[test2.a > UInt32(2)]
+        "
+        )
     }
 
     #[test]
@@ -3597,12 +3809,16 @@ Projection: a, b
         );
 
         // For right anti, filter of the left side can be pushed down.
-        let expected = "RightAnti Join: test1.a = test2.a Filter: test2.b > UInt32(2)\
-        \n  Projection: test1.a, test1.b\
-        \n    TableScan: test1, full_filters=[test1.b > UInt32(1)]\
-        \n  Projection: test2.a, test2.b\
-        \n    TableScan: test2";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        RightAnti Join: test1.a = test2.a Filter: test2.b > UInt32(2)
+          Projection: test1.a, test1.b
+            TableScan: test1, full_filters=[test1.b > UInt32(1)]
+          Projection: test2.a, test2.b
+            TableScan: test2
+        "
+        )
     }
 
     #[derive(Debug)]
@@ -3656,13 +3872,17 @@ Projection: a, b
         \n          TableScan: test1";
         assert_eq!(format!("{plan}"), expected_before);
 
-        let expected_after = "Projection: t.a, t.r\
-        \n  SubqueryAlias: t\
-        \n    Filter: r > Float64(0.5)\
-        \n      Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r\
-        \n        Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]\
-        \n          TableScan: test1, full_filters=[test1.a > Int32(5)]";
-        assert_optimized_plan_eq(plan, expected_after)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: t.a, t.r
+          SubqueryAlias: t
+            Filter: r > Float64(0.5)
+              Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r
+                Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]
+                  TableScan: test1, full_filters=[test1.a > Int32(5)]
+        "
+        )
     }
 
     #[test]
@@ -3701,14 +3921,18 @@ Projection: a, b
         \n          TableScan: test2";
         assert_eq!(format!("{plan}"), expected_before);
 
-        let expected = "Projection: t.a, t.r\
-        \n  SubqueryAlias: t\
-        \n    Filter: r > Float64(0.8)\
-        \n      Projection: test1.a AS a, TestScalarUDF() AS r\
-        \n        Inner Join: test1.a = test2.a\
-        \n          TableScan: test1\
-        \n          TableScan: test2";
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: t.a, t.r
+          SubqueryAlias: t
+            Filter: r > Float64(0.8)
+              Projection: test1.a AS a, TestScalarUDF() AS r
+                Inner Join: test1.a = test2.a
+                  TableScan: test1
+                  TableScan: test2
+        "
+        )
     }
 
     #[test]
@@ -3729,10 +3953,14 @@ Projection: a, b
         \n    TableScan: test";
         assert_eq!(format!("{plan}"), expected_before);
 
-        let expected_after = "Projection: test.a, test.b\
-        \n  Filter: TestScalarUDF() > Float64(0.1)\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(plan, expected_after)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test.b
+          Filter: TestScalarUDF() > Float64(0.1)
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -3757,10 +3985,14 @@ Projection: a, b
         \n    TableScan: test";
         assert_eq!(format!("{plan}"), expected_before);
 
-        let expected_after = "Projection: test.a, test.b\
-        \n  Filter: TestScalarUDF() > Float64(0.1)\
-        \n    TableScan: test, full_filters=[t.a > Int32(5), t.b > Int32(10)]";
-        assert_optimized_plan_eq(plan, expected_after)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test.b
+          Filter: TestScalarUDF() > Float64(0.1)
+            TableScan: test, full_filters=[t.a > Int32(5), t.b > Int32(10)]
+        "
+        )
     }
 
     #[test]
@@ -3788,10 +4020,14 @@ Projection: a, b
         \n    TableScan: test";
         assert_eq!(format!("{plan}"), expected_before);
 
-        let expected_after = "Projection: a, b\
-        \n  Filter: t.a > Int32(5) AND t.b > Int32(10) AND TestScalarUDF() > Float64(0.1)\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(plan, expected_after)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: a, b
+          Filter: t.a > Int32(5) AND t.b > Int32(10) AND TestScalarUDF() > Float64(0.1)
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -3869,7 +4105,12 @@ Projection: a, b
         assert_eq!(format!("{plan}"), expected_before);
 
         // Check that the filter is pushed down to the user-defined node
-        let expected_after = "Filter: Boolean(false)\n  TestUserNode";
-        assert_optimized_plan_eq(plan, expected_after)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: Boolean(false)
+          TestUserNode
+        "
+        )
     }
 }
