@@ -751,7 +751,7 @@ impl SessionState {
     /// Registers a [`ConfigExtension`] as a table option extension that can be
     /// referenced from SQL statements executed against this context.
     pub fn register_table_options_extension<T: ConfigExtension>(&mut self, extension: T) {
-        self.table_options.insert_extension(extension)
+        self.table_options.extensions.insert(extension)
     }
 
     /// Adds or updates a [FileFormatFactory] which can be used with COPY TO or

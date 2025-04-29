@@ -536,7 +536,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
         table_options: TableOptions,
     ) -> ListingOptions {
         let file_format = CsvFormat::default()
-            .with_options(table_options.csv_options_or_default())
+            .with_options(table_options.csv)
             .with_has_header(self.has_header)
             .with_comment(self.comment)
             .with_delimiter(self.delimiter)
@@ -574,8 +574,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
         config: &SessionConfig,
         table_options: TableOptions,
     ) -> ListingOptions {
-        let mut file_format =
-            ParquetFormat::new().with_options(table_options.parquet_options_or_default());
+        let mut file_format = ParquetFormat::new().with_options(table_options.parquet);
 
         if let Some(parquet_pruning) = self.parquet_pruning {
             file_format = file_format.with_enable_pruning(parquet_pruning)
@@ -610,7 +609,7 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
         table_options: TableOptions,
     ) -> ListingOptions {
         let file_format = JsonFormat::default()
-            .with_options(table_options.json_options_or_default())
+            .with_options(table_options.json)
             .with_schema_infer_max_rec(self.schema_infer_max_records)
             .with_file_compression_type(self.file_compression_type.to_owned());
 

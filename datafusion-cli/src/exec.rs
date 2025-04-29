@@ -420,14 +420,17 @@ pub(crate) async fn register_object_store_and_config_extensions(
 
     // Clone and modify the default table options based on the provided options
     let mut table_options = ctx.session_state().default_table_options();
-    if let Some(format) = format {
-        table_options.set_config_format(format);
-    }
-    table_options.alter_with_string_hash_map(options)?;
+    let extensions = if let Some(format) = format {
+        let mut file_table_options = table_options.set_config_format(format);
+        file_table_options.alter_with_string_hash_map(options)?;
+        file_table_options.extensions().clone()
+    } else {
+        table_options.alter_with_string_hash_map(options)?;
+        table_options.extensions
+    };
 
     // Retrieve the appropriate object store based on the scheme, URL, and modified table options
-    let store =
-        get_object_store(&ctx.session_state(), scheme, url, &table_options).await?;
+    let store = get_object_store(&ctx.session_state(), scheme, url, extensions).await?;
 
     // Register the retrieved object store in the session context's runtime environment
     ctx.register_object_store(url, store);

@@ -155,7 +155,7 @@ impl TestParquetFile {
         ctx: &SessionContext,
         maybe_filter: Option<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let parquet_options = ctx.copied_table_options().parquet_options_or_default();
+        let parquet_options = ctx.copied_table_options().parquet;
         let source = Arc::new(ParquetSource::new(parquet_options.clone()));
         let scan_config_builder = FileScanConfigBuilder::new(
             self.object_store_url.clone(),

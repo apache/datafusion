@@ -91,8 +91,7 @@ impl FileFormatFactory for JsonFormatFactory {
     ) -> Result<Arc<dyn FileFormat>> {
         let json_options = match &self.options {
             None => {
-                let mut table_options = state.default_table_options();
-                table_options.set_config_format(ConfigFileType::JSON);
+                let mut table_options = state.file_table_options(ConfigFileType::JSON);
                 table_options.alter_with_string_hash_map(format_options)?;
                 table_options.json_options_or_default()
             }

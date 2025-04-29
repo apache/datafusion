@@ -16,7 +16,9 @@
 // under the License.
 
 use async_trait::async_trait;
-use datafusion_common::config::{ConfigOptions, TableOptions};
+use datafusion_common::config::{
+    ConfigFileType, ConfigOptions, FileSpecificTableOptions, TableOptions,
+};
 use datafusion_common::{DFSchema, Result};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -130,7 +132,29 @@ pub trait Session: Send + Sync {
             .combine_with_session_config(self.config_options())
     }
 
-    /// Returns a mutable reference to [`TableOptions`]
+    /// return the TableOptions for specified file format
+    fn file_table_options(&self, file_type: ConfigFileType) -> FileSpecificTableOptions {
+        let session_table_options = self
+            .table_options()
+            .combine_with_session_config(self.config_options());
+
+        match file_type {
+            ConfigFileType::CSV => FileSpecificTableOptions::Csv {
+                options: session_table_options.csv,
+                extensions: session_table_options.extensions,
+            },
+            ConfigFileType::PARQUET => FileSpecificTableOptions::Parquet {
+                options: session_table_options.parquet,
+                extensions: session_table_options.extensions,
+            },
+            ConfigFileType::JSON => FileSpecificTableOptions::Json {
+                options: session_table_options.json,
+                extensions: session_table_options.extensions,
+            },
+        }
+    }
+
+    /// Returns a mutable reference to [`FileSpecificTableOptions`]
     fn table_options_mut(&mut self) -> &mut TableOptions;
 
     /// Get a new TaskContext to run in this session

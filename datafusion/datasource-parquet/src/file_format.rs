@@ -125,8 +125,7 @@ impl FileFormatFactory for ParquetFormatFactory {
     ) -> Result<Arc<dyn FileFormat>> {
         let parquet_options = match &self.options {
             None => {
-                let mut table_options = state.default_table_options();
-                table_options.set_config_format(ConfigFileType::PARQUET);
+                let mut table_options = state.file_table_options(ConfigFileType::PARQUET);
                 table_options.alter_with_string_hash_map(format_options)?;
                 table_options.parquet_options_or_default()
             }

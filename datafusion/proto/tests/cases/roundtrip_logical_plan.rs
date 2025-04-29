@@ -448,7 +448,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
 
     let table_options =
         TableOptions::default_from_session_config(ctx.state().config_options());
-    let mut parquet_format = table_options.parquet_options_or_default();
+    let mut parquet_format = table_options.parquet;
 
     parquet_format.global.bloom_filter_on_read = true;
     parquet_format.global.created_by = "DataFusion Test".to_string();
@@ -529,7 +529,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
 
     let table_options =
         TableOptions::default_from_session_config(ctx.state().config_options());
-    let mut csv_format = table_options.csv_options_or_default();
+    let mut csv_format = table_options.csv;
 
     csv_format.delimiter = b'*';
     csv_format.date_format = Some("dd/MM/yyyy".to_string());
@@ -598,7 +598,7 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
 
     let table_options =
         TableOptions::default_from_session_config(ctx.state().config_options());
-    let mut json_format = table_options.json_options_or_default();
+    let mut json_format = table_options.json;
 
     // Set specific JSON format options
     json_format.compression = CompressionTypeVariant::GZIP;
@@ -664,7 +664,7 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
 
     let table_options =
         TableOptions::default_from_session_config(ctx.state().config_options());
-    let mut parquet_format = table_options.parquet_options_or_default();
+    let mut parquet_format = table_options.parquet;
 
     // Set specific Parquet format options
     let mut key_value_metadata = HashMap::new();

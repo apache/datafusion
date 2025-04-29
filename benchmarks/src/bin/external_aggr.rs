@@ -313,7 +313,7 @@ impl ExternalAggrConfig {
         let path = format!("{path}/{table}");
         let format = Arc::new(
             ParquetFormat::default()
-                .with_options(ctx.state().table_options().parquet_options_or_default()),
+                .with_options(ctx.state().table_options().parquet.clone()),
         );
         let extension = DEFAULT_PARQUET_EXTENSION;
 

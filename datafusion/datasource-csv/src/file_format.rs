@@ -100,10 +100,9 @@ impl FileFormatFactory for CsvFormatFactory {
     ) -> Result<Arc<dyn FileFormat>> {
         let csv_options = match &self.options {
             None => {
-                let mut table_options = state.default_table_options();
-                table_options.set_config_format(ConfigFileType::CSV);
-                table_options.alter_with_string_hash_map(format_options)?;
-                table_options.csv_options_or_default().clone()
+                let mut csv_options = state.file_table_options(ConfigFileType::CSV);
+                csv_options.alter_with_string_hash_map(format_options)?;
+                csv_options.csv_options_or_default()
             }
             Some(csv_options) => {
                 let mut csv_options = csv_options.clone();
