@@ -327,25 +327,20 @@ pub fn check_function_length_with_diag(
 
         // Multiple signature type
         TypeSignature::OneOf(signatures) => {
-            // For OneOf, we need to check if ANY of the signatures match
-            // If none match, we'll return an error with all collected diagnostics
-            let mut all_results = Vec::new();
-
-            // Try each signature
-            for sig in signatures {
-                let result = check_function_length_with_diag(
+            // Filter out signatures that are not match the current types length
+            signatures.iter().any(|signature| {
+                match check_function_length_with_diag(
                     function_name,
-                    sig,
+                    signature,
                     current_types,
                     function_call_site,
-                );
-                match result {
-                    Ok(()) => return Ok(()), // If any signature matches, return success immediately
-                    Err(err) => all_results.push(err),
+                ) {
+                    Ok(()) => true,
+                    Err(_) => false,
                 }
-            }
+            });
 
-            if all_results.len() == signatures.len() {
+            if signatures.is_empty() {
                 // Create error for no matching signature
                 let error_message = format!(
                     "Function '{}' has no matching signature for {} arguments",
