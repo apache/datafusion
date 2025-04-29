@@ -30,7 +30,7 @@ use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -105,11 +105,9 @@ impl ScalarUDFImpl for ConcatFunc {
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
     /// concat('abcde', 2, NULL, 22) = 'abcde222'
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+
         let mut return_datatype = DataType::Utf8;
         args.iter().for_each(|col| {
             if col.data_type() == DataType::Utf8View {
@@ -169,7 +167,7 @@ impl ScalarUDFImpl for ConcatFunc {
         let mut data_size = 0;
         let mut columns = Vec::with_capacity(args.len());
 
-        for arg in args {
+        for arg in &args {
             match arg {
                 ColumnarValue::Scalar(ScalarValue::Utf8(maybe_value))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(maybe_value))
@@ -470,10 +468,14 @@ mod tests {
             None,
             Some("b"),
         ])));
-        let args = &[c0, c1, c2, c3, c4];
 
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
-        let result = ConcatFunc::new().invoke_batch(args, 3)?;
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1, c2, c3, c4],
+            number_rows: 3,
+            return_type: &Utf8,
+        };
+
+        let result = ConcatFunc::new().invoke_with_args(args)?;
         let expected =
             Arc::new(StringViewArray::from(vec!["foo,x,a", "bar,,", "baz,z,b"]))
                 as ArrayRef;

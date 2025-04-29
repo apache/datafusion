@@ -95,12 +95,11 @@ impl ScalarUDFImpl for SubstrFunc {
         Ok(DataType::Utf8View)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(substr, vec![])(args)
+        make_scalar_function(substr, vec![])(&args.args)
     }
 
     fn aliases(&self) -> &[String] {

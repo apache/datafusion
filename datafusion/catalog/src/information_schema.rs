@@ -405,7 +405,7 @@ fn get_udf_args_and_return_types(
     udf: &Arc<ScalarUDF>,
 ) -> Result<Vec<(Vec<String>, Option<String>)>> {
     let signature = udf.signature();
-    let arg_types = signature.type_signature.get_possible_types();
+    let arg_types = signature.type_signature.get_example_types();
     if arg_types.is_empty() {
         Ok(vec![(vec![], None)])
     } else {
@@ -428,7 +428,7 @@ fn get_udaf_args_and_return_types(
     udaf: &Arc<AggregateUDF>,
 ) -> Result<Vec<(Vec<String>, Option<String>)>> {
     let signature = udaf.signature();
-    let arg_types = signature.type_signature.get_possible_types();
+    let arg_types = signature.type_signature.get_example_types();
     if arg_types.is_empty() {
         Ok(vec![(vec![], None)])
     } else {
@@ -452,7 +452,7 @@ fn get_udwf_args_and_return_types(
     udwf: &Arc<WindowUDF>,
 ) -> Result<Vec<(Vec<String>, Option<String>)>> {
     let signature = udwf.signature();
-    let arg_types = signature.type_signature.get_possible_types();
+    let arg_types = signature.type_signature.get_example_types();
     if arg_types.is_empty() {
         Ok(vec![(vec![], None)])
     } else {

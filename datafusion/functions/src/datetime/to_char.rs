@@ -135,12 +135,12 @@ impl ScalarUDFImpl for ToCharFunc {
         Ok(Utf8)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        let [date_time, format] = take_function_args(self.name(), args)?;
+        let args = args.args;
+        let [date_time, format] = take_function_args(self.name(), &args)?;
 
         match format {
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
@@ -152,7 +152,7 @@ impl ScalarUDFImpl for ToCharFunc {
                 // invoke to_char_scalar with the known string, without converting to array
                 _to_char_scalar(date_time.clone(), Some(format))
             }
-            ColumnarValue::Array(_) => _to_char_array(args),
+            ColumnarValue::Array(_) => _to_char_array(&args),
             _ => {
                 exec_err!(
                     "Format for `to_char` must be non-null Utf8, received {:?}",
@@ -226,15 +226,21 @@ fn _to_char_scalar(
     };
 
     let formatter = ArrayFormatter::try_new(array.as_ref(), &format_options)?;
-    let formatted: Result<Vec<_>, ArrowError> = (0..array.len())
-        .map(|i| formatter.value(i).try_to_string())
+    let formatted: Result<Vec<Option<String>>, ArrowError> = (0..array.len())
+        .map(|i| {
+            if array.is_null(i) {
+                Ok(None)
+            } else {
+                formatter.value(i).try_to_string().map(Some)
+            }
+        })
         .collect();
 
     if let Ok(formatted) = formatted {
         if is_scalar_expression {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                formatted.first().unwrap().to_string(),
-            ))))
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                formatted.first().unwrap().clone(),
+            )))
         } else {
             Ok(ColumnarValue::Array(
                 Arc::new(StringArray::from(formatted)) as ArrayRef
@@ -297,6 +303,7 @@ mod tests {
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
         TimestampSecondArray,
     };
+    use arrow::datatypes::DataType;
     use chrono::{NaiveDateTime, Timelike};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -378,12 +385,13 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_data {
-            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
+            let args = datafusion_expr::ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
+                number_rows: 1,
+                return_type: &DataType::Utf8,
+            };
             let result = ToCharFunc::new()
-                .invoke_batch(
-                    &[ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
-                    1,
-                )
+                .invoke_with_args(args)
                 .expect("that to_char parsed values without error");
 
             if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
@@ -457,15 +465,16 @@ mod tests {
 
         for (value, format, expected) in scalar_array_data {
             let batch_len = format.len();
-            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
+            let args = datafusion_expr::ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Scalar(value),
+                    ColumnarValue::Array(Arc::new(format) as ArrayRef),
+                ],
+                number_rows: batch_len,
+                return_type: &DataType::Utf8,
+            };
             let result = ToCharFunc::new()
-                .invoke_batch(
-                    &[
-                        ColumnarValue::Scalar(value),
-                        ColumnarValue::Array(Arc::new(format) as ArrayRef),
-                    ],
-                    batch_len,
-                )
+                .invoke_with_args(args)
                 .expect("that to_char parsed values without error");
 
             if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
@@ -587,15 +596,16 @@ mod tests {
 
         for (value, format, expected) in array_scalar_data {
             let batch_len = value.len();
-            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
+            let args = datafusion_expr::ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Array(value as ArrayRef),
+                    ColumnarValue::Scalar(format),
+                ],
+                number_rows: batch_len,
+                return_type: &DataType::Utf8,
+            };
             let result = ToCharFunc::new()
-                .invoke_batch(
-                    &[
-                        ColumnarValue::Array(value as ArrayRef),
-                        ColumnarValue::Scalar(format),
-                    ],
-                    batch_len,
-                )
+                .invoke_with_args(args)
                 .expect("that to_char parsed values without error");
 
             if let ColumnarValue::Array(result) = result {
@@ -608,15 +618,16 @@ mod tests {
 
         for (value, format, expected) in array_array_data {
             let batch_len = value.len();
-            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
+            let args = datafusion_expr::ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Array(value),
+                    ColumnarValue::Array(Arc::new(format) as ArrayRef),
+                ],
+                number_rows: batch_len,
+                return_type: &DataType::Utf8,
+            };
             let result = ToCharFunc::new()
-                .invoke_batch(
-                    &[
-                        ColumnarValue::Array(value),
-                        ColumnarValue::Array(Arc::new(format) as ArrayRef),
-                    ],
-                    batch_len,
-                )
+                .invoke_with_args(args)
                 .expect("that to_char parsed values without error");
 
             if let ColumnarValue::Array(result) = result {
@@ -632,23 +643,27 @@ mod tests {
         //
 
         // invalid number of arguments
-        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
-        let result = ToCharFunc::new()
-            .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 1);
+        let args = datafusion_expr::ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
+            number_rows: 1,
+            return_type: &DataType::Utf8,
+        };
+        let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
             "Execution error: to_char function requires 2 arguments, got 1"
         );
 
         // invalid type
-        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
-        let result = ToCharFunc::new().invoke_batch(
-            &[
+        let args = datafusion_expr::ScalarFunctionArgs {
+            args: vec![
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            1,
-        );
+            number_rows: 1,
+            return_type: &DataType::Utf8,
+        };
+        let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
             "Execution error: Format for `to_char` must be non-null Utf8, received Timestamp(Nanosecond, None)"

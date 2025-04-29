@@ -823,6 +823,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             max_row_group_size: value.max_row_group_size as u64,
             created_by: value.created_by.clone(),
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
+            statistics_truncate_length_opt: value.statistics_truncate_length.map(|v| protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v as u64)),
             data_page_row_count_limit: value.data_page_row_count_limit as u64,
             encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
             bloom_filter_on_read: value.bloom_filter_on_read,
@@ -835,6 +836,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
             skip_arrow_metadata: value.skip_arrow_metadata,
+            coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
         })
     }
 }

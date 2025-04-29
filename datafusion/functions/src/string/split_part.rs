@@ -26,7 +26,7 @@ use datafusion_common::cast::as_int64_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -97,11 +97,9 @@ impl ScalarUDFImpl for SplitPartFunc {
         utf8_to_str_type(&arg_types[0], "split_part")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+
         // First, determine if any of the arguments is an Array
         let len = args.iter().find_map(|arg| match arg {
             ColumnarValue::Array(a) => Some(a.len()),

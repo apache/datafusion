@@ -25,6 +25,7 @@ mod join_selection;
 mod limit_pushdown;
 mod limited_distinct_aggregation;
 mod projection_pushdown;
+mod push_down_filter;
 mod replace_with_order_preserving_variants;
 mod sanity_checker;
 mod test_utils;

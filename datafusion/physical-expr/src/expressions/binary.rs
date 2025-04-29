@@ -20,6 +20,7 @@ mod kernels;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
+use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
 
@@ -28,18 +29,24 @@ use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
-use arrow::compute::{cast, ilike, like, nilike, nlike};
+use arrow::compute::{
+    cast, filter_record_batch, ilike, like, nilike, nlike, SlicesIterator,
+};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::statistics::Distribution::{Bernoulli, Gaussian};
+use datafusion_expr::statistics::{
+    combine_bernoullis, combine_gaussians, create_bernoulli_from_comparison,
+    new_generic_from_binary_op, Distribution,
+};
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 
-use crate::expressions::binary::kernels::concat_elements_utf8view;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -163,9 +170,12 @@ fn boolean_op(
 macro_rules! binary_string_array_flag_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
         match $LEFT.data_type() {
-            DataType::Utf8View | DataType::Utf8 => {
+            DataType::Utf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
             },
+            DataType::Utf8View => {
+                compute_utf8view_flag_op!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
+            }
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             },
@@ -202,14 +212,42 @@ macro_rules! compute_utf8_flag_op {
     }};
 }
 
+/// Invoke a compute kernel on a pair of binary data arrays with flags
+macro_rules! compute_utf8view_flag_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("compute_utf8view_flag_op failed to downcast array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("compute_utf8view_flag_op failed to downcast array");
+
+        let flag = if $FLAG {
+            Some($ARRAYTYPE::from(vec!["i"; ll.len()]))
+        } else {
+            None
+        };
+        let mut array = $OP(ll, rr, flag.as_ref())?;
+        if $NOT {
+            array = not(&array).unwrap();
+        }
+        Ok(Arc::new(array))
+    }};
+}
+
 macro_rules! binary_string_array_flag_op_scalar {
     ($LEFT:ident, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
         // This macro is slightly different from binary_string_array_flag_op because, when comparing with a scalar value,
         // the query can be optimized in such a way that operands will be dicts, so we need to support it here
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Utf8View | DataType::Utf8 => {
+            DataType::Utf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
             },
+            DataType::Utf8View => {
+                compute_utf8view_flag_op_scalar!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
+            }
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             },
@@ -217,7 +255,8 @@ macro_rules! binary_string_array_flag_op_scalar {
                 let values = $LEFT.as_any_dictionary().values();
 
                 match values.data_type() {
-                    DataType::Utf8View | DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::Utf8View => compute_utf8view_flag_op_scalar!(values, $RIGHT, $OP, StringViewArray, $NOT, $FLAG),
                     DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
                     other => internal_err!(
                         "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
@@ -271,6 +310,34 @@ macro_rules! compute_utf8_flag_op_scalar {
     }};
 }
 
+/// Invoke a compute kernel on a data array and a scalar value with flag
+macro_rules! compute_utf8view_flag_op_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$ARRAYTYPE>()
+            .expect("compute_utf8view_flag_op_scalar failed to downcast array");
+
+        let string_value = match $RIGHT.try_as_str() {
+            Some(Some(string_value)) => string_value,
+            // null literal or non string
+            _ => return internal_err!(
+                        "compute_utf8view_flag_op_scalar failed to cast literal value {} for operation '{}'",
+                        $RIGHT, stringify!($OP)
+                    )
+        };
+
+        let flag = $FLAG.then_some("i");
+        let mut array =
+            paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
+        if $NOT {
+            array = not(&array).unwrap();
+        }
+
+        Ok(Arc::new(array))
+    }};
+}
+
 impl PhysicalExpr for BinaryExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -293,7 +360,26 @@ impl PhysicalExpr for BinaryExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         use arrow::compute::kernels::numeric::*;
 
+        // Evaluate left-hand side expression.
         let lhs = self.left.evaluate(batch)?;
+
+        // Check if we can apply short-circuit evaluation.
+        match check_short_circuit(&lhs, &self.op) {
+            ShortCircuitStrategy::None => {}
+            ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
+            ShortCircuitStrategy::ReturnRight => {
+                let rhs = self.right.evaluate(batch)?;
+                return Ok(rhs);
+            }
+            ShortCircuitStrategy::PreSelection(selection) => {
+                // The function `evaluate_selection` was not called for filtering and calculation,
+                // as it takes into account cases where the selection contains null values.
+                let batch = filter_record_batch(batch, selection)?;
+                let right_ret = self.right.evaluate(&batch)?;
+                return pre_selection_scatter(selection, right_ret);
+            }
+        }
+
         let rhs = self.right.evaluate(batch)?;
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
@@ -334,23 +420,19 @@ impl PhysicalExpr for BinaryExpr {
 
         let result_type = self.data_type(input_schema)?;
 
-        // Attempt to use special kernels if one input is scalar and the other is an array
-        let scalar_result = match (&lhs, &rhs) {
-            (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
-                // if left is array and right is literal(not NULL) - use scalar operations
-                if scalar.is_null() {
-                    None
-                } else {
-                    self.evaluate_array_scalar(array, scalar.clone())?.map(|r| {
-                        r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
-                    })
+        // If the left-hand side is an array and the right-hand side is a non-null scalar, try the optimized kernel.
+        if let (ColumnarValue::Array(array), ColumnarValue::Scalar(ref scalar)) =
+            (&lhs, &rhs)
+        {
+            if !scalar.is_null() {
+                if let Some(result_array) =
+                    self.evaluate_array_scalar(array, scalar.clone())?
+                {
+                    let final_array = result_array
+                        .and_then(|a| to_result_type_array(&self.op, a, &result_type));
+                    return final_array.map(ColumnarValue::Array);
                 }
             }
-            (_, _) => None, // default to array implementation
-        };
-
-        if let Some(result) = scalar_result {
-            return result.map(ColumnarValue::Array);
         }
 
         // if both arrays or both literals - extract arrays and continue execution
@@ -486,6 +568,37 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
+    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
+        let (left, right) = (children[0], children[1]);
+
+        if self.op.is_numerical_operators() {
+            // We might be able to construct the output statistics more accurately,
+            // without falling back to an unknown distribution, if we are dealing
+            // with Gaussian distributions and numerical operations.
+            if let (Gaussian(left), Gaussian(right)) = (left, right) {
+                if let Some(result) = combine_gaussians(&self.op, left, right)? {
+                    return Ok(Gaussian(result));
+                }
+            }
+        } else if self.op.is_logic_operator() {
+            // If we are dealing with logical operators, we expect (and can only
+            // operate on) Bernoulli distributions.
+            return if let (Bernoulli(left), Bernoulli(right)) = (left, right) {
+                combine_bernoullis(&self.op, left, right).map(Bernoulli)
+            } else {
+                internal_err!(
+                    "Logical operators are only compatible with `Bernoulli` distributions"
+                )
+            };
+        } else if self.op.supports_propagation() {
+            // If we are handling comparison operators, we expect (and can only
+            // operate on) numeric distributions.
+            return create_bernoulli_from_comparison(&self.op, left, right);
+        }
+        // Fall back to an unknown distribution with only summary statistics:
+        new_generic_from_binary_op(&self.op, left, right)
+    }
+
     /// For each operator, [`BinaryExpr`] has distinct rules.
     /// TODO: There may be rules specific to some data types and expression ranges.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
@@ -534,6 +647,32 @@ impl PhysicalExpr for BinaryExpr {
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn write_child(
+            f: &mut std::fmt::Formatter,
+            expr: &dyn PhysicalExpr,
+            precedence: u8,
+        ) -> std::fmt::Result {
+            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+                let p = child.op.precedence();
+                if p == 0 || p < precedence {
+                    write!(f, "(")?;
+                    child.fmt_sql(f)?;
+                    write!(f, ")")
+                } else {
+                    child.fmt_sql(f)
+                }
+            } else {
+                expr.fmt_sql(f)
+            }
+        }
+
+        let precedence = self.op.precedence();
+        write_child(f, self.left.as_ref(), precedence)?;
+        write!(f, " {} ", self.op)?;
+        write_child(f, self.right.as_ref(), precedence)
     }
 }
 
@@ -671,11 +810,211 @@ impl BinaryExpr {
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
             StringConcat => concat_elements(left, right),
-            AtArrow | ArrowAt => {
-                unreachable!("ArrowAt and AtArrow should be rewritten to function")
+            AtArrow | ArrowAt | Arrow | LongArrow | HashArrow | HashLongArrow | AtAt
+            | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe
+            | IntegerDivide => {
+                not_impl_err!(
+                    "Binary operator '{:?}' is not supported in the physical expr",
+                    self.op
+                )
             }
         }
     }
+}
+
+enum ShortCircuitStrategy<'a> {
+    None,
+    ReturnLeft,
+    ReturnRight,
+    PreSelection(&'a BooleanArray),
+}
+
+/// Based on the results calculated from the left side of the short-circuit operation,
+/// if the proportion of `true` is less than 0.2 and the current operation is an `and`,
+/// the `RecordBatch` will be filtered in advance.
+const PRE_SELECTION_THRESHOLD: f32 = 0.2;
+
+/// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
+///
+/// Short-circuiting occurs under these circumstances:
+/// - For `AND`:
+///    - if LHS is all false => short-circuit → return LHS
+///    - if LHS is all true  => short-circuit → return RHS
+///    - if LHS is mixed and true_count/sum_count <= [`PRE_SELECTION_THRESHOLD`] -> pre-selection
+/// - For `OR`:
+///    - if LHS is all true  => short-circuit → return LHS
+///    - if LHS is all false => short-circuit → return RHS
+/// # Arguments
+/// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
+/// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
+/// * `op` - The logical operator (`AND` or `OR`)
+///
+/// # Implementation Notes
+/// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
+/// 2. Handles both scalar values and array values
+/// 3. For arrays, uses optimized bit counting techniques for boolean arrays
+fn check_short_circuit<'a>(
+    lhs: &'a ColumnarValue,
+    op: &Operator,
+) -> ShortCircuitStrategy<'a> {
+    // Quick reject for non-logical operators,and quick judgment when op is and
+    let is_and = match op {
+        Operator::And => true,
+        Operator::Or => false,
+        _ => return ShortCircuitStrategy::None,
+    };
+
+    // Non-boolean types can't be short-circuited
+    if lhs.data_type() != DataType::Boolean {
+        return ShortCircuitStrategy::None;
+    }
+
+    match lhs {
+        ColumnarValue::Array(array) => {
+            // Fast path for arrays - try to downcast to boolean array
+            if let Ok(bool_array) = as_boolean_array(array) {
+                // Arrays with nulls can't be short-circuited
+                if bool_array.null_count() > 0 {
+                    return ShortCircuitStrategy::None;
+                }
+
+                let len = bool_array.len();
+                if len == 0 {
+                    return ShortCircuitStrategy::None;
+                }
+
+                let true_count = bool_array.values().count_set_bits();
+                if is_and {
+                    // For AND, prioritize checking for all-false (short circuit case)
+                    // Uses optimized false_count() method provided by Arrow
+
+                    // Short circuit if all values are false
+                    if true_count == 0 {
+                        return ShortCircuitStrategy::ReturnLeft;
+                    }
+
+                    // If no false values, then all must be true
+                    if true_count == len {
+                        return ShortCircuitStrategy::ReturnRight;
+                    }
+
+                    // determine if we can pre-selection
+                    if true_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
+                        return ShortCircuitStrategy::PreSelection(bool_array);
+                    }
+                } else {
+                    // For OR, prioritize checking for all-true (short circuit case)
+                    // Uses optimized true_count() method provided by Arrow
+
+                    // Short circuit if all values are true
+                    if true_count == len {
+                        return ShortCircuitStrategy::ReturnLeft;
+                    }
+
+                    // If no true values, then all must be false
+                    if true_count == 0 {
+                        return ShortCircuitStrategy::ReturnRight;
+                    }
+                }
+            }
+        }
+        ColumnarValue::Scalar(scalar) => {
+            // Fast path for scalar values
+            if let ScalarValue::Boolean(Some(is_true)) = scalar {
+                // Return Left for:
+                // - AND with false value
+                // - OR with true value
+                if (is_and && !is_true) || (!is_and && *is_true) {
+                    return ShortCircuitStrategy::ReturnLeft;
+                } else {
+                    return ShortCircuitStrategy::ReturnRight;
+                }
+            }
+        }
+    }
+
+    // If we can't short-circuit, indicate that normal evaluation should continue
+    ShortCircuitStrategy::None
+}
+
+/// Creates a new boolean array based on the evaluation of the right expression,
+/// but only for positions where the left_result is true.
+///
+/// This function is used for short-circuit evaluation optimization of logical AND operations:
+/// - When left_result has few true values, we only evaluate the right expression for those positions
+/// - Values are copied from right_array where left_result is true
+/// - All other positions are filled with false values
+///
+/// # Parameters
+/// - `left_result` Boolean array with selection mask (typically from left side of AND)
+/// - `right_result` Result of evaluating right side of expression (only for selected positions)
+///
+/// # Returns
+/// A combined ColumnarValue with values from right_result where left_result is true
+///
+/// # Example
+///  Initial Data: { 1, 2, 3, 4, 5 }
+///  Left Evaluation
+///     (Condition: Equal to 2 or 3)
+///          ↓
+///  Filtered Data: {2, 3}
+///    Left Bitmap: { 0, 1, 1, 0, 0 }
+///          ↓
+///   Right Evaluation
+///     (Condition: Even numbers)
+///          ↓
+///  Right Data: { 2 }
+///    Right Bitmap: { 1, 0 }
+///          ↓
+///   Combine Results
+///  Final Bitmap: { 0, 1, 0, 0, 0 }
+///
+/// # Note
+/// Perhaps it would be better to modify `left_result` directly without creating a copy?
+/// In practice, `left_result` should have only one owner, so making changes should be safe.
+/// However, this is difficult to achieve under the immutable constraints of [`Arc`] and [`BooleanArray`].
+fn pre_selection_scatter(
+    left_result: &BooleanArray,
+    right_result: ColumnarValue,
+) -> Result<ColumnarValue> {
+    let right_boolean_array = match &right_result {
+        ColumnarValue::Array(array) => array.as_boolean(),
+        ColumnarValue::Scalar(_) => return Ok(right_result),
+    };
+
+    let result_len = left_result.len();
+
+    let mut result_array_builder = BooleanArray::builder(result_len);
+
+    // keep track of current position we have in right boolean array
+    let mut right_array_pos = 0;
+
+    // keep track of how much is filled
+    let mut last_end = 0;
+    SlicesIterator::new(left_result).for_each(|(start, end)| {
+        // the gap needs to be filled with false
+        if start > last_end {
+            result_array_builder.append_n(start - last_end, false);
+        }
+
+        // copy values from right array for this slice
+        let len = end - start;
+        right_boolean_array
+            .slice(right_array_pos, len)
+            .iter()
+            .for_each(|v| result_array_builder.append_option(v));
+
+        right_array_pos += len;
+        last_end = end;
+    });
+
+    // Fill any remaining positions with false
+    if last_end < result_len {
+        result_array_builder.append_n(result_len - last_end, false);
+    }
+    let boolean_result = result_array_builder.finish();
+
+    Ok(ColumnarValue::Array(Arc::new(boolean_result)))
 }
 
 fn concat_elements(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<ArrayRef> {
@@ -732,8 +1071,14 @@ pub fn similar_to(
 mod tests {
     use super::*;
     use crate::expressions::{col, lit, try_cast, Column, Literal};
-    use datafusion_common::plan_datafusion_err;
+    use datafusion_expr::lit as expr_lit;
 
+    use datafusion_common::plan_datafusion_err;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
+
+    use crate::planner::logical2physical;
+    use arrow::array::BooleanArray;
+    use datafusion_expr::col as logical_col;
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
         left: Arc<dyn PhysicalExpr>,
@@ -896,9 +1241,9 @@ mod tests {
             DataType::UInt32,
             vec![1u32, 2u32],
             Operator::Plus,
-            Int32Array,
-            DataType::Int32,
-            [2i32, 4i32],
+            Int64Array,
+            DataType::Int64,
+            [2i64, 4i64],
         );
         test_coercion!(
             Int32Array,
@@ -4378,5 +4723,587 @@ mod tests {
             &expected,
         )
         .unwrap();
+    }
+
+    pub fn binary_expr(
+        left: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        right: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<BinaryExpr> {
+        Ok(binary_op(left, op, right, schema)?
+            .as_any()
+            .downcast_ref::<BinaryExpr>()
+            .unwrap()
+            .clone())
+    }
+
+    /// Test for Uniform-Uniform, Unknown-Uniform, Uniform-Unknown and Unknown-Unknown evaluation.
+    #[test]
+    fn test_evaluate_statistics_combination_of_range_holders() -> Result<()> {
+        let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = lit(ScalarValue::from(12.0));
+
+        let left_interval = Interval::make(Some(0.0), Some(12.0))?;
+        let right_interval = Interval::make(Some(12.0), Some(36.0))?;
+        let (left_mean, right_mean) = (ScalarValue::from(6.0), ScalarValue::from(24.0));
+        let (left_med, right_med) = (ScalarValue::from(6.0), ScalarValue::from(24.0));
+
+        for children in [
+            vec![
+                &Distribution::new_uniform(left_interval.clone())?,
+                &Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                &Distribution::new_generic(
+                    left_mean.clone(),
+                    left_med.clone(),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                &Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                &Distribution::new_uniform(right_interval.clone())?,
+                &Distribution::new_generic(
+                    right_mean.clone(),
+                    right_med.clone(),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+            vec![
+                &Distribution::new_generic(
+                    left_mean.clone(),
+                    left_med.clone(),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                &Distribution::new_generic(
+                    right_mean.clone(),
+                    right_med.clone(),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+        ] {
+            let ops = vec![
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Multiply,
+                Operator::Divide,
+            ];
+
+            for op in ops {
+                let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
+                assert_eq!(
+                    expr.evaluate_statistics(&children)?,
+                    new_generic_from_binary_op(&op, children[0], children[1])?
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_statistics_bernoulli() -> Result<()> {
+        let schema = &Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]);
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = Arc::new(Column::new("b", 1)) as _;
+        let eq = Arc::new(binary_expr(
+            Arc::clone(&a),
+            Operator::Eq,
+            Arc::clone(&b),
+            schema,
+        )?);
+        let neq = Arc::new(binary_expr(a, Operator::NotEq, b, schema)?);
+
+        let left_stat = &Distribution::new_uniform(Interval::make(Some(0), Some(7))?)?;
+        let right_stat = &Distribution::new_uniform(Interval::make(Some(4), Some(11))?)?;
+
+        // Intervals: [0, 7], [4, 11].
+        // The intersection is [4, 7], so the probability of equality is 4 / 64 = 1 / 16.
+        assert_eq!(
+            eq.evaluate_statistics(&[left_stat, right_stat])?,
+            Distribution::new_bernoulli(ScalarValue::from(1.0 / 16.0))?
+        );
+
+        // The probability of being distinct is 1 - 1 / 16 = 15 / 16.
+        assert_eq!(
+            neq.evaluate_statistics(&[left_stat, right_stat])?,
+            Distribution::new_bernoulli(ScalarValue::from(15.0 / 16.0))?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_statistics_combination_of_range_holders_arithmetic() -> Result<()> {
+        let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = lit(ScalarValue::from(12.0));
+
+        let left_interval = Interval::make(Some(0.0), Some(12.0))?;
+        let right_interval = Interval::make(Some(12.0), Some(36.0))?;
+
+        let parent = Distribution::new_uniform(Interval::make(Some(-432.), Some(432.))?)?;
+        let children = vec![
+            vec![
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                Distribution::new_generic(
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_generic(
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+            vec![
+                Distribution::new_generic(
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                Distribution::new_generic(
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+        ];
+
+        let ops = vec![
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Multiply,
+            Operator::Divide,
+        ];
+
+        for child_view in children {
+            let child_refs = child_view.iter().collect::<Vec<_>>();
+            for op in &ops {
+                let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
+                assert_eq!(
+                    expr.propagate_statistics(&parent, child_refs.as_slice())?,
+                    Some(child_view.clone())
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_statistics_combination_of_range_holders_comparison() -> Result<()> {
+        let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = lit(ScalarValue::from(12.0));
+
+        let left_interval = Interval::make(Some(0.0), Some(12.0))?;
+        let right_interval = Interval::make(Some(6.0), Some(18.0))?;
+
+        let one = ScalarValue::from(1.0);
+        let parent = Distribution::new_bernoulli(one)?;
+        let children = vec![
+            vec![
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                Distribution::new_generic(
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                Distribution::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_generic(
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+            vec![
+                Distribution::new_generic(
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                Distribution::new_generic(
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
+            ],
+        ];
+
+        let ops = vec![
+            Operator::Eq,
+            Operator::Gt,
+            Operator::GtEq,
+            Operator::Lt,
+            Operator::LtEq,
+        ];
+
+        for child_view in children {
+            let child_refs = child_view.iter().collect::<Vec<_>>();
+            for op in &ops {
+                let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
+                assert!(expr
+                    .propagate_statistics(&parent, child_refs.as_slice())?
+                    .is_some());
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+
+        // Test basic binary expressions
+        let simple_expr = binary_expr(
+            col("a", &schema)?,
+            Operator::Plus,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let display_string = simple_expr.to_string();
+        assert_eq!(display_string, "a@0 + b@1");
+        let sql_string = fmt_sql(&simple_expr).to_string();
+        assert_eq!(sql_string, "a + b");
+
+        // Test nested expressions with different operator precedence
+        let nested_expr = binary_expr(
+            Arc::new(binary_expr(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("b", &schema)?,
+                &schema,
+            )?),
+            Operator::Multiply,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let display_string = nested_expr.to_string();
+        assert_eq!(display_string, "(a@0 + b@1) * b@1");
+        let sql_string = fmt_sql(&nested_expr).to_string();
+        assert_eq!(sql_string, "(a + b) * b");
+
+        // Test nested expressions with same operator precedence
+        let nested_same_prec = binary_expr(
+            Arc::new(binary_expr(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("b", &schema)?,
+                &schema,
+            )?),
+            Operator::Plus,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let display_string = nested_same_prec.to_string();
+        assert_eq!(display_string, "a@0 + b@1 + b@1");
+        let sql_string = fmt_sql(&nested_same_prec).to_string();
+        assert_eq!(sql_string, "a + b + b");
+
+        // Test with literals
+        let lit_expr = binary_expr(
+            col("a", &schema)?,
+            Operator::Eq,
+            lit(ScalarValue::Int32(Some(42))),
+            &schema,
+        )?;
+        let display_string = lit_expr.to_string();
+        assert_eq!(display_string, "a@0 = 42");
+        let sql_string = fmt_sql(&lit_expr).to_string();
+        assert_eq!(sql_string, "a = 42");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_short_circuit() {
+        // Test with non-nullable arrays
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let a_array = Int32Array::from(vec![1, 3, 4, 5, 6]);
+        let b_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(a_array), Arc::new(b_array)],
+        )
+        .unwrap();
+
+        // op: AND left: all false
+        let left_expr = logical2physical(&logical_col("a").eq(expr_lit(2)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(matches!(
+            check_short_circuit(&left_value, &Operator::And),
+            ShortCircuitStrategy::ReturnLeft
+        ));
+
+        // op: AND left: not all false
+        let left_expr = logical2physical(&logical_col("a").eq(expr_lit(3)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        let ColumnarValue::Array(array) = &left_value else {
+            panic!("Expected ColumnarValue::Array");
+        };
+        let ShortCircuitStrategy::PreSelection(value) =
+            check_short_circuit(&left_value, &Operator::And)
+        else {
+            panic!("Expected ShortCircuitStrategy::PreSelection");
+        };
+        let expected_boolean_arr: Vec<_> =
+            as_boolean_array(array).unwrap().iter().collect();
+        let boolean_arr: Vec<_> = value.iter().collect();
+        assert_eq!(expected_boolean_arr, boolean_arr);
+
+        // op: OR left: all true
+        let left_expr = logical2physical(&logical_col("a").gt(expr_lit(0)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(matches!(
+            check_short_circuit(&left_value, &Operator::Or),
+            ShortCircuitStrategy::ReturnLeft
+        ));
+
+        // op: OR left: not all true
+        let left_expr: Arc<dyn PhysicalExpr> =
+            logical2physical(&logical_col("a").gt(expr_lit(2)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        assert!(matches!(
+            check_short_circuit(&left_value, &Operator::Or),
+            ShortCircuitStrategy::None
+        ));
+
+        // Test with nullable arrays and null values
+        let schema_nullable = Arc::new(Schema::new(vec![
+            Field::new("c", DataType::Boolean, true),
+            Field::new("d", DataType::Boolean, true),
+        ]));
+
+        // Create arrays with null values
+        let c_array = Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+            Some(true),
+            None,
+        ])) as ArrayRef;
+        let d_array = Arc::new(BooleanArray::from(vec![
+            Some(false),
+            Some(true),
+            Some(false),
+            None,
+            Some(true),
+        ])) as ArrayRef;
+
+        let batch_nullable = RecordBatch::try_new(
+            Arc::clone(&schema_nullable),
+            vec![Arc::clone(&c_array), Arc::clone(&d_array)],
+        )
+        .unwrap();
+
+        // Case: Mixed values with nulls - shouldn't short-circuit for AND
+        let mixed_nulls = logical2physical(&logical_col("c"), &schema_nullable);
+        let mixed_nulls_value = mixed_nulls.evaluate(&batch_nullable).unwrap();
+        assert!(matches!(
+            check_short_circuit(&mixed_nulls_value, &Operator::And),
+            ShortCircuitStrategy::None
+        ));
+
+        // Case: Mixed values with nulls - shouldn't short-circuit for OR
+        assert!(matches!(
+            check_short_circuit(&mixed_nulls_value, &Operator::Or),
+            ShortCircuitStrategy::None
+        ));
+
+        // Test with all nulls
+        let all_nulls = Arc::new(BooleanArray::from(vec![None, None, None])) as ArrayRef;
+        let null_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("e", DataType::Boolean, true)])),
+            vec![all_nulls],
+        )
+        .unwrap();
+
+        let null_expr = logical2physical(&logical_col("e"), &null_batch.schema());
+        let null_value = null_expr.evaluate(&null_batch).unwrap();
+
+        // All nulls shouldn't short-circuit for AND or OR
+        assert!(matches!(
+            check_short_circuit(&null_value, &Operator::And),
+            ShortCircuitStrategy::None
+        ));
+        assert!(matches!(
+            check_short_circuit(&null_value, &Operator::Or),
+            ShortCircuitStrategy::None
+        ));
+
+        // Test with scalar values
+        // Scalar true
+        let scalar_true = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
+        assert!(matches!(
+            check_short_circuit(&scalar_true, &Operator::Or),
+            ShortCircuitStrategy::ReturnLeft
+        )); // Should short-circuit OR
+        assert!(matches!(
+            check_short_circuit(&scalar_true, &Operator::And),
+            ShortCircuitStrategy::ReturnRight
+        )); // Should return the RHS for AND
+
+        // Scalar false
+        let scalar_false = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
+        assert!(matches!(
+            check_short_circuit(&scalar_false, &Operator::And),
+            ShortCircuitStrategy::ReturnLeft
+        )); // Should short-circuit AND
+        assert!(matches!(
+            check_short_circuit(&scalar_false, &Operator::Or),
+            ShortCircuitStrategy::ReturnRight
+        )); // Should return the RHS for OR
+
+        // Scalar null
+        let scalar_null = ColumnarValue::Scalar(ScalarValue::Boolean(None));
+        assert!(matches!(
+            check_short_circuit(&scalar_null, &Operator::And),
+            ShortCircuitStrategy::None
+        ));
+        assert!(matches!(
+            check_short_circuit(&scalar_null, &Operator::Or),
+            ShortCircuitStrategy::None
+        ));
+    }
+
+    /// Test for [pre_selection_scatter]
+    /// Since [check_short_circuit] ensures that the left side does not contain null and is neither all_true nor all_false, as well as not being empty,
+    /// the following tests have been designed:
+    /// 1. Test sparse left with interleaved true/false
+    /// 2. Test multiple consecutive true blocks
+    /// 3. Test multiple consecutive true blocks
+    /// 4. Test single true at first position
+    /// 5. Test single true at last position
+    /// 6. Test nulls in right array
+    /// 7. Test scalar right handling
+    #[test]
+    fn test_pre_selection_scatter() {
+        fn create_bool_array(bools: Vec<bool>) -> BooleanArray {
+            BooleanArray::from(bools.into_iter().map(Some).collect::<Vec<_>>())
+        }
+        // Test sparse left with interleaved true/false
+        {
+            // Left: [T, F, T, F, T]
+            // Right: [F, T, F] (values for 3 true positions)
+            let left = create_bool_array(vec![true, false, true, false, true]);
+            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![
+                false, true, false,
+            ])));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            let expected = create_bool_array(vec![false, false, true, false, false]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // Test multiple consecutive true blocks
+        {
+            // Left: [F, T, T, F, T, T, T]
+            // Right: [T, F, F, T, F]
+            let left =
+                create_bool_array(vec![false, true, true, false, true, true, true]);
+            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![
+                true, false, false, true, false,
+            ])));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            let expected =
+                create_bool_array(vec![false, true, false, false, false, true, false]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // Test single true at first position
+        {
+            // Left: [T, F, F]
+            // Right: [F]
+            let left = create_bool_array(vec![true, false, false]);
+            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![false])));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            let expected = create_bool_array(vec![false, false, false]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // Test single true at last position
+        {
+            // Left: [F, F, T]
+            // Right: [F]
+            let left = create_bool_array(vec![false, false, true]);
+            let right = ColumnarValue::Array(Arc::new(create_bool_array(vec![false])));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            let expected = create_bool_array(vec![false, false, false]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // Test nulls in right array
+        {
+            // Left: [F, T, F, T]
+            // Right: [None, Some(false)] (with null at first position)
+            let left = create_bool_array(vec![false, true, false, true]);
+            let right_arr = BooleanArray::from(vec![None, Some(false)]);
+            let right = ColumnarValue::Array(Arc::new(right_arr));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            let expected = BooleanArray::from(vec![
+                Some(false),
+                None, // null from right
+                Some(false),
+                Some(false),
+            ]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // Test scalar right handling
+        {
+            // Left: [T, F, T]
+            // Right: Scalar true
+            let left = create_bool_array(vec![true, false, true]);
+            let right = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
+
+            let result = pre_selection_scatter(&left, right).unwrap();
+            assert!(matches!(result, ColumnarValue::Scalar(_)));
+        }
     }
 }

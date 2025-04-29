@@ -18,9 +18,12 @@
 use crate::string::common::to_upper;
 use crate::utils::utf8_to_str_type;
 use arrow::datatypes::DataType;
+use datafusion_common::types::logical_string;
 use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 
@@ -54,7 +57,12 @@ impl Default for UpperFunc {
 impl UpperFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Native(
+                    logical_string(),
+                ))],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -76,12 +84,8 @@ impl ScalarUDFImpl for UpperFunc {
         utf8_to_str_type(&arg_types[0], "upper")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        to_upper(args, "upper")
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        to_upper(&args.args, "upper")
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -97,10 +101,14 @@ mod tests {
 
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();
-        let batch_len = input.len();
-        let args = vec![ColumnarValue::Array(input)];
-        #[allow(deprecated)] // TODO migrate UDF to invoke
-        let result = match func.invoke_batch(&args, batch_len)? {
+
+        let args = ScalarFunctionArgs {
+            number_rows: input.len(),
+            args: vec![ColumnarValue::Array(input)],
+            return_type: &DataType::Utf8,
+        };
+
+        let result = match func.invoke_with_args(args)? {
             ColumnarValue::Array(result) => result,
             _ => unreachable!("upper"),
         };

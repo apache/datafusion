@@ -20,11 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::data_source::FileSource;
-use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::{
-    FileMeta, FileOpenFuture, FileOpener, FileScanConfig, JsonSource,
-};
+use crate::datasource::physical_plan::{FileMeta, FileOpenFuture, FileOpener};
 use crate::error::Result;
 
 use arrow::buffer::Buffer;
@@ -32,16 +28,20 @@ use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource_json::source::JsonSource;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 
+use datafusion_datasource::file_groups::FileGroup;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
@@ -83,8 +83,8 @@ impl ArrowExec {
     }
 
     fn file_scan_config(&self) -> FileScanConfig {
-        let source = self.inner.source();
-        source
+        self.inner
+            .data_source()
             .as_any()
             .downcast_ref::<FileScanConfig>()
             .unwrap()
@@ -92,8 +92,7 @@ impl ArrowExec {
     }
 
     fn json_source(&self) -> JsonSource {
-        let source = self.file_scan_config();
-        source
+        self.file_scan_config()
             .file_source()
             .as_any()
             .downcast_ref::<JsonSource>()
@@ -125,11 +124,11 @@ impl ArrowExec {
         )
     }
 
-    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+    fn with_file_groups(mut self, file_groups: Vec<FileGroup>) -> Self {
         self.base_config.file_groups = file_groups.clone();
         let mut file_source = self.file_scan_config();
         file_source = file_source.with_file_groups(file_groups);
-        self.inner = self.inner.with_source(Arc::new(file_source));
+        self.inner = self.inner.with_data_source(Arc::new(file_source));
         self
     }
 }
@@ -211,14 +210,14 @@ pub struct ArrowSource {
 impl FileSource for ArrowSource {
     fn create_file_opener(
         &self,
-        object_store: Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        Ok(Arc::new(ArrowOpener {
-            object_store: object_store?,
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(ArrowOpener {
+            object_store,
             projection: base_config.file_column_projection_indices(),
-        }))
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -256,10 +255,6 @@ impl FileSource for ArrowSource {
     fn file_type(&self) -> &str {
         "arrow"
     }
-
-    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
-        !(config.file_compression_type.is_compressed() || config.new_lines_in_values)
-    }
 }
 
 /// The struct arrow that implements `[FileOpener]` trait
@@ -278,6 +273,7 @@ impl FileOpener for ArrowOpener {
                 None => {
                     let r = object_store.get(file_meta.location()).await?;
                     match r.payload {
+                        #[cfg(not(target_arch = "wasm32"))]
                         GetResultPayload::File(file, _) => {
                             let arrow_reader = arrow::ipc::reader::FileReader::try_new(
                                 file, projection,
@@ -310,7 +306,7 @@ impl FileOpener for ArrowOpener {
                     )?;
                     // read footer according to footer_len
                     let get_option = GetOptions {
-                        range: Some(GetRange::Suffix(10 + footer_len)),
+                        range: Some(GetRange::Suffix(10 + (footer_len as u64))),
                         ..Default::default()
                     };
                     let get_result = object_store
@@ -337,9 +333,9 @@ impl FileOpener for ArrowOpener {
                         .iter()
                         .flatten()
                         .map(|block| {
-                            let block_len = block.bodyLength() as usize
-                                + block.metaDataLength() as usize;
-                            let block_offset = block.offset() as usize;
+                            let block_len =
+                                block.bodyLength() as u64 + block.metaDataLength() as u64;
+                            let block_offset = block.offset() as u64;
                             block_offset..block_offset + block_len
                         })
                         .collect_vec();
@@ -359,9 +355,9 @@ impl FileOpener for ArrowOpener {
                         .iter()
                         .flatten()
                         .filter(|block| {
-                            let block_offset = block.offset() as usize;
-                            block_offset >= range.start as usize
-                                && block_offset < range.end as usize
+                            let block_offset = block.offset() as u64;
+                            block_offset >= range.start as u64
+                                && block_offset < range.end as u64
                         })
                         .copied()
                         .collect_vec();
@@ -369,9 +365,9 @@ impl FileOpener for ArrowOpener {
                     let recordbatch_ranges = recordbatches
                         .iter()
                         .map(|block| {
-                            let block_len = block.bodyLength() as usize
-                                + block.metaDataLength() as usize;
-                            let block_offset = block.offset() as usize;
+                            let block_len =
+                                block.bodyLength() as u64 + block.metaDataLength() as u64;
+                            let block_offset = block.offset() as u64;
                             block_offset..block_offset + block_len
                         })
                         .collect_vec();

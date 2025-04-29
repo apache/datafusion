@@ -181,6 +181,14 @@ impl DisplayAs for WindowAggExec {
                     .collect();
                 write!(f, "wdw=[{}]", g.join(", "))?;
             }
+            DisplayFormatType::TreeRender => {
+                let g: Vec<String> = self
+                    .window_expr
+                    .iter()
+                    .map(|e| e.name().to_owned().to_string())
+                    .collect();
+                writeln!(f, "select_list={}", g.join(", "))?;
+            }
         }
         Ok(())
     }

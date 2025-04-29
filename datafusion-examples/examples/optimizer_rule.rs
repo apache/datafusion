@@ -20,8 +20,8 @@ use arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{assert_batches_eq, Result, ScalarValue};
 use datafusion::logical_expr::{
-    BinaryExpr, ColumnarValue, Expr, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility,
+    BinaryExpr, ColumnarValue, Expr, LogicalPlan, Operator, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::optimizer::ApplyOrder;
 use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
@@ -205,11 +205,7 @@ impl ScalarUDFImpl for MyEq {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // this example simply returns "true" which is not what a real
         // implementation would do.
         Ok(ColumnarValue::Scalar(ScalarValue::from(true)))

@@ -187,7 +187,7 @@ EXPLAIN SELECT a FROM (select 1 a) x GROUP BY 1
 (SELECT a FROM (select 1.1 a) x GROUP BY 1) ORDER BY 1
 ----
 logical_plan
-01)Sort: x.a ASC NULLS LAST
+01)Sort: a ASC NULLS LAST
 02)--Union
 03)----Projection: CAST(x.a AS Float64) AS a
 04)------Aggregate: groupBy=[[x.a]], aggr=[[]]

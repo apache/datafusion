@@ -30,7 +30,7 @@ use crate::aggregates::{
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
-use crate::spill::{read_spill_as_stream, spill_record_batch_by_size};
+use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -42,7 +42,6 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
@@ -91,6 +90,9 @@ struct SpillState {
     /// GROUP BY expressions for merging spilled data
     merging_group_by: PhysicalGroupBy,
 
+    /// Manages the process of spilling and reading back intermediate data
+    spill_manager: SpillManager,
+
     // ========================================================================
     // STATES:
     // Fields changes during execution. Can be buffer, or state flags that
@@ -109,12 +111,7 @@ struct SpillState {
     /// Peak memory used for buffered data.
     /// Calculated as sum of peak memory values across partitions
     peak_mem_used: metrics::Gauge,
-    /// count of spill files during the execution of the operator
-    spill_count: metrics::Count,
-    /// total spilled bytes during the execution of the operator
-    spilled_bytes: metrics::Count,
-    /// total spilled rows during the execution of the operator
-    spilled_rows: metrics::Count,
+    // Metrics related to spilling are managed inside `spill_manager`
 }
 
 /// Tracks if the aggregate should skip partial aggregations
@@ -435,9 +432,6 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
-
-    /// The [`RuntimeEnv`] associated with the [`TaskContext`] argument
-    runtime: Arc<RuntimeEnv>,
 }
 
 impl GroupedHashAggregateStream {
@@ -513,6 +507,16 @@ impl GroupedHashAggregateStream {
             AggregateMode::Partial,
         )?;
 
+        // Need to update the GROUP BY expressions to point to the correct column after schema change
+        let merging_group_by_expr = agg_group_by
+            .expr
+            .iter()
+            .enumerate()
+            .map(|(idx, (_, name))| {
+                (Arc::new(Column::new(name.as_str(), idx)) as _, name.clone())
+            })
+            .collect();
+
         let partial_agg_schema = Arc::new(partial_agg_schema);
 
         let spill_expr = group_schema
@@ -544,18 +548,22 @@ impl GroupedHashAggregateStream {
 
         let exec_state = ExecutionState::ReadingInput;
 
+        let spill_manager = SpillManager::new(
+            context.runtime_env(),
+            metrics::SpillMetrics::new(&agg.metrics, partition),
+            Arc::clone(&partial_agg_schema),
+        );
+
         let spill_state = SpillState {
             spills: vec![],
             spill_expr,
             spill_schema: partial_agg_schema,
             is_stream_merging: false,
             merging_aggregate_arguments,
-            merging_group_by: PhysicalGroupBy::new_single(agg_group_by.expr.clone()),
+            merging_group_by: PhysicalGroupBy::new_single(merging_group_by_expr),
             peak_mem_used: MetricBuilder::new(&agg.metrics)
                 .gauge("peak_mem_used", partition),
-            spill_count: MetricBuilder::new(&agg.metrics).spill_count(partition),
-            spilled_bytes: MetricBuilder::new(&agg.metrics).spilled_bytes(partition),
-            spilled_rows: MetricBuilder::new(&agg.metrics).spilled_rows(partition),
+            spill_manager,
         };
 
         // Skip aggregation is supported if:
@@ -604,7 +612,6 @@ impl GroupedHashAggregateStream {
             batch_size,
             group_ordering,
             input_done: false,
-            runtime: context.runtime_env(),
             spill_state,
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
@@ -632,16 +639,6 @@ pub(crate) fn create_group_accumulator(
     }
 }
 
-/// Extracts a successful Ok(_) or returns Poll::Ready(Some(Err(e))) with errors
-macro_rules! extract_ok {
-    ($RES: expr) => {{
-        match $RES {
-            Ok(v) => v,
-            Err(e) => return Poll::Ready(Some(Err(e))),
-        }
-    }};
-}
-
 impl Stream for GroupedHashAggregateStream {
     type Item = Result<RecordBatch>;
 
@@ -661,7 +658,7 @@ impl Stream for GroupedHashAggregateStream {
                             let input_rows = batch.num_rows();
 
                             // Do the grouping
-                            extract_ok!(self.group_aggregate_batch(batch));
+                            self.group_aggregate_batch(batch)?;
 
                             self.update_skip_aggregation_probe(input_rows);
 
@@ -673,16 +670,14 @@ impl Stream for GroupedHashAggregateStream {
                             // emit all groups and switch to producing output
                             if self.hit_soft_group_limit() {
                                 timer.done();
-                                extract_ok!(self.set_input_done_and_produce_output());
+                                self.set_input_done_and_produce_output()?;
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
 
                             if let Some(to_emit) = self.group_ordering.emit_to() {
                                 timer.done();
-                                if let Some(batch) =
-                                    extract_ok!(self.emit(to_emit, false))
-                                {
+                                if let Some(batch) = self.emit(to_emit, false)? {
                                     self.exec_state =
                                         ExecutionState::ProducingOutput(batch);
                                 };
@@ -690,9 +685,9 @@ impl Stream for GroupedHashAggregateStream {
                                 break 'reading_input;
                             }
 
-                            extract_ok!(self.emit_early_if_necessary());
+                            self.emit_early_if_necessary()?;
 
-                            extract_ok!(self.switch_to_skip_aggregation());
+                            self.switch_to_skip_aggregation()?;
 
                             timer.done();
                         }
@@ -703,10 +698,10 @@ impl Stream for GroupedHashAggregateStream {
                             let timer = elapsed_compute.timer();
 
                             // Make sure we have enough capacity for `batch`, otherwise spill
-                            extract_ok!(self.spill_previous_if_necessary(&batch));
+                            self.spill_previous_if_necessary(&batch)?;
 
                             // Do the grouping
-                            extract_ok!(self.group_aggregate_batch(batch));
+                            self.group_aggregate_batch(batch)?;
 
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
@@ -716,16 +711,14 @@ impl Stream for GroupedHashAggregateStream {
                             // emit all groups and switch to producing output
                             if self.hit_soft_group_limit() {
                                 timer.done();
-                                extract_ok!(self.set_input_done_and_produce_output());
+                                self.set_input_done_and_produce_output()?;
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
 
                             if let Some(to_emit) = self.group_ordering.emit_to() {
                                 timer.done();
-                                if let Some(batch) =
-                                    extract_ok!(self.emit(to_emit, false))
-                                {
+                                if let Some(batch) = self.emit(to_emit, false)? {
                                     self.exec_state =
                                         ExecutionState::ProducingOutput(batch);
                                 };
@@ -745,7 +738,7 @@ impl Stream for GroupedHashAggregateStream {
                         // Found end from input stream
                         None => {
                             // inner is done, emit all rows and switch to producing output
-                            extract_ok!(self.set_input_done_and_produce_output());
+                            self.set_input_done_and_produce_output()?;
                         }
                     }
                 }
@@ -982,7 +975,7 @@ impl GroupedHashAggregateStream {
     /// memory. Currently only [`GroupOrdering::None`] is supported for spilling.
     fn spill_previous_if_necessary(&mut self, batch: &RecordBatch) -> Result<()> {
         // TODO: support group_ordering for spilling
-        if self.group_values.len() > 0
+        if !self.group_values.is_empty()
             && batch.num_rows() > 0
             && matches!(self.group_ordering, GroupOrdering::None)
             && !self.spill_state.is_stream_merging
@@ -995,28 +988,30 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    /// Emit all rows, sort them, and store them on disk.
+    /// Emit all intermediate aggregation states, sort them, and store them on disk.
+    /// This process helps in reducing memory pressure by allowing the data to be
+    /// read back with streaming merge.
     fn spill(&mut self) -> Result<()> {
+        // Emit and sort intermediate aggregation state
         let Some(emit) = self.emit(EmitTo::All, true)? else {
             return Ok(());
         };
         let sorted = sort_batch(&emit, self.spill_state.spill_expr.as_ref(), None)?;
-        let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
-        // TODO: slice large `sorted` and write to multiple files in parallel
-        spill_record_batch_by_size(
+
+        // Spill sorted state to disk
+        let spillfile = self.spill_state.spill_manager.spill_record_batch_by_size(
             &sorted,
-            spillfile.path().into(),
-            sorted.schema(),
+            "HashAggSpill",
             self.batch_size,
         )?;
-        self.spill_state.spills.push(spillfile);
-
-        // Update metrics
-        self.spill_state.spill_count.add(1);
-        self.spill_state
-            .spilled_bytes
-            .add(sorted.get_array_memory_size());
-        self.spill_state.spilled_rows.add(sorted.num_rows());
+        match spillfile {
+            Some(spillfile) => self.spill_state.spills.push(spillfile),
+            None => {
+                return internal_err!(
+                    "Calling spill with no intermediate batch to spill"
+                );
+            }
+        }
 
         Ok(())
     }
@@ -1072,7 +1067,7 @@ impl GroupedHashAggregateStream {
             })),
         )));
         for spill in self.spill_state.spills.drain(..) {
-            let stream = read_spill_as_stream(spill, Arc::clone(&schema), 2)?;
+            let stream = self.spill_state.spill_manager.read_spill_as_stream(spill)?;
             streams.push(stream);
         }
         self.spill_state.is_stream_merging = true;

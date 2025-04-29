@@ -164,7 +164,8 @@ macro_rules! make_math_unary_udf {
             use datafusion_expr::interval_arithmetic::Interval;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
-                ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+                ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
+                Signature, Volatility,
             };
 
             #[derive(Debug)]
@@ -218,12 +219,11 @@ macro_rules! make_math_unary_udf {
                     $EVALUATE_BOUNDS(inputs)
                 }
 
-                fn invoke_batch(
+                fn invoke_with_args(
                     &self,
-                    args: &[ColumnarValue],
-                    _number_rows: usize,
+                    args: ScalarFunctionArgs,
                 ) -> Result<ColumnarValue> {
-                    let args = ColumnarValue::values_to_arrays(args)?;
+                    let args = ColumnarValue::values_to_arrays(&args.args)?;
                     let arr: ArrayRef = match args[0].data_type() {
                         DataType::Float64 => Arc::new(
                             args[0]
@@ -278,7 +278,8 @@ macro_rules! make_math_binary_udf {
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::TypeSignature;
             use datafusion_expr::{
-                ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+                ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
+                Signature, Volatility,
             };
 
             #[derive(Debug)]
@@ -330,12 +331,11 @@ macro_rules! make_math_binary_udf {
                     $OUTPUT_ORDERING(input)
                 }
 
-                fn invoke_batch(
+                fn invoke_with_args(
                     &self,
-                    args: &[ColumnarValue],
-                    _number_rows: usize,
+                    args: ScalarFunctionArgs,
                 ) -> Result<ColumnarValue> {
-                    let args = ColumnarValue::values_to_arrays(args)?;
+                    let args = ColumnarValue::values_to_arrays(&args.args)?;
                     let arr: ArrayRef = match args[0].data_type() {
                         DataType::Float64 => {
                             let y = args[0].as_primitive::<Float64Type>();

@@ -18,7 +18,9 @@
 extern crate criterion;
 mod helper;
 
+use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_expr::ScalarFunctionArgs;
 use helper::gen_string_array;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -42,8 +44,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("reverse_StringArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(reverse.invoke_batch(&args_string_ascii, N_ROWS))
+                    black_box(reverse.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_ascii.clone(),
+                        number_rows: N_ROWS,
+                        return_type: &DataType::Utf8,
+                    }))
                 })
             },
         );
@@ -58,8 +63,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(reverse.invoke_batch(&args_string_utf8, N_ROWS))
+                    black_box(reverse.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_utf8.clone(),
+                        number_rows: N_ROWS,
+                        return_type: &DataType::Utf8,
+                    }))
                 })
             },
         );
@@ -76,8 +84,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("reverse_StringViewArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(reverse.invoke_batch(&args_string_view_ascii, N_ROWS))
+                    black_box(reverse.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_view_ascii.clone(),
+                        number_rows: N_ROWS,
+                        return_type: &DataType::Utf8,
+                    }))
                 })
             },
         );
@@ -92,8 +103,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(reverse.invoke_batch(&args_string_view_utf8, N_ROWS))
+                    black_box(reverse.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_view_utf8.clone(),
+                        number_rows: N_ROWS,
+                        return_type: &DataType::Utf8,
+                    }))
                 })
             },
         );

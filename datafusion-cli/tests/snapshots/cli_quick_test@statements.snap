@@ -1,0 +1,24 @@
+---
+source: tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "--command"
+    - select 1; select 2;
+    - "-q"
+---
+success: true
+exit_code: 0
+----- stdout -----
++----------+
+| Int64(1) |
++----------+
+| 1        |
++----------+
++----------+
+| Int64(2) |
++----------+
+| 2        |
++----------+
+
+----- stderr -----

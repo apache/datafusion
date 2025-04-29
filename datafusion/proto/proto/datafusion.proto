@@ -21,7 +21,7 @@ syntax = "proto3";
 package datafusion;
 
 option java_multiple_files = true;
-option java_package = "org.apache.arrow.datafusion.protobuf";
+option java_package = "org.apache.datafusion.protobuf";
 option java_outer_classname = "DatafusionProto";
 
 import "datafusion/proto-common/proto/datafusion_common.proto";
@@ -90,7 +90,7 @@ message ListingTableScanNode {
   ProjectionColumns projection = 4;
   datafusion_common.Schema schema = 5;
   repeated LogicalExprNode filters = 6;
-  repeated string table_partition_cols = 7;
+  repeated PartitionColumn table_partition_cols = 7;
   bool collect_stat = 8;
   uint32 target_partitions = 9;
   oneof FileFormatType {
@@ -273,12 +273,11 @@ message DmlNode{
     INSERT_APPEND = 3;
     INSERT_OVERWRITE = 4;
     INSERT_REPLACE = 5;
-    
   }
   Type dml_type = 1;
   LogicalPlanNode input = 2;
   TableReference table_name = 3;
-  datafusion_common.DfSchema schema = 4;
+  LogicalPlanNode target = 5;
 }
 
 message UnnestNode {
@@ -484,6 +483,7 @@ message AliasNode {
   LogicalExprNode expr = 1;
   string alias = 2;
   repeated TableReference relation = 3;
+  map<string, string> metadata = 4;
 }
 
 message BinaryExprNode {
@@ -725,6 +725,7 @@ message PhysicalPlanNode {
     CsvSinkExecNode csv_sink = 28;
     ParquetSinkExecNode parquet_sink = 29;
     UnnestExecNode unnest = 30;
+    JsonScanExecNode json_scan = 31;
   }
 }
 
@@ -996,6 +997,7 @@ message FileScanExecConf {
   reserved 10;
 
   datafusion_common.Constraints constraints = 11;
+  optional uint64 batch_size = 12;
 }
 
 message ParquetScanExecNode {
@@ -1021,6 +1023,10 @@ message CsvScanExecNode {
     string comment = 6;
   }
   bool newlines_in_values = 7;
+}
+
+message JsonScanExecNode {
+  FileScanExecConf base_conf = 1;
 }
 
 message AvroScanExecNode {
@@ -1211,6 +1217,7 @@ message CoalesceBatchesExecNode {
 
 message CoalescePartitionsExecNode {
   PhysicalPlanNode input = 1;
+  optional uint32 fetch = 2;
 }
 
 message PhysicalHashRepartition {

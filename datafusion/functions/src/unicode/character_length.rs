@@ -88,12 +88,11 @@ impl ScalarUDFImpl for CharacterLengthFunc {
         utf8_to_int_type(&arg_types[0], "character_length")
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(character_length, vec![])(args)
+        make_scalar_function(character_length, vec![])(&args.args)
     }
 
     fn aliases(&self) -> &[String] {

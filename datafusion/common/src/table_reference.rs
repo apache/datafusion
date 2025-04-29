@@ -193,8 +193,7 @@ impl TableReference {
         match self {
             TableReference::Bare { table } => **table == *other.table(),
             TableReference::Partial { schema, table } => {
-                **table == *other.table()
-                    && other.schema().map_or(true, |s| *s == **schema)
+                **table == *other.table() && other.schema().is_none_or(|s| *s == **schema)
             }
             TableReference::Full {
                 catalog,
@@ -202,8 +201,8 @@ impl TableReference {
                 table,
             } => {
                 **table == *other.table()
-                    && other.schema().map_or(true, |s| *s == **schema)
-                    && other.catalog().map_or(true, |c| *c == **catalog)
+                    && other.schema().is_none_or(|s| *s == **schema)
+                    && other.catalog().is_none_or(|c| *c == **catalog)
             }
         }
     }

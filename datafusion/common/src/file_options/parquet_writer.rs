@@ -219,6 +219,7 @@ impl ParquetOptions {
             max_row_group_size,
             created_by,
             column_index_truncate_length,
+            statistics_truncate_length,
             data_page_row_count_limit,
             encoding,
             bloom_filter_on_write,
@@ -238,6 +239,7 @@ impl ParquetOptions {
             bloom_filter_on_read: _, // reads not used for writer props
             schema_force_view_types: _,
             binary_as_string: _, // not used for writer props
+            coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
         } = self;
 
@@ -255,6 +257,7 @@ impl ParquetOptions {
             .set_max_row_group_size(*max_row_group_size)
             .set_created_by(created_by.clone())
             .set_column_index_truncate_length(*column_index_truncate_length)
+            .set_statistics_truncate_length(*statistics_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
 
@@ -491,6 +494,7 @@ mod tests {
             max_row_group_size: 42,
             created_by: "wordy".into(),
             column_index_truncate_length: Some(42),
+            statistics_truncate_length: Some(42),
             data_page_row_count_limit: 42,
             encoding: Some("BYTE_STREAM_SPLIT".into()),
             bloom_filter_on_write: !defaults.bloom_filter_on_write,
@@ -513,6 +517,7 @@ mod tests {
             schema_force_view_types: defaults.schema_force_view_types,
             binary_as_string: defaults.binary_as_string,
             skip_arrow_metadata: defaults.skip_arrow_metadata,
+            coerce_int96: None,
         }
     }
 
@@ -587,6 +592,7 @@ mod tests {
                 max_row_group_size: props.max_row_group_size(),
                 created_by: props.created_by().to_string(),
                 column_index_truncate_length: props.column_index_truncate_length(),
+                statistics_truncate_length: props.statistics_truncate_length(),
                 data_page_row_count_limit: props.data_page_row_count_limit(),
 
                 // global options which set the default column props
@@ -618,6 +624,7 @@ mod tests {
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
+                coerce_int96: None,
             },
             column_specific_options,
             key_value_metadata,

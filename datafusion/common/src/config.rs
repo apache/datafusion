@@ -149,9 +149,17 @@ macro_rules! config_namespace {
                             // $(#[allow(deprecated)])?
                             {
                                 $(let value = $transform(value);)? // Apply transformation if specified
-                                $(log::warn!($warn);)? // Log warning if specified
                                 #[allow(deprecated)]
-                                self.$field_name.set(rem, value.as_ref())
+                                let ret = self.$field_name.set(rem, value.as_ref());
+
+                                $(if !$warn.is_empty() {
+                                    let default: $field_type = $default;
+                                    #[allow(deprecated)]
+                                    if default != self.$field_name {
+                                        log::warn!($warn);
+                                    }
+                                })? // Log warning if specified, and the value is not the default
+                                ret
                             }
                         },
                     )*
@@ -242,7 +250,7 @@ config_namespace! {
         pub enable_options_value_normalization: bool, warn = "`enable_options_value_normalization` is deprecated and ignored", default = false
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
-        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
+        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
         pub dialect: String, default = "generic".to_string()
         // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
@@ -252,10 +260,18 @@ config_namespace! {
         /// string length and thus DataFusion can not enforce such limits.
         pub support_varchar_with_length: bool, default = true
 
+       /// If true, `VARCHAR` is mapped to `Utf8View` during SQL planning.
+       /// If false, `VARCHAR` is mapped to `Utf8`  during SQL planning.
+       /// Default is false.
+        pub map_varchar_to_utf8view: bool, default = false
+
         /// When set to true, the source locations relative to the original SQL
-        /// query (i.e. [`Span`](sqlparser::tokenizer::Span)) will be collected
+        /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected
         /// and recorded in the logical plan nodes.
         pub collect_spans: bool, default = false
+
+        /// Specifies the recursion depth limit when parsing complex SQL Queries
+        pub recursion_limit: usize, default = 50
     }
 }
 
@@ -284,7 +300,7 @@ config_namespace! {
         /// concurrency.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub target_partitions: usize, default = get_available_parallelism()
+        pub target_partitions: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// The default time zone
         ///
@@ -300,7 +316,7 @@ config_namespace! {
         /// This is mostly use to plan `UNION` children in parallel.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub planning_concurrency: usize, default = get_available_parallelism()
+        pub planning_concurrency: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// When set to true, skips verifying that the schema produced by
         /// planning the input of `LogicalPlan::Aggregate` exactly matches the
@@ -443,6 +459,14 @@ config_namespace! {
         /// BLOB instead.
         pub binary_as_string: bool, default = false
 
+        /// (reading) If true, parquet reader will read columns of
+        /// physical type int96 as originating from a different resolution
+        /// than nanosecond. This is useful for reading data from systems like Spark
+        /// which stores microsecond resolution timestamps in an int96 allowing it
+        /// to write values with a larger date range than 64-bit timestamps with
+        /// nanosecond resolution.
+        pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
@@ -502,6 +526,10 @@ config_namespace! {
 
         /// (writing) Sets column index truncate length
         pub column_index_truncate_length: Option<usize>, default = Some(64)
+
+        /// (writing) Sets statictics truncate length. If NULL, uses
+        /// default parquet writer setting
+        pub statistics_truncate_length: Option<usize>, default = None
 
         /// (writing) Sets best effort maximum number of rows in data page
         pub data_page_row_count_limit: usize, default = 20_000
@@ -704,6 +732,23 @@ config_namespace! {
 
         /// When set to true, the explain statement will print schema information
         pub show_schema: bool, default = false
+
+        /// Display format of explain. Default is "indent".
+        /// When set to "tree", it will print the plan in a tree-rendered format.
+        pub format: String, default = "indent".to_string()
+    }
+}
+
+impl ExecutionOptions {
+    /// Returns the correct parallelism based on the provided `value`.
+    /// If `value` is `"0"`, returns the default available parallelism, computed with
+    /// `get_available_parallelism`. Otherwise, returns `value`.
+    fn normalized_parallelism(value: &str) -> String {
+        if value.parse::<usize>() == Ok(0) {
+            get_available_parallelism().to_string()
+        } else {
+            value.to_owned()
+        }
     }
 }
 
@@ -819,7 +864,9 @@ impl ConfigOptions {
         for key in keys.0 {
             let env = key.to_uppercase().replace('.', "_");
             if let Some(var) = std::env::var_os(env) {
-                ret.set(&key, var.to_string_lossy().as_ref())?;
+                let value = var.to_string_lossy();
+                log::info!("Set {key} to {value} from the environment variable");
+                ret.set(&key, value.as_ref())?;
             }
         }
 
@@ -1241,35 +1288,72 @@ macro_rules! extensions_options {
                 Box::new(self.clone())
             }
 
-            fn set(&mut self, key: &str, value: &str) -> $crate::Result<()> {
-                match key {
-                    $(
-                       stringify!($field_name) => {
-                        self.$field_name = value.parse().map_err(|e| {
-                            $crate::DataFusionError::Context(
-                                format!(concat!("Error parsing {} as ", stringify!($t),), value),
-                                Box::new($crate::DataFusionError::External(Box::new(e))),
-                            )
-                        })?;
-                        Ok(())
-                       }
-                    )*
-                    _ => Err($crate::DataFusionError::Configuration(
-                        format!(concat!("Config value \"{}\" not found on ", stringify!($struct_name)), key)
-                    ))
-                }
+            fn set(&mut self, key: &str, value: &str) -> $crate::error::Result<()> {
+                $crate::config::ConfigField::set(self, key, value)
             }
 
             fn entries(&self) -> Vec<$crate::config::ConfigEntry> {
-                vec![
+                struct Visitor(Vec<$crate::config::ConfigEntry>);
+
+                impl $crate::config::Visit for Visitor {
+                    fn some<V: std::fmt::Display>(
+                        &mut self,
+                        key: &str,
+                        value: V,
+                        description: &'static str,
+                    ) {
+                        self.0.push($crate::config::ConfigEntry {
+                            key: key.to_string(),
+                            value: Some(value.to_string()),
+                            description,
+                        })
+                    }
+
+                    fn none(&mut self, key: &str, description: &'static str) {
+                        self.0.push($crate::config::ConfigEntry {
+                            key: key.to_string(),
+                            value: None,
+                            description,
+                        })
+                    }
+                }
+
+                let mut v = Visitor(vec![]);
+                // The prefix is not used for extensions.
+                // The description is generated in ConfigField::visit.
+                // We can just pass empty strings here.
+                $crate::config::ConfigField::visit(self, &mut v, "", "");
+                v.0
+            }
+        }
+
+        impl $crate::config::ConfigField for $struct_name {
+            fn set(&mut self, key: &str, value: &str) -> $crate::error::Result<()> {
+                let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+                match key {
                     $(
-                        $crate::config::ConfigEntry {
-                            key: stringify!($field_name).to_owned(),
-                            value: (self.$field_name != $default).then(|| self.$field_name.to_string()),
-                            description: concat!($($d),*).trim(),
+                        stringify!($field_name) => {
+                            // Safely apply deprecated attribute if present
+                            // $(#[allow(deprecated)])?
+                            {
+                                #[allow(deprecated)]
+                                self.$field_name.set(rem, value.as_ref())
+                            }
                         },
                     )*
-                ]
+                    _ => return $crate::error::_config_err!(
+                        "Config value \"{}\" not found on {}", key, stringify!($struct_name)
+                    )
+                }
+            }
+
+            fn visit<V: $crate::config::Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
+                $(
+                    let key = stringify!($field_name).to_string();
+                    let desc = concat!($($d),*).trim();
+                    #[allow(deprecated)]
+                    self.$field_name.visit(v, key.as_str(), desc);
+                )*
             }
         }
     }
@@ -1946,8 +2030,8 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::config::{
-        ConfigEntry, ConfigExtension, ConfigFileType, ExtensionOptions, Extensions,
-        TableOptions,
+        ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
+        Extensions, TableOptions,
     };
 
     #[derive(Default, Debug, Clone)]
@@ -2030,6 +2114,37 @@ mod tests {
         assert_eq!(table_config.csv.escape.unwrap() as char, '"');
         table_config.set("format.escape", "\'").unwrap();
         assert_eq!(table_config.csv.escape.unwrap() as char, '\'');
+    }
+
+    #[test]
+    fn warning_only_not_default() {
+        use std::sync::atomic::AtomicUsize;
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        use log::{Level, LevelFilter, Metadata, Record};
+        struct SimpleLogger;
+        impl log::Log for SimpleLogger {
+            fn enabled(&self, metadata: &Metadata) -> bool {
+                metadata.level() <= Level::Info
+            }
+
+            fn log(&self, record: &Record) {
+                if self.enabled(record.metadata()) {
+                    COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            fn flush(&self) {}
+        }
+        log::set_logger(&SimpleLogger).unwrap();
+        log::set_max_level(LevelFilter::Info);
+        let mut sql_parser_options = crate::config::SqlParserOptions::default();
+        sql_parser_options
+            .set("enable_options_value_normalization", "false")
+            .unwrap();
+        assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 0);
+        sql_parser_options
+            .set("enable_options_value_normalization", "true")
+            .unwrap();
+        assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[cfg(feature = "parquet")]

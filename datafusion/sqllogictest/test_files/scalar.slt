@@ -1807,24 +1807,6 @@ SELECT acos();
 statement error
 SELECT isnan();
 
-# turn off enable_ident_normalization
-statement ok
-set datafusion.sql_parser.enable_ident_normalization = false;
-
-query I
-SELECT LENGTH('str');
-----
-3
-
-query T
-SELECT CONCAT('Hello', 'World')
-----
-HelloWorld
-
-# turn on enable_ident_normalization
-statement ok
-set datafusion.sql_parser.enable_ident_normalization = true;
-
 query I
 SELECT LENGTH('str');
 ----
@@ -1945,7 +1927,7 @@ select position('' in '')
 ----
 1
 
-query error DataFusion error: Error during planning: Function 'strpos' expects NativeType::String but received NativeType::Int64
+query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\) but received NativeType::Int64, DataType: Int64
 select position(1 in 1)
 
 query I

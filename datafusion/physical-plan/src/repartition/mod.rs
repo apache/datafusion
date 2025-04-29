@@ -43,6 +43,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -52,6 +53,9 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use crate::filter_pushdown::{
+    filter_pushdown_transparent, FilterDescription, FilterPushdownResult,
+};
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::trace;
@@ -506,6 +510,25 @@ impl DisplayAs for RepartitionExec {
                 }
                 Ok(())
             }
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
+
+                let input_partition_count =
+                    self.input.output_partitioning().partition_count();
+                let output_partition_count = self.partitioning().partition_count();
+                let input_to_output_partition_str =
+                    format!("{} -> {}", input_partition_count, output_partition_count);
+                writeln!(
+                    f,
+                    "partition_count(in->out)={}",
+                    input_to_output_partition_str
+                )?;
+
+                if self.preserve_order {
+                    writeln!(f, "preserve_order={}", self.preserve_order)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -710,6 +733,17 @@ impl ExecutionPlan for RepartitionExec {
             new_projection,
             new_partitioning,
         )?)))
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        fd: FilterDescription,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(filter_pushdown_transparent::<Arc<dyn ExecutionPlan>>(
+            Arc::new(self.clone()),
+            fd,
+        ))
     }
 }
 
@@ -1051,6 +1085,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::test::TestMemoryExec;
     use crate::{
         test::{
             assert_is_pending,
@@ -1059,16 +1094,17 @@ mod tests {
                 ErrorExec, MockExec,
             },
         },
-        {collect, expressions::col, memory::MemorySourceConfig},
+        {collect, expressions::col},
     };
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
-    use datafusion_common::{arrow_datafusion_err, assert_batches_sorted_eq, exec_err};
+    use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_common::{arrow_datafusion_err, exec_err};
+    use datafusion_common_runtime::JoinSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
-    use tokio::task::JoinSet;
+    use insta::assert_snapshot;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
@@ -1164,11 +1200,8 @@ mod tests {
     ) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(TaskContext::default());
         // create physical plan
-        let exec = MemorySourceConfig::try_new_exec(
-            &input_partitions,
-            Arc::clone(schema),
-            None,
-        )?;
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(schema), None)?;
         let exec = RepartitionExec::try_new(exec, partitioning)?;
 
         // execute and collect results
@@ -1324,23 +1357,30 @@ mod tests {
 
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
 
-        let expected = vec![
-            "+------------------+",
-            "| my_awesome_field |",
-            "+------------------+",
-            "| foo              |",
-            "| bar              |",
-            "| frob             |",
-            "| baz              |",
-            "+------------------+",
-        ];
-
-        assert_batches_sorted_eq!(&expected, &expected_batches);
+        assert_snapshot!(batches_to_sort_string(&expected_batches), @r"
+        +------------------+
+        | my_awesome_field |
+        +------------------+
+        | bar              |
+        | baz              |
+        | foo              |
+        | frob             |
+        +------------------+
+        ");
 
         let output_stream = exec.execute(0, task_ctx).unwrap();
         let batches = crate::common::collect(output_stream).await.unwrap();
 
-        assert_batches_sorted_eq!(&expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +------------------+
+        | my_awesome_field |
+        +------------------+
+        | bar              |
+        | baz              |
+        | foo              |
+        | frob             |
+        +------------------+
+        ");
     }
 
     #[tokio::test]
@@ -1374,18 +1414,16 @@ mod tests {
         // output stream 1 should *not* error and have one of the input batches
         let batches = crate::common::collect(output_stream1).await.unwrap();
 
-        let expected = vec![
-            "+------------------+",
-            "| my_awesome_field |",
-            "+------------------+",
-            "| baz              |",
-            "| frob             |",
-            "| gaz              |",
-            "| grob             |",
-            "+------------------+",
-        ];
-
-        assert_batches_sorted_eq!(&expected, &batches);
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +------------------+
+            | my_awesome_field |
+            +------------------+
+            | baz              |
+            | frob             |
+            | gaz              |
+            | grob             |
+            +------------------+
+            "#);
     }
 
     #[tokio::test]
@@ -1559,11 +1597,8 @@ mod tests {
         let task_ctx = Arc::new(task_ctx);
 
         // create physical plan
-        let exec = MemorySourceConfig::try_new_exec(
-            &input_partitions,
-            Arc::clone(&schema),
-            None,
-        )?;
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
         let exec = RepartitionExec::try_new(exec, partitioning)?;
 
         // pull partitions
@@ -1604,8 +1639,7 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
-    use crate::memory::MemorySourceConfig;
-    use crate::source::DataSourceExec;
+    use crate::test::TestMemoryExec;
     use crate::union::UnionExec;
 
     use datafusion_physical_expr::expressions::col;
@@ -1711,15 +1745,15 @@ mod test {
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-        MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
+        TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
     }
 
     fn sorted_memory_exec(
         schema: &SchemaRef,
         sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
-        Arc::new(DataSourceExec::new(Arc::new(
-            MemorySourceConfig::try_new(&[vec![]], Arc::clone(schema), None)
+        Arc::new(TestMemoryExec::update_cache(Arc::new(
+            TestMemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_exprs])
                 .unwrap(),

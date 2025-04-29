@@ -28,12 +28,14 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
 [lib]
 name = "datafusion_sql"
-path = "src/lib.rs"
 
 [features]
 default = ["unicode_expressions", "unparser"]
@@ -59,5 +61,6 @@ datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 datafusion-functions-window = { workspace = true }
 env_logger = { workspace = true }
+insta = { workspace = true }
 paste = "^1.0"
 rstest = { workspace = true }

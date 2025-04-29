@@ -110,12 +110,11 @@ impl ScalarUDFImpl for MapExtract {
         ))))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(map_extract_inner)(args)
+        make_scalar_function(map_extract_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {

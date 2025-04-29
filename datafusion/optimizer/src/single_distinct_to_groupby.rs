@@ -26,6 +26,7 @@ use datafusion_common::{
     internal_err, tree_node::Transformed, DataFusionError, HashSet, Result,
 };
 use datafusion_expr::builder::project;
+use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
     col,
     expr::AggregateFunction,
@@ -68,11 +69,14 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
     for expr in aggr_expr {
         if let Expr::AggregateFunction(AggregateFunction {
             func,
-            distinct,
-            args,
-            filter,
-            order_by,
-            null_treatment: _,
+            params:
+                AggregateFunctionParams {
+                    distinct,
+                    args,
+                    filter,
+                    order_by,
+                    null_treatment: _,
+                },
         }) = expr
         {
             if filter.is_some() || order_by.is_some() {
@@ -179,9 +183,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .map(|aggr_expr| match aggr_expr {
                         Expr::AggregateFunction(AggregateFunction {
                             func,
-                            mut args,
-                            distinct,
-                            ..
+                            params: AggregateFunctionParams { mut args, distinct, .. }
                         }) => {
                             if distinct {
                                 if args.len() != 1 {
@@ -408,7 +410,7 @@ mod tests {
 
         let expected = "Projection: count(alias1) AS count(DISTINCT Int32(2) * test.b) [count(DISTINCT Int32(2) * test.b):Int64]\
                             \n  Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]\
-                            \n    Aggregate: groupBy=[[Int32(2) * test.b AS alias1]], aggr=[[]] [alias1:Int32]\
+                            \n    Aggregate: groupBy=[[Int32(2) * test.b AS alias1]], aggr=[[]] [alias1:Int64]\
                             \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(plan, expected)
@@ -495,9 +497,9 @@ mod tests {
             .build()?;
 
         // Should work
-        let expected = "Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS count(DISTINCT test.c) [test.a + Int32(1):Int32, count(DISTINCT test.c):Int64]\
-                            \n  Aggregate: groupBy=[[group_alias_0]], aggr=[[count(alias1)]] [group_alias_0:Int32, count(alias1):Int64]\
-                            \n    Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int32, alias1:UInt32]\
+        let expected = "Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS count(DISTINCT test.c) [test.a + Int32(1):Int64, count(DISTINCT test.c):Int64]\
+                            \n  Aggregate: groupBy=[[group_alias_0]], aggr=[[count(alias1)]] [group_alias_0:Int64, count(alias1):Int64]\
+                            \n    Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int64, alias1:UInt32]\
                             \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(plan, expected)

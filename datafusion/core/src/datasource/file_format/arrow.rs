@@ -31,9 +31,7 @@ use super::write::{create_writer, SharedBuffer};
 use super::FileFormatFactory;
 use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::file_format::FileFormat;
-use crate::datasource::physical_plan::{
-    ArrowSource, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
-};
+use crate::datasource::physical_plan::{ArrowSource, FileSink, FileSinkConfig};
 use crate::error::Result;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
@@ -48,21 +46,23 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
 };
-use datafusion_common_runtime::SpawnedTask;
+use datafusion_common_runtime::{JoinSet, SpawnedTask};
+use datafusion_datasource::display::FileGroupDisplay;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 
-use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion_datasource::source::DataSourceExec;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 use tokio::io::AsyncWriteExt;
-use tokio::task::JoinSet;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -144,6 +144,7 @@ impl FileFormat for ArrowFormat {
         for object in objects {
             let r = store.as_ref().get(&object.location).await?;
             let schema = match r.payload {
+                #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
                     let reader = FileReader::try_new(&mut file, None)?;
                     reader.schema()
@@ -171,11 +172,15 @@ impl FileFormat for ArrowFormat {
     async fn create_physical_plan(
         &self,
         _state: &dyn Session,
-        mut conf: FileScanConfig,
+        conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        conf = conf.with_source(Arc::new(ArrowSource::default()));
-        Ok(conf.new_exec())
+        let source = Arc::new(ArrowSource::default());
+        let config = FileScanConfigBuilder::from(conf)
+            .with_source(source)
+            .build();
+
+        Ok(DataSourceExec::from_data_source(config))
     }
 
     async fn create_writer_physical_plan(
@@ -299,8 +304,12 @@ impl DisplayAs for ArrowFileSink {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ArrowFileSink(file_groups=",)?;
-                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
+            }
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "format: arrow")?;
+                write!(f, "file={}", &self.config.original_url)
             }
         }
     }
@@ -434,7 +443,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };
@@ -477,7 +486,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location,
             last_modified: DateTime::default(),
-            size: usize::MAX,
+            size: u64::MAX,
             e_tag: None,
             version: None,
         };

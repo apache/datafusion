@@ -522,6 +522,10 @@ message ParquetOptions {
     uint64 column_index_truncate_length = 17;
   }
 
+  oneof statistics_truncate_length_opt {
+    uint64 statistics_truncate_length = 31;
+  }
+
   oneof encoding_opt {
     string encoding = 19;
   }
@@ -541,6 +545,10 @@ message ParquetOptions {
   uint64 max_row_group_size = 15;
 
   string created_by = 16;
+
+  oneof coerce_int96_opt {
+    string coerce_int96 = 32;
+  }
 }
 
 enum JoinSide {

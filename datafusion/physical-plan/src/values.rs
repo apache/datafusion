@@ -20,13 +20,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::execution_plan::{Boundedness, EmissionType};
+use crate::memory::MemoryStream;
+use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::{
-    memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
-    PhysicalExpr,
+    ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
-
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
@@ -162,6 +161,10 @@ impl DisplayAs for ValuesExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ValuesExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

@@ -21,7 +21,8 @@ use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
 use datafusion_common::{utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -116,12 +117,8 @@ impl ScalarUDFImpl for NVLFunc {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        nvl_func(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        nvl_func(&args.args)
     }
 
     fn aliases(&self) -> &[String] {

@@ -16,10 +16,11 @@
 // under the License.
 
 use arrow::array::ArrayRef;
+use arrow::datatypes::DataType;
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use datafusion_common::ScalarValue;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string::concat;
 use std::sync::Arc;
 
@@ -39,8 +40,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut group = c.benchmark_group("concat function");
         group.bench_function(BenchmarkId::new("concat", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                criterion::black_box(concat().invoke_batch(&args, size).unwrap())
+                let args_cloned = args.clone();
+                criterion::black_box(
+                    concat()
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args_cloned,
+                            number_rows: size,
+                            return_type: &DataType::Utf8,
+                        })
+                        .unwrap(),
+                )
             })
         });
         group.finish();

@@ -180,7 +180,7 @@ pub fn compute_record_batch_statistics(
     }
 }
 
-/// Write in Arrow IPC format.
+/// Write in Arrow IPC File format.
 pub struct IPCWriter {
     /// Path
     pub path: PathBuf,

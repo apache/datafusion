@@ -22,9 +22,10 @@ use arrow::{
     util::bench_util::create_primitive_array,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::trunc;
 
+use arrow::datatypes::DataType;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -34,16 +35,30 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f32_args = vec![ColumnarValue::Array(f32_array)];
         c.bench_function(&format!("trunc f32 array: {}", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                black_box(trunc.invoke_batch(&f32_args, size).unwrap())
+                black_box(
+                    trunc
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: f32_args.clone(),
+                            number_rows: size,
+                            return_type: &DataType::Float32,
+                        })
+                        .unwrap(),
+                )
             })
         });
         let f64_array = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
         let f64_args = vec![ColumnarValue::Array(f64_array)];
         c.bench_function(&format!("trunc f64 array: {}", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                black_box(trunc.invoke_batch(&f64_args, size).unwrap())
+                black_box(
+                    trunc
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: f64_args.clone(),
+                            number_rows: size,
+                            return_type: &DataType::Float64,
+                        })
+                        .unwrap(),
+                )
             })
         });
     }

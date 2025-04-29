@@ -17,7 +17,7 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{utils::take_function_args, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -75,12 +75,8 @@ impl ScalarUDFImpl for ArrowTypeOfFunc {
         Ok(DataType::Utf8)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let [arg] = take_function_args(self.name(), args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [arg] = take_function_args(self.name(), args.args)?;
         let input_data_type = arg.data_type();
         Ok(ColumnarValue::Scalar(ScalarValue::from(format!(
             "{input_data_type}"

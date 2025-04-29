@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{DFSchemaRef, TableReference};
 
-use crate::LogicalPlan;
+use crate::{LogicalPlan, TableSource};
 
 /// Operator that copies the contents of a database to file(s)
 #[derive(Clone)]
@@ -91,12 +91,12 @@ impl Hash for CopyTo {
 
 /// The operator that modifies the content of a database (adapted from
 /// substrait WriteRel)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct DmlStatement {
     /// The table name
     pub table_name: TableReference,
-    /// The schema of the table (must align with Rel input)
-    pub table_schema: DFSchemaRef,
+    /// this is target table to insert into
+    pub target: Arc<dyn TableSource>,
     /// The type of operation to perform
     pub op: WriteOp,
     /// The relation that determines the tuples to add/remove/modify the schema must match with table_schema
@@ -104,18 +104,51 @@ pub struct DmlStatement {
     /// The schema of the output relation
     pub output_schema: DFSchemaRef,
 }
+impl Eq for DmlStatement {}
+impl Hash for DmlStatement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.table_name.hash(state);
+        self.target.schema().hash(state);
+        self.op.hash(state);
+        self.input.hash(state);
+        self.output_schema.hash(state);
+    }
+}
+
+impl PartialEq for DmlStatement {
+    fn eq(&self, other: &Self) -> bool {
+        self.table_name == other.table_name
+            && self.target.schema() == other.target.schema()
+            && self.op == other.op
+            && self.input == other.input
+            && self.output_schema == other.output_schema
+    }
+}
+
+impl Debug for DmlStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DmlStatement")
+            .field("table_name", &self.table_name)
+            .field("target", &"...")
+            .field("target_schema", &self.target.schema())
+            .field("op", &self.op)
+            .field("input", &self.input)
+            .field("output_schema", &self.output_schema)
+            .finish()
+    }
+}
 
 impl DmlStatement {
     /// Creates a new DML statement with the output schema set to a single `count` column.
     pub fn new(
         table_name: TableReference,
-        table_schema: DFSchemaRef,
+        target: Arc<dyn TableSource>,
         op: WriteOp,
         input: Arc<LogicalPlan>,
     ) -> Self {
         Self {
             table_name,
-            table_schema,
+            target,
             op,
             input,
 

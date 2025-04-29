@@ -27,6 +27,7 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
+use datafusion_common::types::{logical_date, NativeType};
 
 use datafusion_common::{
     cast::{
@@ -44,7 +45,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
-use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -95,24 +96,29 @@ impl DatePartFunc {
             signature: Signature::one_of(
                 vec![
                     TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Timestamp,
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Timestamp,
+                            // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
+                            vec![TypeSignatureClass::Native(logical_string())],
+                            NativeType::Timestamp(Nanosecond, None),
+                        ),
                     ]),
                     TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Date,
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_date())),
                     ]),
                     TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Time,
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Time),
                     ]),
                     TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Interval,
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Interval),
                     ]),
                     TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Duration,
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Duration),
                     ]),
                 ],
                 Volatility::Immutable,
@@ -161,11 +167,11 @@ impl ScalarUDFImpl for DatePartFunc {
             )
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = args.args;
         let [part, array] = take_function_args(self.name(), args)?;
 
         let part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = part {
@@ -181,11 +187,11 @@ impl ScalarUDFImpl for DatePartFunc {
         let is_scalar = matches!(array, ColumnarValue::Scalar(_));
 
         let array = match array {
-            ColumnarValue::Array(array) => Arc::clone(array),
+            ColumnarValue::Array(array) => Arc::clone(&array),
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
-        let part_trim = part_normalization(part);
+        let part_trim = part_normalization(&part);
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow

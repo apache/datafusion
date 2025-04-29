@@ -20,12 +20,12 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use super::{
+use crate::execution_plan::{Boundedness, EmissionType};
+use crate::memory::MemoryStream;
+use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution_plan::{Boundedness, EmissionType};
-use crate::memory::MemoryStream;
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use arrow::datatypes::SchemaRef;
@@ -161,6 +161,9 @@ impl DisplayAs for WorkTableExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "WorkTableExec: name={}", self.name)
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "name={}", self.name)
             }
         }
     }

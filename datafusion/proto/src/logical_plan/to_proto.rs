@@ -19,11 +19,13 @@
 //! DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
+use std::collections::HashMap;
+
 use datafusion_common::{TableReference, UnnestOptions};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{
-    self, Alias, Between, BinaryExpr, Cast, GroupingSet, InList, Like, Placeholder,
-    ScalarFunction, Unnest,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
+    Like, Placeholder, ScalarFunction, Unnest,
 };
 use datafusion_expr::WriteOp;
 use datafusion_expr::{
@@ -200,6 +202,7 @@ pub fn serialize_expr(
             expr,
             relation,
             name,
+            metadata,
         }) => {
             let alias = Box::new(protobuf::AliasNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
@@ -208,6 +211,7 @@ pub fn serialize_expr(
                     .map(|r| vec![r.into()])
                     .unwrap_or(vec![]),
                 alias: name.to_owned(),
+                metadata: metadata.to_owned().unwrap_or(HashMap::new()),
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Alias(alias)),
@@ -300,12 +304,15 @@ pub fn serialize_expr(
         }
         Expr::WindowFunction(expr::WindowFunction {
             ref fun,
-            ref args,
-            ref partition_by,
-            ref order_by,
-            ref window_frame,
-            // TODO: support null treatment in proto
-            null_treatment: _,
+            params:
+                expr::WindowFunctionParams {
+                    ref args,
+                    ref partition_by,
+                    ref order_by,
+                    ref window_frame,
+                    // TODO: support null treatment in proto
+                    null_treatment: _,
+                },
         }) => {
             let (window_function, fun_definition) = match fun {
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
@@ -348,11 +355,14 @@ pub fn serialize_expr(
         }
         Expr::AggregateFunction(expr::AggregateFunction {
             ref func,
-            ref args,
-            ref distinct,
-            ref filter,
-            ref order_by,
-            null_treatment: _,
+            params:
+                AggregateFunctionParams {
+                    ref args,
+                    ref distinct,
+                    ref filter,
+                    ref order_by,
+                    null_treatment: _,
+                },
         }) => {
             let mut buf = Vec::new();
             let _ = codec.try_encode_udaf(func, &mut buf);
@@ -554,6 +564,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::InList(expr)),
             }
         }
+        #[expect(deprecated)]
         Expr::Wildcard { qualifier, .. } => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
                 qualifier: qualifier.to_owned().map(|x| x.into()),

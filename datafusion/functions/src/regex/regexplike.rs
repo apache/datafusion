@@ -21,12 +21,15 @@ use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
-use datafusion_common::exec_err;
-use datafusion_common::ScalarValue;
-use datafusion_common::{arrow_datafusion_err, plan_err};
-use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::types::logical_string;
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, internal_err, plan_err, DataFusionError, Result,
+    ScalarValue,
+};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 use std::any::Any;
@@ -79,7 +82,17 @@ impl RegexpLikeFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::String(2), TypeSignature::String(3)],
+                vec![
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    ]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    ]),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -110,11 +123,12 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = &args.args;
+
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
