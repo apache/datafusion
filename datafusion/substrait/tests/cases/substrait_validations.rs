@@ -21,7 +21,7 @@ mod tests {
     // verify the schema compatibility validations
     mod schema_compatibility {
         use crate::utils::test::read_json;
-        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::arrow::datatypes::{DataType, Field, Fields};
         use datafusion::common::{DFSchema, Result, TableReference};
         use datafusion::datasource::empty::EmptyTable;
         use datafusion::prelude::SessionContext;
@@ -61,8 +61,33 @@ mod tests {
             let proto_plan =
                 read_json("tests/testdata/test_plans/simple_select.substrait.json");
             // this is the exact schema of the Substrait plan
-            let df_schema =
-                vec![("a", DataType::Int32, false), ("b", DataType::Int32, true)];
+            let df_schema = vec![
+                ("a", DataType::Int32, false),
+                ("b", DataType::Int32, true),
+                (
+                    "c",
+                    DataType::Map(
+                        Arc::new(Field::new_struct(
+                            "entries",
+                            Fields::from(vec![
+                                Field::new("key", DataType::Utf8, false),
+                                Field::new_struct(
+                                    "value",
+                                    Fields::from(vec![Field::new(
+                                        "d",
+                                        DataType::Utf8,
+                                        true,
+                                    )]),
+                                    true,
+                                ),
+                            ]),
+                            true,
+                        )),
+                        false,
+                    ),
+                    true,
+                ),
+            ];
 
             let ctx = generate_context_with_table("DATA", df_schema)?;
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
@@ -70,7 +95,7 @@ mod tests {
             assert_snapshot!(
             plan,
             @r#"
-                Projection: DATA.a, DATA.b
+                Projection: DATA.a, DATA.b, DATA.c
                   TableScan: DATA
                 "#
                         );
@@ -85,7 +110,30 @@ mod tests {
             let df_schema = vec![
                 ("b", DataType::Int32, true),
                 ("a", DataType::Int32, false),
-                ("c", DataType::Int32, false),
+                (
+                    "c",
+                    DataType::Map(
+                        Arc::new(Field::new_struct(
+                            "entries",
+                            Fields::from(vec![
+                                Field::new("key", DataType::Utf8, false),
+                                Field::new_struct(
+                                    "value",
+                                    Fields::from(vec![Field::new(
+                                        "d",
+                                        DataType::Utf8,
+                                        true,
+                                    )]),
+                                    true,
+                                ),
+                            ]),
+                            true,
+                        )),
+                        false,
+                    ),
+                    true,
+                ),
+                ("e", DataType::Int32, false),
             ];
             let ctx = generate_context_with_table("DATA", df_schema)?;
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
@@ -93,8 +141,8 @@ mod tests {
             assert_snapshot!(
             plan,
             @r#"
-                Projection: DATA.a, DATA.b
-                  TableScan: DATA projection=[a, b]
+                Projection: DATA.a, DATA.b, DATA.c
+                  TableScan: DATA projection=[a, b, c]
                 "#
                         );
             Ok(())
