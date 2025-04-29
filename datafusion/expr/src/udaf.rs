@@ -224,6 +224,13 @@ impl AggregateUDF {
         self.inner.return_type(args)
     }
 
+    /// Return the field of the function given its input fields
+    ///
+    /// See [`AggregateUDFImpl::return_field`] for more details.
+    pub fn return_field(&self, args: &[Field]) -> Result<Field> {
+        self.inner.return_field(args)
+    }
+
     /// Return an accumulator the given aggregate, given its return datatype
     pub fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         self.inner.accumulator(acc_args)
@@ -673,6 +680,31 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// What [`DataType`] will be returned by this function, given the types of
     /// the arguments
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+    /// What type will be returned by this function, given the arguments?
+    ///
+    /// By default, this function calls [`Self::return_type`] with the
+    /// types of each argument.
+    ///
+    /// # Notes
+    ///
+    /// Most UDFs should implement [`Self::return_type`] and not this
+    /// function as the output type for most functions only depends on the types
+    /// of their inputs (e.g. `sqrt(f32)` is always `f32`).
+    ///
+    /// This function can be used for more advanced cases such as:
+    ///
+    /// 1. specifying nullability
+    /// 2. return types based on the **values** of the arguments (rather than
+    ///    their **types**.
+    /// 3. return types based on metadata within the fields of the inputs
+    fn return_field(&self, arg_fields: &[Field]) -> Result<Field> {
+        let arg_types: Vec<_> =
+            arg_fields.iter().map(|f| f.data_type()).cloned().collect();
+        let data_type = self.return_type(&arg_types)?;
+
+        Ok(Field::new(self.name(), data_type, self.is_nullable()))
+    }
 
     /// Whether the aggregate function is nullable.
     ///

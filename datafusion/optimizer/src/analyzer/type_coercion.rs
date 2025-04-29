@@ -808,12 +808,15 @@ fn coerce_arguments_for_signature_with_aggregate_udf(
         return Ok(expressions);
     }
 
-    let current_types = expressions
+    let current_fields = expressions
         .iter()
-        .map(|e| e.get_type(schema))
+        .map(|e| e.to_field(schema).map(|(_, f)| f.as_ref().clone()))
         .collect::<Result<Vec<_>>>()?;
 
-    let new_types = data_types_with_aggregate_udf(&current_types, func)?;
+    let new_types = data_types_with_aggregate_udf(&current_fields, func)?
+        .into_iter()
+        .map(|f| f.data_type().clone())
+        .collect::<Vec<_>>();
 
     expressions
         .into_iter()

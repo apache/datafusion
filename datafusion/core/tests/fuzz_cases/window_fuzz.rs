@@ -448,9 +448,9 @@ fn get_random_function(
         if !args.is_empty() {
             // Do type coercion first argument
             let a = args[0].clone();
-            let dt = a.data_type(schema.as_ref()).unwrap();
+            let dt = a.return_field(schema.as_ref()).unwrap();
             let coerced = data_types_with_aggregate_udf(&[dt], udf).unwrap();
-            args[0] = cast(a, schema, coerced[0].clone()).unwrap();
+            args[0] = cast(a, schema, coerced[0].data_type().clone()).unwrap();
         }
     }
 
