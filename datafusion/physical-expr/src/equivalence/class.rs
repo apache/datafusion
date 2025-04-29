@@ -523,20 +523,20 @@ impl EquivalenceGroup {
     ) -> Option<Arc<dyn PhysicalExpr>> {
         // First, we try to project expressions with an exact match. If we are
         // unable to do this, we consult equivalence classes.
-        if let Some(target) = mapping.get(expr) {
+        if let Some(targets) = mapping.get(expr) {
             // If we match the source, we can project directly:
-            let (target, _) = target.first().unwrap();
+            let (target, _) = targets.first();
             return Some(Arc::clone(target));
         } else {
             // If the given expression is not inside the mapping, try to project
             // expressions considering the equivalence classes.
-            for (source, target) in mapping.iter() {
+            for (source, targets) in mapping.iter() {
                 // If we match an equivalent expression to `source`, then we can
                 // project. For example, if we have the mapping `(a as a1, a + c)`
                 // and the equivalence class `(a, b)`, expression `b` projects to `a1`.
                 let eq_class = self.get_equivalence_class(source);
                 if eq_class.is_some_and(|group| group.contains(expr)) {
-                    let (target, _) = target.first().unwrap();
+                    let (target, _) = targets.first();
                     return Some(Arc::clone(target));
                 }
             }
@@ -544,7 +544,7 @@ impl EquivalenceGroup {
         // Project a non-leaf expression by projecting its children.
         let children = expr.children();
         if children.is_empty() {
-            // Leaf expression should be inside mapping.
+            // A leaf expression should be inside the mapping.
             return None;
         }
         children
@@ -575,12 +575,12 @@ impl EquivalenceGroup {
             // merge all equivalent expressions into the classes.
             let normalized_expr = self.normalize_expr(Arc::clone(source));
             let cls = new_classes.entry(normalized_expr).or_default();
-            for (target, _) in targets {
+            for (target, _) in targets.iter() {
                 cls.push(Arc::clone(target));
             }
             // Save new constants arising from the projection:
             if let Some(across) = self.is_expr_constant(source) {
-                for (target, _) in targets {
+                for (target, _) in targets.iter() {
                     let const_expr = ConstExpr::new(Arc::clone(target), across.clone());
                     new_constants.push(const_expr);
                 }
@@ -1073,29 +1073,28 @@ mod tests {
             Field::new("b+c", DataType::Int32, false),
         ]));
 
-        let mapping = ProjectionMapping {
-            map: [
-                (
-                    binary(
-                        col("a", &schema)?,
-                        Operator::Plus,
-                        col("c", &schema)?,
-                        &schema,
-                    )?,
-                    vec![(col("a+c", &projected_schema)?, 0)],
-                ),
-                (
-                    binary(
-                        col("b", &schema)?,
-                        Operator::Plus,
-                        col("c", &schema)?,
-                        &schema,
-                    )?,
-                    vec![(col("b+c", &projected_schema)?, 1)],
-                ),
-            ]
-            .into(),
-        };
+        let mapping = [
+            (
+                binary(
+                    col("a", &schema)?,
+                    Operator::Plus,
+                    col("c", &schema)?,
+                    &schema,
+                )?,
+                vec![(col("a+c", &projected_schema)?, 0)].into(),
+            ),
+            (
+                binary(
+                    col("b", &schema)?,
+                    Operator::Plus,
+                    col("c", &schema)?,
+                    &schema,
+                )?,
+                vec![(col("b+c", &projected_schema)?, 1)].into(),
+            ),
+        ]
+        .into_iter()
+        .collect::<ProjectionMapping>();
 
         let projected = group.project(&mapping);
 

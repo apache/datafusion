@@ -914,16 +914,13 @@ impl EquivalenceProperties {
     ///
     /// A new `ProjectionMapping` with normalized source expressions.
     fn normalized_mapping(&self, mapping: &ProjectionMapping) -> ProjectionMapping {
-        ProjectionMapping {
-            map: mapping
-                .iter()
-                .map(|(source, target)| {
-                    let normalized_source =
-                        self.eq_group.normalize_expr(Arc::clone(source));
-                    (normalized_source, target.to_vec())
-                })
-                .collect(),
-        }
+        mapping
+            .iter()
+            .map(|(source, target)| {
+                let normalized_source = self.eq_group.normalize_expr(Arc::clone(source));
+                (normalized_source, target.clone())
+            })
+            .collect::<ProjectionMapping>()
     }
 
     /// Computes projected orderings based on a given projection mapping.

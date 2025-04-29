@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use crate::expressions::Column;
@@ -27,14 +27,50 @@ use datafusion_common::{internal_err, Result};
 
 use indexmap::IndexMap;
 
+/// Stores target expressions, along with their indices, that associate with a
+/// source expression in a projection mapping.
+#[derive(Clone, Debug, Default)]
+pub struct ProjectionTargets {
+    /// A non-empty vector of pairs of target expressions and their indices.
+    /// Consider using a special non-empty collection type in the future (e.g.
+    /// if Rust provides one in the standard library).
+    exprs_indices: Vec<(Arc<dyn PhysicalExpr>, usize)>,
+}
+
+impl ProjectionTargets {
+    pub fn first(&self) -> &(Arc<dyn PhysicalExpr>, usize) {
+        // Since the vector is non-empty, we can safely unwrap:
+        self.exprs_indices.first().unwrap()
+    }
+}
+
+impl Deref for ProjectionTargets {
+    type Target = Vec<(Arc<dyn PhysicalExpr>, usize)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.exprs_indices
+    }
+}
+
+impl DerefMut for ProjectionTargets {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.exprs_indices
+    }
+}
+
+impl From<Vec<(Arc<dyn PhysicalExpr>, usize)>> for ProjectionTargets {
+    fn from(exprs_indices: Vec<(Arc<dyn PhysicalExpr>, usize)>) -> Self {
+        Self { exprs_indices }
+    }
+}
+
 /// Stores the mapping between source expressions and target expressions for a
 /// projection.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ProjectionMapping {
     /// Mapping between source expressions and target expressions.
     /// Vector indices correspond to the indices after projection.
-    #[allow(clippy::type_complexity)]
-    pub map: IndexMap<Arc<dyn PhysicalExpr>, Vec<(Arc<dyn PhysicalExpr>, usize)>>,
+    map: IndexMap<Arc<dyn PhysicalExpr>, ProjectionTargets>,
 }
 
 impl ProjectionMapping {
@@ -46,8 +82,8 @@ impl ProjectionMapping {
     /// projection mapping would be:
     ///
     /// ```text
-    ///  [0]: (c + d, col("c + d"))
-    ///  [1]: (a + b, col("a + b"))
+    ///  [0]: (c + d, [(col("c + d"), 0)])
+    ///  [1]: (a + b, [(col("a + b"), 1)])
     /// ```
     ///
     /// where `col("c + d")` means the column named `"c + d"`.
@@ -56,7 +92,7 @@ impl ProjectionMapping {
         input_schema: &SchemaRef,
     ) -> Result<Self> {
         // Construct a map from the input expressions to the output expression of the projection:
-        let mut map = IndexMap::new();
+        let mut map = IndexMap::<_, ProjectionTargets>::new();
         for (expr_idx, (expr, name)) in expr.into_iter().enumerate() {
             let target_expr = Arc::new(Column::new(&name, expr_idx)) as _;
             let source_expr = expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
@@ -82,7 +118,7 @@ impl ProjectionMapping {
             })
             .data()?;
             map.entry(source_expr)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push((target_expr, expr_idx));
         }
         Ok(Self { map })
@@ -103,10 +139,20 @@ impl ProjectionMapping {
 }
 
 impl Deref for ProjectionMapping {
-    type Target = IndexMap<Arc<dyn PhysicalExpr>, Vec<(Arc<dyn PhysicalExpr>, usize)>>;
+    type Target = IndexMap<Arc<dyn PhysicalExpr>, ProjectionTargets>;
 
     fn deref(&self) -> &Self::Target {
         &self.map
+    }
+}
+
+impl FromIterator<(Arc<dyn PhysicalExpr>, ProjectionTargets)> for ProjectionMapping {
+    fn from_iter<T: IntoIterator<Item = (Arc<dyn PhysicalExpr>, ProjectionTargets)>>(
+        iter: T,
+    ) -> Self {
+        Self {
+            map: IndexMap::from_iter(iter),
+        }
     }
 }
 

@@ -676,7 +676,7 @@ impl AggregateExec {
 
         // If the group by is empty, then we ensure that the operator will produce
         // only one row, and mark the generated result as a constant value.
-        if group_expr_mapping.map.is_empty() {
+        if group_expr_mapping.is_empty() {
             let mut constants = eq_properties.constants().to_vec();
             let new_constants = aggr_exprs.iter().enumerate().map(|(idx, func)| {
                 let column = Arc::new(Column::new(func.name(), idx));
@@ -691,7 +691,6 @@ impl AggregateExec {
         let mut constraints = eq_properties.constraints().to_vec();
         let new_constraint = Constraint::Unique(
             group_expr_mapping
-                .map
                 .iter()
                 .flat_map(|(_, target_cols)| {
                     target_cols.iter().flat_map(|(expr, _)| {

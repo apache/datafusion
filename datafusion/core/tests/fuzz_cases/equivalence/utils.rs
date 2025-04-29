@@ -49,7 +49,7 @@ pub fn output_schema(
     for (source, targets) in mapping.iter() {
         let data_type = source.data_type(input_schema)?;
         let nullable = source.nullable(input_schema)?;
-        for (target, _) in targets {
+        for (target, _) in targets.iter() {
             let Some(column) = target.as_any().downcast_ref::<Column>() else {
                 return plan_err!("Expects to have column");
             };
