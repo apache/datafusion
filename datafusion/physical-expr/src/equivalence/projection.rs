@@ -38,11 +38,13 @@ pub struct ProjectionTargets {
 }
 
 impl ProjectionTargets {
+    /// Returns the first target expression and its index.
     pub fn first(&self) -> &(Arc<dyn PhysicalExpr>, usize) {
         // Since the vector is non-empty, we can safely unwrap:
         self.exprs_indices.first().unwrap()
     }
 
+    /// Adds a target expression and its index to the list of targets.
     pub fn push(&mut self, target: (Arc<dyn PhysicalExpr>, usize)) {
         self.exprs_indices.push(target);
     }
