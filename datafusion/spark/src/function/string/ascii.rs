@@ -26,38 +26,7 @@ use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
-#[user_doc(
-    doc_section(label = "Spark String Functions"),
-    description = "Returns the ASCII code point of the first character of string.",
-    syntax_example = "ascii(str)",
-    sql_example = r#"```sql
-> select ascii('abc');
-+--------------------+
-| ascii(abc)         |
-+--------------------+
-| 97                 |
-+--------------------+
-> select ascii('🚀');
-+-------------------+
-| ascii(🚀)         |
-+-------------------+
-| 128640            |
-+-------------------+
-> select ascii(2);
-+----------------+
-| ascii(2)       |
-+----------------+
-| 50             |
-+----------------+
-> select ascii(X'44617461467573696F6E');
-+--------------------------------------+
-| ascii(X'44617461467573696F6E')       |
-+--------------------------------------+
-| 68                                   |
-+--------------------------------------+
-```"#,
-    standard_argument(name = "str", prefix = "String")
-)]
+/// https://spark.apache.org/docs/latest/api/sql/index.html#ascii
 #[derive(Debug)]
 pub struct SparkAscii {
     signature: Signature,

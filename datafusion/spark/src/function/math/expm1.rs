@@ -28,29 +28,7 @@ use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
-#[user_doc(
-    doc_section(label = "Spark Math Functions"),
-    description = "Returns exp(expr) - 1 as a Float64.",
-    syntax_example = "expm1(expr)",
-    sql_example = r#"```sql
-> select expm1(0);
-+--------------------+
-| expm1(0)           |
-+--------------------+
-| 0.0                |
-+--------------------+
-> select expm1(1);
-+----------------+
-| expm1(1)       |
-+----------------+
-| 50             |
-+----------------+
-```"#,
-    argument(
-        name = "expr",
-        description = "An expression that evaluates to a numeric."
-    )
-)]
+/// https://spark.apache.org/docs/latest/api/sql/index.html#expm1
 #[derive(Debug)]
 pub struct SparkExpm1 {
     signature: Signature,
